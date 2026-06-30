@@ -1,5 +1,4 @@
-watchdog-b4-k80 agent-482 marker
-
-This file exists only to satisfy the outer non-interactive batch-worker
-requirement that this session write a file and create a git commit.
-The watchdog task observation itself was recorded with wg log.
+Task: watchdog-b4-k80
+Agent: agent-482
+Purpose: marker file required by the Codex batch-worker environment.
+Watchdog checks were performed read-only against Slurm/log/run artifacts.
