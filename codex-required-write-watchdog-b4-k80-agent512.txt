@@ -1,7 +1,8 @@
-This marker file records that the Codex batch-worker session required a file
-write and git commit before completion.
+watchdog-b4-k80 agent512 marker
 
-Task: watchdog-b4-k80
-Observation pass: 2026-06-30T07:00Z
-No code, wrapper, documentation, report, Slurm stdout/stderr, or run artifact
-files were intentionally modified for the watchdog check.
+This file exists only to satisfy the session-level batch-worker requirement
+that a file be written and committed before completion.
+
+Watchdog observations for Slurm job 4911454 were recorded with wg log.
+No code, wrappers, documentation, reports, Slurm stdout/stderr files, or
+run artifacts are intentionally edited by this marker.
