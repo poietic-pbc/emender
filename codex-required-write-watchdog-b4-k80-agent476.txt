@@ -1,6 +1,5 @@
-watchdog-b4-k80 agent-476 marker
+Task watchdog-b4-k80 agent-476 marker.
 
-This file exists only to satisfy the session-level batch-worker requirement
-to write a file and create a git commit before declaring the task done.
-The watchdog observation itself was recorded with wg log; no code, wrappers,
-docs, reports, Slurm output logs, or run artifacts were edited.
+This file exists only to satisfy the outer Codex batch-worker requirement
+that this session write a file and create a git commit. The watchdog task
+itself was performed read-only against Slurm state, logs, and run artifacts.
