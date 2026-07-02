@@ -27,7 +27,12 @@ OUTPUT_ROOT=${OUTPUT_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_run
 DATA=${DATA:-/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt}
 VAL_DATA=${VAL_DATA:-/lustre/orion/bif148/scratch/erikgarrison/emender/data/commapile_mainmix_val_smoke.txt}
 TIKTOKEN_CACHE_DIR=${TIKTOKEN_CACHE_DIR:-/lustre/orion/bif148/proj-shared/tiktoken_cache}
-RESUME_CHECKPOINT=${RESUME_CHECKPOINT:-/lustre/orion/bif148/proj-shared/emender/checkpoints/E97_1.3B_diloco_20260623_103742_step260500/checkpoint_E97_1.3B_diloco_20260623_103742_step260500_loss_2.7481.pt}
+DEFAULT_RESUME_CHECKPOINT=${DEFAULT_RESUME_CHECKPOINT:-/lustre/orion/bif148/proj-shared/emender/checkpoints/E97_1.3B_diloco_20260623_103742_step260500/checkpoint_E97_1.3B_diloco_20260623_103742_step260500_loss_2.7481.pt}
+CHAIN_LATEST_PATH=${CHAIN_LATEST_PATH:-}
+CHAIN_SEED_CHECKPOINT=${CHAIN_SEED_CHECKPOINT:-$DEFAULT_RESUME_CHECKPOINT}
+CHAIN_MANIFEST_PATH=${CHAIN_MANIFEST_PATH:-}
+CHAIN_UPDATE_ON_FAILURE=${CHAIN_UPDATE_ON_FAILURE:-1}
+RESUME_CHECKPOINT=${RESUME_CHECKPOINT:-}
 TRAIN_MINUTES=${TRAIN_MINUTES:-10}
 DILOCO_K=${DILOCO_K:-40}
 DILOCO_OUTER_OPTIMIZER=${DILOCO_OUTER_OPTIMIZER:-avg}
@@ -38,6 +43,7 @@ DILOCO_ISLAND_SIZE=${DILOCO_ISLAND_SIZE:-1}
 DILOCO_MERGE_TOPOLOGY=${DILOCO_MERGE_TOPOLOGY:-global}
 DILOCO_MERGE_GROUP_SIZE=${DILOCO_MERGE_GROUP_SIZE:-8}
 DILOCO_MERGE_GROUP_CREATE_BARRIER_EVERY=${DILOCO_MERGE_GROUP_CREATE_BARRIER_EVERY:-8}
+DILOCO_MERGE_COMPLETION_BARRIER=${DILOCO_MERGE_COMPLETION_BARRIER:-1}
 DILOCO_MERGE_BUCKET_NUMEL=${DILOCO_MERGE_BUCKET_NUMEL:-0}
 DILOCO_MERGE_DEBUG=${DILOCO_MERGE_DEBUG:-0}
 DILOCO_MERGE_DEBUG_RANKS=${DILOCO_MERGE_DEBUG_RANKS:-0}
@@ -51,12 +57,26 @@ COMPILE_WARMUP_STEPS=${COMPILE_WARMUP_STEPS:-1}
 WALLTIME_FINAL_CHECKPOINT_MARGIN_SECONDS=${WALLTIME_FINAL_CHECKPOINT_MARGIN_SECONDS:-600}
 WALLTIME_CHECK_EVERY=${WALLTIME_CHECK_EVERY:-1}
 DISTRIBUTED_HEALTH_CHECK_EVERY=${DISTRIBUTED_HEALTH_CHECK_EVERY:-1}
+DISABLE_SCALAR_STATUS_COLLECTIVES=${DISABLE_SCALAR_STATUS_COLLECTIVES:-0}
+STATUS_REQUEST_POLL_SECONDS=${STATUS_REQUEST_POLL_SECONDS:-1.0}
 HUMAN_APPROVAL_RECORD=${HUMAN_APPROVAL_RECORD:-WG task validate-e97-1-3b: one bounded 1-node avg E97 1.3B pretrained resume canary only; no 8+ node scaleout authorized by this submission.}
 FRONTIER_RCCL_ENV=${FRONTIER_RCCL_ENV:-current}
 FRONTIER_PER_RANK_TRITON_CACHE=${FRONTIER_PER_RANK_TRITON_CACHE:-0}
 
 [[ -r "$DATA" ]] || { echo "DATA is not readable: $DATA" >&2; exit 4; }
 [[ -r "$VAL_DATA" ]] || { echo "VAL_DATA is not readable: $VAL_DATA" >&2; exit 4; }
+if [[ -z "$RESUME_CHECKPOINT" ]]; then
+  if [[ -n "$CHAIN_LATEST_PATH" && -e "$CHAIN_LATEST_PATH" ]]; then
+    RESUME_CHECKPOINT=$(readlink -f "$CHAIN_LATEST_PATH")
+  elif [[ -n "$CHAIN_SEED_CHECKPOINT" ]]; then
+    RESUME_CHECKPOINT="$CHAIN_SEED_CHECKPOINT"
+  else
+    RESUME_CHECKPOINT="$DEFAULT_RESUME_CHECKPOINT"
+  fi
+fi
+if [[ -n "$CHAIN_LATEST_PATH" && -z "$CHAIN_MANIFEST_PATH" ]]; then
+  CHAIN_MANIFEST_PATH="${CHAIN_LATEST_PATH}.manifest.json"
+fi
 [[ -r "$RESUME_CHECKPOINT" ]] || { echo "RESUME_CHECKPOINT is not readable: $RESUME_CHECKPOINT" >&2; exit 4; }
 
 RUN_DATE=$(date -u +%Y%m%d)
@@ -163,10 +183,18 @@ COMMON_ARGS=(
   --diloco_merge_topology "$DILOCO_MERGE_TOPOLOGY"
   --diloco_merge_group_size "$DILOCO_MERGE_GROUP_SIZE"
   --diloco_merge_group_create_barrier_every "$DILOCO_MERGE_GROUP_CREATE_BARRIER_EVERY"
+  --diloco_merge_completion_barrier "$DILOCO_MERGE_COMPLETION_BARRIER"
   --diloco_merge_bucket_numel "$DILOCO_MERGE_BUCKET_NUMEL"
   --diloco_merge_debug "$DILOCO_MERGE_DEBUG"
   --diloco_merge_debug_ranks "$DILOCO_MERGE_DEBUG_RANKS"
 )
+
+if [[ "$DISABLE_SCALAR_STATUS_COLLECTIVES" == "1" ]]; then
+  COMMON_ARGS+=(
+    --disable_scalar_status_collectives
+    --status_request_poll_seconds "$STATUS_REQUEST_POLL_SECONDS"
+  )
+fi
 
 MODEL_ARGS=(
   --level E97
@@ -206,15 +234,23 @@ MODEL_ARGS=(
   echo "stderr=$STDERR_PATH"
   echo "human_approval_record=$HUMAN_APPROVAL_RECORD"
   echo "resume_checkpoint=$RESUME_CHECKPOINT"
+  echo "default_resume_checkpoint=$DEFAULT_RESUME_CHECKPOINT"
+  echo "chain_latest_path=$CHAIN_LATEST_PATH"
+  echo "chain_seed_checkpoint=$CHAIN_SEED_CHECKPOINT"
+  echo "chain_manifest_path=$CHAIN_MANIFEST_PATH"
+  echo "chain_update_on_failure=$CHAIN_UPDATE_ON_FAILURE"
   echo "requested_node_hours=$REQUESTED_NODE_HOURS"
   echo "diloco_k=$DILOCO_K"
   echo "diloco_island_size=$DILOCO_ISLAND_SIZE"
   echo "diloco_merge_topology=$DILOCO_MERGE_TOPOLOGY"
   echo "diloco_merge_group_size=$DILOCO_MERGE_GROUP_SIZE"
   echo "diloco_merge_group_create_barrier_every=$DILOCO_MERGE_GROUP_CREATE_BARRIER_EVERY"
+  echo "diloco_merge_completion_barrier=$DILOCO_MERGE_COMPLETION_BARRIER"
   echo "diloco_merge_bucket_numel=$DILOCO_MERGE_BUCKET_NUMEL"
   echo "diloco_merge_debug=$DILOCO_MERGE_DEBUG"
   echo "diloco_merge_debug_ranks=$DILOCO_MERGE_DEBUG_RANKS"
+  echo "disable_scalar_status_collectives=$DISABLE_SCALAR_STATUS_COLLECTIVES"
+  echo "status_request_poll_seconds=$STATUS_REQUEST_POLL_SECONDS"
   echo "frontier_rccl_env=$FRONTIER_RCCL_ENV"
   echo "rccl_net_plugin_status=$RCCL_NET_PLUGIN_STATUS"
   echo "frontier_per_rank_triton_cache=$FRONTIER_PER_RANK_TRITON_CACHE"
@@ -223,7 +259,7 @@ MODEL_ARGS=(
   fi
   echo
   echo "=== slurm ==="
-  env | sort | grep -E '^(SLURM|MPICH|NCCL|RCCL|FI_|MASTER|OMP|ROCR|HIP|HSA|LD_LIBRARY_PATH|AWS_OFI_RCCL|FRONTIER|NDM|DATA|VAL_DATA|TRAIN_MINUTES|SCALEOUT|DILOCO|TIKTOKEN|TRITON|HUMAN_APPROVAL|RESUME_CHECKPOINT)' || true
+  env | sort | grep -E '^(SLURM|MPICH|NCCL|RCCL|FI_|MASTER|OMP|ROCR|HIP|HSA|LD_LIBRARY_PATH|AWS_OFI_RCCL|FRONTIER|NDM|DATA|VAL_DATA|TRAIN_MINUTES|SCALEOUT|DILOCO|TIKTOKEN|TRITON|HUMAN_APPROVAL|RESUME_CHECKPOINT|DEFAULT_RESUME_CHECKPOINT|CHAIN_|DISABLE_SCALAR|STATUS_REQUEST)' || true
   echo
   echo "=== command ==="
   printf '%q ' srun -N "$REQUESTED_NODES" -n "$((REQUESTED_NODES * 8))" -c7 --gpus-per-task=1 --gpu-bind=closest bash -lc \
@@ -255,6 +291,11 @@ manifest = {
     "requested_node_hours": float("${REQUESTED_NODE_HOURS}"),
     "human_approval_record": "${HUMAN_APPROVAL_RECORD}",
     "resume_checkpoint": "${RESUME_CHECKPOINT}",
+    "default_resume_checkpoint": "${DEFAULT_RESUME_CHECKPOINT}",
+    "chain_latest_path": "${CHAIN_LATEST_PATH}",
+    "chain_seed_checkpoint": "${CHAIN_SEED_CHECKPOINT}",
+    "chain_manifest_path": "${CHAIN_MANIFEST_PATH}",
+    "chain_update_on_failure": int("${CHAIN_UPDATE_ON_FAILURE}"),
     "architecture_source": "staged args.json from E97_1.3B_diloco_20260623_103742_step260500",
     "diloco_k": int("${DILOCO_K}"),
     "diloco_island_size": int("${DILOCO_ISLAND_SIZE}"),
@@ -265,9 +306,12 @@ manifest = {
     "diloco_merge_topology": "${DILOCO_MERGE_TOPOLOGY}",
     "diloco_merge_group_size": int("${DILOCO_MERGE_GROUP_SIZE}"),
     "diloco_merge_group_create_barrier_every": int("${DILOCO_MERGE_GROUP_CREATE_BARRIER_EVERY}"),
+    "diloco_merge_completion_barrier": int("${DILOCO_MERGE_COMPLETION_BARRIER}"),
     "diloco_merge_bucket_numel": int("${DILOCO_MERGE_BUCKET_NUMEL}"),
     "diloco_merge_debug": int("${DILOCO_MERGE_DEBUG}"),
     "diloco_merge_debug_ranks": "${DILOCO_MERGE_DEBUG_RANKS}",
+    "disable_scalar_status_collectives": int("${DISABLE_SCALAR_STATUS_COLLECTIVES}"),
+    "status_request_poll_seconds": float("${STATUS_REQUEST_POLL_SECONDS}"),
     "frontier_per_rank_triton_cache": int("${FRONTIER_PER_RANK_TRITON_CACHE}"),
     "frontier_triton_cache_base": "${FRONTIER_TRITON_CACHE_BASE}",
     "batch_size": int("${BATCH_SIZE}"),
@@ -328,5 +372,52 @@ with summary.open("w", encoding="utf-8") as out:
     if not error_lines:
         out.write("No error-like lines found.\n")
 PY
+
+if [[ -n "$CHAIN_LATEST_PATH" ]]; then
+  RUN_LATEST=$(find "${RUN_ROOT}/train" -mindepth 2 -maxdepth 2 -name latest.pt -print 2>/dev/null | sort | tail -n 1 || true)
+  RESOLVED_RUN_LATEST=""
+  if [[ -n "$RUN_LATEST" ]]; then
+    RESOLVED_RUN_LATEST=$(readlink -f "$RUN_LATEST" || true)
+  fi
+
+  if [[ -n "$RESOLVED_RUN_LATEST" && -r "$RESOLVED_RUN_LATEST" ]]; then
+    if [[ "$TRAIN_STATUS" == "0" || "$CHAIN_UPDATE_ON_FAILURE" == "1" ]]; then
+      mkdir -p "$(dirname "$CHAIN_LATEST_PATH")"
+      TMP_CHAIN_LINK="${CHAIN_LATEST_PATH}.${SLURM_JOB_ID:-manual}.$$.tmp"
+      ln -sfn "$RESOLVED_RUN_LATEST" "$TMP_CHAIN_LINK"
+      mv -Tf "$TMP_CHAIN_LINK" "$CHAIN_LATEST_PATH"
+      python - <<PY
+import json
+from pathlib import Path
+
+manifest_path = Path("${CHAIN_MANIFEST_PATH}")
+manifest_path.parent.mkdir(parents=True, exist_ok=True)
+payload = {
+    "updated_at_utc": "${END_UTC}",
+    "train_status": int("${TRAIN_STATUS}"),
+    "job_id": "${SLURM_JOB_ID:-manual}",
+    "job_name": "${SLURM_JOB_NAME:-e97-1p3b-pretrained-canary}",
+    "variant": "${SCALEOUT_VARIANT}",
+    "input_checkpoint": "${RESUME_CHECKPOINT}",
+    "latest_symlink": "${CHAIN_LATEST_PATH}",
+    "latest_checkpoint": "${RESOLVED_RUN_LATEST}",
+    "run_latest": "${RUN_LATEST}",
+    "run_root": "${RUN_ROOT}",
+    "manifest": "${MANIFEST_FILE}",
+    "summary": "${SUMMARY_FILE}",
+    "git_commit": "${GIT_COMMIT}",
+}
+with manifest_path.open("w", encoding="utf-8") as fh:
+    json.dump(payload, fh, indent=2, sort_keys=True)
+    fh.write("\n")
+PY
+      echo "[chain] advanced ${CHAIN_LATEST_PATH} -> ${RESOLVED_RUN_LATEST}"
+    else
+      echo "[chain] not advancing ${CHAIN_LATEST_PATH}: train_status=${TRAIN_STATUS}, CHAIN_UPDATE_ON_FAILURE=${CHAIN_UPDATE_ON_FAILURE}"
+    fi
+  else
+    echo "[chain] no readable run latest.pt found under ${RUN_ROOT}/train; chain pointer unchanged"
+  fi
+fi
 
 exit "$TRAIN_STATUS"

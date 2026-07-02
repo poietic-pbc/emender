@@ -399,6 +399,13 @@ def parse_args():
                              'communicator construction at scale while preserving '
                              'collective order. 0 disables the pacing barriers. '
                              '(env: NDM_DILOCO_MERGE_GROUP_CREATE_BARRIER_EVERY).')
+    parser.add_argument('--diloco_merge_completion_barrier', type=int,
+                        default=_env_bool_int('NDM_DILOCO_MERGE_COMPLETION_BARRIER', True),
+                        help='For hierarchical DiLoCo merges, run one all-rank completion '
+                             'barrier after the tree reduce/broadcast finishes. This keeps '
+                             'local subgroups from racing ahead while another subgroup is '
+                             'still completing its final broadcast. 1=enabled, 0=disabled '
+                             '(env: NDM_DILOCO_MERGE_COMPLETION_BARRIER).')
     parser.add_argument('--diloco_merge_debug', type=int, choices=[0, 1],
                         default=_env_bool_int('NDM_DILOCO_MERGE_DEBUG', False),
                         help='Enable rank-filtered DiLoCo merge entry/exit logging '
@@ -429,15 +436,26 @@ def parse_args():
                              'Default 600s leaves room for DiLoCo final merge and rank-0 save.')
     parser.add_argument('--walltime_check_every', type=int, default=1,
                         help='Check coordinated walltime/shutdown finalization every N optimizer '
-                             'steps. Distributed runs perform one scalar all-reduce at each check '
-                             'so a signal or deadline observed by any rank brings all ranks into '
-                             'finalization together.')
+                             'steps. By default distributed runs perform one scalar all-reduce at '
+                             'each check so a signal or deadline observed by any rank brings all '
+                             'ranks into finalization together.')
     parser.add_argument('--distributed_health_check_every', type=int, default=1,
                         help='Check distributed non-finite loss/grad health every N optimizer '
                              'steps. Defaults to every step. Pure DiLoCo scaleout jobs can set '
                              'this to the DiLoCo K interval to avoid per-step scalar collectives; '
                              'a local non-finite value between checks raises on that rank and '
                              'fails the job rather than entering a mismatched collective.')
+    parser.add_argument('--disable_scalar_status_collectives', action='store_true',
+                        help='Disable steady-state default-process-group scalar all-reduces used '
+                             'for health, train-budget, and walltime status checks. DiLoCo jobs '
+                             'then use local non-finite guards plus filesystem stop requests at '
+                             'safe optimizer-step boundaries; model-weight DiLoCo collectives are '
+                             'unchanged.')
+    parser.add_argument('--status_request_poll_seconds', type=float, default=1.0,
+                        help='When --disable_scalar_status_collectives is set, poll this many '
+                             'seconds for a filesystem stop request at each walltime/budget check '
+                             'boundary. This lets one rank publish a stop without a NCCL/RCCL '
+                             'scalar all-reduce.')
     parser.add_argument('--disable_walltime_final_checkpoint', action='store_true',
                         help='Disable walltime-aware pre-shutdown final checkpointing. Signal '
                              'handling still requests a graceful final checkpoint.')
@@ -715,7 +733,18 @@ class FinalCheckpointController:
             return None
         return payload.get('reason') or 'peer_final_checkpoint_request'
 
-    def maybe_request_stop(self, step, dist_enabled=False):
+    def _poll_peer_request_reason(self, timeout_s=0.0, poll_s=0.05):
+        deadline = time.time() + max(0.0, float(timeout_s))
+        while True:
+            reason = self._read_peer_request_reason()
+            if reason:
+                return reason
+            if time.time() >= deadline:
+                return None
+            time.sleep(min(poll_s, max(0.0, deadline - time.time())))
+
+    def maybe_request_stop(self, step, dist_enabled=False, peer_poll_s=0.0,
+                           extra_local_reason=None, extra_remaining=None):
         """Return (stop, reason, remaining_s) at safe optimizer-step boundaries."""
         if self.triggered:
             return True, self.reason, self.remaining_s
@@ -723,15 +752,21 @@ class FinalCheckpointController:
             return False, None, None
 
         local_reason, remaining = self._local_request()
+        if local_reason is None and extra_local_reason:
+            local_reason = extra_local_reason
+            remaining = extra_remaining
         if local_reason:
             self._write_stop_request(local_reason, step)
             reason = local_reason
         else:
-            reason = (
-                'peer_final_checkpoint_request'
-                if dist_enabled and self._read_peer_request_reason()
-                else None
-            )
+            reason = None
+
+        if dist_enabled:
+            peer_reason = self._poll_peer_request_reason(peer_poll_s)
+            if peer_reason and not reason:
+                reason = peer_reason
+        elif not reason:
+            reason = self._read_peer_request_reason()
 
         if reason:
             self.triggered = True
@@ -1600,6 +1635,16 @@ def diloco_merge(core_model, optimizer, args, world_size, outer_state,
             p.data.copy_(merged)
     if torch.cuda.is_available():
         torch.cuda.synchronize()
+    merge_topology = str(getattr(args, 'diloco_merge_topology', 'global') or 'global').lower()
+    completion_barrier = int(getattr(args, 'diloco_merge_completion_barrier', 1) or 0)
+    if merge_topology == 'hierarchical' and completion_barrier != 0:
+        # Hierarchical merging ends with independent local-group broadcasts. A
+        # fast local group can otherwise leave the merge while another group is
+        # still in its final broadcast, and later K-step collectives may overlap.
+        # One all-rank barrier per merge restores a single completion point.
+        dist.barrier()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
     sync_s = time.time() - t0
 
     # 3. Outer optimizer (momentum). Skipped for the local-SGD default.
@@ -1837,6 +1882,17 @@ def train(args):
     else:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"Using device: {device}")
+
+    status_collectives_enabled = (
+        dist_enabled
+        and dist.is_initialized()
+        and not bool(getattr(args, 'disable_scalar_status_collectives', False))
+    )
+    status_request_poll_s = max(0.0, float(getattr(args, 'status_request_poll_seconds', 0.0)))
+    if is_main and dist_enabled and not status_collectives_enabled:
+        print("[status] scalar default-process-group status collectives disabled; "
+              f"filesystem stop-request polling={status_request_poll_s:.2f}s at "
+              "walltime/budget check boundaries", flush=True)
 
     final_ckpt = FinalCheckpointController(args, device)
     if is_main:
@@ -2755,12 +2811,21 @@ def train(args):
 
         local_nonfinite_loss = not torch.isfinite(loss)
         if check_health_now:
-            if distributed_any(local_nonfinite_loss, device, dist_enabled=dist_enabled):
+            if status_collectives_enabled and distributed_any(local_nonfinite_loss, device, dist_enabled=True):
                 if local_nonfinite_loss:
                     print(f"Non-finite loss at step {step}: {loss.item()}. Stopping before optimizer step.")
-                elif dist_enabled:
+                else:
                     print(f"Peer reported non-finite loss at step {step}. Stopping before optimizer step.",
                           flush=True)
+                stopped_nonfinite = True
+                break
+            elif not status_collectives_enabled and local_nonfinite_loss:
+                if dist_enabled:
+                    raise RuntimeError(
+                        f"Non-finite loss at step {step}: {loss.item()} "
+                        "(scalar status collectives disabled)"
+                    )
+                print(f"Non-finite loss at step {step}: {loss.item()}. Stopping before optimizer step.")
                 stopped_nonfinite = True
                 break
         elif local_nonfinite_loss:
@@ -2812,32 +2877,24 @@ def train(args):
                 grad_norm = sum(p.grad.norm().item() ** 2 for p in model.parameters() if p.grad is not None) ** 0.5
 
             local_nonfinite_grad = not torch.isfinite(torch.as_tensor(grad_norm))
-            if check_health_now and distributed_any(local_nonfinite_grad, device, dist_enabled=dist_enabled):
+            if (check_health_now and status_collectives_enabled
+                    and distributed_any(local_nonfinite_grad, device, dist_enabled=True)):
                 grad_value = grad_norm.item() if hasattr(grad_norm, 'item') else float(grad_norm)
-                if dist_enabled:
-                    # Multi-rank (DiLoCo/DDP): a per-rank skip desyncs the collective merge
-                    # (ranks would diverge in step count). Keep the stop guard for safety.
-                    if local_nonfinite_grad:
-                        print(f"Non-finite grad norm at step {step}: {grad_value}. Stopping before optimizer step (multi-rank).", flush=True)
-                    else:
-                        print(f"Peer reported non-finite grad norm at step {step}. Stopping before optimizer step (multi-rank).", flush=True)
-                    optimizer.zero_grad(set_to_none=True)
-                    stopped_nonfinite = True
-                    break
-                # Single-GPU: SKIP this step and continue (standard mixed-precision recipe).
-                # Grad clipping handles finite explosions; a one-off bf16 inf cannot be scaled,
-                # so dropping the offending step is correct — far better than killing a multi-day run.
-                # Per-skip log: if these become frequent it signals a real divergence, not a transient.
-                print(f"Non-finite grad norm at step {step}: {grad_value}. SKIPPING this step (transient overflow), continuing.", flush=True)
+                # Multi-rank (DiLoCo/DDP): a per-rank skip desyncs the collective merge
+                # (ranks would diverge in step count). Keep the stop guard for safety.
+                if local_nonfinite_grad:
+                    print(f"Non-finite grad norm at step {step}: {grad_value}. Stopping before optimizer step (multi-rank).", flush=True)
+                else:
+                    print(f"Peer reported non-finite grad norm at step {step}. Stopping before optimizer step (multi-rank).", flush=True)
                 optimizer.zero_grad(set_to_none=True)
-                accumulated_steps = 0
-                continue
+                stopped_nonfinite = True
+                break
             elif local_nonfinite_grad:
                 grad_value = grad_norm.item() if hasattr(grad_norm, 'item') else float(grad_norm)
                 if dist_enabled:
                     raise RuntimeError(
                         f"Non-finite grad norm at step {step}: {grad_value} "
-                        f"(distributed health check cadence={health_check_every})"
+                        f"({'scalar status collectives disabled' if check_health_now else f'distributed health check cadence={health_check_every}'})"
                     )
                 print(f"Non-finite grad norm at step {step}: {grad_value}. SKIPPING this step (transient overflow), continuing.", flush=True)
                 optimizer.zero_grad(set_to_none=True)
@@ -2905,6 +2962,46 @@ def train(args):
                 running_loss = 0
                 tokens_processed = 0
                 start_time = time.time()
+
+            # Final-stop coordination must run before any rank-0-only eval or
+            # checkpoint work. Otherwise non-head ranks can enter finalization
+            # while rank 0 is still validating/saving, which desynchronizes the
+            # next distributed boundary.
+            walltime_check_every = max(1, int(args.walltime_check_every))
+            check_walltime_now = (
+                step % walltime_check_every == 0
+                or bool(getattr(final_ckpt, 'triggered', False))
+            )
+            if check_walltime_now:
+                local_budget_done = train_end_time is not None and time.time() >= train_end_time
+                extra_stop_reason = 'train_budget' if local_budget_done else None
+                stop_for_final, final_reason, remaining_s = final_ckpt.maybe_request_stop(
+                    step,
+                    dist_enabled=dist_enabled,
+                    peer_poll_s=(status_request_poll_s if not status_collectives_enabled else 0.0),
+                    extra_local_reason=extra_stop_reason,
+                )
+                if status_collectives_enabled:
+                    stop_for_final, final_reason, remaining_s = consensus_final_checkpoint_stop(
+                        final_ckpt,
+                        stop_for_final,
+                        final_reason,
+                        remaining_s,
+                        device,
+                        dist_enabled,
+                    )
+                if stop_for_final:
+                    rem_text = 'unknown' if remaining_s is None else f"{remaining_s:.1f}"
+                    print(f"[final-checkpoint] rank {rank}/{world_size} entering finalization "
+                          f"at step={step} reason={final_reason} remaining_s={rem_text} "
+                          f"model_variant={args._model_variant} is_head={is_main}",
+                          flush=True)
+                    break
+
+                if status_collectives_enabled and distributed_any(local_budget_done, device, dist_enabled=True):
+                    stop_training = True
+                elif not status_collectives_enabled and local_budget_done:
+                    stop_training = True
 
             # Fixed held-out curve (rank 0 only). For schedule-free y-mode this
             # intentionally keeps optimizer.train() weights and only flips the
@@ -2974,34 +3071,6 @@ def train(args):
                 print(f"  >>> saved checkpoint: {ckpt_path.name}")
                 if args.optimizer == 'schedulefree':
                     optimizer.train()  # Back to training mode
-
-            walltime_check_every = max(1, int(args.walltime_check_every))
-            check_walltime_now = (
-                step % walltime_check_every == 0
-                or bool(getattr(final_ckpt, 'triggered', False))
-            )
-            if check_walltime_now:
-                stop_for_final, final_reason, remaining_s = final_ckpt.maybe_request_stop(
-                    step, dist_enabled=dist_enabled)
-                stop_for_final, final_reason, remaining_s = consensus_final_checkpoint_stop(
-                    final_ckpt,
-                    stop_for_final,
-                    final_reason,
-                    remaining_s,
-                    device,
-                    dist_enabled,
-                )
-                if stop_for_final:
-                    rem_text = 'unknown' if remaining_s is None else f"{remaining_s:.1f}"
-                    print(f"[final-checkpoint] rank {rank}/{world_size} entering finalization "
-                          f"at step={step} reason={final_reason} remaining_s={rem_text} "
-                          f"model_variant={args._model_variant} is_head={is_main}",
-                          flush=True)
-                    break
-
-                local_budget_done = train_end_time is not None and time.time() >= train_end_time
-                if distributed_any(local_budget_done, device, dist_enabled=dist_enabled):
-                    stop_training = True
 
     # Stop prefetch thread
     prefetch_stop.set()
