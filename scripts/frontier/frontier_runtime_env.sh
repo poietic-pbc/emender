@@ -26,6 +26,43 @@ frontier_load_default_modules() {
   export LD_LIBRARY_PATH="${CRAY_LD_LIBRARY_PATH:-}:${LD_LIBRARY_PATH:-}"
 }
 
+frontier_assert_emender_conda_env() {
+  local expected_prefix="${EMENDER_CONDA_ENV:-}"
+  local active_prefix
+  local expected_real
+  local active_real
+
+  [[ -n "$expected_prefix" ]] || return 0
+
+  case "$expected_prefix" in
+    /*|.*|*/*)
+      expected_real=$(readlink -f "$expected_prefix")
+      active_prefix=$(python - <<'PY'
+import sys
+print(sys.prefix)
+PY
+)
+      active_real=$(readlink -f "$active_prefix")
+      if [[ "$active_real" != "$expected_real" ]]; then
+        echo "active Python prefix ${active_real} does not match EMENDER_CONDA_ENV ${expected_real}" >&2
+        return 4
+      fi
+      ;;
+  esac
+}
+
+frontier_activate_emender_conda_env() {
+  local conda_base
+
+  [[ -n "${EMENDER_CONDA_ENV:-}" ]] || return 0
+
+  conda_base=$(conda info --base)
+  # shellcheck disable=SC1090
+  source "${conda_base}/etc/profile.d/conda.sh"
+  conda activate "$EMENDER_CONDA_ENV"
+  frontier_assert_emender_conda_env
+}
+
 frontier_resolve_librccl_net() {
   local candidates=()
   local part
@@ -58,12 +95,14 @@ frontier_capture_runtime_env() {
   echo "frontier_enable_olcf_rccl_plugin=${FRONTIER_ENABLE_OLCF_RCCL_PLUGIN:-0}"
   echo "frontier_rocm_module=${FRONTIER_ROCM_MODULE:-rocm/7.1.1}"
   echo "frontier_rccl_net_plugin_module=${FRONTIER_RCCL_NET_PLUGIN_MODULE:-rccl-net-plugin/1.0}"
+  echo "EMENDER_CONDA_ENV=${EMENDER_CONDA_ENV:-}"
+  echo "CONDA_PREFIX=${CONDA_PREFIX:-}"
   echo "OLCF_OFI_NCCL_ROOT=${OLCF_OFI_NCCL_ROOT:-}"
   echo "NCCL_NET_PLUGIN=${NCCL_NET_PLUGIN:-}"
   echo "librccl_net_path=${librccl_net_path}"
   echo
   echo "=== frontier communication env ==="
-  env | sort | grep -E '^(FI_CXI|FI_MR|NCCL|RCCL|HSA_FORCE_FINE_GRAIN_PCIE|OLCF_OFI_NCCL_ROOT|LD_LIBRARY_PATH|ROCM|FRONTIER_RUNTIME_PROFILE|FRONTIER_ENABLE_OLCF_RCCL_PLUGIN|FRONTIER_ROCM_MODULE|FRONTIER_RCCL_NET_PLUGIN_MODULE)=' || true
+  env | sort | grep -E '^(FI_CXI|FI_MR|NCCL|RCCL|HSA_FORCE_FINE_GRAIN_PCIE|OLCF_OFI_NCCL_ROOT|LD_LIBRARY_PATH|ROCM|FRONTIER_RUNTIME_PROFILE|FRONTIER_ENABLE_OLCF_RCCL_PLUGIN|FRONTIER_ROCM_MODULE|FRONTIER_RCCL_NET_PLUGIN_MODULE|EMENDER_CONDA_ENV|CONDA_PREFIX)=' || true
   echo
   echo "=== python runtime versions ==="
   python - <<'PY'

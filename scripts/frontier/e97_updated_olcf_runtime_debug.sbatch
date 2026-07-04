@@ -32,6 +32,9 @@ if ! command -v module >/dev/null 2>&1; then
   source /etc/profile.d/modules.sh
 fi
 
+# shellcheck disable=SC1091
+source "${REPO}/scripts/frontier/frontier_runtime_env.sh"
+
 mkdir -p "${REPO}/logs/frontier/debug"
 cd "${REPO}"
 
@@ -75,6 +78,7 @@ export FRONTIER_RCCL_NET_PLUGIN_MODULE=${FRONTIER_RCCL_NET_PLUGIN_MODULE:-rccl-n
 export REQUIRE_RCCL_NET_PLUGIN=${REQUIRE_RCCL_NET_PLUGIN:-1}
 export NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS=${NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS:-1800}
 export FRONTIER_PER_RANK_TRITON_CACHE=${FRONTIER_PER_RANK_TRITON_CACHE:-1}
+export FRONTIER_TRAIN_ENV_PREFLIGHT=${FRONTIER_TRAIN_ENV_PREFLIGHT:-1}
 export TRAIN_MINUTES=${TRAIN_MINUTES:-6}
 export BATCH_SIZE=${BATCH_SIZE:-1}
 export SAVE_EVERY=${SAVE_EVERY:-999999}
@@ -97,8 +101,7 @@ export REQUESTED_WALLTIME=${REQUESTED_WALLTIME:-00:30:00}
 export REQUESTED_NODE_HOURS=${REQUESTED_NODE_HOURS:-1.0}
 export HUMAN_APPROVAL_RECORD=${HUMAN_APPROVAL_RECORD:-WG debug-updated-olcf-runtime: 2-node debug-QOS E97 active-latest resume smoke under OLCF runtime candidate; production chain pointer updates disabled.}
 
-# shellcheck disable=SC1091
-source activate "${ENV_PREFIX}"
+frontier_activate_emender_conda_env
 
 PLUGIN_STATUS=not-found
 IFS=':' read -r -a LD_PARTS <<< "${LD_LIBRARY_PATH:-}"

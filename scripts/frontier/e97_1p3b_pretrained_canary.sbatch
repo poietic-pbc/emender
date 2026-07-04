@@ -63,6 +63,7 @@ STATUS_REQUEST_POLL_SECONDS=${STATUS_REQUEST_POLL_SECONDS:-1.0}
 HUMAN_APPROVAL_RECORD=${HUMAN_APPROVAL_RECORD:-WG task validate-e97-1-3b: one bounded 1-node avg E97 1.3B pretrained resume canary only; no 8+ node scaleout authorized by this submission.}
 FRONTIER_RCCL_ENV=${FRONTIER_RCCL_ENV:-current}
 FRONTIER_PER_RANK_TRITON_CACHE=${FRONTIER_PER_RANK_TRITON_CACHE:-0}
+FRONTIER_TRAIN_ENV_PREFLIGHT=${FRONTIER_TRAIN_ENV_PREFLIGHT:-0}
 REQUIRE_RCCL_NET_PLUGIN=${REQUIRE_RCCL_NET_PLUGIN:-0}
 
 [[ -r "$DATA" ]] || { echo "DATA is not readable: $DATA" >&2; exit 4; }
@@ -107,13 +108,13 @@ fi
 source "${REPO}/scripts/frontier/frontier_runtime_env.sh"
 frontier_load_default_modules
 
-if [[ -n "${EMENDER_CONDA_ENV:-}" ]]; then
-  source "$(conda info --base)/etc/profile.d/conda.sh"
-  conda activate "$EMENDER_CONDA_ENV"
-fi
+frontier_activate_emender_conda_env
 
+export REPO
+export EMENDER_CONDA_ENV
 export TIKTOKEN_CACHE_DIR
 export FRONTIER_PER_RANK_TRITON_CACHE
+export FRONTIER_TRAIN_ENV_PREFLIGHT
 export FRONTIER_TRITON_CACHE_BASE
 export RANK_START_LOG
 export MPICH_GPU_SUPPORT_ENABLED=${MPICH_GPU_SUPPORT_ENABLED:-1}
@@ -274,23 +275,36 @@ MODEL_ARGS=(
   echo "require_rccl_net_plugin=$REQUIRE_RCCL_NET_PLUGIN"
   echo "rank_start_log=$RANK_START_LOG"
   echo "frontier_per_rank_triton_cache=$FRONTIER_PER_RANK_TRITON_CACHE"
+  echo "frontier_train_env_preflight=$FRONTIER_TRAIN_ENV_PREFLIGHT"
+  echo "emender_conda_env=${EMENDER_CONDA_ENV:-}"
+  echo "conda_prefix=${CONDA_PREFIX:-}"
   if [[ "$FRONTIER_PER_RANK_TRITON_CACHE" == "1" ]]; then
     echo "frontier_triton_cache_base=$FRONTIER_TRITON_CACHE_BASE"
   fi
   echo
   echo "=== slurm ==="
-  env | sort | grep -E '^(SLURM|MPICH|NCCL|RCCL|FI_|MASTER|OMP|ROCR|HIP|HSA|LD_LIBRARY_PATH|AWS_OFI_RCCL|FRONTIER|NDM|DATA|VAL_DATA|TRAIN_MINUTES|SCALEOUT|DILOCO|TIKTOKEN|TRITON|HUMAN_APPROVAL|RESUME_CHECKPOINT|DEFAULT_RESUME_CHECKPOINT|CHAIN_|DISABLE_SCALAR|STATUS_REQUEST)' || true
+  env | sort | grep -E '^(SLURM|MPICH|NCCL|RCCL|FI_|MASTER|OMP|ROCR|HIP|HSA|LD_LIBRARY_PATH|AWS_OFI_RCCL|FRONTIER|NDM|DATA|VAL_DATA|TRAIN_MINUTES|SCALEOUT|DILOCO|TIKTOKEN|TRITON|HUMAN_APPROVAL|RESUME_CHECKPOINT|DEFAULT_RESUME_CHECKPOINT|CHAIN_|DISABLE_SCALAR|STATUS_REQUEST|EMENDER_CONDA_ENV|CONDA_PREFIX)' || true
   echo
   echo "=== command ==="
   printf '%q ' srun -N "$REQUESTED_NODES" -n "$((REQUESTED_NODES * 8))" -c7 --gpus-per-task=1 --gpu-bind=closest bash -lc \
-    'printf "%s\t%s\t%s\t%s\t%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${SLURM_PROCID:-}" "${SLURM_LOCALID:-}" "${SLURMD_NODENAME:-$(hostname)}" "${SLURM_NTASKS:-}" >> "$RANK_START_LOG"; if [[ "${FRONTIER_PER_RANK_TRITON_CACHE:-0}" == "1" ]]; then export TRITON_CACHE_DIR="${FRONTIER_TRITON_CACHE_BASE%/}/rank-${SLURM_PROCID}"; mkdir -p "$TRITON_CACHE_DIR"; fi; export RANK=$SLURM_PROCID WORLD_SIZE=$SLURM_NTASKS LOCAL_RANK=0; exec python -u train.py "$@"' \
+    'source "${REPO}/scripts/frontier/frontier_runtime_env.sh"; frontier_activate_emender_conda_env; printf "%s\t%s\t%s\t%s\t%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${SLURM_PROCID:-}" "${SLURM_LOCALID:-}" "${SLURMD_NODENAME:-$(hostname)}" "${SLURM_NTASKS:-}" >> "$RANK_START_LOG"; if [[ "${FRONTIER_PER_RANK_TRITON_CACHE:-0}" == "1" ]]; then export TRITON_CACHE_DIR="${FRONTIER_TRITON_CACHE_BASE%/}/rank-${SLURM_PROCID}"; mkdir -p "$TRITON_CACHE_DIR"; fi; export RANK=$SLURM_PROCID WORLD_SIZE=$SLURM_NTASKS LOCAL_RANK=0; exec python -u train.py "$@"' \
     bash "${COMMON_ARGS[@]}" "${MODEL_ARGS[@]}"
   echo
 } | tee "$ENV_FILE"
 
+if [[ "$FRONTIER_TRAIN_ENV_PREFLIGHT" == "1" ]]; then
+  {
+    echo
+    echo "=== delegated srun training env preflight ==="
+    srun -N1 -n1 -c7 --gpus-per-task=1 --gpu-bind=closest \
+      bash -lc 'source "${REPO}/scripts/frontier/frontier_runtime_env.sh"; frontier_activate_emender_conda_env; frontier_capture_runtime_env' \
+      2>&1
+  } | tee -a "$ENV_FILE"
+fi
+
 set +e
 srun -N "$REQUESTED_NODES" -n "$((REQUESTED_NODES * 8))" -c7 --gpus-per-task=1 --gpu-bind=closest \
-  bash -lc 'printf "%s\t%s\t%s\t%s\t%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${SLURM_PROCID:-}" "${SLURM_LOCALID:-}" "${SLURMD_NODENAME:-$(hostname)}" "${SLURM_NTASKS:-}" >> "$RANK_START_LOG"; if [[ "${FRONTIER_PER_RANK_TRITON_CACHE:-0}" == "1" ]]; then export TRITON_CACHE_DIR="${FRONTIER_TRITON_CACHE_BASE%/}/rank-${SLURM_PROCID}"; mkdir -p "$TRITON_CACHE_DIR"; fi; export RANK=$SLURM_PROCID WORLD_SIZE=$SLURM_NTASKS LOCAL_RANK=0; exec python -u train.py "$@"' \
+  bash -lc 'source "${REPO}/scripts/frontier/frontier_runtime_env.sh"; frontier_activate_emender_conda_env; printf "%s\t%s\t%s\t%s\t%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${SLURM_PROCID:-}" "${SLURM_LOCALID:-}" "${SLURMD_NODENAME:-$(hostname)}" "${SLURM_NTASKS:-}" >> "$RANK_START_LOG"; if [[ "${FRONTIER_PER_RANK_TRITON_CACHE:-0}" == "1" ]]; then export TRITON_CACHE_DIR="${FRONTIER_TRITON_CACHE_BASE%/}/rank-${SLURM_PROCID}"; mkdir -p "$TRITON_CACHE_DIR"; fi; export RANK=$SLURM_PROCID WORLD_SIZE=$SLURM_NTASKS LOCAL_RANK=0; exec python -u train.py "$@"' \
   bash "${COMMON_ARGS[@]}" "${MODEL_ARGS[@]}" \
   2>&1 | tee "${LOG_DIR}/train.log"
 TRAIN_STATUS=${PIPESTATUS[0]}

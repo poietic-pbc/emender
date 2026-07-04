@@ -59,6 +59,29 @@ def test_e97_ladder_forces_olcf_runtime_and_plugin_gate():
     assert "RANK_START_LOG" in canary
 
 
+def test_e97_canary_reasserts_emender_conda_env_inside_srun_ranks():
+    helper = (ROOT / "scripts/frontier/frontier_runtime_env.sh").read_text()
+    canary = (ROOT / "scripts/frontier/e97_1p3b_pretrained_canary.sbatch").read_text()
+
+    assert "frontier_activate_emender_conda_env()" in helper
+    assert "frontier_assert_emender_conda_env()" in helper
+    assert "conda deactivate" not in helper
+    assert "conda deactivate" not in canary
+    assert "frontier_activate_emender_conda_env" in canary
+    assert "export EMENDER_CONDA_ENV" in canary
+    assert "frontier_train_env_preflight=$FRONTIER_TRAIN_ENV_PREFLIGHT" in canary
+    assert "=== delegated srun training env preflight ===" in canary
+    assert "frontier_capture_runtime_env" in canary
+
+    preflight = canary.index("=== delegated srun training env preflight ===")
+    training = canary.index("2>&1 | tee \"${LOG_DIR}/train.log\"")
+    for section in (canary[preflight:training], canary[training - 800:training]):
+        activation = section.index("frontier_activate_emender_conda_env")
+        python_exec = section.find("python -u train.py")
+        if python_exec != -1:
+            assert activation < python_exec
+
+
 def test_updated_olcf_debug_wrapper_preserves_chain_guard_and_hardening():
     debug = (ROOT / "scripts/frontier/e97_updated_olcf_runtime_debug.sbatch").read_text()
 
@@ -68,6 +91,10 @@ def test_updated_olcf_debug_wrapper_preserves_chain_guard_and_hardening():
     assert "export CHAIN_LATEST_PATH=" in debug
     assert "export CHAIN_MANIFEST_PATH=" in debug
     assert "export CHAIN_UPDATE_ON_FAILURE=0" in debug
+    assert "export FRONTIER_TRAIN_ENV_PREFLIGHT=${FRONTIER_TRAIN_ENV_PREFLIGHT:-1}" in debug
+    assert "frontier_activate_emender_conda_env" in debug
+    assert "source activate" not in debug
+    assert "conda deactivate" not in debug
     assert "FRONTIER_ENABLE_OLCF_RCCL_PLUGIN=${FRONTIER_ENABLE_OLCF_RCCL_PLUGIN:-1}" in debug
     assert "REQUIRE_RCCL_NET_PLUGIN=${REQUIRE_RCCL_NET_PLUGIN:-1}" in debug
     assert "NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS=${NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS:-1800}" in debug
