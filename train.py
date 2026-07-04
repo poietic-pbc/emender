@@ -34,6 +34,7 @@ import datetime
 import glob
 import re
 import tempfile
+import ctypes.util
 
 _SHUTDOWN_REQUEST = {
     'requested': False,
@@ -445,6 +446,15 @@ def parse_args():
                              'this to the DiLoCo K interval to avoid per-step scalar collectives; '
                              'a local non-finite value between checks raises on that rank and '
                              'fails the job rather than entering a mismatched collective.')
+    parser.add_argument('--distributed_init_timeout_seconds', type=float,
+                        default=(
+                            float(os.environ['NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS'])
+                            if os.environ.get('NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS') else None
+                        ),
+                        help='Optional explicit torch.distributed init_process_group timeout. '
+                             'Unset preserves PyTorch defaults; set a finite debug value such as '
+                             '900 to expose rendezvous failures without waiting indefinitely '
+                             '(env: NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS).')
     parser.add_argument('--disable_scalar_status_collectives', action='store_true',
                         help='Disable steady-state default-process-group scalar all-reduces used '
                              'for health, train-budget, and walltime status checks. DiLoCo jobs '
@@ -853,6 +863,65 @@ def parse_level(level_str):
         return level_str  # Keep as string for any other format
 
 
+def _resolve_library_from_ld_path(name):
+    paths = []
+    for root_var in ('OLCF_OFI_NCCL_ROOT', 'AWS_OFI_RCCL_PLUGIN_DIR'):
+        root = os.environ.get(root_var)
+        if root:
+            paths.extend([
+                os.path.join(root, 'lib', name),
+                os.path.join(root, 'lib64', name),
+            ])
+    for part in os.environ.get('LD_LIBRARY_PATH', '').split(':'):
+        if part:
+            paths.append(os.path.join(part, name))
+    for path in paths:
+        if os.path.isfile(path) and os.access(path, os.R_OK):
+            return path
+    found = ctypes.util.find_library(name[:-3] if name.endswith('.so') else name)
+    return found or None
+
+
+def _selected_env(prefixes, names):
+    keys = sorted(
+        key for key in os.environ
+        if key in names or any(key.startswith(prefix) for prefix in prefixes)
+    )
+    return {key: os.environ.get(key) for key in keys}
+
+
+def frontier_runtime_manifest():
+    """Capture Frontier communication/runtime state for post-run diagnosis."""
+    try:
+        import triton
+        triton_version = getattr(triton, '__version__', None)
+    except Exception as exc:
+        triton_version = f"import-error:{exc!r}"
+
+    return {
+        'python_version': sys.version.split()[0],
+        'python_executable': sys.executable,
+        'torch_version': getattr(torch, '__version__', None),
+        'torch_version_hip': getattr(torch.version, 'hip', None),
+        'triton_version': triton_version,
+        'olcf_ofi_nccl_root': os.environ.get('OLCF_OFI_NCCL_ROOT'),
+        'librccl_net_path': _resolve_library_from_ld_path('librccl-net.so') or 'not-found',
+        'env': _selected_env(
+            prefixes=('FI_CXI', 'NCCL'),
+            names={
+                'HSA_FORCE_FINE_GRAIN_PCIE',
+                'OLCF_OFI_NCCL_ROOT',
+                'NCCL_NET_PLUGIN',
+                'FRONTIER_RUNTIME_PROFILE',
+                'FRONTIER_ENABLE_OLCF_RCCL_PLUGIN',
+                'FRONTIER_ROCM_MODULE',
+                'FRONTIER_RCCL_NET_PLUGIN_MODULE',
+                'NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS',
+            },
+        ),
+    }
+
+
 def setup_output_dir(args, model_metadata=None):
     """Create output directory with run info."""
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -874,6 +943,7 @@ def setup_output_dir(args, model_metadata=None):
         'resume': getattr(args, 'resume', None),
         'diloco_bootstrap_outer_state': getattr(args, 'diloco_bootstrap_outer_state', 'none'),
         'model': model_metadata or getattr(args, '_model_metadata', None),
+        'runtime': frontier_runtime_manifest(),
     }
 
     # Save args
@@ -1862,10 +1932,16 @@ def train(args):
         torch.cuda.set_device(local_rank)
         device = torch.device(f'cuda:{local_rank}')
         if not dist.is_initialized():
+            init_kwargs = {}
+            if getattr(args, 'distributed_init_timeout_seconds', None) is not None:
+                init_timeout_s = max(1.0, float(args.distributed_init_timeout_seconds))
+                init_kwargs['timeout'] = datetime.timedelta(seconds=init_timeout_s)
+                if is_main:
+                    print(f"[distributed-init] timeout={init_timeout_s:.1f}s", flush=True)
             try:
-                dist.init_process_group(backend='nccl', device_id=device)
+                dist.init_process_group(backend='nccl', device_id=device, **init_kwargs)
             except TypeError:
-                dist.init_process_group(backend='nccl')
+                dist.init_process_group(backend='nccl', **init_kwargs)
         _mode = 'DiLoCo' if use_diloco else 'DDP'
         if is_main:
             print(f"[{_mode}] world_size={world_size} backend=nccl; this is rank {rank} "

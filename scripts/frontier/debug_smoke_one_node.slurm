@@ -51,12 +51,8 @@ STDERR_PATH="logs/frontier/debug/${SLURM_JOB_NAME:-emender-smoke}-${SLURM_JOB_ID
 mkdir -p "$LOG_DIR" "$ARTIFACT_DIR" "$SUMMARY_DIR"
 cd "$REPO"
 
-module load PrgEnv-gnu/8.7.0
-module load cpe/26.03
-module load miniforge3/23.11.0-0
-module load rocm/7.1.1
-module load craype-accel-amd-gfx90a
-export LD_LIBRARY_PATH="${CRAY_LD_LIBRARY_PATH:-}:${LD_LIBRARY_PATH:-}"
+source "${REPO}/scripts/frontier/frontier_runtime_env.sh"
+frontier_load_default_modules
 
 if [[ -n "${EMENDER_CONDA_ENV:-}" ]]; then
   source "$(conda info --base)/etc/profile.d/conda.sh"
@@ -65,6 +61,9 @@ fi
 
 export MPICH_GPU_SUPPORT_ENABLED=${MPICH_GPU_SUPPORT_ENABLED:-1}
 export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-hsn0}
+if frontier_runtime_olcf_rccl_enabled; then
+  export NCCL_NET_PLUGIN=${NCCL_NET_PLUGIN:-librccl-net.so}
+fi
 export MASTER_ADDR=${MASTER_ADDR:-$(hostname -i | awk '{print $1}')}
 export MASTER_PORT=${MASTER_PORT:-3442}
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-7}
@@ -201,6 +200,7 @@ esac
 
 START_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 GIT_COMMIT=$(git rev-parse HEAD)
+LIBRCCL_NET_PATH=$(frontier_resolve_librccl_net)
 REQUESTED_NODES=${SLURM_JOB_NUM_NODES:-1}
 REQUESTED_SECONDS=$(python - <<'PY'
 import os
@@ -240,6 +240,10 @@ PY
   echo "=== slurm ==="
   env | sort | grep -E '^(SLURM|MPICH|NCCL|MASTER|OMP|ROCR|HIP|HSA|GDN2|NDM|DATA|VAL_DATA|TOKENIZER|TIKTOKEN|TRAIN_MINUTES|SMOKE_VARIANT)=' || true
   echo "requested_node_hours=$REQUESTED_NODE_HOURS"
+  echo "librccl_net_path=$LIBRCCL_NET_PATH"
+  echo
+  echo "=== frontier runtime ==="
+  frontier_capture_runtime_env "$LIBRCCL_NET_PATH"
   echo
   echo "=== modules ==="
   module list 2>&1
@@ -385,6 +389,13 @@ manifest = {
     "kernel_smoke_status": int("${KERNEL_SMOKE_STATUS}"),
     "train_status": int("${TRAIN_STATUS}"),
     "git_commit": "${GIT_COMMIT}",
+    "frontier_runtime_profile": "${FRONTIER_RUNTIME_PROFILE:-default}",
+    "frontier_enable_olcf_rccl_plugin": int("${FRONTIER_ENABLE_OLCF_RCCL_PLUGIN:-0}"),
+    "frontier_rocm_module": "${FRONTIER_ROCM_MODULE:-rocm/7.1.1}",
+    "frontier_rccl_net_plugin_module": "${FRONTIER_RCCL_NET_PLUGIN_MODULE:-rccl-net-plugin/1.0}",
+    "olcf_ofi_nccl_root": "${OLCF_OFI_NCCL_ROOT:-}",
+    "nccl_net_plugin": "${NCCL_NET_PLUGIN:-}",
+    "librccl_net_path": "${LIBRCCL_NET_PATH}",
     "tiktoken_cache_dir": "${TIKTOKEN_CACHE_DIR}",
     "resume_checkpoint": "${RESUME_CHECKPOINT:-}",
     "stdout": "${STDOUT_PATH}",

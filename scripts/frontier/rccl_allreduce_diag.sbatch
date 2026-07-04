@@ -44,12 +44,8 @@ STDERR_PATH="logs/frontier/rccl_diag/${SLURM_JOB_NAME:-rccl-allreduce-diag}-${SL
 mkdir -p "$ARTIFACT_DIR" "$LOG_DIR" "$SUMMARY_DIR" logs/frontier/rccl_diag
 cd "$REPO"
 
-module load PrgEnv-gnu/8.7.0
-module load cpe/26.03
-module load miniforge3/23.11.0-0
-module load rocm/7.1.1
-module load craype-accel-amd-gfx90a
-export LD_LIBRARY_PATH="${CRAY_LD_LIBRARY_PATH:-}:${LD_LIBRARY_PATH:-}"
+source "${REPO}/scripts/frontier/frontier_runtime_env.sh"
+frontier_load_default_modules
 
 if [[ -n "${EMENDER_CONDA_ENV:-}" ]]; then
   source "$(conda info --base)/etc/profile.d/conda.sh"
@@ -83,23 +79,11 @@ if [[ "$MODE" == "recommended" ]]; then
 else
   export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-hsn0}
 fi
-
-PLUGIN_CANDIDATES=()
-if [[ -n "${AWS_OFI_RCCL_PLUGIN_DIR:-}" ]]; then
-  PLUGIN_CANDIDATES+=("${AWS_OFI_RCCL_PLUGIN_DIR%/}/lib/librccl-net.so")
+if frontier_runtime_olcf_rccl_enabled; then
+  export NCCL_NET_PLUGIN=${NCCL_NET_PLUGIN:-librccl-net.so}
 fi
-IFS=':' read -r -a _LD_PARTS <<< "${LD_LIBRARY_PATH:-}"
-for part in "${_LD_PARTS[@]}"; do
-  [[ -n "$part" ]] && PLUGIN_CANDIDATES+=("${part%/}/librccl-net.so")
-done
 
-PLUGIN_STATUS="not-found"
-for candidate in "${PLUGIN_CANDIDATES[@]}"; do
-  if [[ -r "$candidate" ]]; then
-    PLUGIN_STATUS="$candidate"
-    break
-  fi
-done
+PLUGIN_STATUS=$(frontier_resolve_librccl_net)
 export RCCL_DIAG_PLUGIN_STATUS="$PLUGIN_STATUS"
 
 {
@@ -114,6 +98,9 @@ export RCCL_DIAG_PLUGIN_STATUS="$PLUGIN_STATUS"
   echo
   echo "=== modules ==="
   module -t list 2>&1 || true
+  echo
+  echo "=== frontier runtime ==="
+  frontier_capture_runtime_env "$PLUGIN_STATUS"
   echo
   echo "=== selected env ==="
   env | sort | grep -E '^(SLURM|MPICH|NCCL|RCCL|FI_|MASTER|OMP|ROCR|HIP|HSA|CRAY|ROCM|LD_LIBRARY_PATH|AWS_OFI_RCCL|EMENDER_CONDA_ENV)' || true
