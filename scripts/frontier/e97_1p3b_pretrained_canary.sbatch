@@ -57,11 +57,13 @@ COMPILE_WARMUP_STEPS=${COMPILE_WARMUP_STEPS:-1}
 WALLTIME_FINAL_CHECKPOINT_MARGIN_SECONDS=${WALLTIME_FINAL_CHECKPOINT_MARGIN_SECONDS:-600}
 WALLTIME_CHECK_EVERY=${WALLTIME_CHECK_EVERY:-1}
 DISTRIBUTED_HEALTH_CHECK_EVERY=${DISTRIBUTED_HEALTH_CHECK_EVERY:-1}
+DISTRIBUTED_INIT_TIMEOUT_SECONDS=${DISTRIBUTED_INIT_TIMEOUT_SECONDS:-${NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS:-}}
 DISABLE_SCALAR_STATUS_COLLECTIVES=${DISABLE_SCALAR_STATUS_COLLECTIVES:-0}
 STATUS_REQUEST_POLL_SECONDS=${STATUS_REQUEST_POLL_SECONDS:-1.0}
 HUMAN_APPROVAL_RECORD=${HUMAN_APPROVAL_RECORD:-WG task validate-e97-1-3b: one bounded 1-node avg E97 1.3B pretrained resume canary only; no 8+ node scaleout authorized by this submission.}
 FRONTIER_RCCL_ENV=${FRONTIER_RCCL_ENV:-current}
 FRONTIER_PER_RANK_TRITON_CACHE=${FRONTIER_PER_RANK_TRITON_CACHE:-0}
+REQUIRE_RCCL_NET_PLUGIN=${REQUIRE_RCCL_NET_PLUGIN:-0}
 
 [[ -r "$DATA" ]] || { echo "DATA is not readable: $DATA" >&2; exit 4; }
 [[ -r "$VAL_DATA" ]] || { echo "VAL_DATA is not readable: $VAL_DATA" >&2; exit 4; }
@@ -88,6 +90,7 @@ SUMMARY_DIR="${RUN_ROOT}/summaries"
 ENV_FILE="${ARTIFACT_DIR}/env.txt"
 MANIFEST_FILE="${ARTIFACT_DIR}/manifest.json"
 SUMMARY_FILE="${SUMMARY_DIR}/summary.md"
+RANK_START_LOG="${ARTIFACT_DIR}/rank-start.tsv"
 STDOUT_PATH="logs/frontier/scaleout/${SLURM_JOB_NAME:-e97-1p3b-pretrained-canary}-${SLURM_JOB_ID:-manual}.out"
 STDERR_PATH="logs/frontier/scaleout/${SLURM_JOB_NAME:-e97-1p3b-pretrained-canary}-${SLURM_JOB_ID:-manual}.err"
 FRONTIER_TRITON_CACHE_BASE=${FRONTIER_TRITON_CACHE_BASE:-"${RUN_ROOT}/artifacts/triton-cache"}
@@ -95,12 +98,14 @@ FRONTIER_TRITON_CACHE_BASE=${FRONTIER_TRITON_CACHE_BASE:-"${RUN_ROOT}/artifacts/
 mkdir -p "$LOG_DIR" "$ARTIFACT_DIR" "$SUMMARY_DIR" logs/frontier/scaleout
 cd "$REPO"
 
-module load PrgEnv-gnu/8.7.0
-module load cpe/26.03
-module load miniforge3/23.11.0-0
-module load rocm/7.1.1
-module load craype-accel-amd-gfx90a
-export LD_LIBRARY_PATH="${CRAY_LD_LIBRARY_PATH:-}:${LD_LIBRARY_PATH:-}"
+if ! command -v module >/dev/null 2>&1; then
+  # shellcheck disable=SC1091
+  source /etc/profile.d/modules.sh
+fi
+
+# shellcheck disable=SC1091
+source "${REPO}/scripts/frontier/frontier_runtime_env.sh"
+frontier_load_default_modules
 
 if [[ -n "${EMENDER_CONDA_ENV:-}" ]]; then
   source "$(conda info --base)/etc/profile.d/conda.sh"
@@ -110,11 +115,22 @@ fi
 export TIKTOKEN_CACHE_DIR
 export FRONTIER_PER_RANK_TRITON_CACHE
 export FRONTIER_TRITON_CACHE_BASE
+export RANK_START_LOG
 export MPICH_GPU_SUPPORT_ENABLED=${MPICH_GPU_SUPPORT_ENABLED:-1}
 export MASTER_ADDR=${MASTER_ADDR:-$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)}
-export MASTER_PORT=${MASTER_PORT:-3442}
+frontier_derive_master_port() {
+  if [[ -n "${SLURM_JOB_ID:-}" && "${SLURM_JOB_ID}" =~ ^[0-9]+$ ]]; then
+    printf '%d\n' $((20000 + (10#${SLURM_JOB_ID} % 40000)))
+  else
+    printf '3442\n'
+  fi
+}
+export MASTER_PORT=${MASTER_PORT:-$(frontier_derive_master_port)}
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-7}
 export NDM_PIN_TRITON_AUTOTUNE=${NDM_PIN_TRITON_AUTOTUNE:-1}
+if [[ -n "$DISTRIBUTED_INIT_TIMEOUT_SECONDS" ]]; then
+  export NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS="$DISTRIBUTED_INIT_TIMEOUT_SECONDS"
+fi
 
 if [[ "$FRONTIER_RCCL_ENV" == "recommended" ]]; then
   export FI_MR_CACHE_MONITOR=${FI_MR_CACHE_MONITOR:-kdreg2}
@@ -135,14 +151,11 @@ else
   export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-hsn0}
 fi
 
-RCCL_NET_PLUGIN_STATUS="not-found"
-IFS=':' read -r -a LD_LIBRARY_PATH_PARTS <<< "${LD_LIBRARY_PATH:-}"
-for lib_dir in "${LD_LIBRARY_PATH_PARTS[@]}"; do
-  if [[ -n "$lib_dir" && -r "${lib_dir%/}/librccl-net.so" ]]; then
-    RCCL_NET_PLUGIN_STATUS="${lib_dir%/}/librccl-net.so"
-    break
-  fi
-done
+RCCL_NET_PLUGIN_STATUS=$(frontier_resolve_librccl_net)
+if [[ "$REQUIRE_RCCL_NET_PLUGIN" == "1" && "$RCCL_NET_PLUGIN_STATUS" == "not-found" ]]; then
+  echo "librccl-net.so was not found after runtime setup; refusing to start ladder training" >&2
+  exit 4
+fi
 
 REQUESTED_NODES=${SLURM_JOB_NUM_NODES:-1}
 REQUESTED_WALLTIME=${REQUESTED_WALLTIME:-${SLURM_TIMELIMIT:-00:20:00}}
@@ -188,6 +201,10 @@ COMMON_ARGS=(
   --diloco_merge_debug "$DILOCO_MERGE_DEBUG"
   --diloco_merge_debug_ranks "$DILOCO_MERGE_DEBUG_RANKS"
 )
+
+if [[ -n "$DISTRIBUTED_INIT_TIMEOUT_SECONDS" ]]; then
+  COMMON_ARGS+=(--distributed_init_timeout_seconds "$DISTRIBUTED_INIT_TIMEOUT_SECONDS")
+fi
 
 if [[ "$DISABLE_SCALAR_STATUS_COLLECTIVES" == "1" ]]; then
   COMMON_ARGS+=(
@@ -249,10 +266,13 @@ MODEL_ARGS=(
   echo "diloco_merge_bucket_numel=$DILOCO_MERGE_BUCKET_NUMEL"
   echo "diloco_merge_debug=$DILOCO_MERGE_DEBUG"
   echo "diloco_merge_debug_ranks=$DILOCO_MERGE_DEBUG_RANKS"
+  echo "distributed_init_timeout_seconds=${DISTRIBUTED_INIT_TIMEOUT_SECONDS:-}"
   echo "disable_scalar_status_collectives=$DISABLE_SCALAR_STATUS_COLLECTIVES"
   echo "status_request_poll_seconds=$STATUS_REQUEST_POLL_SECONDS"
   echo "frontier_rccl_env=$FRONTIER_RCCL_ENV"
   echo "rccl_net_plugin_status=$RCCL_NET_PLUGIN_STATUS"
+  echo "require_rccl_net_plugin=$REQUIRE_RCCL_NET_PLUGIN"
+  echo "rank_start_log=$RANK_START_LOG"
   echo "frontier_per_rank_triton_cache=$FRONTIER_PER_RANK_TRITON_CACHE"
   if [[ "$FRONTIER_PER_RANK_TRITON_CACHE" == "1" ]]; then
     echo "frontier_triton_cache_base=$FRONTIER_TRITON_CACHE_BASE"
@@ -263,14 +283,14 @@ MODEL_ARGS=(
   echo
   echo "=== command ==="
   printf '%q ' srun -N "$REQUESTED_NODES" -n "$((REQUESTED_NODES * 8))" -c7 --gpus-per-task=1 --gpu-bind=closest bash -lc \
-    'if [[ "${FRONTIER_PER_RANK_TRITON_CACHE:-0}" == "1" ]]; then export TRITON_CACHE_DIR="${FRONTIER_TRITON_CACHE_BASE%/}/rank-${SLURM_PROCID}"; mkdir -p "$TRITON_CACHE_DIR"; fi; export RANK=$SLURM_PROCID WORLD_SIZE=$SLURM_NTASKS LOCAL_RANK=0; exec python -u train.py "$@"' \
+    'printf "%s\t%s\t%s\t%s\t%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${SLURM_PROCID:-}" "${SLURM_LOCALID:-}" "${SLURMD_NODENAME:-$(hostname)}" "${SLURM_NTASKS:-}" >> "$RANK_START_LOG"; if [[ "${FRONTIER_PER_RANK_TRITON_CACHE:-0}" == "1" ]]; then export TRITON_CACHE_DIR="${FRONTIER_TRITON_CACHE_BASE%/}/rank-${SLURM_PROCID}"; mkdir -p "$TRITON_CACHE_DIR"; fi; export RANK=$SLURM_PROCID WORLD_SIZE=$SLURM_NTASKS LOCAL_RANK=0; exec python -u train.py "$@"' \
     bash "${COMMON_ARGS[@]}" "${MODEL_ARGS[@]}"
   echo
 } | tee "$ENV_FILE"
 
 set +e
 srun -N "$REQUESTED_NODES" -n "$((REQUESTED_NODES * 8))" -c7 --gpus-per-task=1 --gpu-bind=closest \
-  bash -lc 'if [[ "${FRONTIER_PER_RANK_TRITON_CACHE:-0}" == "1" ]]; then export TRITON_CACHE_DIR="${FRONTIER_TRITON_CACHE_BASE%/}/rank-${SLURM_PROCID}"; mkdir -p "$TRITON_CACHE_DIR"; fi; export RANK=$SLURM_PROCID WORLD_SIZE=$SLURM_NTASKS LOCAL_RANK=0; exec python -u train.py "$@"' \
+  bash -lc 'printf "%s\t%s\t%s\t%s\t%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${SLURM_PROCID:-}" "${SLURM_LOCALID:-}" "${SLURMD_NODENAME:-$(hostname)}" "${SLURM_NTASKS:-}" >> "$RANK_START_LOG"; if [[ "${FRONTIER_PER_RANK_TRITON_CACHE:-0}" == "1" ]]; then export TRITON_CACHE_DIR="${FRONTIER_TRITON_CACHE_BASE%/}/rank-${SLURM_PROCID}"; mkdir -p "$TRITON_CACHE_DIR"; fi; export RANK=$SLURM_PROCID WORLD_SIZE=$SLURM_NTASKS LOCAL_RANK=0; exec python -u train.py "$@"' \
   bash "${COMMON_ARGS[@]}" "${MODEL_ARGS[@]}" \
   2>&1 | tee "${LOG_DIR}/train.log"
 TRAIN_STATUS=${PIPESTATUS[0]}
@@ -310,10 +330,14 @@ manifest = {
     "diloco_merge_bucket_numel": int("${DILOCO_MERGE_BUCKET_NUMEL}"),
     "diloco_merge_debug": int("${DILOCO_MERGE_DEBUG}"),
     "diloco_merge_debug_ranks": "${DILOCO_MERGE_DEBUG_RANKS}",
+    "distributed_init_timeout_seconds": "${DISTRIBUTED_INIT_TIMEOUT_SECONDS}",
     "disable_scalar_status_collectives": int("${DISABLE_SCALAR_STATUS_COLLECTIVES}"),
     "status_request_poll_seconds": float("${STATUS_REQUEST_POLL_SECONDS}"),
+    "require_rccl_net_plugin": int("${REQUIRE_RCCL_NET_PLUGIN}"),
+    "rccl_net_plugin_status": "${RCCL_NET_PLUGIN_STATUS}",
     "frontier_per_rank_triton_cache": int("${FRONTIER_PER_RANK_TRITON_CACHE}"),
     "frontier_triton_cache_base": "${FRONTIER_TRITON_CACHE_BASE}",
+    "rank_start_log": "${RANK_START_LOG}",
     "batch_size": int("${BATCH_SIZE}"),
     "chunk_size": int("${CHUNK_SIZE}"),
     "save_every": int("${SAVE_EVERY}"),

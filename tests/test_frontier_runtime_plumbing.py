@@ -42,6 +42,38 @@ def test_rccl_diagnostic_uses_shared_plugin_resolution():
     assert "frontier_capture_runtime_env" in diag
 
 
+def test_e97_ladder_forces_olcf_runtime_and_plugin_gate():
+    ladder = (ROOT / "scripts/frontier/e97_1p3b_pretrained_k160_scale_ladder.sbatch").read_text()
+    canary = (ROOT / "scripts/frontier/e97_1p3b_pretrained_canary.sbatch").read_text()
+
+    assert ".envs/olcf-rocm711-torch210-py312" in ladder
+    assert "FRONTIER_ENABLE_OLCF_RCCL_PLUGIN=${FRONTIER_ENABLE_OLCF_RCCL_PLUGIN:-1}" in ladder
+    assert "FRONTIER_RCCL_NET_PLUGIN_MODULE=${FRONTIER_RCCL_NET_PLUGIN_MODULE:-rccl-net-plugin/1.0}" in ladder
+    assert "REQUIRE_RCCL_NET_PLUGIN=${REQUIRE_RCCL_NET_PLUGIN:-1}" in ladder
+    assert "NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS=${NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS:-1800}" in ladder
+    assert "frontier_load_default_modules" in canary
+    assert "frontier_derive_master_port" in canary
+    assert "RCCL_NET_PLUGIN_STATUS=$(frontier_resolve_librccl_net)" in canary
+    assert "refusing to start ladder training" in canary
+    assert "--distributed_init_timeout_seconds" in canary
+    assert "RANK_START_LOG" in canary
+
+
+def test_updated_olcf_debug_wrapper_preserves_chain_guard_and_hardening():
+    debug = (ROOT / "scripts/frontier/e97_updated_olcf_runtime_debug.sbatch").read_text()
+
+    assert "ENV_PREFIX=${ENV_PREFIX:-\"${REPO}/.envs/olcf-rocm711-torch210-py312\"}" in debug
+    assert "module load rccl-net-plugin/1.0" in debug
+    assert "RESOLVED_PRODUCTION_LATEST=$(readlink -f \"${PRODUCTION_LATEST}\")" in debug
+    assert "export CHAIN_LATEST_PATH=" in debug
+    assert "export CHAIN_MANIFEST_PATH=" in debug
+    assert "export CHAIN_UPDATE_ON_FAILURE=0" in debug
+    assert "FRONTIER_ENABLE_OLCF_RCCL_PLUGIN=${FRONTIER_ENABLE_OLCF_RCCL_PLUGIN:-1}" in debug
+    assert "REQUIRE_RCCL_NET_PLUGIN=${REQUIRE_RCCL_NET_PLUGIN:-1}" in debug
+    assert "NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS=${NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS:-1800}" in debug
+    assert "production latest.pt metadata changed during debug smoke" in debug
+
+
 def test_train_runtime_manifest_resolves_olcf_librccl_net(monkeypatch, tmp_path):
     import train
 
