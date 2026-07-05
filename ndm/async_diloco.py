@@ -52,8 +52,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 import json
 import math
+import multiprocessing as mp
 import os
 from pathlib import Path
+import queue
 import time
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
@@ -1193,6 +1195,577 @@ def _weighted_scalar_mean(
     }
 
 
+@dataclass(frozen=True)
+class AsyncDiLoCoWorkerSpec:
+    worker_id: str
+    gpu_id: int
+    local_steps: int = 1
+    tokens_per_step: int = 1024
+    delay_s: float = 0.0
+    fail_before_submit: bool = False
+    delta_scale: float = 0.01
+
+    @property
+    def tokens(self) -> int:
+        return int(self.local_steps * self.tokens_per_step)
+
+
+@dataclass(frozen=True)
+class AsyncDiLoCoWorkerReport:
+    worker_id: str
+    gpu_id: int
+    base_generation: int
+    update: AsyncDiLoCoUpdate | None
+    elapsed_s: float
+    tokens: int = 0
+    failed: bool = False
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class AsyncDiLoCoSupervisorPrototypeResult:
+    node_id: str
+    generation: int
+    node_update: AsyncDiLoCoUpdate
+    worker_reports: Sequence[AsyncDiLoCoWorkerReport]
+    metrics: AsyncDiLoCoGenerationMetrics
+
+
+@dataclass(frozen=True)
+class AsyncDiLoCoGlobalPrototypeResult:
+    generation: int
+    state: Mapping[str, torch.Tensor]
+    metrics: AsyncDiLoCoGenerationMetrics
+    checkpoint_behavior: Mapping[str, Any]
+    publish_result: AsyncDiLoCoPublishResult | None = None
+
+
+@dataclass(frozen=True)
+class AsyncDiLoCoPrototypeResult:
+    run_id: str
+    generation: int
+    initial_state_path: str | None
+    supervisor: AsyncDiLoCoSupervisorPrototypeResult
+    global_merger: AsyncDiLoCoGlobalPrototypeResult
+    metrics_summary: AsyncDiLoCoMetricsSummary
+    metrics_path: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return _canonicalize({
+            "run_id": self.run_id,
+            "generation": self.generation,
+            "initial_state_path": self.initial_state_path,
+            "effective_quorum": self.supervisor.metrics.quorum_size,
+            "tokens_per_sec": self.global_merger.metrics.tokens_per_sec,
+            "update_bytes": dict(self.global_merger.metrics.update_bytes),
+            "generation_latency_s": self.global_merger.metrics.generation_duration_s,
+            "checkpoint_behavior": dict(self.global_merger.checkpoint_behavior),
+            "metrics_path": self.metrics_path,
+            "metrics_summary": self.metrics_summary.to_dict(),
+            "worker_reports": [
+                {
+                    "worker_id": report.worker_id,
+                    "gpu_id": report.gpu_id,
+                    "base_generation": report.base_generation,
+                    "tokens": report.tokens,
+                    "elapsed_s": report.elapsed_s,
+                    "failed": report.failed,
+                    "error": report.error,
+                }
+                for report in self.supervisor.worker_reports
+            ],
+        })
+
+
+@dataclass(frozen=True)
+class AsyncDiLoCoPrototypeConfig:
+    """One local worker/supervisor/global-merger generation.
+
+    ``initial_state_path`` is read-only. Durable ``latest`` publication happens
+    only inside ``run_dir`` so debug loads cannot update production latest.
+    """
+
+    run_id: str
+    generation: int = 0
+    node_id: str = "node-0"
+    worker_specs: Sequence[AsyncDiLoCoWorkerSpec] = field(default_factory=tuple)
+    local_quorum: int | None = None
+    global_quorum: int = 1
+    timeout_s: float = 30.0
+    eta_outer: float = 1.0
+    weight_by: str = "tokens"
+    initial_state_path: str | Path | None = None
+    initial_state: TensorState | None = None
+    run_dir: str | Path | None = None
+    use_processes: bool = False
+    include_group_merger: bool = True
+
+
+def load_async_diloco_readonly_state(path: str | Path) -> dict[str, torch.Tensor]:
+    source = Path(path)
+    if source.is_dir():
+        source = source / "state.pt"
+    if not source.exists():
+        raise FileNotFoundError(f"async DiLoCo initial state not found: {source}")
+    payload = torch.load(source, map_location="cpu", weights_only=False)
+    return _checkpoint_payload_to_tensor_state(payload)
+
+
+def run_async_diloco_worker_supervisor_prototype(
+    config: AsyncDiLoCoPrototypeConfig,
+) -> AsyncDiLoCoPrototypeResult:
+    worker_specs = tuple(config.worker_specs) or tuple(
+        AsyncDiLoCoWorkerSpec(worker_id=f"worker-{idx}", gpu_id=idx)
+        for idx in range(8)
+    )
+    local_quorum = config.local_quorum if config.local_quorum is not None else len(worker_specs)
+    if local_quorum <= 0 or local_quorum > len(worker_specs):
+        raise ValueError("local_quorum must be in [1, worker_count]")
+    if config.global_quorum != 1:
+        raise ValueError("single-node prototype supports global_quorum=1")
+
+    base_state = _prototype_base_state(config)
+    supervisor = _run_node_supervisor_prototype(
+        run_id=config.run_id,
+        node_id=config.node_id,
+        generation=config.generation,
+        base_state=base_state,
+        worker_specs=worker_specs,
+        local_quorum=local_quorum,
+        timeout_s=config.timeout_s,
+        eta_outer=config.eta_outer,
+        weight_by=config.weight_by,
+        use_processes=config.use_processes,
+    )
+    node_update = supervisor.node_update
+    if config.include_group_merger:
+        node_update = replace(node_update, worker_id=f"group-0/{node_update.worker_id}")
+    global_result = _run_global_merger_prototype(
+        run_id=config.run_id,
+        generation=config.generation,
+        base_state=base_state,
+        node_update=node_update,
+        eta_outer=config.eta_outer,
+        weight_by=config.weight_by,
+        generation_duration_s=supervisor.metrics.generation_duration_s,
+        run_dir=config.run_dir,
+    )
+    summary = build_metrics_summary(
+        run_id=config.run_id,
+        requested_workers=len(worker_specs),
+        participating_workers=supervisor.metrics.participating_workers,
+        generations=(supervisor.metrics, global_result.metrics),
+    )
+    metrics_path = None
+    if config.run_dir is not None:
+        metrics_path = str(Path(config.run_dir) / "prototype_metrics.json")
+    result = AsyncDiLoCoPrototypeResult(
+        run_id=config.run_id,
+        generation=config.generation,
+        initial_state_path=None if config.initial_state_path is None else str(config.initial_state_path),
+        supervisor=supervisor,
+        global_merger=global_result,
+        metrics_summary=summary,
+        metrics_path=metrics_path,
+    )
+    if metrics_path is not None:
+        Path(metrics_path).write_text(stable_json_dumps(result.to_dict()) + "\n", encoding="utf-8")
+    return result
+
+
+def _prototype_base_state(config: AsyncDiLoCoPrototypeConfig) -> dict[str, torch.Tensor]:
+    if config.initial_state is not None:
+        return _clone_state(config.initial_state)
+    if config.initial_state_path is not None:
+        return load_async_diloco_readonly_state(config.initial_state_path)
+    return {
+        "x": torch.tensor([0.0, 1.0], dtype=torch.float32),
+        "z": torch.tensor([2.0, 3.0], dtype=torch.float32),
+    }
+
+
+def _checkpoint_payload_to_tensor_state(payload: Any) -> dict[str, torch.Tensor]:
+    if isinstance(payload, Mapping) and "x" in payload and "z" in payload:
+        x_payload = payload["x"]
+        z_payload = payload["z"]
+        if torch.is_tensor(x_payload) and torch.is_tensor(z_payload):
+            return {"x": x_payload.detach().clone().cpu(), "z": z_payload.detach().clone().cpu()}
+        if isinstance(x_payload, Sequence) and isinstance(z_payload, Sequence):
+            out = {
+                f"x.{idx}": tensor.detach().clone().cpu()
+                for idx, tensor in enumerate(x_payload)
+                if torch.is_tensor(tensor)
+            }
+            out.update({
+                f"z.{idx}": tensor.detach().clone().cpu()
+                for idx, tensor in enumerate(z_payload)
+                if torch.is_tensor(tensor)
+            })
+            if out:
+                return out
+    if isinstance(payload, Mapping):
+        for key in ("state_dict", "model_state_dict", "model"):
+            state_dict = payload.get(key)
+            if isinstance(state_dict, Mapping):
+                tensors = {
+                    str(name): tensor.detach().clone().cpu()
+                    for name, tensor in sorted(state_dict.items())
+                    if torch.is_tensor(tensor)
+                }
+                if tensors:
+                    return {f"x.{name}": tensor for name, tensor in tensors.items()}
+    raise ValueError("checkpoint payload does not contain x/z or model tensor state")
+
+
+def _run_node_supervisor_prototype(
+    *,
+    run_id: str,
+    node_id: str,
+    generation: int,
+    base_state: TensorState,
+    worker_specs: Sequence[AsyncDiLoCoWorkerSpec],
+    local_quorum: int,
+    timeout_s: float,
+    eta_outer: float,
+    weight_by: str,
+    use_processes: bool,
+) -> AsyncDiLoCoSupervisorPrototypeResult:
+    start_s = time.monotonic()
+    reports = (
+        _collect_process_worker_reports(base_state, generation, worker_specs, local_quorum, timeout_s)
+        if use_processes
+        else _collect_inline_worker_reports(base_state, generation, worker_specs, local_quorum, timeout_s)
+    )
+    elapsed_s = max(0.0, time.monotonic() - start_s)
+    accepted_updates = [
+        report.update for report in reports
+        if report.update is not None and not report.failed
+    ]
+    if len(accepted_updates) < local_quorum:
+        raise RuntimeError(f"node quorum not reached: accepted={len(accepted_updates)} quorum={local_quorum}")
+    missing_ids = sorted(set(spec.worker_id for spec in worker_specs) - set(report.worker_id for report in reports))
+    status_updates = [
+        _prototype_status_update(spec.worker_id, generation, base_state, timed_out=True)
+        for spec in worker_specs
+        if spec.worker_id in missing_ids
+    ]
+    status_updates.extend(
+        _prototype_status_update(report.worker_id, generation, base_state, failed=True)
+        for report in reports
+        if report.failed
+    )
+    status_updates.extend(
+        _prototype_status_update(report.worker_id, generation, base_state, timed_out=True)
+        for report in reports
+        if report.update is None and not report.failed
+    )
+    merge_start_s = time.monotonic()
+    merge_result = quorum_merge(
+        base_state,
+        tuple(accepted_updates + status_updates),
+        run_id=run_id,
+        generation=generation,
+        requested_workers=len(worker_specs),
+        quorum_threshold=local_quorum,
+        eta_outer=eta_outer,
+        weight_by=weight_by,
+        generation_duration_s=elapsed_s,
+    )
+    node_delta = compute_dense_delta(base_state, merge_result.state)
+    metrics = replace(
+        merge_result.metrics,
+        merge_duration_s=max(0.0, time.monotonic() - merge_start_s),
+        update_bytes={
+            "worker": sum(state_num_bytes(update.delta) for update in accepted_updates),
+            "node": state_num_bytes(node_delta),
+        },
+    )
+    node_update = AsyncDiLoCoUpdate(
+        worker_id=node_id,
+        base_generation=generation,
+        delta=node_delta,
+        tokens=metrics.tokens_per_generation,
+        local_steps=sum(update.local_steps for update in accepted_updates),
+        loss_moving_average=dict(metrics.loss_moving_average),
+    )
+    return AsyncDiLoCoSupervisorPrototypeResult(
+        node_id=node_id,
+        generation=generation,
+        node_update=node_update,
+        worker_reports=tuple(sorted(reports, key=lambda report: report.worker_id)),
+        metrics=metrics,
+    )
+
+
+def _collect_inline_worker_reports(
+    base_state: TensorState,
+    generation: int,
+    worker_specs: Sequence[AsyncDiLoCoWorkerSpec],
+    local_quorum: int,
+    timeout_s: float,
+) -> tuple[AsyncDiLoCoWorkerReport, ...]:
+    reports: list[AsyncDiLoCoWorkerReport] = []
+    deadline_s = time.monotonic() + timeout_s
+    for spec in worker_specs:
+        if sum(1 for report in reports if report.update is not None and not report.failed) >= local_quorum:
+            break
+        if time.monotonic() >= deadline_s:
+            break
+        reports.append(_run_prototype_worker(base_state, generation, spec))
+    return tuple(reports)
+
+
+def _collect_process_worker_reports(
+    base_state: TensorState,
+    generation: int,
+    worker_specs: Sequence[AsyncDiLoCoWorkerSpec],
+    local_quorum: int,
+    timeout_s: float,
+) -> tuple[AsyncDiLoCoWorkerReport, ...]:
+    ctx = mp.get_context("fork" if "fork" in mp.get_all_start_methods() else "spawn")
+    result_queue = ctx.Queue()
+    processes: list[tuple[AsyncDiLoCoWorkerSpec, mp.Process]] = []
+    for spec in worker_specs:
+        process = ctx.Process(
+            target=_prototype_worker_process_entry,
+            args=(_clone_state(base_state), generation, spec, result_queue),
+        )
+        process.start()
+        processes.append((spec, process))
+
+    reports: list[AsyncDiLoCoWorkerReport] = []
+    deadline_s = time.monotonic() + timeout_s
+    while time.monotonic() < deadline_s:
+        if sum(1 for report in reports if report.update is not None and not report.failed) >= local_quorum:
+            break
+        try:
+            payload = result_queue.get(timeout=min(0.05, max(0.0, deadline_s - time.monotonic())))
+            reports.append(_prototype_worker_report_from_payload(payload, base_state))
+        except queue.Empty:
+            continue
+
+    reported = {report.worker_id for report in reports}
+    for spec, process in processes:
+        process.join(timeout=0.05)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=1.0)
+        if spec.worker_id in reported:
+            continue
+        failed = process.exitcode not in (0, None)
+        reports.append(AsyncDiLoCoWorkerReport(
+            worker_id=spec.worker_id,
+            gpu_id=spec.gpu_id,
+            base_generation=generation,
+            update=None,
+            elapsed_s=0.0,
+            failed=failed,
+            error=f"exitcode={process.exitcode}" if failed else "timed out before submit",
+        ))
+    return tuple(reports)
+
+
+def _prototype_worker_process_entry(
+    base_state: TensorState,
+    generation: int,
+    spec: AsyncDiLoCoWorkerSpec,
+    result_queue: Any,
+) -> None:
+    result_queue.put(_prototype_worker_report_to_payload(
+        _run_prototype_worker(base_state, generation, spec)
+    ))
+
+
+def _prototype_worker_report_to_payload(report: AsyncDiLoCoWorkerReport) -> dict[str, Any]:
+    update_payload = None
+    if report.update is not None:
+        update_payload = {
+            "worker_id": report.update.worker_id,
+            "base_generation": report.update.base_generation,
+            "delta": {
+                name: tensor.detach().cpu().tolist()
+                for name, tensor in report.update.delta.items()
+            },
+            "tokens": report.update.tokens,
+            "local_steps": report.update.local_steps,
+            "loss_moving_average": dict(report.update.loss_moving_average),
+            "failed": report.update.failed,
+            "timed_out": report.update.timed_out,
+            "invalid": report.update.invalid,
+        }
+    return {
+        "worker_id": report.worker_id,
+        "gpu_id": report.gpu_id,
+        "base_generation": report.base_generation,
+        "update": update_payload,
+        "elapsed_s": report.elapsed_s,
+        "tokens": report.tokens,
+        "failed": report.failed,
+        "error": report.error,
+    }
+
+
+def _prototype_worker_report_from_payload(
+    payload: Mapping[str, Any],
+    base_state: TensorState,
+) -> AsyncDiLoCoWorkerReport:
+    update = None
+    update_payload = payload.get("update")
+    if isinstance(update_payload, Mapping):
+        update = AsyncDiLoCoUpdate(
+            worker_id=str(update_payload["worker_id"]),
+            base_generation=int(update_payload["base_generation"]),
+            delta={
+                str(name): torch.tensor(values, dtype=base_state[str(name)].dtype)
+                for name, values in update_payload["delta"].items()
+            },
+            tokens=int(update_payload["tokens"]),
+            local_steps=int(update_payload["local_steps"]),
+            loss_moving_average={
+                str(name): float(value)
+                for name, value in update_payload["loss_moving_average"].items()
+            },
+            failed=bool(update_payload["failed"]),
+            timed_out=bool(update_payload["timed_out"]),
+            invalid=bool(update_payload["invalid"]),
+        )
+    return AsyncDiLoCoWorkerReport(
+        worker_id=str(payload["worker_id"]),
+        gpu_id=int(payload["gpu_id"]),
+        base_generation=int(payload["base_generation"]),
+        update=update,
+        elapsed_s=float(payload["elapsed_s"]),
+        tokens=int(payload["tokens"]),
+        failed=bool(payload["failed"]),
+        error=None if payload.get("error") is None else str(payload["error"]),
+    )
+
+
+def _run_prototype_worker(
+    base_state: TensorState,
+    generation: int,
+    spec: AsyncDiLoCoWorkerSpec,
+) -> AsyncDiLoCoWorkerReport:
+    start_s = time.monotonic()
+    if spec.delay_s > 0.0:
+        time.sleep(spec.delay_s)
+    if spec.fail_before_submit:
+        return AsyncDiLoCoWorkerReport(
+            worker_id=spec.worker_id,
+            gpu_id=spec.gpu_id,
+            base_generation=generation,
+            update=None,
+            elapsed_s=max(0.0, time.monotonic() - start_s),
+            failed=True,
+            error="configured failure before submit",
+        )
+    shift = float(spec.delta_scale * (spec.gpu_id + 1) * max(1, spec.local_steps))
+    worker_state = {name: tensor + shift for name, tensor in base_state.items()}
+    update = AsyncDiLoCoUpdate(
+        worker_id=spec.worker_id,
+        base_generation=generation,
+        delta=compute_dense_delta(base_state, worker_state),
+        tokens=spec.tokens,
+        local_steps=spec.local_steps,
+        loss_moving_average={"loss_100": max(0.0, 1.0 - 0.01 * spec.local_steps)},
+    )
+    return AsyncDiLoCoWorkerReport(
+        worker_id=spec.worker_id,
+        gpu_id=spec.gpu_id,
+        base_generation=generation,
+        update=update,
+        elapsed_s=max(0.0, time.monotonic() - start_s),
+        tokens=update.tokens,
+    )
+
+
+def _prototype_status_update(
+    worker_id: str,
+    generation: int,
+    base_state: TensorState,
+    *,
+    timed_out: bool = False,
+    failed: bool = False,
+) -> AsyncDiLoCoUpdate:
+    return AsyncDiLoCoUpdate(
+        worker_id=worker_id,
+        base_generation=generation,
+        delta={name: torch.zeros_like(tensor) for name, tensor in base_state.items()},
+        tokens=1,
+        local_steps=1,
+        failed=failed,
+        timed_out=timed_out,
+    )
+
+
+def _run_global_merger_prototype(
+    *,
+    run_id: str,
+    generation: int,
+    base_state: TensorState,
+    node_update: AsyncDiLoCoUpdate,
+    eta_outer: float,
+    weight_by: str,
+    generation_duration_s: float,
+    run_dir: str | Path | None,
+) -> AsyncDiLoCoGlobalPrototypeResult:
+    merge_start_s = time.monotonic()
+    merge_result = quorum_merge(
+        base_state,
+        (node_update,),
+        run_id=run_id,
+        generation=generation,
+        requested_workers=1,
+        quorum_threshold=1,
+        eta_outer=eta_outer,
+        weight_by=weight_by,
+        generation_duration_s=generation_duration_s,
+    )
+    metrics = replace(
+        merge_result.metrics,
+        merge_duration_s=max(0.0, time.monotonic() - merge_start_s),
+        update_bytes={
+            "node": state_num_bytes(node_update.delta),
+            "global_state": state_num_bytes(merge_result.state),
+        },
+    )
+    publish_result = None
+    checkpoint_behavior: dict[str, Any] = {
+        "enabled": False,
+        "latest_advanced": False,
+        "paths": [],
+        "sizes": {},
+    }
+    if run_dir is not None:
+        manager = AsyncDiLoCoCheckpointManager(
+            run_dir,
+            run_id=run_id,
+            role=GLOBAL_MERGER_ROLE,
+            cadence=AsyncDiLoCoCheckpointCadence(
+                recovery_every_generations=None,
+                recovery_every_seconds=None,
+                export_every_generations=None,
+                export_every_seconds=None,
+            ),
+        )
+        publish_result = manager.publish_global_generation(metrics)
+        metrics = publish_result.metrics
+        checkpoint_behavior = {
+            "enabled": True,
+            "latest_advanced": publish_result.latest_advanced,
+            "latest_path": publish_result.latest_path,
+            "paths": list(metrics.checkpoint_paths),
+            "sizes": dict(metrics.checkpoint_sizes),
+        }
+    return AsyncDiLoCoGlobalPrototypeResult(
+        generation=generation,
+        state=merge_result.state,
+        metrics=metrics,
+        checkpoint_behavior=checkpoint_behavior,
+        publish_result=publish_result,
+    )
+
+
 __all__ = [
     "ASYNC_DILOCO_CHECKPOINT_SCHEMA_VERSION",
     "ASYNC_DILOCO_METRICS_SCHEMA_VERSION",
@@ -1209,17 +1782,25 @@ __all__ = [
     "AsyncDiLoCoGenerationMetrics",
     "AsyncDiLoCoMergeResult",
     "AsyncDiLoCoMetricsSummary",
+    "AsyncDiLoCoGlobalPrototypeResult",
+    "AsyncDiLoCoPrototypeConfig",
+    "AsyncDiLoCoPrototypeResult",
     "AsyncDiLoCoPublishResult",
     "AsyncDiLoCoResumeSource",
+    "AsyncDiLoCoSupervisorPrototypeResult",
     "AsyncDiLoCoUpdate",
+    "AsyncDiLoCoWorkerReport",
+    "AsyncDiLoCoWorkerSpec",
     "apply_dense_delta",
     "build_metrics_summary",
     "compute_dense_delta",
+    "load_async_diloco_readonly_state",
     "quorum_distribution",
     "quorum_merge",
     "read_generation_metrics_jsonl",
     "read_metrics_json",
     "rebase_state",
+    "run_async_diloco_worker_supervisor_prototype",
     "stable_json_dumps",
     "state_norms",
     "state_num_bytes",
