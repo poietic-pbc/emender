@@ -1,0 +1,87 @@
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+torch = pytest.importorskip("torch")
+
+
+def test_async_diloco_e97_2n8n_runner_records_global_partial_quorum_and_resume(tmp_path):
+    checkpoint = tmp_path / "e97_checkpoint.pt"
+    torch.save(
+        {
+            "model_state_dict": {
+                "layers.0.weight": torch.tensor([1.0, 2.0], dtype=torch.float32),
+                "layers.0.bias": torch.tensor([3.0], dtype=torch.float32),
+            }
+        },
+        checkpoint,
+    )
+    production_latest = tmp_path / "production_latest.pt"
+    production_latest.symlink_to(checkpoint)
+    command_file = tmp_path / "command.txt"
+    command_file.write_text("python async_diloco_e97_2n8n_debug.py --example\n", encoding="utf-8")
+    metrics_json = tmp_path / "metrics.json"
+    run_dir = tmp_path / "debug-run"
+
+    subprocess.run(
+        [
+            sys.executable,
+            "scripts/frontier/async_diloco_e97_2n8n_debug.py",
+            "--run-id",
+            "unit-run",
+            "--checkpoint",
+            str(checkpoint),
+            "--run-dir",
+            str(run_dir),
+            "--metrics-json",
+            str(metrics_json),
+            "--node-count",
+            "4",
+            "--worker-count-per-node",
+            "4",
+            "--local-quorum",
+            "3",
+            "--global-quorum",
+            "3",
+            "--local-steps",
+            "1",
+            "--tokens-per-step",
+            "128",
+            "--timeout-s",
+            "0.2",
+            "--global-drop-node-ids",
+            "3",
+            "--resume-check",
+            "--command-file",
+            str(command_file),
+            "--production-latest-path",
+            str(production_latest),
+        ],
+        check=True,
+        cwd=Path(__file__).resolve().parents[1],
+    )
+
+    payload = json.loads(metrics_json.read_text(encoding="utf-8"))
+    assert payload["conclusion"] == "pass"
+    assert payload["configured_quorum"] == {
+        "global_quorum": 3,
+        "local_quorum": 3,
+        "nodes": 4,
+        "worker_count_per_node": 4,
+    }
+    assert payload["effective_quorum"]["global"] == 3
+    assert payload["effective_quorum"]["local_distribution"]["min"] == 3
+    assert payload["update_counts"]["global"]["accepted"] == 3
+    assert payload["update_counts"]["global"]["timed_out"] == 1
+    assert payload["induced_lag_drop"]["global_dropped_node_ids"] == [3]
+    assert payload["resume_check"]["tested"] is True
+    assert payload["resume_check"]["selected_generation"] == 0
+    assert payload["resume_check"]["published_generation"] == 1
+    assert payload["checkpoint_finalization"]["latest_advanced"] is True
+    assert payload["checkpoint_finalization"]["debug_run_directory_only"] is True
+    assert payload["production_latest_guard"]["changed"] is False
+    assert payload["checkpoint"]["modified_by_run"] is False
+    assert (run_dir / "latest.json").exists()
