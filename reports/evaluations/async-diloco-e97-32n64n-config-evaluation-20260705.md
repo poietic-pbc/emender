@@ -92,3 +92,33 @@ particular, this retry found no machine-readable 32/64-node async metrics, no
 per-generation manifests, no measured checkpoint-cadence overhead, no
 non-production resume-from-latest test across jobs, and no future launch recipe
 based on the requested evidence.
+
+## Final Retry Addendum: agent-639
+
+Date: 2026-07-05
+
+Score remains: `0.06`
+Confidence remains: `0.94`
+Recommended WG disposition remains: `incomplete`
+
+On the second retry after two prior incomplete dispositions, the WG task record
+still lists no artifacts for `async-diloco-e97-32n64n-config`. The task log
+contains the upstream approval details and evaluator dispositions, but no
+task-launched approved 32-node or 64-node Slurm job IDs, launch commands,
+elapsed times, node-hours, run logs, or pass/no-go conclusions.
+
+A fresh workspace search again found historical 32-node and 64-node E97 reports
+from other tasks, plus local async 1-node/control evidence, but not the required
+32/64-node async DiLoCo E97 configuration-test artifacts for this WG task.
+There is still no machine-readable comparison of configured/effective quorum,
+tokens/sec, generation latency, checkpoint duration/size/percent overhead,
+checkpoint paths/latest behavior, stale/drop counts, or loss moving averages.
+There are still no per-generation manifests from the requested test run
+directory, no measured or modeled recovery cadence using `N generations or
+wall-clock interval, whichever fires first`, no non-production cross-job
+resume-from-latest evidence, and no future 128/256-node launch recipe grounded
+in those measurements.
+
+The rubric remains explicit rather than underspecified. The only defensible
+disposition is still retryable incomplete, because downstream 256-node launch
+preparation should not consume this task as if the 32/64-node evidence exists.
