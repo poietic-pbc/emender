@@ -1,0 +1,25 @@
+Task: quality-pass-async-quorum-diloco
+Date: 2026-07-05
+
+Reviewed docs/ASYNC_QUORUM_DILOCO.md and the async quorum DiLoCo task graph.
+No implementation files or design-doc text were changed.
+
+Metadata actions performed:
+- Added paused human approval gate approve-async-diloco before 32/64-node
+  Frontier config tests.
+- Rewired async-diloco-e97-32n64n-config to depend on approve-async-diloco.
+- Tightened transport, 1-node, 2/8-node, 32/64-node, and 256-node approval
+  task descriptions/validation criteria.
+- Rewired async-diloco-submit-256n12h-human-approval behind
+  async-diloco-prepare-256n12h.
+
+Validation focus:
+- E97 remains the main research arm; GDN2/model-only paths are controls only.
+- Large or production Slurm submissions are blocked behind explicit human
+  approval recorded in WG.
+- Frontier jobs must be launched by WG tasks and record job ID, command/logs,
+  elapsed time, node-hours, and pass/no-go conclusion.
+- Tests/runs must emit machine-readable metrics, including effective quorum and
+  checkpoint/latest behavior.
+- Production latest pointer advancement remains owned by the global merger and
+  is forbidden in debug/config tasks.
