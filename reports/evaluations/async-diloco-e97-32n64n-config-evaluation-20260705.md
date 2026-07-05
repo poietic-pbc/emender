@@ -70,3 +70,25 @@ credit for the substantive run, measurement, resume, or recommendation
 deliverables. The task should not unblock downstream 256-node launch-package
 preparation until a worker actually runs the approved 32/64-node tests or
 records a concrete external blocker after attempting to launch them.
+
+## Retry Addendum: agent-638
+
+Date: 2026-07-05
+
+Score remains: `0.06`
+Confidence remains: `0.94`
+Recommended WG disposition remains: `incomplete`
+
+On retry, `wg show async-diloco-e97-32n64n-config` still shows no artifacts
+for this task and no logs recording task-launched 32-node or 64-node Slurm job
+IDs, commands, elapsed time, node-hours, pass/no-go conclusions, or metrics
+paths. A workspace search found historical 32/64-node E97 reports and scripts
+from other tasks, but not the required async DiLoCo E97 32/64-node config-test
+evidence for `async-diloco-e97-32n64n-config`.
+
+The prior evaluation is therefore still calibrated: upstream approval was
+recorded, but the substantive validation checklist remains unmet. In
+particular, this retry found no machine-readable 32/64-node async metrics, no
+per-generation manifests, no measured checkpoint-cadence overhead, no
+non-production resume-from-latest test across jobs, and no future launch recipe
+based on the requested evidence.
