@@ -270,6 +270,35 @@ run with 256 nodes and quorum 192, a healthy system should show whether it
 typically advances with 250-plus nodes, 220 nodes, or barely at threshold. That
 distinction tells us if the system is robust or merely surviving.
 
+### Metrics Artifact Schema
+
+The standard in-repo metrics harness lives in `ndm.async_diloco`:
+
+- `AsyncDiLoCoGenerationMetrics` is the per-generation JSONL row schema.
+- `AsyncDiLoCoMetricsSummary` is the run-level JSON summary schema.
+- `write_generation_metrics_jsonl` and `write_metrics_json` write stable,
+  sorted-key, compact JSON so unit tests and Frontier debug jobs can compare
+  artifacts byte-for-byte when inputs are unchanged.
+
+The schema is versioned by `schema_version` and currently requires each
+generation row to include:
+
+- requested and participating worker counts;
+- configured quorum threshold and effective quorum size;
+- accepted, stale, timed-out, failed, and invalid update counts;
+- generation, merge, rebase, and checkpoint durations;
+- aggregate tokens/sec and accepted tokens per generation;
+- update byte volume by level;
+- loss moving averages and update norm summaries;
+- checkpoint paths and sizes;
+- whether the authoritative `latest` pointer advanced;
+- resume source generation, or `null` for fresh runs.
+
+The run-level summary repeats the run identifiers, embeds the generation rows,
+sums update counters and byte volumes, records latest advancement, records the
+resume source generation when unambiguous, and computes effective quorum-size
+average, minimum, maximum, p50, p90, p95, and p99.
+
 ## Payload Cost
 
 For a 1.3B parameter model:
