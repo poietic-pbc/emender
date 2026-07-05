@@ -241,11 +241,30 @@ Checkpointing should have three layers:
 3. Export checkpoints: user-facing model checkpoints written less frequently
    for evaluation, S3 upload, and continuation by other training paths.
 
-Initial production defaults should be conservative: write a recovery checkpoint
-every 20 to 30 minutes, write an export checkpoint about hourly, and trigger a
-final recovery checkpoint with enough walltime remaining to finish cleanly.
-These numbers are policy defaults, not mathematical constants; the tests should
-measure checkpoint write time and recommend final values.
+Initial production defaults must be scale-adaptive rather than a fixed
+20-to-30-minute recovery interval. At 256 nodes with batch size 4 and `K=40`,
+each local step covers 16,777,216 tokens and each DiLoCo generation covers
+671,088,640 tokens. If 64-node batch-4 scans extrapolate to roughly one to two
+minutes per `K=40` generation at 256 nodes, a 20-minute recovery interval can
+lose many accepted global generations and about 85 node-hours on a failure.
+
+Use this cadence policy until measurements justify changing it:
+
+- write a generation manifest every DiLoCo generation;
+- write recovery checkpoints by whichever fires first: a configured generation
+  interval or a configured wall-clock interval;
+- for the first 256-node `K=40` launch package, start with a recovery target of
+  about 5 to 10 minutes if checkpoint write time and training overhead are
+  acceptable;
+- write export checkpoints about hourly unless evaluation/transfer needs a
+  different lower-frequency cadence;
+- trigger a final recovery checkpoint with enough walltime remaining to finish
+  cleanly.
+
+These numbers are policy defaults, not mathematical constants. The 32/64-node
+configuration tests and 256-node launch preparation must measure checkpoint
+write duration, checkpoint size, generation duration, and percent overhead
+before finalizing any production cadence.
 
 ## Metrics Required From Tests
 
