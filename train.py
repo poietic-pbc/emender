@@ -1465,6 +1465,11 @@ def _diloco_merge_log(args, step, merge_index, label, bucket_index, numel, dtype
     )
 
 
+def _diloco_sync_accelerator():
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+
 def _build_diloco_hierarchical_merge_groups(world_size, rank, group_size,
                                             create_barrier_every=8):
     """Create exact two-level DiLoCo merge groups.
@@ -1541,11 +1546,17 @@ def _diloco_hierarchical_sum_average_flat(flat, world_size, args):
     root_group = meta.get('root_group')
 
     dist.reduce(flat, dst=local_root, op=dist.ReduceOp.SUM, group=local_group)
+    # The next stage uses a different process group, and ProcessGroupNCCL/RCCL
+    # CUDA collectives may return after enqueue. Force the local reduce to finish
+    # before the root all-reduce consumes the same buffer on another communicator.
+    _diloco_sync_accelerator()
     if is_root:
         if root_group is not None:
             dist.all_reduce(flat, op=dist.ReduceOp.SUM, group=root_group)
+            _diloco_sync_accelerator()
         flat.div_(world_size)
     dist.broadcast(flat, src=local_root, group=local_group)
+    _diloco_sync_accelerator()
 
 
 def _warm_diloco_hierarchical_merge_groups(args, device):

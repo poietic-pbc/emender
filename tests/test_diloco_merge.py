@@ -725,6 +725,55 @@ def test_hierarchical_group_builder_paces_32n_g4_construction(monkeypatch):
     assert calls[-1] == ("barrier", None)
 
 
+def test_hierarchical_merge_syncs_dependent_stages(monkeypatch):
+    """Root ranks must not enqueue root all-reduce or local broadcast before the
+    prior communicator has completed the same buffer."""
+    import train
+
+    calls = []
+
+    class FakeDist:
+        class ReduceOp:
+            SUM = object()
+
+        @staticmethod
+        def reduce(tensor, dst=None, op=None, group=None):
+            calls.append(("reduce", dst, group))
+
+        @staticmethod
+        def all_reduce(tensor, op=None, group=None):
+            calls.append(("all_reduce", group))
+
+        @staticmethod
+        def broadcast(tensor, src=None, group=None):
+            calls.append(("broadcast", src, group))
+
+    monkeypatch.setattr(train, "dist", FakeDist)
+    monkeypatch.setattr(train.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(train.torch.cuda, "synchronize",
+                        lambda *args, **kwargs: calls.append(("cuda_sync",)))
+
+    args = _ns()
+    args._diloco_merge_groups = {
+        "topology": "hierarchical",
+        "local_group": "local-ranks-0-3",
+        "local_root": 0,
+        "is_root": True,
+        "root_group": "root-ranks",
+    }
+
+    train._diloco_hierarchical_sum_average_flat(torch.ones(4), world_size=8, args=args)
+
+    assert calls == [
+        ("reduce", 0, "local-ranks-0-3"),
+        ("cuda_sync",),
+        ("all_reduce", "root-ranks"),
+        ("cuda_sync",),
+        ("broadcast", 0, "local-ranks-0-3"),
+        ("cuda_sync",),
+    ]
+
+
 def _worker_hierarchical_exact(rank, world_size, init_file, ret):
     dist.init_process_group(backend='gloo', init_method=f'file://{init_file}',
                             rank=rank, world_size=world_size)
