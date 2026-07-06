@@ -42,3 +42,7 @@ This deserves partial credit because the most important seed identity and integr
 ## Verdict
 
 Grade: **0.30 / 1.00**. This should remain incomplete or be continued by an implementation agent to create the seed manifest, verify readability/integrity from Frontier login, and record the exact downstream env/config location before unblocking dependent tasks.
+
+## Retry Check: 2026-07-06T08:50Z
+
+Retry agent `agent-662` fast-forwarded the worktree to include this report and re-ran repository searches for the exact refreshed seed identifiers (`step_1065000`, `checkpoint_step_1065000_loss_2.5386.pt`, `latest_emender_E97_1.3B.json`, and SHA256 `c68ea2d95f2721f1f52664f71c1453e4f30a5520b33eb1cf54974185e5a100a4`). No new seed manifest or downstream env/config evidence was found outside the WG log/evaluation report context. The calibrated score remains **0.30 / 1.00**, and downstream tasks should remain blocked until an implementation pass writes the manifest and records Frontier readability plus exact downstream config location.
