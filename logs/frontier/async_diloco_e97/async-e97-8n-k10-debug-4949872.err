@@ -1,0 +1,81 @@
+
+Lmod is automatically replacing "cce/18.0.1" with "gcc-native/13.2".
+
+
+Lmod is automatically replacing "PrgEnv-cray/8.6.0" with "PrgEnv-gnu/8.7.0".
+
+
+Due to MODULEPATH changes, the following have been reloaded:
+  1) cray-libsci/24.11.0     2) cray-mpich/8.1.31     3) darshan-runtime/3.4.6-mpi
+
+
+The following have been reloaded with a version change:
+  1) cray-libsci/24.11.0 => cray-libsci/26.03.0
+  2) cray-mpich/8.1.31 => cray-mpich/9.1.0
+  3) cray-pmi/6.1.15 => cray-pmi/6.1.17
+  4) craype/2.7.33 => craype/2.7.36
+  5) darshan-runtime/3.4.6-mpi => darshan-runtime/3.4.7-mpi
+  6) gcc-native/13.2 => gcc-native/14.2
+  7) perftools-base/24.11.0 => perftools-base/26.03.0
+
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-745/scripts/frontier/e97_async_diloco_train.py", line 245, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-745/scripts/frontier/e97_async_diloco_train.py", line 166, in main
+    result = run_real_async_diloco_file_rank(RealAsyncFileRankConfig(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-745/ndm/async_diloco_real.py", line 348, in run_real_async_diloco_file_rank
+    _atomic_write_json(nodes_dir / f"{node_id}.json", node_payload)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-745/ndm/async_diloco_real.py", line 1216, in _atomic_write_json
+    tmp.write_text(stable_json_dumps(payload) + "\n", encoding="utf-8")
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-745/ndm/async_diloco.py", line 1210, in stable_json_dumps
+    return json.dumps(_canonicalize(payload), sort_keys=True, separators=(",", ":"))
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-745/ndm/async_diloco.py", line 1298, in _canonicalize
+    return {str(k): _canonicalize(value[k]) for k in sorted(value)}
+                    ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-745/ndm/async_diloco.py", line 1309, in _canonicalize
+    raise ValueError(f"non-finite metric value: {value}")
+ValueError: non-finite metric value: nan
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-745/scripts/frontier/e97_async_diloco_train.py", line 245, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-745/scripts/frontier/e97_async_diloco_train.py", line 166, in main
+    result = run_real_async_diloco_file_rank(RealAsyncFileRankConfig(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-745/ndm/async_diloco_real.py", line 348, in run_real_async_diloco_file_rank
+    _atomic_write_json(nodes_dir / f"{node_id}.json", node_payload)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-745/ndm/async_diloco_real.py", line 1216, in _atomic_write_json
+    tmp.write_text(stable_json_dumps(payload) + "\n", encoding="utf-8")
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-745/ndm/async_diloco.py", line 1210, in stable_json_dumps
+    return json.dumps(_canonicalize(payload), sort_keys=True, separators=(",", ":"))
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-745/ndm/async_diloco.py", line 1298, in _canonicalize
+    return {str(k): _canonicalize(value[k]) for k in sorted(value)}
+                    ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-745/ndm/async_diloco.py", line 1309, in _canonicalize
+    raise ValueError(f"non-finite metric value: {value}")
+ValueError: non-finite metric value: nan
+srun: error: frontier01916: task 6: Exited with exit code 1
+srun: Terminating StepId=4949872.0
+[2026-07-06T17:28:12.321] error: *** STEP 4949872.0 ON frontier01910 CANCELLED AT 2026-07-06T17:28:12 DUE TO TASK FAILURE ***
+srun: error: frontier01915: task 5: Terminated
+srun: error: frontier01912: task 2: Terminated
+srun: error: frontier01913: task 3: Terminated
+srun: error: frontier01918: task 7: Terminated
+srun: error: frontier01910: task 0: Terminated
+srun: error: frontier01914: task 4: Terminated
+srun: error: frontier01911: task 1: Terminated
+srun: Force Terminated StepId=4949872.0
