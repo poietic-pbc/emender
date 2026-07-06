@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 torch = pytest.importorskip("torch")
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_async_diloco_e97_2n8n_runner_records_global_partial_quorum_and_resume(tmp_path):
@@ -93,3 +94,54 @@ def test_async_diloco_e97_2n8n_runner_records_global_partial_quorum_and_resume(t
     assert payload["production_latest_guard"]["changed"] is False
     assert payload["checkpoint"]["modified_by_run"] is False
     assert (run_dir / "latest.json").exists()
+
+
+def test_async_diloco_multinode_entrypoint_and_wrappers_are_main_relative():
+    entrypoint = ROOT / "scripts/frontier/async_diloco_e97_multinode.py"
+    debug_wrapper = ROOT / "scripts/frontier/async_diloco_e97_2n8n_debug.sbatch"
+    launch_wrapper = ROOT / "scripts/frontier/async_diloco_e97_256n12h_launch.sbatch"
+
+    assert entrypoint.is_file()
+    assert "from async_diloco_e97_2n8n_debug import main" in entrypoint.read_text(encoding="utf-8")
+
+    debug_text = debug_wrapper.read_text(encoding="utf-8")
+    launch_text = launch_wrapper.read_text(encoding="utf-8")
+    wrapper_text = debug_text + "\n" + launch_text
+
+    expected_entrypoint = "scripts/frontier/async_diloco_e97_multinode.py"
+    assert f"ASYNC_ENTRYPOINT=${{ASYNC_ENTRYPOINT:-{expected_entrypoint}}}" in debug_text
+    assert f"ASYNC_ENTRYPOINT=${{ASYNC_ENTRYPOINT:-{expected_entrypoint}}}" in launch_text
+    assert 'python -u "$ASYNC_ENTRYPOINT"' in debug_text
+    assert 'python -u "$ASYNC_ENTRYPOINT"' in launch_text
+    assert ".wg-worktrees" not in wrapper_text
+
+
+def test_async_diloco_launch_wrappers_expose_required_env_knobs():
+    debug_text = (ROOT / "scripts/frontier/async_diloco_e97_2n8n_debug.sbatch").read_text(encoding="utf-8")
+    launch_text = (ROOT / "scripts/frontier/async_diloco_e97_256n12h_launch.sbatch").read_text(encoding="utf-8")
+
+    for token in (
+        "E97_CHECKPOINT=${E97_CHECKPOINT:-",
+        "OUTPUT_ROOT=${OUTPUT_ROOT:-",
+        "ASYNC_LOCAL_QUORUM=${ASYNC_LOCAL_QUORUM:-",
+        "ASYNC_GLOBAL_QUORUM=${ASYNC_GLOBAL_QUORUM:-",
+        "REQUESTED_WALLTIME=${REQUESTED_WALLTIME:-",
+        "PRODUCTION_LATEST_GUARD=${PRODUCTION_LATEST_GUARD:-",
+    ):
+        assert token in debug_text
+
+    for token in (
+        "SEED_LATEST_PATH=${SEED_LATEST_PATH:-",
+        "E97_CHECKPOINT=${E97_CHECKPOINT:-$SEED_LATEST_PATH}",
+        "OUTPUT_ROOT=${OUTPUT_ROOT:-",
+        "ASYNC_LOCAL_QUORUM=${ASYNC_LOCAL_QUORUM:-",
+        "ASYNC_GLOBAL_QUORUM=${ASYNC_GLOBAL_QUORUM:-",
+        "DILOCO_K=${DILOCO_K:-",
+        "RECOVERY_EVERY_GENERATIONS=${RECOVERY_EVERY_GENERATIONS:-",
+        "RECOVERY_EVERY_SECONDS=${RECOVERY_EVERY_SECONDS:-",
+        "EXPORT_EVERY_GENERATIONS=${EXPORT_EVERY_GENERATIONS:-",
+        "EXPORT_EVERY_SECONDS=${EXPORT_EVERY_SECONDS:-",
+        "REQUESTED_WALLTIME=${REQUESTED_WALLTIME:-",
+        "PRODUCTION_LATEST_GUARD=${PRODUCTION_LATEST_GUARD:-",
+    ):
+        assert token in launch_text

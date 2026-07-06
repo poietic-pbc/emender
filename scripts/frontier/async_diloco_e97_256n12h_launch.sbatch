@@ -20,7 +20,9 @@ set -euo pipefail
 REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
 TASK_ID=${WG_TASK_ID:-async-diloco-submit-256n12h-human-approval}
 TRAINING_TARGET=${TRAINING_TARGET:-E97_1.3B_step483000_async_diloco_256n12h_20260705}
-E97_CHECKPOINT=${E97_CHECKPOINT:-/lustre/orion/bif148/proj-shared/emender/checkpoints/E97_1.3B_20260623_103742_step_483000/checkpoint_step_483000_loss_2.5431.pt}
+DEFAULT_E97_SEED_LATEST=/lustre/orion/bif148/proj-shared/emender/checkpoints/E97_1.3B_20260623_103742_step_483000/checkpoint_step_483000_loss_2.5431.pt
+SEED_LATEST_PATH=${SEED_LATEST_PATH:-${E97_CHECKPOINT:-$DEFAULT_E97_SEED_LATEST}}
+E97_CHECKPOINT=${E97_CHECKPOINT:-$SEED_LATEST_PATH}
 OUTPUT_ROOT=${OUTPUT_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/async_diloco}
 SCALEOUT_VARIANT=${SCALEOUT_VARIANT:-E97_1.3B_step483000_async_quorum_b4_k40_256n12h}
 RUN_DATE=$(date -u +%Y%m%d)
@@ -32,7 +34,8 @@ RUN_DIR="${RUN_ROOT}/async_run"
 METRICS_JSON="${ARTIFACT_DIR}/async_diloco_e97_256n_metrics.json"
 COMMAND_FILE="${ARTIFACT_DIR}/command.txt"
 ENV_FILE="${ARTIFACT_DIR}/env.txt"
-ASYNC_ENTRYPOINT=${ASYNC_ENTRYPOINT:-scripts/frontier/async_diloco_e97_2n8n_debug.py}
+ASYNC_ENTRYPOINT=${ASYNC_ENTRYPOINT:-scripts/frontier/async_diloco_e97_multinode.py}
+PRODUCTION_LATEST_GUARD=${PRODUCTION_LATEST_GUARD:-}
 
 # Async quorum recipe.
 ASYNC_NODE_COUNT=${ASYNC_NODE_COUNT:-256}
@@ -75,7 +78,9 @@ cd "$REPO"
 {
   echo "task_id=$TASK_ID"
   echo "training_target=$TRAINING_TARGET"
+  echo "seed_latest_path=$SEED_LATEST_PATH"
   echo "e97_checkpoint=$E97_CHECKPOINT"
+  echo "async_entrypoint=$ASYNC_ENTRYPOINT"
   echo "scaleout_variant=$SCALEOUT_VARIANT"
   echo "run_root=$RUN_ROOT"
   echo "run_dir=$RUN_DIR"
@@ -104,6 +109,7 @@ cd "$REPO"
   echo "export_every_seconds=$EXPORT_EVERY_SECONDS"
   echo "finalization_buffer_seconds=$FINALIZATION_BUFFER_SECONDS"
   echo "chain_update_on_failure=$CHAIN_UPDATE_ON_FAILURE"
+  echo "production_latest_guard=$PRODUCTION_LATEST_GUARD"
   echo "human_approval_record=$HUMAN_APPROVAL_RECORD"
   echo "git_commit=$(git rev-parse HEAD)"
 } | tee "$ENV_FILE"
@@ -129,6 +135,7 @@ python -u "$ASYNC_ENTRYPOINT" \\
   --recovery-every-seconds "$RECOVERY_EVERY_SECONDS" \\
   --export-every-generations "$EXPORT_EVERY_GENERATIONS" \\
   --export-every-seconds "$EXPORT_EVERY_SECONDS" \\
+  ${PRODUCTION_LATEST_GUARD:+--production-latest-path "$PRODUCTION_LATEST_GUARD" \\}
   --training-target "$TRAINING_TARGET"
 EOF
 
@@ -141,7 +148,7 @@ fi
 
 [[ -f "$ASYNC_ENTRYPOINT" ]] || {
   echo "Approved launch cannot start because ASYNC_ENTRYPOINT is missing: $ASYNC_ENTRYPOINT" >&2
-  echo "The downstream approval task must first restore or replace the 32/64-node async multi-node entrypoint recorded in the evidence command files." >&2
+  echo "The downstream approval task must first restore or replace the async multi-node entrypoint." >&2
   exit 65
 }
 
@@ -164,6 +171,9 @@ CMD=(
   --export-every-seconds "$EXPORT_EVERY_SECONDS"
   --training-target "$TRAINING_TARGET"
 )
+if [[ -n "$PRODUCTION_LATEST_GUARD" ]]; then
+  CMD+=(--production-latest-path "$PRODUCTION_LATEST_GUARD")
+fi
 
 printf '%q ' "${CMD[@]}" > "$COMMAND_FILE"
 printf '\n' >> "$COMMAND_FILE"

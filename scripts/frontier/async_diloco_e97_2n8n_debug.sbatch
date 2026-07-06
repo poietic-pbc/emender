@@ -37,6 +37,7 @@ COMMAND_FILE="${ARTIFACT_DIR}/command.txt"
 ENV_FILE="${ARTIFACT_DIR}/env.txt"
 STDOUT_PATH="logs/frontier/async_diloco_e97/${SLURM_JOB_NAME:-async-diloco-e97-2n8n}-${SLURM_JOB_ID:-manual}.out"
 STDERR_PATH="logs/frontier/async_diloco_e97/${SLURM_JOB_NAME:-async-diloco-e97-2n8n}-${SLURM_JOB_ID:-manual}.err"
+ASYNC_ENTRYPOINT=${ASYNC_ENTRYPOINT:-scripts/frontier/async_diloco_e97_multinode.py}
 
 E97_CHECKPOINT=${E97_CHECKPOINT:-/lustre/orion/bif148/proj-shared/emender/checkpoints/E97_1.3B_20260623_103742_step_483000/checkpoint_step_483000_loss_2.5431.pt}
 TRAINING_TARGET=${TRAINING_TARGET:-E97_1.3B_step483000_async_diloco_debug}
@@ -84,10 +85,11 @@ frontier_load_default_modules
 frontier_activate_emender_conda_env
 
 [[ -r "$E97_CHECKPOINT" ]] || { echo "E97_CHECKPOINT is not readable: $E97_CHECKPOINT" >&2; exit 4; }
+[[ -f "$ASYNC_ENTRYPOINT" ]] || { echo "ASYNC_ENTRYPOINT is missing: $ASYNC_ENTRYPOINT" >&2; exit 65; }
 
 RUN_ID="${TASK_ID}-${SLURM_JOB_ID:-manual}-${RUN_STAMP}"
 CMD=(
-  python -u scripts/frontier/async_diloco_e97_2n8n_debug.py
+  python -u "$ASYNC_ENTRYPOINT"
   --run-id "$RUN_ID"
   --checkpoint "$E97_CHECKPOINT"
   --run-dir "$RUN_DIR"
@@ -151,6 +153,7 @@ printf '\n' >> "$COMMAND_FILE"
   echo "run_dir=$RUN_DIR"
   echo "metrics_json=$METRICS_JSON"
   echo "summary_file=$SUMMARY_FILE"
+  echo "async_entrypoint=$ASYNC_ENTRYPOINT"
   echo "stdout=$STDOUT_PATH"
   echo "stderr=$STDERR_PATH"
   echo "slurm_job_id=${SLURM_JOB_ID:-manual}"
