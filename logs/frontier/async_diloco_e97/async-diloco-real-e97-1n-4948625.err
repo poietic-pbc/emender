@@ -1,0 +1,41 @@
+
+Lmod is automatically replacing "cce/18.0.1" with "gcc-native/13.2".
+
+
+Lmod is automatically replacing "PrgEnv-cray/8.6.0" with "PrgEnv-gnu/8.7.0".
+
+
+Due to MODULEPATH changes, the following have been reloaded:
+  1) cray-libsci/24.11.0     2) cray-mpich/8.1.31     3) darshan-runtime/3.4.6-mpi
+
+
+The following have been reloaded with a version change:
+  1) cray-libsci/24.11.0 => cray-libsci/26.03.0
+  2) cray-mpich/8.1.31 => cray-mpich/9.1.0
+  3) cray-pmi/6.1.15 => cray-pmi/6.1.17
+  4) craype/2.7.33 => craype/2.7.36
+  5) darshan-runtime/3.4.6-mpi => darshan-runtime/3.4.7-mpi
+  6) gcc-native/13.2 => gcc-native/14.2
+  7) perftools-base/24.11.0 => perftools-base/26.03.0
+
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-724/scripts/frontier/e97_async_diloco_train.py", line 123, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-724/scripts/frontier/e97_async_diloco_train.py", line 95, in main
+    result = run_real_async_diloco(RealAsyncDiLoCoConfig(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-724/ndm/async_diloco_real.py", line 278, in run_real_async_diloco
+    train.load_checkpoint(str(config.initial_checkpoint), global_model)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-724/train.py", line 1105, in load_checkpoint
+    model.load_state_dict(ckpt['model_state_dict'])
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/torch/nn/modules/module.py", line 2635, in load_state_dict
+    raise RuntimeError(
+RuntimeError: Error(s) in loading state_dict for LadderLM:
+	Missing key(s) in state_dict: "layers.0.A_log", "layers.0.dt_bias", "layers.0.qkv_proj.weight", "layers.0.a_proj.weight", "layers.0.g_proj.weight", "layers.0.erase_gate_proj.weight", "layers.0.value_write_gate_proj.weight", "layers.0.o_proj.weight". 
+	Unexpected key(s) in state_dict: "layer_norms.1.weight", "layer_norms.2.weight", "layer_norms.3.weight", "layer_norms.4.weight", "layer_norms.5.weight", "layer_norms.6.weight", "layer_norms.7.weight", "layer_norms.8.weight", "layer_norms.9.weight", "layer_norms.10.weight", "layers.1.mixer.A_log", "layers.1.mixer.dt_bias", "layers.1.mixer.qkv_proj.weight", "layers.1.mixer.a_proj.weight", "layers.1.mixer.g_proj.weight", "layers.1.mixer.erase_gate_proj.weight", "layers.1.mixer.value_write_gate_proj.weight", "layers.1.mixer.o_proj.weight", "layers.1.norm_2.weight", "layers.1.mlp.w1.weight", "layers.1.mlp.w2.weight", "layers.1.mlp.w3.weight", "layers.2.mixer.A_log", "layers.2.mixer.dt_bias", "layers.2.mixer.qkv_proj.weight", "layers.2.mixer.a_proj.weight", "layers.2.mixer.g_proj.weight", "layers.2.mixer.erase_gate_proj.weight", "layers.2.mixer.value_write_gate_proj.weight", "layers.2.mixer.o_proj.weight", "layers.2.norm_2.weight", "layers.2.mlp.w1.weight", "layers.2.mlp.w2.weight", "layers.2.mlp.w3.weight", "layers.3.mixer.A_log", "layers.3.mixer.dt_bias", "layers.3.mixer.qkv_proj.weight", "layers.3.mixer.a_proj.weight", "layers.3.mixer.g_proj.weight", "layers.3.mixer.erase_gate_proj.weight", "layers.3.mixer.value_write_gate_proj.weight", "layers.3.mixer.o_proj.weight", "layers.3.norm_2.weight", "layers.3.mlp.w1.weight", "layers.3.mlp.w2.weight", "layers.3.mlp.w3.weight", "layers.4.mixer.A_log", "layers.4.mixer.dt_bias", "layers.4.mixer.qkv_proj.weight", "layers.4.mixer.a_proj.weight", "layers.4.mixer.g_proj.weight", "layers.4.mixer.erase_gate_proj.weight", "layers.4.mixer.value_write_gate_proj.weight", "layers.4.mixer.o_proj.weight", "layers.4.norm_2.weight", "layers.4.mlp.w1.weight", "layers.4.mlp.w2.weight", "layers.4.mlp.w3.weight", "layers.5.mixer.A_log", "layers.5.mixer.dt_bias", "layers.5.mixer.qkv_proj.weight", "layers.5.mixer.a_proj.weight", "layers.5.mixer.g_proj.weight", "layers.5.mixer.erase_gate_proj.weight", "layers.5.mixer.value_write_gate_proj.weight", "layers.5.mixer.o_proj.weight", "layers.5.norm_2.weight", "layers.5.mlp.w1.weight", "layers.5.mlp.w2.weight", "layers.5.mlp.w3.weight", "layers.6.mixer.A_log", "layers.6.mixer.dt_bias", "layers.6.mixer.qkv_proj.weight", "layers.6.mixer.a_proj.weight", "layers.6.mixer.g_proj.weight", "layers.6.mixer.erase_gate_proj.weight", "layers.6.mixer.value_write_gate_proj.weight", "layers.6.mixer.o_proj.weight", "layers.6.norm_2.weight", "layers.6.mlp.w1.weight", "layers.6.mlp.w2.weight", "layers.6.mlp.w3.weight", "layers.7.mixer.A_log", "layers.7.mixer.dt_bias", "layers.7.mixer.qkv_proj.weight", "layers.7.mixer.a_proj.weight", "layers.7.mixer.g_proj.weight", "layers.7.mixer.erase_gate_proj.weight", "layers.7.mixer.value_write_gate_proj.weight", "layers.7.mixer.o_proj.weight", "layers.7.norm_2.weight", "layers.7.mlp.w1.weight", "layers.7.mlp.w2.weight", "layers.7.mlp.w3.weight", "layers.8.mixer.A_log", "layers.8.mixer.dt_bias", "layers.8.mixer.qkv_proj.weight", "layers.8.mixer.a_proj.weight", "layers.8.mixer.g_proj.weight", "layers.8.mixer.erase_gate_proj.weight", "layers.8.mixer.value_write_gate_proj.weight", "layers.8.mixer.o_proj.weight", "layers.8.norm_2.weight", "layers.8.mlp.w1.weight", "layers.8.mlp.w2.weight", "layers.8.mlp.w3.weight", "layers.9.mixer.A_log", "layers.9.mixer.dt_bias", "layers.9.mixer.qkv_proj.weight", "layers.9.mixer.a_proj.weight", "layers.9.mixer.g_proj.weight", "layers.9.mixer.erase_gate_proj.weight", "layers.9.mixer.value_write_gate_proj.weight", "layers.9.mixer.o_proj.weight", "layers.9.norm_2.weight", "layers.9.mlp.w1.weight", "layers.9.mlp.w2.weight", "layers.9.mlp.w3.weight", "layers.10.mixer.A_log", "layers.10.mixer.dt_bias", "layers.10.mixer.qkv_proj.weight", "layers.10.mixer.a_proj.weight", "layers.10.mixer.g_proj.weight", "layers.10.mixer.erase_gate_proj.weight", "layers.10.mixer.value_write_gate_proj.weight", "layers.10.mixer.o_proj.weight", "layers.10.norm_2.weight", "layers.10.mlp.w1.weight", "layers.10.mlp.w2.weight", "layers.10.mlp.w3.weight", "layers.0.mixer.A_log", "layers.0.mixer.dt_bias", "layers.0.mixer.qkv_proj.weight", "layers.0.mixer.a_proj.weight", "layers.0.mixer.g_proj.weight", "layers.0.mixer.erase_gate_proj.weight", "layers.0.mixer.value_write_gate_proj.weight", "layers.0.mixer.o_proj.weight", "layers.0.norm_2.weight", "layers.0.mlp.w1.weight", "layers.0.mlp.w2.weight", "layers.0.mlp.w3.weight". 
+	size mismatch for embedding.weight: copying a param with shape torch.Size([50281, 1792]) from checkpoint, the shape in current model is torch.Size([256, 8]).
+	size mismatch for layer_norms.0.weight: copying a param with shape torch.Size([1792]) from checkpoint, the shape in current model is torch.Size([8]).
+	size mismatch for norm.weight: copying a param with shape torch.Size([1792]) from checkpoint, the shape in current model is torch.Size([8]).
+	size mismatch for lm_head.weight: copying a param with shape torch.Size([50281, 1792]) from checkpoint, the shape in current model is torch.Size([256, 8]).
