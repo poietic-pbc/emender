@@ -112,7 +112,10 @@ def test_async_diloco_multinode_entrypoint_and_wrappers_are_main_relative():
     assert f"ASYNC_ENTRYPOINT=${{ASYNC_ENTRYPOINT:-{expected_entrypoint}}}" in debug_text
     assert f"ASYNC_ENTRYPOINT=${{ASYNC_ENTRYPOINT:-{expected_entrypoint}}}" in launch_text
     assert 'python -u "$ASYNC_ENTRYPOINT"' in debug_text
-    assert 'python -u "$ASYNC_ENTRYPOINT"' in launch_text
+    assert 'frontier_activate_emender_conda_env\nPYTHON_BIN=$(command -v python)' in launch_text
+    assert '"$PYTHON_BIN" -u "$ASYNC_ENTRYPOINT"' in launch_text
+    assert "ASYNC_DILOCO_RUNTIME_PROBE_ONLY" in launch_text
+    assert "  python -u \"$ASYNC_ENTRYPOINT\"" not in launch_text
     assert ".wg-worktrees" not in wrapper_text
 
 

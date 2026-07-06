@@ -24,6 +24,12 @@ DEFAULT_E97_SEED_LATEST=/lustre/orion/bif148/proj-shared/emender/checkpoints/eme
 SEED_LATEST_PATH=${SEED_LATEST_PATH:-${E97_CHECKPOINT:-$DEFAULT_E97_SEED_LATEST}}
 E97_CHECKPOINT=${E97_CHECKPOINT:-$SEED_LATEST_PATH}
 OUTPUT_ROOT=${OUTPUT_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/async_diloco}
+DEFAULT_ENV_PREFIX="${REPO}/.envs/olcf-rocm711-torch210-py312"
+if [[ ! -d "$DEFAULT_ENV_PREFIX" && -d /lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312 ]]; then
+  DEFAULT_ENV_PREFIX=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312
+fi
+ENV_PREFIX=${ENV_PREFIX:-$DEFAULT_ENV_PREFIX}
+export EMENDER_CONDA_ENV=${EMENDER_CONDA_ENV:-$ENV_PREFIX}
 SCALEOUT_VARIANT=${SCALEOUT_VARIANT:-E97_1.3B_step1065000_async_quorum_b4_k40_256n12h}
 RUN_DATE=$(date -u +%Y%m%d)
 RUN_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
@@ -81,6 +87,18 @@ HUMAN_APPROVAL_RECORD=${HUMAN_APPROVAL_RECORD:-User 2026-07-06 conditional appro
 mkdir -p "$ARTIFACT_DIR" "$LOG_DIR" logs/frontier/async_diloco_e97
 cd "$REPO"
 
+if ! command -v module >/dev/null 2>&1; then
+  # shellcheck disable=SC1091
+  source /etc/profile.d/modules.sh
+fi
+
+# shellcheck disable=SC1091
+source "${REPO}/scripts/frontier/frontier_runtime_env.sh"
+frontier_load_default_modules
+frontier_activate_emender_conda_env
+PYTHON_BIN=$(command -v python)
+[[ -n "$PYTHON_BIN" ]] || { echo "Activated runtime did not provide python" >&2; exit 66; }
+
 {
   echo "task_id=$TASK_ID"
   echo "training_target=$TRAINING_TARGET"
@@ -91,6 +109,9 @@ cd "$REPO"
   echo "run_root=$RUN_ROOT"
   echo "run_dir=$RUN_DIR"
   echo "metrics_json=$METRICS_JSON"
+  echo "env_prefix=$ENV_PREFIX"
+  echo "emender_conda_env=$EMENDER_CONDA_ENV"
+  echo "python_bin=$PYTHON_BIN"
   echo "requested_walltime=$REQUESTED_WALLTIME"
   echo "requested_node_hours=$REQUESTED_NODE_HOURS"
   echo "async_node_count=$ASYNC_NODE_COUNT"
@@ -119,6 +140,12 @@ cd "$REPO"
   echo "production_latest_policy=$PRODUCTION_LATEST_POLICY"
   echo "human_approval_record=$HUMAN_APPROVAL_RECORD"
   echo "git_commit=$(git rev-parse HEAD)"
+  echo
+  echo "=== modules ==="
+  module -t list 2>&1 || true
+  echo
+  echo "=== frontier runtime ==="
+  frontier_capture_runtime_env
 } | tee "$ENV_FILE"
 
 cat > "$COMMAND_FILE" <<EOF
@@ -126,7 +153,7 @@ Prepared command. The prepare task does not execute it; the downstream
 human-approval task must set ASYNC_DILOCO_HUMAN_APPROVED=1 before this wrapper
 will attempt it:
 
-python -u "$ASYNC_ENTRYPOINT" \\
+"$PYTHON_BIN" -u "$ASYNC_ENTRYPOINT" \\
   --run-id "${TASK_ID}-\${SLURM_JOB_ID:-manual}-${RUN_STAMP}" \\
   --checkpoint "$E97_CHECKPOINT" \\
   --run-dir "$RUN_DIR" \\
@@ -147,20 +174,55 @@ python -u "$ASYNC_ENTRYPOINT" \\
 EOF
 
 [[ -r "$E97_CHECKPOINT" ]] || { echo "E97_CHECKPOINT is not readable: $E97_CHECKPOINT" >&2; exit 4; }
+[[ -f "$ASYNC_ENTRYPOINT" ]] || {
+  echo "Launch cannot start because ASYNC_ENTRYPOINT is missing: $ASYNC_ENTRYPOINT" >&2
+  exit 65
+}
+
+if [[ "${ASYNC_DILOCO_RUNTIME_PROBE_ONLY:-0}" == "1" ]]; then
+  "$PYTHON_BIN" - "$ASYNC_ENTRYPOINT" "$METRICS_JSON" <<'PY'
+import json
+import os
+import platform
+import sys
+from pathlib import Path
+
+entrypoint = Path(sys.argv[1])
+metrics = Path(sys.argv[2])
+compile(entrypoint.read_text(encoding="utf-8"), str(entrypoint), "exec")
+metrics.parent.mkdir(parents=True, exist_ok=True)
+metrics.write_text(
+    json.dumps(
+        {
+            "conclusion": "runtime-probe-pass",
+            "entrypoint": str(entrypoint),
+            "python_executable": sys.executable,
+            "python_prefix": sys.prefix,
+            "python_version": platform.python_version(),
+            "conda_prefix": os.environ.get("CONDA_PREFIX", ""),
+            "emender_conda_env": os.environ.get("EMENDER_CONDA_ENV", ""),
+            "slurm_job_id": os.environ.get("SLURM_JOB_ID", "manual"),
+            "slurm_job_num_nodes": os.environ.get("SLURM_JOB_NUM_NODES", "manual"),
+        },
+        indent=2,
+        sort_keys=True,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+print(f"runtime_probe_python={sys.executable}")
+print(f"runtime_probe_entrypoint={entrypoint}")
+PY
+  exit 0
+fi
 
 if [[ "${ASYNC_DILOCO_HUMAN_APPROVED:-0}" != "1" ]]; then
   echo "Prepared launch package only. Refusing to start 256-node async DiLoCo without ASYNC_DILOCO_HUMAN_APPROVED=1 from WG human approval task." >&2
   exit 64
 fi
 
-[[ -f "$ASYNC_ENTRYPOINT" ]] || {
-  echo "Approved launch cannot start because ASYNC_ENTRYPOINT is missing: $ASYNC_ENTRYPOINT" >&2
-  echo "The downstream approval task must first restore or replace the async multi-node entrypoint." >&2
-  exit 65
-}
-
 CMD=(
-  python -u "$ASYNC_ENTRYPOINT"
+  "$PYTHON_BIN" -u "$ASYNC_ENTRYPOINT"
   --run-id "${TASK_ID}-${SLURM_JOB_ID:-manual}-${RUN_STAMP}"
   --checkpoint "$E97_CHECKPOINT"
   --run-dir "$RUN_DIR"
