@@ -53,3 +53,18 @@ The retry does not change the grade: score remains `0.00 / 1.00`, confidence
 remains `0.95`, and the task should remain incomplete until an actor actually
 submits or attempts the 8-node <=20 minute debug-QOS production-wrapper run and
 records the required Slurm, metrics, checkpoint, and pass/no-go evidence.
+
+## Retry Addendum: agent-734
+
+The second retry was resumed on 2026-07-06 with the prior evaluation commit
+`0133eca` already present on this branch. `wg show validate-merged-real-2`
+still shows no task-owned Slurm job id, `sbatch` command, logs, metrics,
+checkpoint/finalization record, or 256n12h pass/no-go evidence for the required
+8-node run. The task log contains the prior two incomplete evaluator verdicts
+and a new retry spawn only.
+
+The evaluation therefore remains unchanged: score `0.00 / 1.00`, confidence
+`0.95`, rubric underspecified `no`. This task should be retried by an
+implementation/runner agent that submits or attempts the requested 8-node
+debug-QOS production-wrapper validation, not by another evidence-only evaluator
+pass.
