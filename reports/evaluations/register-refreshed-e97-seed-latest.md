@@ -1,0 +1,44 @@
+# Evaluation: register-refreshed-e97-seed-latest
+
+Task: `register-refreshed-e97-seed-latest`
+Evaluator agent: `agent-661`
+Evaluation date: 2026-07-06
+
+## Grade
+
+Overall score: **0.30 / 1.00**
+Confidence: **0.86**
+Rubric underspecified: **No**. The task had an explicit `## Validation` checklist with concrete acceptance criteria.
+
+## Dimension Scores
+
+| Dimension | Score | Rationale |
+| --- | ---: | --- |
+| User-provided path recorded | 0.80 | The WG task log records a user-provided checkpoint and metadata URI for the 2026-07-06 async 256n chain: `s3://spinozans/emender/e97-diloco/emender_E97_1.3B_20260702_111457/step_1065000/checkpoint_step_1065000_loss_2.5386.pt` and `s3://spinozans/emender/e97-diloco/latest_emender_E97_1.3B.json`. However, this appears in the task log before the assigned actor run and is not accompanied by an actor-produced manifest. |
+| Seed manifest created/updated | 0.00 | No seed manifest or repository artifact containing the exact checkpoint URI, SHA256, and downstream config location was found. The task worktree reports zero commits ahead and zero uncommitted files. |
+| Readability / existence verification | 0.20 | The log contains S3 size and SHA256 evidence, but there is no recorded actor verification that the file or symlink target exists and is readable from the Frontier login environment. |
+| Integrity evidence | 0.70 | SHA256 and size were recorded in the WG log. This is useful integrity evidence, but it was not tied to a manifest artifact or fresh actor-side verification. |
+| Step/loss/provenance metadata | 0.75 | Step, loss, estimated BPB, tokens seen, checkpoint size, SHA256, and metadata URI are present in the WG log. Provenance is partial because the actor did not inspect or preserve the metadata JSON in a downstream-readable artifact. |
+| Downstream env/config location | 0.00 | No exact downstream env/config location for this seed was recorded. This is a major miss because downstream validation and submission tasks depend on a stable intake location. |
+| Correct gate behavior | 0.60 | The task is still `in-progress`, so downstream consumers remain blocked rather than being falsely unblocked. This preserves safety, but the task was resumed and assigned without completing the required intake work. |
+| No Slurm job submitted | 1.00 | I found no indication in the task log or trace that a Slurm job was submitted by this task. |
+
+## Rationale
+
+The actor did not complete the central registration/intake deliverable. The only substantive seed details are present in the WG task log, apparently from the coordinator/user path handoff before the main actor run. The main task trace shows no agent runs, the worktree shows no commits ahead and no uncommitted files, and repository search found no manifest or config entry for the exact `step_1065000` checkpoint or its SHA256 outside the WG log.
+
+This deserves partial credit because the most important seed identity and integrity facts are present in the WG log and the gate has not been incorrectly marked done. It cannot receive a passing grade because the explicit validation required a seed manifest, readability verification from the Frontier login environment, and downstream env/config location for the exact seed. Those items are missing.
+
+## Checklist Assessment
+
+- User-provided refreshed seed path recorded in WG task log and seed manifest: **Partially met**. WG log yes; seed manifest no.
+- File or symlink target exists and is readable from Frontier login: **Not demonstrated**.
+- Size and SHA256 or equivalent integrity evidence recorded if practical: **Mostly met in WG log**.
+- Step/loss/provenance metadata recorded if discoverable: **Mostly met in WG log, not in manifest**.
+- Downstream env/config location for exact seed recorded: **Not met**.
+- Task remains blocked/paused instead of guessing if refreshed path has not been shared: **Not applicable after path was supplied; downstream remains blocked because task is still in progress**.
+- No Slurm job submitted by this task: **Met**.
+
+## Verdict
+
+Grade: **0.30 / 1.00**. This should remain incomplete or be continued by an implementation agent to create the seed manifest, verify readability/integrity from Frontier login, and record the exact downstream env/config location before unblocking dependent tasks.
