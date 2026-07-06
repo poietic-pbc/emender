@@ -102,7 +102,9 @@ def test_async_diloco_multinode_entrypoint_and_wrappers_are_main_relative():
     launch_wrapper = ROOT / "scripts/frontier/async_diloco_e97_256n12h_launch.sbatch"
 
     assert entrypoint.is_file()
-    assert "from async_diloco_e97_2n8n_debug import main" in entrypoint.read_text(encoding="utf-8")
+    entrypoint_text = entrypoint.read_text(encoding="utf-8")
+    assert "from e97_async_diloco_train import main" in entrypoint_text
+    assert "from async_diloco_e97_2n8n_debug import main" not in entrypoint_text
 
     debug_text = debug_wrapper.read_text(encoding="utf-8")
     launch_text = launch_wrapper.read_text(encoding="utf-8")
