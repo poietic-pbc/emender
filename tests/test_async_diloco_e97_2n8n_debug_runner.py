@@ -115,10 +115,13 @@ def test_async_diloco_multinode_entrypoint_and_wrappers_are_main_relative():
     assert f"ASYNC_ENTRYPOINT=${{ASYNC_ENTRYPOINT:-{expected_entrypoint}}}" in debug_text
     assert f"ASYNC_ENTRYPOINT=${{ASYNC_ENTRYPOINT:-{expected_production_entrypoint}}}" in launch_text
     assert 'python -u "$ASYNC_ENTRYPOINT"' in debug_text
-    assert 'frontier_activate_emender_conda_env\nPYTHON_BIN=$(command -v python)' in launch_text
+    assert "frontier_activate_emender_conda_env" in launch_text
+    assert "export TIKTOKEN_CACHE_DIR\nPYTHON_BIN=$(command -v python)" in launch_text
     assert '"$PYTHON_BIN" -u "$ASYNC_ENTRYPOINT"' in launch_text
     assert "Production validation rejects ASYNC_DILOCO_RUNTIME_PROBE_ONLY=1" in launch_text
     assert "ASYNC_DILOCO_NON_PRODUCTION_DEBUG" in launch_text
+    assert "export TIKTOKEN_CACHE_DIR" in launch_text
+    assert "p50k_base tokenizer cache is missing under TIKTOKEN_CACHE_DIR" in launch_text
     assert "*async_diloco_e97_multinode.py|*async_diloco_e97_2n8n_debug.py" in launch_text
     assert "  python -u \"$ASYNC_ENTRYPOINT\"" not in launch_text
     assert ".wg-worktrees" not in wrapper_text
@@ -141,6 +144,7 @@ def test_async_diloco_launch_wrappers_expose_required_env_knobs():
     for token in (
         "SEED_LATEST_PATH=${SEED_LATEST_PATH:-",
         "E97_CHECKPOINT=${E97_CHECKPOINT:-$SEED_LATEST_PATH}",
+        "TIKTOKEN_CACHE_DIR=${TIKTOKEN_CACHE_DIR:-/lustre/orion/bif148/proj-shared/tiktoken_cache}",
         "DEFAULT_E97_SEED_LATEST=/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt",
         "TRAINING_TARGET=${TRAINING_TARGET:-E97_1.3B_step1065000_async_diloco_256n12h_20260706}",
         "SCALEOUT_VARIANT=${SCALEOUT_VARIANT:-E97_1.3B_step1065000_async_quorum_b4_k40_256n12h}",
@@ -150,6 +154,18 @@ def test_async_diloco_launch_wrappers_expose_required_env_knobs():
         "DILOCO_K=${DILOCO_K:-",
         "BATCH_SIZE=${BATCH_SIZE:-4}",
         "CHUNK_SIZE=${CHUNK_SIZE:-2048}",
+        "MODEL_TOKENIZER=${MODEL_TOKENIZER:-p50k_base}",
+        "MODEL_DIM=${MODEL_DIM:-1792}",
+        "MODEL_DEPTH=${MODEL_DEPTH:-11}",
+        "MODEL_N_HEADS=${MODEL_N_HEADS:-216}",
+        "MODEL_N_STATE=${MODEL_N_STATE:-32}",
+        "MODEL_MLP_RATIO=${MODEL_MLP_RATIO:-2.2623}",
+        "ASYNC_E97_BF16=${ASYNC_E97_BF16:-1}",
+        "ASYNC_E97_USE_CHUNKED=${ASYNC_E97_USE_CHUNKED:-1}",
+        "ASYNC_E97_CHECKPOINT_INTERVAL=${ASYNC_E97_CHECKPOINT_INTERVAL:-64}",
+        "ASYNC_E97_GRADIENT_CHECKPOINTING=${ASYNC_E97_GRADIENT_CHECKPOINTING:-1}",
+        "ASYNC_E97_PROJECTION_CHUNK_SIZE=${ASYNC_E97_PROJECTION_CHUNK_SIZE:-256}",
+        "ASYNC_E97_LOSS_CHUNK_SIZE=${ASYNC_E97_LOSS_CHUNK_SIZE:-256}",
         "RECOVERY_EVERY_GENERATIONS=${RECOVERY_EVERY_GENERATIONS:-",
         "RECOVERY_EVERY_SECONDS=${RECOVERY_EVERY_SECONDS:-",
         "EXPORT_EVERY_GENERATIONS=${EXPORT_EVERY_GENERATIONS:-",
@@ -171,15 +187,32 @@ def test_production_async_launcher_records_artifacts_and_real_command_branch():
     assert 'echo "command_file=$COMMAND_FILE"' in launch_text
     assert 'echo "env_file=$ENV_FILE"' in launch_text
     assert 'echo "async_entrypoint=$ASYNC_ENTRYPOINT"' in launch_text
+    assert 'echo "tiktoken_cache_dir=$TIKTOKEN_CACHE_DIR"' in launch_text
     assert 'echo "python_bin=$PYTHON_BIN"' in launch_text
     assert 'CMD=(\n  "$PYTHON_BIN" -u "$ASYNC_ENTRYPOINT"' in launch_text
     assert '--checkpoint "$E97_CHECKPOINT"' in launch_text
     assert '--data "$DATA"' in launch_text
     assert '--worker-count "$ASYNC_WORKER_COUNT"' in launch_text
+    assert '--tokenizer "$MODEL_TOKENIZER"' in launch_text
     assert '--batch-size "$BATCH_SIZE"' in launch_text
     assert '--chunk-size "$CHUNK_SIZE"' in launch_text
     assert '--local-steps "$DILOCO_K"' in launch_text
     assert '--steps "$DILOCO_K"' in launch_text
+    assert '--e97-chunk-size "$ASYNC_E97_CHUNK_SIZE"' in launch_text
+    assert '--checkpoint-interval "$ASYNC_E97_CHECKPOINT_INTERVAL"' in launch_text
+    assert '--projection-chunk-size "$ASYNC_E97_PROJECTION_CHUNK_SIZE"' in launch_text
+    assert '--loss-chunk-size "$ASYNC_E97_LOSS_CHUNK_SIZE"' in launch_text
+    assert '--recovery-every-generations "$RECOVERY_EVERY_GENERATIONS"' in launch_text
+    assert '--finalization-reserve-seconds "$FINALIZATION_BUFFER_SECONDS"' in launch_text
+    assert 'CMD+=(--dim "$MODEL_DIM")' in launch_text
+    assert 'CMD+=(--depth "$MODEL_DEPTH")' in launch_text
+    assert 'CMD+=(--n-heads "$MODEL_N_HEADS")' in launch_text
+    assert 'CMD+=(--n-state "$MODEL_N_STATE")' in launch_text
+    assert 'CMD+=(--mlp-ratio "$MODEL_MLP_RATIO")' in launch_text
+    assert 'CMD+=(--bf16)' in launch_text
+    assert 'CMD+=(--use-chunked-e97)' in launch_text
+    assert 'CMD+=(--gradient-checkpointing)' in launch_text
+    assert 'CMD+=(--walltime-remaining-s "$FINALIZATION_BUFFER_SECONDS")' in launch_text
     assert 'if [[ "$ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM" == "1" ]]; then' in launch_text
     assert 'CMD+=(--synthetic-token-stream)' in launch_text
     assert 'exec "${CMD[@]}"' in launch_text
