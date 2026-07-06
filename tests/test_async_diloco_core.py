@@ -4,6 +4,8 @@ torch = pytest.importorskip("torch")
 
 from ndm.async_diloco import (
     AsyncDiLoCoUpdate,
+    default_global_quorum,
+    default_local_quorum,
     quorum_merge,
     rebase_state,
 )
@@ -61,6 +63,111 @@ def test_full_cohort_weighted_merge_matches_synchronous_average():
     torch.testing.assert_close(result.state["x"], base["x"] + expected_dx)
     torch.testing.assert_close(result.state["z"], base["z"] + expected_dz)
     assert result.metrics.quorum_size == 2
+
+
+def test_quorum_miss_defers_without_mutating_state_and_records_metrics():
+    base = _state([1.0, 2.0, 3.0, 4.0])
+    updates = [
+        _update(0, 0, [1.0, 0.0], [0.0, 1.0], tokens=2),
+        AsyncDiLoCoUpdate(
+            worker_id="stale",
+            base_generation=-1,
+            delta={
+                "x": torch.zeros(2, dtype=torch.float32),
+                "z": torch.zeros(2, dtype=torch.float32),
+            },
+            tokens=1,
+            local_steps=1,
+        ),
+        AsyncDiLoCoUpdate(
+            worker_id="timed-out",
+            base_generation=0,
+            delta={
+                "x": torch.zeros(2, dtype=torch.float32),
+                "z": torch.zeros(2, dtype=torch.float32),
+            },
+            tokens=1,
+            local_steps=1,
+            timed_out=True,
+        ),
+        AsyncDiLoCoUpdate(
+            worker_id="failed",
+            base_generation=0,
+            delta={
+                "x": torch.zeros(2, dtype=torch.float32),
+                "z": torch.zeros(2, dtype=torch.float32),
+            },
+            tokens=1,
+            local_steps=1,
+            failed=True,
+        ),
+        AsyncDiLoCoUpdate(
+            worker_id="invalid",
+            base_generation=0,
+            delta={
+                "x": torch.zeros(2, dtype=torch.float32),
+                "z": torch.zeros(2, dtype=torch.float32),
+            },
+            tokens=1,
+            local_steps=1,
+            invalid=True,
+        ),
+    ]
+
+    result = quorum_merge(
+        base,
+        updates,
+        run_id="defer",
+        generation=0,
+        requested_workers=6,
+        quorum_threshold=2,
+    )
+
+    assert not result.advanced
+    assert result.metrics.quorum_status == "deferred"
+    assert result.metrics.latest_advanced is False
+    assert result.metrics.accepted_updates == 1
+    assert result.metrics.stale_updates == 1
+    assert result.metrics.timed_out_updates == 1
+    assert result.metrics.failed_updates == 1
+    assert result.metrics.invalid_updates == 1
+    assert result.metrics.tokens_per_generation == 0
+    torch.testing.assert_close(result.state["x"], base["x"])
+    torch.testing.assert_close(result.state["z"], base["z"])
+
+
+def test_quorum_miss_still_rejects_corrupt_accepted_delta():
+    base = _state([1.0, 2.0, 3.0, 4.0])
+    bad = AsyncDiLoCoUpdate(
+        worker_id="bad",
+        base_generation=0,
+        delta={
+            "x": torch.tensor([float("nan"), 0.0], dtype=torch.float32),
+            "z": torch.zeros(2, dtype=torch.float32),
+        },
+        tokens=1,
+        local_steps=1,
+    )
+
+    with pytest.raises(ValueError, match="non-finite"):
+        quorum_merge(
+            base,
+            (bad,),
+            run_id="bad",
+            generation=0,
+            requested_workers=4,
+            quorum_threshold=2,
+        )
+
+
+def test_default_quorum_helpers_expose_local_6_of_8_and_global_two_thirds():
+    assert default_local_quorum() == 6
+    assert default_local_quorum(8) == 6
+    assert default_local_quorum(4) == 4
+    assert default_global_quorum(1) == 1
+    assert default_global_quorum(2) == 2
+    assert default_global_quorum(3) == 2
+    assert default_global_quorum(256) == 171
 
 
 def test_rebase_preserves_local_displacement_and_xz_geometry():

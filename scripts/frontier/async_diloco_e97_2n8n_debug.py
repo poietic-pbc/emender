@@ -141,14 +141,17 @@ def _run_global_merge(
         generation_duration_s=generation_duration_s,
         resume_source_generation=resume_source_generation,
     )
+    quorum_advanced = len(merge_result.accepted_updates) >= global_quorum
     metrics = replace(
         merge_result.metrics,
         merge_duration_s=max(0.0, time.monotonic() - merge_start_s),
         update_bytes={
             "node": sum(state_num_bytes(update.delta) for update in merge_result.accepted_updates),
-            "global_state": state_num_bytes(merge_result.state),
+            "global_state": state_num_bytes(merge_result.state) if quorum_advanced else 0,
         },
     )
+    if not quorum_advanced:
+        return dict(merge_result.state), metrics, None
     manager = AsyncDiLoCoCheckpointManager(
         run_dir,
         run_id=run_id,
@@ -258,9 +261,12 @@ def main() -> int:
             if representative_result is None:
                 representative_result = supervisor
         node_results.append(supervisor)
-        node_update = replace(supervisor.node_update, worker_id=f"group-0/{supervisor.node_id}")
-        if node_idx in dropped_node_ids:
-            global_updates.append(_status_update(node_update.worker_id, 0, base_state, timed_out=True))
+        node_update = supervisor.node_update
+        global_worker_id = f"group-0/{supervisor.node_id}"
+        if node_update is not None:
+            node_update = replace(node_update, worker_id=global_worker_id)
+        if node_idx in dropped_node_ids or node_update is None:
+            global_updates.append(_status_update(global_worker_id, 0, base_state, timed_out=True))
         else:
             global_updates.append(node_update)
 
@@ -291,43 +297,49 @@ def main() -> int:
         manager = AsyncDiLoCoCheckpointManager(run_dir, run_id=args.run_id, role=GLOBAL_MERGER_ROLE)
         resume_source = manager.select_resume_source()
         if resume_source is None:
-            raise RuntimeError("resume check requested but no finalized generation was selected")
-        resumed_state, resumed_metrics, resumed_publish = _run_global_merge(
-            run_id=args.run_id,
-            generation=resume_source.generation + 1,
-            base_state=final_state,
-            node_updates=tuple(
-                replace(
-                    update,
-                    base_generation=resume_source.generation + 1,
-                    worker_id=f"resume/{update.worker_id}",
-                )
-                for update in global_updates
-                if not update.timed_out and not update.failed and not update.invalid
-            ),
-            global_quorum=args.global_quorum,
-            requested_nodes=args.node_count,
-            generation_duration_s=generation_duration_s,
-            run_dir=run_dir,
-            eta_outer=args.eta_outer,
-            weight_by=args.weight_by,
-            resume_source_generation=resume_source.generation,
-            recovery_every_generations=args.recovery_every_generations,
-            recovery_every_seconds=args.recovery_every_seconds,
-            export_every_generations=args.export_every_generations,
-            export_every_seconds=args.export_every_seconds,
-        )
-        final_state = resumed_state
-        resume_payload = {
-            "tested": True,
-            "selected_generation": resume_source.generation,
-            "selected_manifest_path": resume_source.manifest_path,
-            "selected_latest_path": resume_source.latest_path,
-            "published_generation": resumed_metrics.generation,
-            "latest_path": resumed_publish.latest_path,
-            "latest_advanced": resumed_publish.latest_advanced,
-            "metrics": resumed_metrics.to_dict(),
-        }
+            resume_payload = {
+                "tested": True,
+                "selected_generation": None,
+                "latest_advanced": False,
+                "reason": "no finalized generation selected",
+            }
+        else:
+            resumed_state, resumed_metrics, resumed_publish = _run_global_merge(
+                run_id=args.run_id,
+                generation=resume_source.generation + 1,
+                base_state=final_state,
+                node_updates=tuple(
+                    replace(
+                        update,
+                        base_generation=resume_source.generation + 1,
+                        worker_id=f"resume/{update.worker_id}",
+                    )
+                    for update in global_updates
+                    if not update.timed_out and not update.failed and not update.invalid
+                ),
+                global_quorum=args.global_quorum,
+                requested_nodes=args.node_count,
+                generation_duration_s=generation_duration_s,
+                run_dir=run_dir,
+                eta_outer=args.eta_outer,
+                weight_by=args.weight_by,
+                resume_source_generation=resume_source.generation,
+                recovery_every_generations=args.recovery_every_generations,
+                recovery_every_seconds=args.recovery_every_seconds,
+                export_every_generations=args.export_every_generations,
+                export_every_seconds=args.export_every_seconds,
+            )
+            final_state = resumed_state
+            resume_payload = {
+                "tested": True,
+                "selected_generation": resume_source.generation,
+                "selected_manifest_path": resume_source.manifest_path,
+                "selected_latest_path": resume_source.latest_path,
+                "published_generation": resumed_metrics.generation,
+                "latest_path": None if resumed_publish is None else resumed_publish.latest_path,
+                "latest_advanced": False if resumed_publish is None else resumed_publish.latest_advanced,
+                "metrics": resumed_metrics.to_dict(),
+            }
 
     end_utc = _utc_now()
     elapsed_s = max(0.0, time.monotonic() - start_s)
@@ -342,7 +354,10 @@ def main() -> int:
             command = command_path.read_text(encoding="utf-8").strip()
 
     local_metrics = [result.metrics for result in node_results]
-    checkpoint_records = [record.to_dict() for record in publish_result.checkpoint_records]
+    checkpoint_records = (
+        [] if publish_result is None
+        else [record.to_dict() for record in publish_result.checkpoint_records]
+    )
     recovery_records = [
         record for record in checkpoint_records
         if record.get("kind") == "recovery" and record.get("finalized")

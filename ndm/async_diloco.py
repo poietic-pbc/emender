@@ -121,6 +121,9 @@ CHECKPOINT_LATEST_REQUIRED_FIELDS = (
 
 
 TensorState = Mapping[str, torch.Tensor]
+DEFAULT_LOCAL_WORKERS_PER_NODE = 8
+DEFAULT_LOCAL_QUORUM_TARGET = 6
+DEFAULT_GLOBAL_QUORUM_FRACTION = 2.0 / 3.0
 
 
 def _clone_state(state: TensorState) -> dict[str, torch.Tensor]:
@@ -236,6 +239,57 @@ def state_norms(state: TensorState) -> dict[str, float]:
     }
 
 
+def _validate_tensor_state(state: TensorState, label: str) -> None:
+    for name, tensor in state.items():
+        if not isinstance(tensor, torch.Tensor):
+            raise ValueError(f"{label} tensor {name!r} is not a torch.Tensor")
+        if not torch.isfinite(tensor.detach()).all().item():
+            raise ValueError(f"{label} tensor {name!r} contains non-finite values")
+
+
+def _validate_update_delta(base_state: TensorState, update: "AsyncDiLoCoUpdate") -> None:
+    if set(base_state) != set(update.delta):
+        missing = sorted(set(base_state) - set(update.delta))
+        extra = sorted(set(update.delta) - set(base_state))
+        raise ValueError(
+            f"update {update.worker_id!r} delta keys differ: missing={missing} extra={extra}"
+        )
+    for name, base_tensor in base_state.items():
+        delta_tensor = update.delta[name]
+        if base_tensor.shape != delta_tensor.shape:
+            raise ValueError(
+                f"update {update.worker_id!r} tensor {name!r} shape differs: "
+                f"{tuple(delta_tensor.shape)} != {tuple(base_tensor.shape)}"
+            )
+        if not torch.isfinite(delta_tensor.detach()).all().item():
+            raise ValueError(
+                f"update {update.worker_id!r} tensor {name!r} contains non-finite values"
+            )
+
+
+def default_local_quorum(worker_count: int = DEFAULT_LOCAL_WORKERS_PER_NODE) -> int:
+    """Return the production default local quorum target.
+
+    Frontier nodes expose eight GPU workers for this path; the production
+    default is six accepted worker updates per node.  Smaller synthetic tests
+    keep a feasible default by capping at the worker count.
+    """
+
+    worker_count = int(worker_count)
+    if worker_count <= 0:
+        raise ValueError("worker_count must be positive")
+    return min(DEFAULT_LOCAL_QUORUM_TARGET, worker_count)
+
+
+def default_global_quorum(node_count: int) -> int:
+    """Return the default global quorum, ceil(2/3 * node_count)."""
+
+    node_count = int(node_count)
+    if node_count <= 0:
+        raise ValueError("node_count must be positive")
+    return int(math.ceil(DEFAULT_GLOBAL_QUORUM_FRACTION * node_count))
+
+
 @dataclass(frozen=True)
 class AsyncDiLoCoUpdate:
     """One worker/node delta submitted to an async quorum DiLoCo generation."""
@@ -279,6 +333,7 @@ class AsyncDiLoCoGenerationMetrics:
     checkpoint_sizes: Mapping[str, int] = field(default_factory=dict)
     latest_advanced: bool = False
     resume_source_generation: int | None = None
+    quorum_status: str = "advanced"
     schema_version: int = ASYNC_DILOCO_METRICS_SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
@@ -308,6 +363,7 @@ class AsyncDiLoCoGenerationMetrics:
             "checkpoint_sizes": dict(self.checkpoint_sizes),
             "latest_advanced": self.latest_advanced,
             "resume_source_generation": self.resume_source_generation,
+            "quorum_status": self.quorum_status,
         })
 
     @classmethod
@@ -344,6 +400,12 @@ class AsyncDiLoCoGenerationMetrics:
                 None if payload["resume_source_generation"] is None
                 else int(payload["resume_source_generation"])
             ),
+            quorum_status=str(
+                payload.get(
+                    "quorum_status",
+                    "advanced" if bool(payload["latest_advanced"]) else "deferred",
+                )
+            ),
         )
 
 
@@ -363,6 +425,7 @@ class AsyncDiLoCoMetricsSummary:
         for metric in self.generations:
             if metric.latest_advanced:
                 latest_generation = metric.generation
+        health_counters = sustained_health_counters(self.generations)
         resume_sources = sorted({
             metric.resume_source_generation
             for metric in self.generations
@@ -388,6 +451,11 @@ class AsyncDiLoCoMetricsSummary:
                 "advanced": latest_generation is not None,
                 "generation": latest_generation,
             },
+            "quorum_status": {
+                "advanced": sum(1 for m in self.generations if m.quorum_status == "advanced"),
+                "deferred": sum(1 for m in self.generations if m.quorum_status == "deferred"),
+            },
+            "sustained_health": health_counters,
             "resume_source_generation": resume_sources[0] if len(resume_sources) == 1 else None,
             "generations": generation_dicts,
         })
@@ -419,6 +487,10 @@ class AsyncDiLoCoMergeResult:
     failed_updates: Sequence[AsyncDiLoCoUpdate]
     invalid_updates: Sequence[AsyncDiLoCoUpdate]
     metrics: AsyncDiLoCoGenerationMetrics
+
+    @property
+    def advanced(self) -> bool:
+        return self.metrics.quorum_status == "advanced"
 
 
 @dataclass(frozen=True)
@@ -935,6 +1007,12 @@ def quorum_merge(
 ) -> AsyncDiLoCoMergeResult:
     """Apply one reject-stale quorum merge over synthetic tensor states."""
 
+    if requested_workers <= 0:
+        raise ValueError("requested_workers must be positive")
+    if quorum_threshold <= 0 or quorum_threshold > requested_workers:
+        raise ValueError("quorum_threshold must be in [1, requested_workers]")
+    _validate_tensor_state(base_state, "base_state")
+
     accepted: list[AsyncDiLoCoUpdate] = []
     stale: list[AsyncDiLoCoUpdate] = []
     timed_out: list[AsyncDiLoCoUpdate] = []
@@ -951,12 +1029,53 @@ def quorum_merge(
         elif update.base_generation != generation:
             stale.append(update)
         else:
+            _validate_update_delta(base_state, update)
             accepted.append(update)
 
+    checkpoint_sizes_dict = {} if checkpoint_sizes is None else dict(checkpoint_sizes)
+    metrics_kwargs = {
+        "run_id": run_id,
+        "generation": generation,
+        "requested_workers": requested_workers,
+        "participating_workers": len(updates),
+        "quorum_threshold": quorum_threshold,
+        "quorum_size": len(accepted),
+        "accepted_updates": len(accepted),
+        "stale_updates": len(stale),
+        "timed_out_updates": len(timed_out),
+        "failed_updates": len(failed),
+        "invalid_updates": len(invalid),
+        "generation_duration_s": generation_duration_s,
+        "merge_duration_s": merge_duration_s,
+        "rebase_duration_s": rebase_duration_s,
+        "checkpoint_duration_s": checkpoint_duration_s,
+        "checkpoint_paths": tuple(checkpoint_paths),
+        "checkpoint_sizes": checkpoint_sizes_dict,
+        "resume_source_generation": resume_source_generation,
+    }
+
     if len(accepted) < quorum_threshold:
-        raise RuntimeError(
-            f"quorum not reached for generation {generation}: "
-            f"accepted={len(accepted)} threshold={quorum_threshold}")
+        metrics = AsyncDiLoCoGenerationMetrics(
+            **metrics_kwargs,
+            tokens_per_sec=0.0,
+            tokens_per_generation=0,
+            update_bytes={
+                "accepted": sum(state_num_bytes(update.delta) for update in accepted),
+            },
+            loss_moving_average={},
+            update_norms={},
+            latest_advanced=False,
+            quorum_status="deferred",
+        )
+        return AsyncDiLoCoMergeResult(
+            state=_clone_state(base_state),
+            accepted_updates=tuple(accepted),
+            stale_updates=tuple(stale),
+            timed_out_updates=tuple(timed_out),
+            failed_updates=tuple(failed),
+            invalid_updates=tuple(invalid),
+            metrics=metrics,
+        )
 
     mean_delta = weighted_mean_deltas(accepted, weight_by=weight_by)
     merged_state = apply_dense_delta(base_state, mean_delta, scale=eta_outer)
@@ -969,30 +1088,14 @@ def quorum_merge(
         [float(update.tokens) for update in accepted],
     )
     metrics = AsyncDiLoCoGenerationMetrics(
-        run_id=run_id,
-        generation=generation,
-        requested_workers=requested_workers,
-        participating_workers=len(updates),
-        quorum_threshold=quorum_threshold,
-        quorum_size=len(accepted),
-        accepted_updates=len(accepted),
-        stale_updates=len(stale),
-        timed_out_updates=len(timed_out),
-        failed_updates=len(failed),
-        invalid_updates=len(invalid),
-        generation_duration_s=generation_duration_s,
-        merge_duration_s=merge_duration_s,
-        rebase_duration_s=rebase_duration_s,
-        checkpoint_duration_s=checkpoint_duration_s,
+        **metrics_kwargs,
         tokens_per_sec=tokens_per_sec,
         tokens_per_generation=total_tokens,
         update_bytes={"accepted": sum(state_num_bytes(update.delta) for update in accepted)},
         loss_moving_average=loss_ma,
         update_norms=state_norms(mean_delta),
-        checkpoint_paths=tuple(checkpoint_paths),
-        checkpoint_sizes={} if checkpoint_sizes is None else dict(checkpoint_sizes),
         latest_advanced=latest_advanced,
-        resume_source_generation=resume_source_generation,
+        quorum_status="advanced",
     )
     return AsyncDiLoCoMergeResult(
         state=merged_state,
@@ -1061,6 +1164,44 @@ def percentile(values: Sequence[int | float], q: float) -> float:
         return xs[lo]
     frac = pos - lo
     return xs[lo] * (1.0 - frac) + xs[hi] * frac
+
+
+def sustained_health_counters(
+    generations: Sequence[AsyncDiLoCoGenerationMetrics],
+) -> dict[str, int | bool]:
+    """Return run-level counters suitable for sustained-health policy hooks."""
+
+    advanced = 0
+    deferred = 0
+    current_deferred_streak = 0
+    max_deferred_streak = 0
+    current_nonadvanced_latest_streak = 0
+    max_nonadvanced_latest_streak = 0
+    for metric in generations:
+        if metric.quorum_status == "advanced":
+            advanced += 1
+            current_deferred_streak = 0
+        else:
+            deferred += 1
+            current_deferred_streak += 1
+            max_deferred_streak = max(max_deferred_streak, current_deferred_streak)
+        if metric.latest_advanced:
+            current_nonadvanced_latest_streak = 0
+        else:
+            current_nonadvanced_latest_streak += 1
+            max_nonadvanced_latest_streak = max(
+                max_nonadvanced_latest_streak,
+                current_nonadvanced_latest_streak,
+            )
+    return {
+        "advanced_generations": advanced,
+        "deferred_generations": deferred,
+        "current_deferred_streak": current_deferred_streak,
+        "max_deferred_streak": max_deferred_streak,
+        "current_nonadvanced_latest_streak": current_nonadvanced_latest_streak,
+        "max_nonadvanced_latest_streak": max_nonadvanced_latest_streak,
+        "healthy": deferred == 0 and current_nonadvanced_latest_streak == 0,
+    }
 
 
 def stable_json_dumps(payload: Mapping[str, Any]) -> str:
@@ -1226,7 +1367,7 @@ class AsyncDiLoCoWorkerReport:
 class AsyncDiLoCoSupervisorPrototypeResult:
     node_id: str
     generation: int
-    node_update: AsyncDiLoCoUpdate
+    node_update: AsyncDiLoCoUpdate | None
     worker_reports: Sequence[AsyncDiLoCoWorkerReport]
     metrics: AsyncDiLoCoGenerationMetrics
 
@@ -1290,7 +1431,8 @@ class AsyncDiLoCoPrototypeConfig:
     node_id: str = "node-0"
     worker_specs: Sequence[AsyncDiLoCoWorkerSpec] = field(default_factory=tuple)
     local_quorum: int | None = None
-    global_quorum: int = 1
+    global_quorum: int | None = None
+    global_node_count: int = 1
     timeout_s: float = 30.0
     eta_outer: float = 1.0
     weight_by: str = "tokens"
@@ -1318,11 +1460,23 @@ def run_async_diloco_worker_supervisor_prototype(
         AsyncDiLoCoWorkerSpec(worker_id=f"worker-{idx}", gpu_id=idx)
         for idx in range(8)
     )
-    local_quorum = config.local_quorum if config.local_quorum is not None else len(worker_specs)
+    local_quorum = (
+        config.local_quorum
+        if config.local_quorum is not None
+        else default_local_quorum(len(worker_specs))
+    )
     if local_quorum <= 0 or local_quorum > len(worker_specs):
         raise ValueError("local_quorum must be in [1, worker_count]")
-    if config.global_quorum != 1:
-        raise ValueError("single-node prototype supports global_quorum=1")
+    global_node_count = int(config.global_node_count)
+    if global_node_count <= 0:
+        raise ValueError("global_node_count must be positive")
+    global_quorum = (
+        config.global_quorum
+        if config.global_quorum is not None
+        else default_global_quorum(global_node_count)
+    )
+    if global_quorum <= 0 or global_quorum > global_node_count:
+        raise ValueError("global_quorum must be in [1, global_node_count]")
 
     base_state = _prototype_base_state(config)
     supervisor = _run_node_supervisor_prototype(
@@ -1338,13 +1492,15 @@ def run_async_diloco_worker_supervisor_prototype(
         use_processes=config.use_processes,
     )
     node_update = supervisor.node_update
-    if config.include_group_merger:
+    if node_update is not None and config.include_group_merger:
         node_update = replace(node_update, worker_id=f"group-0/{node_update.worker_id}")
     global_result = _run_global_merger_prototype(
         run_id=config.run_id,
         generation=config.generation,
         base_state=base_state,
         node_update=node_update,
+        requested_nodes=global_node_count,
+        global_quorum=global_quorum,
         eta_outer=config.eta_outer,
         weight_by=config.weight_by,
         generation_duration_s=supervisor.metrics.generation_duration_s,
@@ -1369,6 +1525,7 @@ def run_async_diloco_worker_supervisor_prototype(
         metrics_path=metrics_path,
     )
     if metrics_path is not None:
+        Path(metrics_path).parent.mkdir(parents=True, exist_ok=True)
         Path(metrics_path).write_text(stable_json_dumps(result.to_dict()) + "\n", encoding="utf-8")
     return result
 
@@ -1441,8 +1598,6 @@ def _run_node_supervisor_prototype(
         report.update for report in reports
         if report.update is not None and not report.failed
     ]
-    if len(accepted_updates) < local_quorum:
-        raise RuntimeError(f"node quorum not reached: accepted={len(accepted_updates)} quorum={local_quorum}")
     missing_ids = sorted(set(spec.worker_id for spec in worker_specs) - set(report.worker_id for report in reports))
     status_updates = [
         _prototype_status_update(spec.worker_id, generation, base_state, timed_out=True)
@@ -1472,14 +1627,24 @@ def _run_node_supervisor_prototype(
         generation_duration_s=elapsed_s,
     )
     node_delta = compute_dense_delta(base_state, merge_result.state)
+    update_bytes = {
+        "worker": sum(state_num_bytes(update.delta) for update in accepted_updates),
+        "node": state_num_bytes(node_delta) if merge_result.advanced else 0,
+    }
     metrics = replace(
         merge_result.metrics,
         merge_duration_s=max(0.0, time.monotonic() - merge_start_s),
-        update_bytes={
-            "worker": sum(state_num_bytes(update.delta) for update in accepted_updates),
-            "node": state_num_bytes(node_delta),
-        },
+        update_bytes=update_bytes,
     )
+    node_update = None
+    if not merge_result.advanced:
+        return AsyncDiLoCoSupervisorPrototypeResult(
+            node_id=node_id,
+            generation=generation,
+            node_update=node_update,
+            worker_reports=tuple(sorted(reports, key=lambda report: report.worker_id)),
+            metrics=metrics,
+        )
     node_update = AsyncDiLoCoUpdate(
         worker_id=node_id,
         base_generation=generation,
@@ -1547,12 +1712,13 @@ def _collect_process_worker_reports(
     reported = {report.worker_id for report in reports}
     for spec, process in processes:
         process.join(timeout=0.05)
-        if process.is_alive():
+        timed_out = process.is_alive()
+        if timed_out:
             process.terminate()
             process.join(timeout=1.0)
         if spec.worker_id in reported:
             continue
-        failed = process.exitcode not in (0, None)
+        failed = not timed_out and process.exitcode not in (0, None)
         reports.append(AsyncDiLoCoWorkerReport(
             worker_id=spec.worker_id,
             gpu_id=spec.gpu_id,
@@ -1703,20 +1869,35 @@ def _run_global_merger_prototype(
     run_id: str,
     generation: int,
     base_state: TensorState,
-    node_update: AsyncDiLoCoUpdate,
+    node_update: AsyncDiLoCoUpdate | None,
+    requested_nodes: int,
+    global_quorum: int,
     eta_outer: float,
     weight_by: str,
     generation_duration_s: float,
     run_dir: str | Path | None,
 ) -> AsyncDiLoCoGlobalPrototypeResult:
     merge_start_s = time.monotonic()
+    node_updates: list[AsyncDiLoCoUpdate] = []
+    if node_update is not None:
+        node_updates.append(node_update)
+    missing_nodes = requested_nodes - len(node_updates)
+    for idx in range(max(0, missing_nodes)):
+        node_updates.append(
+            _prototype_status_update(
+                f"missing-node-{idx}",
+                generation,
+                base_state,
+                timed_out=True,
+            )
+        )
     merge_result = quorum_merge(
         base_state,
-        (node_update,),
+        tuple(node_updates),
         run_id=run_id,
         generation=generation,
-        requested_workers=1,
-        quorum_threshold=1,
+        requested_workers=requested_nodes,
+        quorum_threshold=global_quorum,
         eta_outer=eta_outer,
         weight_by=weight_by,
         generation_duration_s=generation_duration_s,
@@ -1725,8 +1906,8 @@ def _run_global_merger_prototype(
         merge_result.metrics,
         merge_duration_s=max(0.0, time.monotonic() - merge_start_s),
         update_bytes={
-            "node": state_num_bytes(node_update.delta),
-            "global_state": state_num_bytes(merge_result.state),
+            "node": 0 if node_update is None else state_num_bytes(node_update.delta),
+            "global_state": state_num_bytes(merge_result.state) if merge_result.advanced else 0,
         },
     )
     publish_result = None
@@ -1736,7 +1917,7 @@ def _run_global_merger_prototype(
         "paths": [],
         "sizes": {},
     }
-    if run_dir is not None:
+    if run_dir is not None and merge_result.advanced:
         manager = AsyncDiLoCoCheckpointManager(
             run_dir,
             run_id=run_id,
@@ -1770,6 +1951,9 @@ __all__ = [
     "ASYNC_DILOCO_CHECKPOINT_SCHEMA_VERSION",
     "ASYNC_DILOCO_METRICS_SCHEMA_VERSION",
     "CHECKPOINT_LATEST_REQUIRED_FIELDS",
+    "DEFAULT_GLOBAL_QUORUM_FRACTION",
+    "DEFAULT_LOCAL_QUORUM_TARGET",
+    "DEFAULT_LOCAL_WORKERS_PER_NODE",
     "GENERATION_REQUIRED_FIELDS",
     "EXPORT_CHECKPOINT_KIND",
     "GENERATION_MANIFEST_KIND",
@@ -1794,6 +1978,8 @@ __all__ = [
     "apply_dense_delta",
     "build_metrics_summary",
     "compute_dense_delta",
+    "default_global_quorum",
+    "default_local_quorum",
     "load_async_diloco_readonly_state",
     "quorum_distribution",
     "quorum_merge",
@@ -1804,6 +1990,7 @@ __all__ = [
     "stable_json_dumps",
     "state_norms",
     "state_num_bytes",
+    "sustained_health_counters",
     "validate_generation_metrics",
     "validate_checkpoint_latest",
     "validate_metrics_summary",
