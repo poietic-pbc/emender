@@ -61,15 +61,21 @@ ASYNC_GLOBAL_DROP_NODE_IDS=${ASYNC_GLOBAL_DROP_NODE_IDS:-}
 ASYNC_RESUME_CHECK=${ASYNC_RESUME_CHECK:-0}
 PRODUCTION_LATEST_GUARD=${PRODUCTION_LATEST_GUARD:-}
 REQUESTED_WALLTIME=${REQUESTED_WALLTIME:-00:20:00}
-REQUESTED_NODE_HOURS=${REQUESTED_NODE_HOURS:-$(python - <<'PY'
-import os
-nodes = float(os.environ.get("SLURM_JOB_NUM_NODES", "1"))
-wall = os.environ.get("REQUESTED_WALLTIME", "00:20:00")
-parts = [float(p) for p in wall.split(":")]
-seconds = parts[-1] + 60 * parts[-2] + (3600 * parts[-3] if len(parts) == 3 else 0)
-print(f"{nodes * seconds / 3600:.6f}")
-PY
-)}
+if [[ -z "${REQUESTED_NODE_HOURS:-}" ]]; then
+  REQUESTED_NODE_HOURS=$(awk -v nodes="${SLURM_JOB_NUM_NODES:-1}" -v wall="$REQUESTED_WALLTIME" '
+    BEGIN {
+      split(wall, parts, ":")
+      if (length(parts) == 3) {
+        seconds = (parts[1] * 3600) + (parts[2] * 60) + parts[3]
+      } else if (length(parts) == 2) {
+        seconds = (parts[1] * 60) + parts[2]
+      } else {
+        seconds = parts[1]
+      }
+      printf "%.6f\n", nodes * seconds / 3600
+    }
+  ')
+fi
 
 mkdir -p "$ARTIFACT_DIR" "$LOG_DIR" "$SUMMARY_DIR" logs/frontier/async_diloco_e97
 cd "$REPO"
