@@ -20,9 +20,11 @@ from ndm.async_diloco import stable_json_dumps
 from ndm.async_diloco import AsyncDiLoCoCheckpointCadence
 from ndm.async_diloco_real import (
     RealAsyncDiLoCoConfig,
+    RealAsyncFileRankConfig,
     RealAsyncWorkerSpec,
     default_tiny_e97_train_args,
     run_real_async_diloco,
+    run_real_async_diloco_file_rank,
 )
 
 
@@ -90,6 +92,10 @@ def parse_args() -> argparse.Namespace:
                         help="If set, publish a finalization checkpoint when inside the reserve window.")
     parser.add_argument("--estimated-finalization-duration-s", type=float, default=-1.0)
     parser.add_argument("--device", default=os.environ.get("ASYNC_DILOCO_DEVICE", "cpu"))
+    parser.add_argument("--actual-multinode-file-quorum", action="store_true",
+                        help="Run one Slurm-launched node rank and use rank 0 as a file quorum coordinator.")
+    parser.add_argument("--node-rank", type=int, default=None,
+                        help="Actual node rank for --actual-multinode-file-quorum; defaults to SLURM_PROCID.")
     return parser.parse_args()
 
 
@@ -109,6 +115,8 @@ def main() -> int:
         raise ValueError("--node-count must be positive")
     if not args.synthetic_token_stream and not args.data:
         raise ValueError("--data is required unless --synthetic-token-stream is set")
+    if args.actual_multinode_file_quorum and args.synthetic_token_stream:
+        raise ValueError("--actual-multinode-file-quorum requires real data; synthetic token stream is disabled")
 
     train_overrides = {
         key: value
@@ -148,6 +156,42 @@ def main() -> int:
         projection_chunk_size=args.projection_chunk_size,
         loss_chunk_size=args.loss_chunk_size,
     )
+    if args.actual_multinode_file_quorum:
+        node_rank = args.node_rank
+        if node_rank is None:
+            node_rank = int(os.environ.get("SLURM_PROCID", os.environ.get("PMI_RANK", "0")))
+        global_quorum = None if args.global_quorum <= 0 else args.global_quorum
+        if global_quorum is None:
+            global_quorum = int((2 * args.node_count + 2) // 3)
+        result = run_real_async_diloco_file_rank(RealAsyncFileRankConfig(
+            run_id=args.run_id,
+            run_dir=Path(args.run_dir),
+            metrics_json=(args.metrics_json or None),
+            train_args=train_args,
+            node_rank=int(node_rank),
+            node_count=args.node_count,
+            global_quorum=int(global_quorum),
+            local_steps=args.local_steps,
+            timeout_s=args.timeout_s,
+            eta_outer=args.eta_outer,
+            initial_checkpoint=(Path(args.checkpoint) if args.checkpoint else None),
+            synthetic_token_stream=False,
+            device=args.device,
+            walltime_remaining_s=_optional_positive_float(args.walltime_remaining_s),
+            estimated_finalization_duration_s=_optional_positive_float(
+                args.estimated_finalization_duration_s
+            ),
+            checkpoint_cadence=AsyncDiLoCoCheckpointCadence(
+                recovery_every_generations=_optional_positive_int(args.recovery_every_generations),
+                recovery_every_seconds=_optional_positive_float(args.recovery_every_seconds),
+                export_every_generations=_optional_positive_int(args.export_every_generations),
+                export_every_seconds=_optional_positive_float(args.export_every_seconds),
+                finalization_reserve_seconds=float(args.finalization_reserve_seconds),
+            ),
+        ))
+        print(stable_json_dumps(result), flush=True)
+        return 0
+
     worker_specs = []
     for idx in range(args.worker_count):
         node_id = f"node-{idx % args.node_count}"

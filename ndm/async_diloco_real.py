@@ -10,6 +10,7 @@ from __future__ import annotations
 from argparse import Namespace
 from dataclasses import dataclass, field, replace
 import copy
+import json
 import math
 from pathlib import Path
 import time
@@ -174,6 +175,30 @@ class RealAsyncDiLoCoRunResult:
         }
 
 
+@dataclass(frozen=True)
+class RealAsyncFileRankConfig:
+    """Configuration for one Slurm-launched node rank in the debug file path."""
+
+    run_id: str
+    run_dir: str | Path
+    metrics_json: str | Path | None
+    train_args: Namespace
+    node_rank: int
+    node_count: int
+    global_quorum: int
+    local_steps: int
+    timeout_s: float = 900.0
+    eta_outer: float = 1.0
+    weight_by: str = "tokens"
+    initial_checkpoint: str | Path | None = None
+    synthetic_token_stream: bool = False
+    synthetic_vocab_size: int = 256
+    device: str = "cpu"
+    walltime_remaining_s: float | None = None
+    estimated_finalization_duration_s: float | None = None
+    checkpoint_cadence: AsyncDiLoCoCheckpointCadence = field(default_factory=AsyncDiLoCoCheckpointCadence)
+
+
 def default_tiny_e97_train_args(**overrides: Any) -> Namespace:
     """Return a CPU-friendly E97 Namespace compatible with train.py helpers."""
 
@@ -237,6 +262,122 @@ def default_tiny_e97_train_args(**overrides: Any) -> Namespace:
     }
     values.update(overrides)
     return Namespace(**values)
+
+
+def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str, Any]:
+    """Run one actual node process and let rank 0 publish a quorum record.
+
+    This path is intentionally bounded for Frontier debug validation: every
+    Slurm task runs real local token training from the same seed checkpoint and
+    writes durable per-node artifacts, while rank 0 merges node metadata through
+    shared storage. It avoids claiming a dense tensor allreduce/storage exchange
+    that this debug path does not implement.
+    """
+
+    if config.node_count <= 0:
+        raise ValueError("node_count must be positive")
+    if config.node_rank < 0 or config.node_rank >= config.node_count:
+        raise ValueError("node_rank must be in [0, node_count)")
+    if config.global_quorum <= 0 or config.global_quorum > config.node_count:
+        raise ValueError("global_quorum must be in [1, node_count]")
+    if config.synthetic_token_stream:
+        raise ValueError("synthetic_token_stream is disabled for actual multinode validation")
+
+    run_dir = Path(config.run_dir)
+    progress_dir = run_dir / "progress"
+    nodes_dir = run_dir / "node_updates"
+    progress_dir.mkdir(parents=True, exist_ok=True)
+    nodes_dir.mkdir(parents=True, exist_ok=True)
+
+    node_id = f"node-{int(config.node_rank):05d}"
+    generation = 0
+    start_s = time.monotonic()
+    _write_rank_heartbeat(
+        progress_dir,
+        node_rank=config.node_rank,
+        node_id=node_id,
+        stage="starting",
+        generation=generation,
+        extra={"node_count": config.node_count, "global_quorum": config.global_quorum},
+    )
+
+    train_args = _copy_train_args(config.train_args)
+    train.normalize_training_args(train_args)
+    torch.manual_seed(int(getattr(train_args, "seed", 42)))
+    global_model = train.build_training_model(train_args)
+    if config.initial_checkpoint is not None:
+        train.load_checkpoint(str(config.initial_checkpoint), global_model)
+    base_state = _floating_state_dict(global_model)
+    del global_model
+
+    _write_rank_heartbeat(
+        progress_dir,
+        node_rank=config.node_rank,
+        node_id=node_id,
+        stage="checkpoint_loaded",
+        generation=generation,
+        extra={"base_state_bytes": state_num_bytes(base_state)},
+    )
+
+    spec = RealAsyncWorkerSpec(
+        worker_id=f"{node_id}/worker-00000",
+        node_id=node_id,
+        device=config.device,
+        local_steps=config.local_steps,
+        seed_offset=config.node_rank,
+    )
+    node_result = _run_real_node_supervisor(
+        run_id=config.run_id,
+        node_id=node_id,
+        generation=generation,
+        base_state=base_state,
+        train_args=train_args,
+        worker_specs=(spec,),
+        local_quorum=1,
+        eta_outer=config.eta_outer,
+        weight_by=config.weight_by,
+        timeout_s=config.timeout_s,
+        synthetic_token_stream=False,
+        synthetic_vocab_size=config.synthetic_vocab_size,
+    )
+    node_payload = _node_result_payload(
+        config,
+        node_result,
+        elapsed_s=max(0.0, time.monotonic() - start_s),
+    )
+    _atomic_write_json(nodes_dir / f"{node_id}.json", node_payload)
+    _write_rank_heartbeat(
+        progress_dir,
+        node_rank=config.node_rank,
+        node_id=node_id,
+        stage="node_update_written",
+        generation=generation,
+        extra={
+            "node_update_submitted": node_result.node_update is not None,
+            "tokens": node_result.metrics.tokens_per_generation,
+            "loss": node_result.metrics.loss_moving_average.get("loss"),
+        },
+    )
+
+    root_payload: dict[str, Any] | None = None
+    if int(config.node_rank) == 0:
+        root_payload = _coordinate_file_rank_quorum(
+            config=config,
+            start_s=start_s,
+            nodes_dir=nodes_dir,
+            progress_dir=progress_dir,
+            generation=generation,
+        )
+
+    return {
+        "run_id": config.run_id,
+        "node_rank": int(config.node_rank),
+        "node_id": node_id,
+        "node_update_path": str(nodes_dir / f"{node_id}.json"),
+        "node_update_submitted": node_result.node_update is not None,
+        "coordinator": int(config.node_rank) == 0,
+        "global_result": root_payload,
+    }
 
 
 def run_real_async_diloco(config: RealAsyncDiLoCoConfig) -> RealAsyncDiLoCoRunResult:
@@ -778,6 +919,304 @@ def _mean(values: Sequence[float]) -> float:
     return float(sum(values) / len(values))
 
 
+def _node_result_payload(
+    config: RealAsyncFileRankConfig,
+    node_result: RealAsyncNodeResult,
+    *,
+    elapsed_s: float,
+) -> dict[str, Any]:
+    losses = [
+        loss
+        for report in node_result.worker_reports
+        for loss in report.losses
+        if math.isfinite(float(loss))
+    ]
+    return {
+        "schema_version": 1,
+        "run_id": config.run_id,
+        "node_rank": int(config.node_rank),
+        "node_id": node_result.node_id,
+        "generation": int(node_result.generation),
+        "elapsed_s": float(elapsed_s),
+        "node_update_submitted": node_result.node_update is not None,
+        "bounded_debug_update_kind": "metadata_quorum_no_dense_delta_storage",
+        "metrics": node_result.metrics.to_dict(),
+        "tokens": int(node_result.metrics.tokens_per_generation),
+        "loss": (_mean(losses) if losses else math.nan),
+        "losses": [float(loss) for loss in losses],
+        "worker_reports": [
+            {
+                "worker_id": report.worker_id,
+                "node_id": report.node_id,
+                "base_generation": report.base_generation,
+                "tokens": report.tokens,
+                "losses": list(report.losses),
+                "failed": report.failed,
+                "timed_out": report.timed_out,
+                "invalid": report.invalid,
+                "error": report.error,
+            }
+            for report in node_result.worker_reports
+        ],
+    }
+
+
+def _coordinate_file_rank_quorum(
+    *,
+    config: RealAsyncFileRankConfig,
+    start_s: float,
+    nodes_dir: Path,
+    progress_dir: Path,
+    generation: int,
+) -> dict[str, Any]:
+    deadline_s = start_s + float(config.timeout_s)
+    metrics_path = Path(config.metrics_json) if config.metrics_json is not None else Path(config.run_dir) / "real_async_metrics.json"
+    accepted: list[dict[str, Any]] = []
+    all_payloads: list[dict[str, Any]] = []
+    last_partial_write_s = 0.0
+
+    while time.monotonic() < deadline_s:
+        all_payloads = _read_node_payloads(nodes_dir)
+        accepted = [
+            payload for payload in all_payloads
+            if payload.get("node_update_submitted") is True
+            and int(payload.get("generation", -1)) == generation
+        ]
+        partial = _file_quorum_payload(
+            config=config,
+            generation=generation,
+            accepted=accepted,
+            all_payloads=all_payloads,
+            start_s=start_s,
+            latest_advanced=False,
+            checkpoint_paths=(),
+            checkpoint_sizes={},
+        )
+        now_s = time.monotonic()
+        if now_s - last_partial_write_s >= 5.0 or len(accepted) >= config.global_quorum:
+            _atomic_write_json(metrics_path, partial)
+            _write_rank_heartbeat(
+                progress_dir,
+                node_rank=config.node_rank,
+                node_id="node-00000",
+                stage="coordinator_waiting",
+                generation=generation,
+                extra={
+                    "accepted_nodes": len(accepted),
+                    "seen_nodes": len(all_payloads),
+                    "global_quorum": config.global_quorum,
+                    "partial_metrics_json": str(metrics_path),
+                },
+            )
+            last_partial_write_s = now_s
+        if len(accepted) >= config.global_quorum:
+            break
+        time.sleep(1.0)
+
+    timed_out = max(0, int(config.node_count) - len(all_payloads))
+    failed = sum(1 for payload in all_payloads if payload.get("node_update_submitted") is not True)
+    metrics = _file_quorum_metrics(
+        config=config,
+        generation=generation,
+        accepted=accepted,
+        all_payloads=all_payloads,
+        start_s=start_s,
+        timed_out=timed_out,
+        failed=failed,
+    )
+
+    checkpoint_paths: tuple[str, ...] = ()
+    checkpoint_sizes: dict[str, int] = {}
+    latest_advanced = False
+    if len(accepted) >= config.global_quorum:
+        manager = AsyncDiLoCoCheckpointManager(
+            config.run_dir,
+            run_id=config.run_id,
+            role=GLOBAL_MERGER_ROLE,
+            cadence=config.checkpoint_cadence,
+        )
+        publish = manager.publish_global_generation(
+            metrics,
+            walltime_remaining_s=config.walltime_remaining_s,
+            estimated_finalization_duration_s=config.estimated_finalization_duration_s,
+        )
+        metrics = publish.metrics
+        checkpoint_paths = tuple(metrics.checkpoint_paths)
+        checkpoint_sizes = dict(metrics.checkpoint_sizes)
+        latest_advanced = True
+
+    final_payload = _file_quorum_payload(
+        config=config,
+        generation=generation,
+        accepted=accepted,
+        all_payloads=all_payloads,
+        start_s=start_s,
+        latest_advanced=latest_advanced,
+        checkpoint_paths=checkpoint_paths,
+        checkpoint_sizes=checkpoint_sizes,
+        metrics=metrics,
+    )
+    _atomic_write_json(metrics_path, final_payload)
+    _write_rank_heartbeat(
+        progress_dir,
+        node_rank=config.node_rank,
+        node_id="node-00000",
+        stage="coordinator_finalized" if latest_advanced else "coordinator_deferred",
+        generation=generation,
+        extra={
+            "accepted_nodes": len(accepted),
+            "seen_nodes": len(all_payloads),
+            "global_quorum": config.global_quorum,
+            "latest_advanced": latest_advanced,
+        },
+    )
+    return final_payload
+
+
+def _read_node_payloads(nodes_dir: Path) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for path in sorted(nodes_dir.glob("node-*.json")):
+        try:
+            payloads.append(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError):
+            continue
+    return payloads
+
+
+def _file_quorum_metrics(
+    *,
+    config: RealAsyncFileRankConfig,
+    generation: int,
+    accepted: Sequence[Mapping[str, Any]],
+    all_payloads: Sequence[Mapping[str, Any]],
+    start_s: float,
+    timed_out: int,
+    failed: int,
+) -> AsyncDiLoCoGenerationMetrics:
+    duration_s = max(0.0, time.monotonic() - start_s)
+    tokens = sum(int(payload.get("tokens", 0)) for payload in accepted)
+    losses = [
+        float(payload["loss"])
+        for payload in accepted
+        if payload.get("loss") is not None and math.isfinite(float(payload["loss"]))
+    ]
+    advanced = len(accepted) >= int(config.global_quorum)
+    return AsyncDiLoCoGenerationMetrics(
+        run_id=config.run_id,
+        generation=int(generation),
+        requested_workers=int(config.node_count),
+        participating_workers=len(all_payloads),
+        quorum_threshold=int(config.global_quorum),
+        quorum_size=len(accepted),
+        accepted_updates=len(accepted),
+        stale_updates=0,
+        timed_out_updates=int(timed_out),
+        failed_updates=int(failed),
+        invalid_updates=0,
+        generation_duration_s=duration_s,
+        merge_duration_s=0.0,
+        rebase_duration_s=0.0,
+        checkpoint_duration_s=0.0,
+        tokens_per_sec=(float(tokens) / duration_s if duration_s > 0.0 else 0.0),
+        tokens_per_generation=int(tokens),
+        update_bytes={"node_metadata": sum(len(stable_json_dumps(payload)) for payload in accepted)},
+        loss_moving_average={"loss": _mean(losses), "loss_100": _mean(losses)} if losses else {},
+        update_norms={},
+        latest_advanced=False,
+        quorum_status=("advanced" if advanced else "deferred"),
+    )
+
+
+def _file_quorum_payload(
+    *,
+    config: RealAsyncFileRankConfig,
+    generation: int,
+    accepted: Sequence[Mapping[str, Any]],
+    all_payloads: Sequence[Mapping[str, Any]],
+    start_s: float,
+    latest_advanced: bool,
+    checkpoint_paths: Sequence[str],
+    checkpoint_sizes: Mapping[str, int],
+    metrics: AsyncDiLoCoGenerationMetrics | None = None,
+) -> dict[str, Any]:
+    timed_out = max(0, int(config.node_count) - len(all_payloads))
+    failed = sum(1 for payload in all_payloads if payload.get("node_update_submitted") is not True)
+    if metrics is None:
+        metrics = _file_quorum_metrics(
+            config=config,
+            generation=generation,
+            accepted=accepted,
+            all_payloads=all_payloads,
+            start_s=start_s,
+            timed_out=timed_out,
+            failed=failed,
+        )
+    metrics_dict = metrics.to_dict()
+    if checkpoint_paths:
+        metrics_dict["checkpoint_paths"] = list(checkpoint_paths)
+        metrics_dict["checkpoint_sizes"] = dict(checkpoint_sizes)
+        metrics_dict["latest_advanced"] = bool(latest_advanced)
+    return {
+        "schema_version": 1,
+        "run_id": config.run_id,
+        "mode": "actual_multinode_file_quorum_debug",
+        "bounded_debug_alternative": {
+            "dense_delta_exchange": "not_implemented_for_debug_shared_storage",
+            "proof": "one Slurm-launched process per node runs real local token training and rank 0 merges node metadata quorum",
+        },
+        "synthetic_token_stream": False,
+        "node_count": int(config.node_count),
+        "global_quorum": int(config.global_quorum),
+        "generation": int(generation),
+        "latest_generation": (int(generation) if latest_advanced else -1),
+        "latest_path": str(Path(config.run_dir) / "latest.json"),
+        "metrics_summary": build_metrics_summary(
+            run_id=config.run_id,
+            requested_workers=int(config.node_count),
+            participating_workers=len(all_payloads),
+            generations=(metrics,),
+        ).to_dict(),
+        "global_generations": [{
+            "generation": int(generation),
+            "metrics": metrics_dict,
+            "publish_paths": list(checkpoint_paths),
+        }],
+        "node_generations": list(all_payloads),
+        "accepted_node_ids": [str(payload.get("node_id")) for payload in accepted],
+        "partial": not latest_advanced,
+    }
+
+
+def _write_rank_heartbeat(
+    progress_dir: Path,
+    *,
+    node_rank: int,
+    node_id: str,
+    stage: str,
+    generation: int,
+    extra: Mapping[str, Any] | None = None,
+) -> None:
+    payload = {
+        "schema_version": 1,
+        "node_rank": int(node_rank),
+        "node_id": node_id,
+        "stage": stage,
+        "generation": int(generation),
+        "monotonic_s": time.monotonic(),
+    }
+    if extra:
+        payload.update(dict(extra))
+    _atomic_write_json(progress_dir / f"{node_id}.heartbeat.json", payload)
+
+
+def _atomic_write_json(path: str | Path, payload: Mapping[str, Any]) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f".{target.name}.tmp")
+    tmp.write_text(stable_json_dumps(payload) + "\n", encoding="utf-8")
+    tmp.replace(target)
+
+
 def _write_json(path: str | Path, payload: Mapping[str, Any]) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -787,10 +1226,12 @@ def _write_json(path: str | Path, payload: Mapping[str, Any]) -> None:
 __all__ = [
     "RealAsyncDiLoCoConfig",
     "RealAsyncDiLoCoRunResult",
+    "RealAsyncFileRankConfig",
     "RealAsyncGlobalResult",
     "RealAsyncNodeResult",
     "RealAsyncWorkerReport",
     "RealAsyncWorkerSpec",
     "default_tiny_e97_train_args",
     "run_real_async_diloco",
+    "run_real_async_diloco_file_rank",
 ]

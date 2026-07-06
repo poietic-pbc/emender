@@ -118,6 +118,9 @@ def test_async_diloco_multinode_entrypoint_and_wrappers_are_main_relative():
     assert "frontier_activate_emender_conda_env" in launch_text
     assert "export TIKTOKEN_CACHE_DIR\nPYTHON_BIN=$(command -v python)" in launch_text
     assert '"$PYTHON_BIN" -u "$ASYNC_ENTRYPOINT"' in launch_text
+    assert "ASYNC_ACTUAL_MULTINODE_FILE_QUORUM=${ASYNC_ACTUAL_MULTINODE_FILE_QUORUM:-$ASYNC_DILOCO_NON_PRODUCTION_DEBUG}" in launch_text
+    assert "LAUNCH_CMD=(\n    srun\n    -N \"$ASYNC_NODE_COUNT\"\n    -n \"$ASYNC_NODE_COUNT\"\n    --ntasks-per-node=1" in launch_text
+    assert "CMD+=(--actual-multinode-file-quorum)" in launch_text
     assert "Production validation rejects ASYNC_DILOCO_RUNTIME_PROBE_ONLY=1" in launch_text
     assert "ASYNC_DILOCO_NON_PRODUCTION_DEBUG" in launch_text
     assert "export TIKTOKEN_CACHE_DIR" in launch_text
@@ -182,13 +185,14 @@ def test_production_async_launcher_records_artifacts_and_real_command_branch():
 
     assert 'COMMAND_FILE="${ARTIFACT_DIR}/command.txt"' in launch_text
     assert 'ENV_FILE="${ARTIFACT_DIR}/env.txt"' in launch_text
-    assert "printf '%q ' \"${CMD[@]}\" > \"$COMMAND_FILE\"" in launch_text
+    assert "printf '%q ' \"${LAUNCH_CMD[@]}\" > \"$COMMAND_FILE\"" in launch_text
     assert "} | tee \"$ENV_FILE\"" in launch_text
     assert 'echo "command_file=$COMMAND_FILE"' in launch_text
     assert 'echo "env_file=$ENV_FILE"' in launch_text
     assert 'echo "async_entrypoint=$ASYNC_ENTRYPOINT"' in launch_text
     assert 'echo "tiktoken_cache_dir=$TIKTOKEN_CACHE_DIR"' in launch_text
     assert 'echo "python_bin=$PYTHON_BIN"' in launch_text
+    assert 'echo "async_launch_uses_srun=$([[ "$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM" == "1" && "$ASYNC_NODE_COUNT" -gt 1 ]] && echo 1 || echo 0)"' in launch_text
     assert 'CMD=(\n  "$PYTHON_BIN" -u "$ASYNC_ENTRYPOINT"' in launch_text
     assert '--checkpoint "$E97_CHECKPOINT"' in launch_text
     assert '--data "$DATA"' in launch_text
@@ -215,4 +219,17 @@ def test_production_async_launcher_records_artifacts_and_real_command_branch():
     assert 'CMD+=(--walltime-remaining-s "$FINALIZATION_BUFFER_SECONDS")' in launch_text
     assert 'if [[ "$ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM" == "1" ]]; then' in launch_text
     assert 'CMD+=(--synthetic-token-stream)' in launch_text
-    assert 'exec "${CMD[@]}"' in launch_text
+    assert 'exec "${LAUNCH_CMD[@]}"' in launch_text
+
+
+def test_production_async_launcher_debug_multinode_uses_srun_not_bare_python():
+    launch_text = (ROOT / "scripts/frontier/async_diloco_e97_256n12h_launch.sbatch").read_text(encoding="utf-8")
+
+    assert "--actual-multinode-file-quorum" in launch_text
+    assert "LAUNCH_CMD=(\n    srun" in launch_text
+    assert '-N "$ASYNC_NODE_COUNT"' in launch_text
+    assert '-n "$ASYNC_NODE_COUNT"' in launch_text
+    assert "--ntasks-per-node=1" in launch_text
+    assert "printf '%q ' \"${LAUNCH_CMD[@]}\" > \"$COMMAND_FILE\"" in launch_text
+    assert 'exec "${LAUNCH_CMD[@]}"' in launch_text
+    assert 'exec "${CMD[@]}"' not in launch_text

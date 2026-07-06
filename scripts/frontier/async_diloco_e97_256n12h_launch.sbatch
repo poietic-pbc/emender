@@ -46,6 +46,7 @@ ENV_FILE="${ARTIFACT_DIR}/env.txt"
 ASYNC_ENTRYPOINT=${ASYNC_ENTRYPOINT:-scripts/frontier/e97_async_diloco_train.py}
 ASYNC_DILOCO_NON_PRODUCTION_DEBUG=${ASYNC_DILOCO_NON_PRODUCTION_DEBUG:-0}
 ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM=${ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM:-0}
+ASYNC_ACTUAL_MULTINODE_FILE_QUORUM=${ASYNC_ACTUAL_MULTINODE_FILE_QUORUM:-$ASYNC_DILOCO_NON_PRODUCTION_DEBUG}
 
 # Async quorum recipe. Local quorum is six of eight workers per node; global
 # quorum defaults to ceil(2/3 * nodes), including scaled debug node counts.
@@ -240,8 +241,22 @@ fi
 if [[ "$ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM" == "1" ]]; then
   CMD+=(--synthetic-token-stream)
 fi
+if [[ "$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM" == "1" ]]; then
+  CMD+=(--actual-multinode-file-quorum)
+fi
 
-printf '%q ' "${CMD[@]}" > "$COMMAND_FILE"
+LAUNCH_CMD=("${CMD[@]}")
+if [[ "$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM" == "1" && "$ASYNC_NODE_COUNT" -gt 1 ]]; then
+  LAUNCH_CMD=(
+    srun
+    -N "$ASYNC_NODE_COUNT"
+    -n "$ASYNC_NODE_COUNT"
+    --ntasks-per-node=1
+    "${CMD[@]}"
+  )
+fi
+
+printf '%q ' "${LAUNCH_CMD[@]}" > "$COMMAND_FILE"
 printf '\n' >> "$COMMAND_FILE"
 
 {
@@ -266,6 +281,8 @@ printf '\n' >> "$COMMAND_FILE"
   echo "async_node_count=$ASYNC_NODE_COUNT"
   echo "async_worker_count_per_node=$ASYNC_WORKER_COUNT_PER_NODE"
   echo "async_worker_count=$ASYNC_WORKER_COUNT"
+  echo "async_actual_multinode_file_quorum=$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM"
+  echo "async_launch_uses_srun=$([[ "$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM" == "1" && "$ASYNC_NODE_COUNT" -gt 1 ]] && echo 1 || echo 0)"
   echo "async_local_quorum=$ASYNC_LOCAL_QUORUM"
   echo "async_global_quorum=$ASYNC_GLOBAL_QUORUM"
   echo "async_global_timeout_s=$ASYNC_GLOBAL_TIMEOUT_S"
@@ -335,4 +352,4 @@ if [[ "${ASYNC_DILOCO_HUMAN_APPROVED:-0}" != "1" && "$ASYNC_DILOCO_NON_PRODUCTIO
   exit 64
 fi
 
-exec "${CMD[@]}"
+exec "${LAUNCH_CMD[@]}"

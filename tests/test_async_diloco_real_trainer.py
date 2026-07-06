@@ -9,11 +9,16 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from ndm.async_diloco import AsyncDiLoCoCheckpointCadence
+from ndm.async_diloco import AsyncDiLoCoGenerationMetrics, AsyncDiLoCoUpdate
 from ndm.async_diloco_real import (
     RealAsyncDiLoCoConfig,
+    RealAsyncFileRankConfig,
+    RealAsyncNodeResult,
     RealAsyncWorkerSpec,
+    RealAsyncWorkerReport,
     default_tiny_e97_train_args,
     run_real_async_diloco,
+    run_real_async_diloco_file_rank,
     _run_real_worker,
 )
 
@@ -307,6 +312,122 @@ def test_real_async_trainer_checkpoint_cadence_records_recovery_and_finalization
         "/recovery_checkpoints/" in path and "walltime_finalization" in path
         for path in paths
     )
+
+
+def test_actual_multinode_file_rank_writes_progress_and_global_quorum(tmp_path, monkeypatch):
+    class OneParamModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.zeros(1))
+
+    monkeypatch.setattr("ndm.async_diloco_real.train.build_training_model", lambda _args: OneParamModel())
+    monkeypatch.setattr("ndm.async_diloco_real.train.load_checkpoint", lambda *_args, **_kwargs: None)
+
+    def fake_node_supervisor(**kwargs):
+        spec = kwargs["worker_specs"][0]
+        generation = kwargs["generation"]
+        delta = {"weight": torch.ones(1) * (int(spec.seed_offset) + 1)}
+        update = AsyncDiLoCoUpdate(
+            worker_id=kwargs["node_id"],
+            base_generation=generation,
+            delta=delta,
+            tokens=8192,
+            local_steps=2,
+            loss_moving_average={"loss": 2.0 + int(spec.seed_offset), "loss_100": 2.0 + int(spec.seed_offset)},
+        )
+        worker = RealAsyncWorkerReport(
+            worker_id=spec.worker_id,
+            node_id=kwargs["node_id"],
+            base_generation=generation,
+            update=update,
+            elapsed_s=0.1,
+            tokens=8192,
+            losses=(2.0 + int(spec.seed_offset),),
+        )
+        metrics = AsyncDiLoCoGenerationMetrics(
+            run_id=kwargs["run_id"],
+            generation=generation,
+            requested_workers=1,
+            participating_workers=1,
+            quorum_threshold=1,
+            quorum_size=1,
+            accepted_updates=1,
+            stale_updates=0,
+            timed_out_updates=0,
+            failed_updates=0,
+            invalid_updates=0,
+            generation_duration_s=0.1,
+            merge_duration_s=0.0,
+            rebase_duration_s=0.0,
+            checkpoint_duration_s=0.0,
+            tokens_per_sec=81920.0,
+            tokens_per_generation=8192,
+            update_bytes={"worker": 4, "node": 4},
+            loss_moving_average={"loss": 2.0 + int(spec.seed_offset), "loss_100": 2.0 + int(spec.seed_offset)},
+        )
+        return RealAsyncNodeResult(
+            node_id=kwargs["node_id"],
+            generation=generation,
+            node_update=update,
+            worker_reports=(worker,),
+            metrics=metrics,
+        )
+
+    monkeypatch.setattr("ndm.async_diloco_real._run_real_node_supervisor", fake_node_supervisor)
+
+    base = {
+        "run_id": "file-rank",
+        "run_dir": tmp_path / "run",
+        "metrics_json": tmp_path / "metrics.json",
+        "train_args": _args(data=str(tmp_path / "real_tokens.txt")),
+        "node_count": 2,
+        "global_quorum": 2,
+        "local_steps": 2,
+        "timeout_s": 3.0,
+        "synthetic_token_stream": False,
+        "walltime_remaining_s": 0.0,
+        "estimated_finalization_duration_s": 0.0,
+        "checkpoint_cadence": AsyncDiLoCoCheckpointCadence(
+            recovery_every_generations=1,
+            finalization_reserve_seconds=1200.0,
+        ),
+    }
+    (tmp_path / "real_tokens.txt").write_text("real token source placeholder\n", encoding="utf-8")
+
+    rank1 = run_real_async_diloco_file_rank(RealAsyncFileRankConfig(node_rank=1, **base))
+    rank0 = run_real_async_diloco_file_rank(RealAsyncFileRankConfig(node_rank=0, **base))
+
+    assert rank1["node_update_submitted"] is True
+    assert rank0["coordinator"] is True
+    payload = json.loads((tmp_path / "metrics.json").read_text(encoding="utf-8"))
+    assert payload["mode"] == "actual_multinode_file_quorum_debug"
+    assert payload["synthetic_token_stream"] is False
+    assert payload["latest_generation"] == 0
+    assert payload["global_generations"][0]["metrics"]["quorum_status"] == "advanced"
+    assert payload["global_generations"][0]["metrics"]["accepted_updates"] == 2
+    assert payload["global_generations"][0]["metrics"]["tokens_per_generation"] == 16384
+    assert payload["global_generations"][0]["metrics"]["tokens_per_sec"] > 0.0
+    assert payload["accepted_node_ids"] == ["node-00000", "node-00001"]
+    assert (tmp_path / "run" / "latest.json").exists()
+    assert (tmp_path / "run" / "progress" / "node-00000.heartbeat.json").exists()
+    assert (tmp_path / "run" / "progress" / "node-00001.heartbeat.json").exists()
+    assert (tmp_path / "run" / "node_updates" / "node-00000.json").exists()
+    assert (tmp_path / "run" / "node_updates" / "node-00001.json").exists()
+
+
+def test_actual_multinode_file_rank_rejects_synthetic_stream(tmp_path):
+    with pytest.raises(ValueError, match="synthetic_token_stream is disabled"):
+        run_real_async_diloco_file_rank(RealAsyncFileRankConfig(
+            run_id="reject-synthetic",
+            run_dir=tmp_path / "run",
+            metrics_json=tmp_path / "metrics.json",
+            train_args=_args(),
+            node_rank=0,
+            node_count=1,
+            global_quorum=1,
+            local_steps=1,
+            synthetic_token_stream=True,
+        ))
 
 
 def test_multinode_entrypoint_no_longer_imports_synthetic_debug_harness():
