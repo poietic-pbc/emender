@@ -17,6 +17,24 @@ hygiene, worktree isolation, "no built-in Task tool" rules, etc.
 This file only covers things specific to this project. Add project-specific
 build commands, test commands, architecture notes, and service recipes here.
 
+## Runner / intake / implementation tasks
+
+For this project, workers assigned to runner, intake, or implementation tasks
+must perform the requested work before judging whether evidence exists. Do not
+turn a runner task into an evaluator pass that merely reports missing artifacts.
+For example, if a task asks you to launch the approved 32/64-node Slurm jobs,
+submit or attempt the launch commands instead of grading the absence of prior
+Slurm output; if a task asks you to create, download, or verify a refreshed seed
+manifest, run the concrete manifest commands instead of only noting that no seed
+manifest evidence is present yet.
+
+Mark a runner/intake/implementation task incomplete only after attempting the
+concrete commands available to you and logging the exact blocker, command, or
+external dependency that prevented completion. This note is project-specific
+mitigation for recent failures in `async-diloco-e97-32n64n-config` and
+`register-refreshed-e97-seed-latest`, and is meant to reinforce, not replace,
+the universal WG guidance from `wg agent-guide`.
+
 **At the start of each session, run `wg quickstart` in your terminal to orient yourself.**
 Use `wg service start` to dispatch work — do not manually claim tasks.
 
