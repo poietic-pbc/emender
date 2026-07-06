@@ -35,6 +35,7 @@ import glob
 import re
 import tempfile
 import ctypes.util
+from contextlib import nullcontext
 
 _SHUTDOWN_REQUEST = {
     'requested': False,
@@ -774,7 +775,7 @@ class FinalCheckpointController:
         if dist_enabled:
             peer_reason = self._poll_peer_request_reason(peer_poll_s)
             if peer_reason and not reason:
-                reason = peer_reason
+                reason = 'peer_final_checkpoint_request'
         elif not reason:
             reason = self._read_peer_request_reason()
 
@@ -1169,6 +1170,317 @@ def prepare_schedulefree_eval_mode(optimizer, args):
 def heldout_eval_mode_label(args):
     """Canonical label for the schedule-free held-out weight basis."""
     return 'y' if args.heldout_eval_mode in ('y', 'train') else 'x'
+
+
+def normalize_training_args(args, *, announce=False):
+    """Apply train.py's import-safe argument normalization in-place."""
+    args.level = parse_level(args.level)
+    if getattr(args, 'use_triton', None) is None:
+        _e97_family = str(args.level) in ('E97', '97', 'E97-M2')
+        _needs_triton_fused = _e97_family or bool(getattr(args, 'e88_raw_write', 0))
+        if _needs_triton_fused and getattr(args, 'bf16', False):
+            args.use_triton = 1
+            if announce:
+                print(f"[fused] level={args.level!r} raw_write={bool(getattr(args, 'e88_raw_write', 0))}: "
+                      f"AUTO-enabling Triton split-edit kernel (--use_triton 1). Pass --use_triton 0 to force eager.",
+                      flush=True)
+        else:
+            args.use_triton = 0
+    return args
+
+
+def resolve_training_r_h_mode(args, *, announce=False):
+    """Resolve the effective recurrent W_h constraint mode used by train.py."""
+    r_h_mode = getattr(args, 'r_h_mode', 'auto')
+    if r_h_mode == 'auto' and args.level != 'mamba2':
+        full_wh_levels = {1, 33, 42, 51, 52, 53, 56, 57, 58, 60}
+        matrix_state_levels = {70, 71, 72, 73}
+        level_int = int(args.level) if str(args.level).isdigit() else 0
+        if level_int in full_wh_levels:
+            r_h_mode = 'spectral_norm'
+            if announce:
+                print(f"Auto r_h_mode: spectral_norm (level {level_int} has full W_h)")
+        elif level_int in matrix_state_levels:
+            r_h_mode = 'none'
+            if announce:
+                print(f"Auto r_h_mode: none (level {level_int} is matrix state - gated update is bounded)")
+        else:
+            r_h_mode = 'none'
+            if announce:
+                print(f"Auto r_h_mode: none (level {level_int} has bounded/no W_h)")
+    return r_h_mode
+
+
+def resolve_training_vocab_size(args, *, announce=False):
+    """Return the token vocabulary size for byte-level or tiktoken training."""
+    if getattr(args, 'tokenizer', None):
+        import tiktoken
+        enc = tiktoken.get_encoding(args.tokenizer)
+        vocab_size = enc.n_vocab
+        if announce:
+            print(f"Tokenizer: {args.tokenizer}, vocab_size={vocab_size}")
+        return vocab_size
+    return 256
+
+
+def build_training_model(args, *, vocab_size=None, r_h_mode=None):
+    """Build an unwrapped train.py LadderLM model without invoking the CLI.
+
+    The helper intentionally exposes the real E97/Ladder path needed by the
+    async DiLoCo orchestrator. Legacy special-case baseline branches remain in
+    train(args) so existing CLI behavior stays unchanged.
+    """
+    normalize_training_args(args)
+    if vocab_size is None:
+        vocab_size = resolve_training_vocab_size(args)
+    if r_h_mode is None:
+        r_h_mode = resolve_training_r_h_mode(args)
+
+    if args.dim is not None and args.depth is not None:
+        layer_kwargs = {}
+        if getattr(args, 'head_type_logits', None) is not None:
+            layer_kwargs['head_type_logits'] = [float(x) for x in args.head_type_logits.split(',')]
+            layer_kwargs['gdn_allow_neg_eigval'] = bool(getattr(args, 'gdn_allow_neg_eigval', 1))
+        if getattr(args, 'corner_mixture', None) is not None:
+            layer_kwargs['corner_mixture'] = [float(x) for x in args.corner_mixture.split(',')]
+        if getattr(args, 'lam_max', None) is not None:
+            layer_kwargs['lam_max'] = args.lam_max
+        if getattr(args, 'beta_max', None) is not None:
+            layer_kwargs['beta_max'] = args.beta_max
+        if getattr(args, 'igain_max', None) is not None:
+            layer_kwargs['igain_max'] = args.igain_max
+        if getattr(args, 'layer_kwargs', None) is not None:
+            layer_kwargs.update(json.loads(args.layer_kwargs))
+        return LadderLM(
+            vocab_size=vocab_size,
+            dim=args.dim,
+            depth=args.depth,
+            level=args.level,
+            layer_kwargs=(layer_kwargs or None),
+            expansion=getattr(args, 'expansion', 1.0),
+            n_groups=getattr(args, 'n_groups', 32),
+            n_state=getattr(args, 'n_state', 64),
+            n_slots=getattr(args, 'n_slots', 64),
+            n_heads=getattr(args, 'n_heads', None),
+            top_k=getattr(args, 'top_k', None),
+            k_fast=getattr(args, 'k_fast', None),
+            k_slow=getattr(args, 'k_slow', None),
+            use_gate=bool(getattr(args, 'use_gate', 1)),
+            gate_activation=getattr(args, 'gate_activation', 'sigmoid'),
+            linear_state=bool(getattr(args, 'linear_state', 0)),
+            use_write_gate=bool(getattr(args, 'use_write_gate', 0)),
+            e88_decay_mode=getattr(args, 'e88_decay_mode', 'mamba'),
+            e88_value_residual=bool(getattr(args, 'e88_value_residual', 0)),
+            e88_raw_write=bool(getattr(args, 'e88_raw_write', 0)),
+            use_chunked_e97=bool(getattr(args, 'use_chunked_e97', 0)),
+            e97_chunk_size=getattr(args, 'e97_chunk_size', 32),
+            state_expansion=getattr(args, 'state_expansion', 2),
+            r_h_mode=r_h_mode,
+            use_conv=bool(getattr(args, 'use_conv', 0)),
+            d_conv=getattr(args, 'd_conv', 4),
+            gdn2_mlp_ratio=getattr(args, 'gdn2_mlp_ratio', 6208 / 2304),
+            dropout=getattr(args, 'dropout', 0.0),
+            checkpoint_interval=getattr(args, 'checkpoint_interval', 16),
+            gradient_checkpointing=bool(getattr(args, 'gradient_checkpointing', False)),
+            projection_chunk_size=getattr(args, 'projection_chunk_size', 0),
+            loss_chunk_size=getattr(args, 'loss_chunk_size', 0),
+            use_triton=bool(getattr(args, 'use_triton', 0)),
+            mlp_ratio=getattr(args, 'mlp_ratio', 0.0),
+            mlp_multiple=getattr(args, 'mlp_multiple', 64),
+        )
+
+    return create_ladder_model(
+        target_params=args.params,
+        level=args.level,
+        vocab_size=vocab_size,
+        expansion=getattr(args, 'expansion', 1.0),
+        n_groups=getattr(args, 'n_groups', 32),
+        state_expansion=getattr(args, 'state_expansion', 2),
+        r_h_mode=r_h_mode,
+    )
+
+
+def build_training_optimizer(core_model, args, *, announce=False):
+    """Create train.py-compatible optimizer and per-group base_lr metadata."""
+    knob_suffixes = ('lam_raw', 'beta_raw', 'igain_raw', 'gamma_raw')
+    knob_params, base_params = [], []
+    for name, p in core_model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if any(name.endswith(s) for s in knob_suffixes):
+            knob_params.append(p)
+        else:
+            base_params.append(p)
+
+    knob_lr_mult = float(getattr(args, 'knob_lr_mult', 1.0))
+    use_knob_group = knob_lr_mult != 1.0 and len(knob_params) > 0
+    if use_knob_group:
+        param_groups = [
+            {'params': base_params, 'lr': args.lr},
+            {'params': knob_params, 'lr': args.lr * knob_lr_mult},
+        ]
+        if announce:
+            print(f"Knob-LR group: {len(knob_params)} knob params at lr="
+                  f"{args.lr * knob_lr_mult:.2e} ({knob_lr_mult}x base); "
+                  f"{len(base_params)} base params at lr={args.lr:.2e}")
+    else:
+        param_groups = core_model.parameters()
+
+    if args.optimizer == 'schedulefree':
+        optimizer = schedulefree.AdamWScheduleFree(
+            param_groups,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            betas=(0.9, 0.95),
+            warmup_steps=getattr(args, 'warmup_steps', 0),
+        )
+        if announce:
+            print(f"Using schedule-free AdamW (lr={args.lr}, warmup_steps={args.warmup_steps})")
+    else:
+        optimizer = AdamW(
+            param_groups,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            betas=(0.9, 0.95),
+        )
+        if announce:
+            print(f"Using AdamW with warmup={args.warmup_steps} steps + cosine decay to "
+                  f"{args.min_lr_frac:.0%} of lr over {args.steps} steps")
+
+    for pg in optimizer.param_groups:
+        pg['base_lr'] = pg['lr']
+    return optimizer
+
+
+def build_training_dataset(args, *, rank=0, dist_enabled=False):
+    """Create the real train.py streaming dataset for one rank."""
+    data_seed = args.seed + (rank if dist_enabled else 0)
+    if args.tbptt:
+        return BatchedStreamDataset(
+            data_path=args.data,
+            batch_size=args.batch_size,
+            chunk_size=args.chunk_size + 1,
+            seed=data_seed,
+        )
+    if getattr(args, 'tokenizer', None):
+        return TokenizedStreamDataset(
+            data_path=args.data,
+            chunk_size=args.chunk_size + 1,
+            seed=data_seed,
+            tokenizer_name=args.tokenizer,
+        )
+    return DocumentStreamDataset(
+        data_path=args.data,
+        chunk_size=args.chunk_size + 1,
+        seed=data_seed,
+    )
+
+
+def get_training_batch(train_dataset, args, device):
+    """Fetch one train.py-style batch from a streaming dataset."""
+    if args.tbptt:
+        chunks, is_doc_end = train_dataset.get_batch(device=device)
+        actual_lengths = torch.full((args.batch_size,), args.chunk_size + 1, device=device)
+    else:
+        chunks, is_doc_end, actual_lengths = train_dataset.get_batch(args.batch_size, device=device)
+    return chunks, is_doc_end, actual_lengths
+
+
+def compute_training_loss(model, chunks, args, *, prev_hiddens=None):
+    """Compute train.py's autoregressive loss for one chunk batch."""
+    if getattr(args, 'bf16', False):
+        autocast_ctx = torch.autocast(
+            device_type=chunks.device.type,
+            dtype=torch.bfloat16,
+            enabled=True,
+        )
+    else:
+        autocast_ctx = nullcontext()
+    with autocast_ctx:
+        if args.tbptt:
+            result = model(
+                chunks,
+                return_loss=True,
+                return_prev_hiddens=True,
+                prev_hiddens=prev_hiddens,
+            )
+        else:
+            result = model(
+                chunks,
+                return_loss=True,
+            )
+
+        if isinstance(result, tuple):
+            loss, (next_hidden, _) = result
+        else:
+            loss = result
+            next_hidden = None
+
+    return loss, next_hidden
+
+
+def train_one_optimizer_step(model, optimizer, args, *, batch_iter=None, device=None,
+                             step=0, hidden_state=None):
+    """Run one real train.py optimizer step, including grad accumulation."""
+    if device is None:
+        device = next(model.parameters()).device
+    model.train()
+    if args.optimizer == 'schedulefree':
+        optimizer.train()
+    optimizer.zero_grad(set_to_none=True)
+
+    total_loss = 0.0
+    tokens_processed = 0
+    for _ in range(max(1, int(getattr(args, 'grad_accum', 1)))):
+        if batch_iter is None:
+            raise ValueError("batch_iter is required for train_one_optimizer_step")
+        chunks, is_doc_end, actual_lengths = next(batch_iter)
+        chunks = chunks.to(device)
+        actual_lengths = actual_lengths.to(device)
+        if args.tbptt and hidden_state is not None:
+            reset_mask = is_doc_end.to(device).view(-1, 1)
+            hidden_state = [h * (~reset_mask) if h is not None else None for h in hidden_state]
+        loss, next_hidden = compute_training_loss(
+            model, chunks, args, prev_hiddens=hidden_state)
+        if not torch.isfinite(loss):
+            raise FloatingPointError(f"non-finite training loss at step {step}: {loss.item()}")
+        (loss / max(1, int(getattr(args, 'grad_accum', 1)))).backward()
+        if args.tbptt and next_hidden is not None:
+            hidden_state = [h.detach() if h is not None else None for h in next_hidden]
+        total_loss += float(loss.item())
+        tokens_processed += int(actual_lengths.sum().item())
+
+    if getattr(args, 'grad_clip', 0) > 0:
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+    else:
+        grad_norm = sum(
+            p.grad.norm().item() ** 2 for p in model.parameters()
+            if p.grad is not None
+        ) ** 0.5
+    if not torch.isfinite(torch.as_tensor(grad_norm)):
+        optimizer.zero_grad(set_to_none=True)
+        grad_value = grad_norm.item() if hasattr(grad_norm, 'item') else float(grad_norm)
+        raise FloatingPointError(f"non-finite grad norm at step {step}: {grad_value}")
+
+    if args.optimizer == 'adamw':
+        scale = lr_scale_at(step, args.warmup_steps, args.steps, args.min_lr_frac)
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = param_group['base_lr'] * scale
+        lr = optimizer.param_groups[0]['lr']
+    else:
+        lr = args.lr
+
+    optimizer.step()
+    optimizer.zero_grad()
+    grad_value = grad_norm.item() if hasattr(grad_norm, 'item') else float(grad_norm)
+    return {
+        'step': step + 1,
+        'loss': total_loss / max(1, int(getattr(args, 'grad_accum', 1))),
+        'grad_norm': grad_value,
+        'lr': lr,
+        'tokens_processed': tokens_processed,
+        'hidden_state': hidden_state,
+    }
 
 
 def _clone_param_list_like(params, source=None, fill_zeros=False):
@@ -1893,25 +2205,13 @@ def train(args):
     """Main training loop."""
     install_shutdown_signal_handlers()
 
-    # Parse level (convert '3' to 3, keep 'log_5' as string)
-    args.level = parse_level(args.level)
-
     # AUTO-resolve --use_triton (default None). E97 (split-edit) and raw-write have
     # their fused fwd/bwd ONLY in the Triton kernel — the CUDA register-owned path
     # rejects both, so without Triton they silently fall back to the eager T-scan
     # (~40-260x slower). Default those families to the fused Triton path under bf16
     # (parity-verified, paper/review/E97_FUSED_LM_KERNEL_NOTE.md). Everything else
     # keeps the historical default (CUDA register-owned, use_triton=0).
-    if args.use_triton is None:
-        _e97_family = str(args.level) in ('E97', '97', 'E97-M2')
-        _needs_triton_fused = _e97_family or bool(getattr(args, 'e88_raw_write', 0))
-        if _needs_triton_fused and getattr(args, 'bf16', False):
-            args.use_triton = 1
-            print(f"[fused] level={args.level!r} raw_write={bool(getattr(args, 'e88_raw_write', 0))}: "
-                  f"AUTO-enabling Triton split-edit kernel (--use_triton 1). Pass --use_triton 0 to force eager.",
-                  flush=True)
-        else:
-            args.use_triton = 0
+    normalize_training_args(args, announce=True)
 
     # --- Distributed setup (opt-in, backward compatible) -----------------------
     # Activates ONLY under torchrun (WORLD_SIZE>1). Single-GPU/no-torchrun runs are
@@ -2043,37 +2343,11 @@ def train(args):
     heldout_curve = None
     heldout_curve_path = None
 
-    # Resolve 'auto' r_h_mode based on model architecture
-    r_h_mode = args.r_h_mode
-    if r_h_mode == 'auto' and args.level != 'mamba2':
-        # Models with full W_h matrix need spectral norm for stability
-        # Models with diagonal/scalar W_h are already bounded
-        full_wh_levels = {1, 33, 42, 51, 52, 53, 56, 57, 58, 60}  # Full W_h matrix (E59 is highway, no W_h)
-        diagonal_levels = {34, 44, 54}  # Diagonal W_h (already bounded)
-        scalar_levels = {43, 55}  # Scalar decay (already bounded)
-        no_wh_levels = {45, 46, 48}  # No W_h at all
-        # E70-73: Matrix state models use gated updates (alpha*S + (1-alpha)*outer), naturally bounded
-        matrix_state_levels = {70, 71, 72, 73}  # No spectral norm needed - gated update is bounded
+    # Resolve 'auto' r_h_mode based on model architecture.
+    r_h_mode = resolve_training_r_h_mode(args, announce=True)
 
-        level_int = int(args.level) if str(args.level).isdigit() else 0
-        if level_int in full_wh_levels:
-            r_h_mode = 'spectral_norm'
-            print(f"Auto r_h_mode: spectral_norm (level {level_int} has full W_h)")
-        elif level_int in matrix_state_levels:
-            r_h_mode = 'none'
-            print(f"Auto r_h_mode: none (level {level_int} is matrix state - gated update is bounded)")
-        else:
-            r_h_mode = 'none'
-            print(f"Auto r_h_mode: none (level {level_int} has bounded/no W_h)")
-
-    # Resolve vocab size: 256 for byte-level (default) or tokenizer vocab size
-    if args.tokenizer:
-        import tiktoken
-        _enc = tiktoken.get_encoding(args.tokenizer)
-        vocab_size = _enc.n_vocab
-        print(f"Tokenizer: {args.tokenizer}, vocab_size={vocab_size}")
-    else:
-        vocab_size = 256
+    # Resolve vocab size: 256 for byte-level (default) or tokenizer vocab size.
+    vocab_size = resolve_training_vocab_size(args, announce=True)
 
     # Create model
     if args.level == 'mamba2':
@@ -2575,55 +2849,7 @@ def train(args):
     if is_main:
         print(f"Model: Level {args.level}, {core_model.get_num_params():,} parameters")
 
-    # Build param groups. With --knob_lr_mult != 1, the UnifiedCell recurrence
-    # knobs (lam/beta/igain/gamma raw) get a SEPARATE optimizer group at a higher
-    # LR; everything else stays at base LR. This mirrors the expressivity path
-    # (experiments/expressivity_tasks/train_hybrid.py) so the E98-CMA candidate's
-    # validated knob_lr_mult=5.38 placement is preserved at LM scale.
-    KNOB_SUFFIXES = ('lam_raw', 'beta_raw', 'igain_raw', 'gamma_raw')
-    knob_params, base_params = [], []
-    for name, p in core_model.named_parameters():
-        if not p.requires_grad:
-            continue
-        if any(name.endswith(s) for s in KNOB_SUFFIXES):
-            knob_params.append(p)
-        else:
-            base_params.append(p)
-    use_knob_group = args.knob_lr_mult != 1.0 and len(knob_params) > 0
-    if use_knob_group:
-        param_groups = [
-            {'params': base_params, 'lr': args.lr},
-            {'params': knob_params, 'lr': args.lr * args.knob_lr_mult},
-        ]
-        print(f"Knob-LR group: {len(knob_params)} knob params at lr="
-              f"{args.lr * args.knob_lr_mult:.2e} ({args.knob_lr_mult}x base); "
-              f"{len(base_params)} base params at lr={args.lr:.2e}")
-    else:
-        param_groups = core_model.parameters()
-
-    # Create optimizer
-    if args.optimizer == 'schedulefree':
-        optimizer = schedulefree.AdamWScheduleFree(
-            param_groups,
-            lr=args.lr,
-            weight_decay=args.weight_decay,
-            betas=(0.9, 0.95),
-            warmup_steps=args.warmup_steps,
-        )
-        print(f"Using schedule-free AdamW (lr={args.lr}, warmup_steps={args.warmup_steps})")
-    else:
-        optimizer = AdamW(
-            param_groups,
-            lr=args.lr,
-            weight_decay=args.weight_decay,
-            betas=(0.9, 0.95),
-        )
-        print(f"Using AdamW with warmup={args.warmup_steps} steps + cosine decay to "
-              f"{args.min_lr_frac:.0%} of lr over {args.steps} steps")
-    # Capture each group's base LR so the warmup+cosine schedule can scale them
-    # while preserving per-group ratios (e.g. --knob_lr_mult).
-    for pg in optimizer.param_groups:
-        pg['base_lr'] = pg['lr']
+    optimizer = build_training_optimizer(core_model, args, announce=True)
 
     # Resume if requested
     start_step = 0
@@ -2647,31 +2873,10 @@ def train(args):
     # different real tokens every step (true data parallelism, not replicated work).
     # Offsetting the dataset seed by rank gives disjoint sampling positions across
     # the corpus. Model weights stay identical (DDP broadcast); only the data differs.
-    data_seed = args.seed + (rank if dist_enabled else 0)
-
     # Create dataset - use BatchedStreamDataset for TBPTT (persistent per-batch streams)
     if args.tbptt:
         print("TBPTT enabled: using BatchedStreamDataset (persistent streams)")
-        train_dataset = BatchedStreamDataset(
-            data_path=args.data,
-            batch_size=args.batch_size,
-            chunk_size=args.chunk_size + 1,  # +1 for target
-            seed=data_seed,
-        )
-    else:
-        if args.tokenizer:
-            train_dataset = TokenizedStreamDataset(
-                data_path=args.data,
-                chunk_size=args.chunk_size + 1,  # +1 for target
-                seed=data_seed,
-                tokenizer_name=args.tokenizer,
-            )
-        else:
-            train_dataset = DocumentStreamDataset(
-                data_path=args.data,
-                chunk_size=args.chunk_size + 1,  # +1 for target
-                seed=data_seed,
-            )
+    train_dataset = build_training_dataset(args, rank=rank, dist_enabled=dist_enabled)
 
     val_loader = None
     if args.val_data:
