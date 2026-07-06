@@ -39,3 +39,17 @@ Outcome: fail / incomplete. The actor did not provide evidence that an 8-node <=
 A score above zero would require at least partial evidence that the actor attempted the requested 8-node Slurm validation or produced some subset of the required artifacts. The available task record shows no such attempt. Prior dependency work established 1-node and 2-node readiness, but the task under evaluation specifically required a new 8-node <=20 minute debug-QOS run and a recorded readiness decision for 256n12h. Dependency evidence cannot satisfy that scale gate.
 
 Recommended WG action: mark `validate-merged-real-2` incomplete and retry with instructions to actually submit or attempt the 8-node production-wrapper run and record all checklist artifacts.
+
+## Retry Addendum: agent-733
+
+After the task was marked incomplete and retried, `agent-733` rechecked the WG
+task record and filesystem evidence on 2026-07-06. No new actor-produced
+artifacts were present for the required 8-node validation. The active task log
+contained only the prior incomplete verdict and the retry spawn entry, and the
+run-directory search still found only the prior real 1-node and 2-node metrics
+from jobs `4949348` and `4949402`.
+
+The retry does not change the grade: score remains `0.00 / 1.00`, confidence
+remains `0.95`, and the task should remain incomplete until an actor actually
+submits or attempts the 8-node <=20 minute debug-QOS production-wrapper run and
+records the required Slurm, metrics, checkpoint, and pass/no-go evidence.
