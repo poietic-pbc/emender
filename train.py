@@ -1084,8 +1084,14 @@ def save_checkpoint(model, optimizer, step, loss, output_dir, keep_n=5, outer_st
         if tmp_latest.exists() or tmp_latest.is_symlink():
             tmp_latest.unlink()
 
-    # Clean up old checkpoints
-    ckpts = sorted(glob.glob(str(output_dir / 'checkpoint_step_*.pt')))
+    # Clean up old checkpoints by numeric training step.  Lexicographic filename
+    # ordering breaks across digit-width boundaries such as 999500 -> 1000000.
+    def _checkpoint_sort_key(path):
+        match = re.search(r'checkpoint_step_(\d+)_loss_', os.path.basename(path))
+        return int(match.group(1)) if match else -1
+
+    ckpts = sorted(glob.glob(str(output_dir / 'checkpoint_step_*.pt')),
+                   key=_checkpoint_sort_key)
     for old_ckpt in ckpts[:-keep_n]:
         os.remove(old_ckpt)
 

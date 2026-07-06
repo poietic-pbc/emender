@@ -109,7 +109,7 @@ def parse_logs(paths: list[Path]) -> tuple[list[Point], list[Resume], list[Check
 
 def checkpoint_files(run_root: Path) -> list[Checkpoint]:
     checkpoints: list[Checkpoint] = []
-    for path in sorted(run_root.glob("runs/levelE97_100m_*/checkpoint_step_*_loss_*.pt")):
+    for path in sorted(run_root.glob("runs/*/checkpoint_step_*_loss_*.pt")):
         match = CKPT_NAME_RE.search(path.name)
         if not match:
             continue
@@ -270,13 +270,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    log_paths = [
-        args.run_root / "run_phase1.log",
-        args.run_root / "run_pre_supervisor_20260622T101450Z.log",
-        args.run_root / "run_20260623T103727Z.log",
-        args.run_root / "run.log",
-    ]
-    existing_logs = [path for path in log_paths if path.exists()]
+    existing_logs = sorted(
+        args.run_root.glob("run*.log"),
+        key=lambda path: (path.stat().st_mtime, path.name),
+    )
     points, resumes, save_markers = parse_logs(existing_logs)
     effective_points, superseded = effective_lineage(points)
     checkpoints = save_markers + checkpoint_files(args.run_root)
