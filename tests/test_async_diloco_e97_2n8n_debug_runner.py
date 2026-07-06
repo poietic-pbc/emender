@@ -133,6 +133,9 @@ def test_async_diloco_launch_wrappers_expose_required_env_knobs():
     for token in (
         "SEED_LATEST_PATH=${SEED_LATEST_PATH:-",
         "E97_CHECKPOINT=${E97_CHECKPOINT:-$SEED_LATEST_PATH}",
+        "DEFAULT_E97_SEED_LATEST=/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt",
+        "TRAINING_TARGET=${TRAINING_TARGET:-E97_1.3B_step1065000_async_diloco_256n12h_20260706}",
+        "SCALEOUT_VARIANT=${SCALEOUT_VARIANT:-E97_1.3B_step1065000_async_quorum_b4_k40_256n12h}",
         "OUTPUT_ROOT=${OUTPUT_ROOT:-",
         "ASYNC_LOCAL_QUORUM=${ASYNC_LOCAL_QUORUM:-",
         "ASYNC_GLOBAL_QUORUM=${ASYNC_GLOBAL_QUORUM:-",
@@ -143,5 +146,6 @@ def test_async_diloco_launch_wrappers_expose_required_env_knobs():
         "EXPORT_EVERY_SECONDS=${EXPORT_EVERY_SECONDS:-",
         "REQUESTED_WALLTIME=${REQUESTED_WALLTIME:-",
         "PRODUCTION_LATEST_GUARD=${PRODUCTION_LATEST_GUARD:-",
+        "PRODUCTION_LATEST_POLICY=${PRODUCTION_LATEST_POLICY:-run-local-latest-json-with-external-chain-latest-guard}",
     ):
         assert token in launch_text

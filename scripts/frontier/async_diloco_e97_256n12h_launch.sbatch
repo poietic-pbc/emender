@@ -18,13 +18,13 @@
 set -euo pipefail
 
 REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
-TASK_ID=${WG_TASK_ID:-async-diloco-submit-256n12h-human-approval}
-TRAINING_TARGET=${TRAINING_TARGET:-E97_1.3B_step483000_async_diloco_256n12h_20260705}
-DEFAULT_E97_SEED_LATEST=/lustre/orion/bif148/proj-shared/emender/checkpoints/E97_1.3B_20260623_103742_step_483000/checkpoint_step_483000_loss_2.5431.pt
+TASK_ID=${WG_TASK_ID:-submit-refreshed-e97-async-256n12h}
+TRAINING_TARGET=${TRAINING_TARGET:-E97_1.3B_step1065000_async_diloco_256n12h_20260706}
+DEFAULT_E97_SEED_LATEST=/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt
 SEED_LATEST_PATH=${SEED_LATEST_PATH:-${E97_CHECKPOINT:-$DEFAULT_E97_SEED_LATEST}}
 E97_CHECKPOINT=${E97_CHECKPOINT:-$SEED_LATEST_PATH}
 OUTPUT_ROOT=${OUTPUT_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/async_diloco}
-SCALEOUT_VARIANT=${SCALEOUT_VARIANT:-E97_1.3B_step483000_async_quorum_b4_k40_256n12h}
+SCALEOUT_VARIANT=${SCALEOUT_VARIANT:-E97_1.3B_step1065000_async_quorum_b4_k40_256n12h}
 RUN_DATE=$(date -u +%Y%m%d)
 RUN_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 RUN_ROOT="${OUTPUT_ROOT}/${SCALEOUT_VARIANT}/${RUN_DATE}/${SLURM_JOB_ID:-manual}-${RUN_STAMP}"
@@ -60,8 +60,8 @@ TRAIN_MINUTES=${TRAIN_MINUTES:-700}
 REQUESTED_WALLTIME=${REQUESTED_WALLTIME:-12:00:00}
 REQUESTED_NODE_HOURS=${REQUESTED_NODE_HOURS:-3072.0}
 
-# Scale-adaptive durable-state policy. Recovery fires on whichever threshold
-# arrives first; generation manifests are every generation.
+# Scale-adaptive durable-state policy. Recovery/export fires on whichever
+# threshold arrives first; generation manifests are every generation.
 GENERATION_MANIFEST_EVERY=${GENERATION_MANIFEST_EVERY:-1}
 RECOVERY_EVERY_GENERATIONS=${RECOVERY_EVERY_GENERATIONS:-5}
 RECOVERY_EVERY_SECONDS=${RECOVERY_EVERY_SECONDS:-600}
@@ -70,7 +70,13 @@ EXPORT_EVERY_SECONDS=${EXPORT_EVERY_SECONDS:-3600}
 FINALIZATION_BUFFER_SECONDS=${FINALIZATION_BUFFER_SECONDS:-1200}
 CHAIN_UPDATE_ON_FAILURE=${CHAIN_UPDATE_ON_FAILURE:-0}
 
-HUMAN_APPROVAL_RECORD=${HUMAN_APPROVAL_RECORD:-WG async-diloco-submit-256n12h-human-approval must be resumed by the human before sbatch; prepared package only.}
+# Production latest policy: this job publishes durable state under its run-local
+# async_run/latest.json. The existing production chain latest.pt is a guard-only
+# path and must not change during this launch.
+PRODUCTION_LATEST_GUARD=${PRODUCTION_LATEST_GUARD:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/chains/E97_1.3B_step489920_b4_k80_64n_hier_g4_bucket64m_avg/latest.pt}
+PRODUCTION_LATEST_POLICY=${PRODUCTION_LATEST_POLICY:-run-local-latest-json-with-external-chain-latest-guard}
+
+HUMAN_APPROVAL_RECORD=${HUMAN_APPROVAL_RECORD:-User 2026-07-06 conditional approval: refreshed seed registered, 4n20m validation passed, queue 256n12h.}
 
 mkdir -p "$ARTIFACT_DIR" "$LOG_DIR" logs/frontier/async_diloco_e97
 cd "$REPO"
@@ -110,6 +116,7 @@ cd "$REPO"
   echo "finalization_buffer_seconds=$FINALIZATION_BUFFER_SECONDS"
   echo "chain_update_on_failure=$CHAIN_UPDATE_ON_FAILURE"
   echo "production_latest_guard=$PRODUCTION_LATEST_GUARD"
+  echo "production_latest_policy=$PRODUCTION_LATEST_POLICY"
   echo "human_approval_record=$HUMAN_APPROVAL_RECORD"
   echo "git_commit=$(git rev-parse HEAD)"
 } | tee "$ENV_FILE"
