@@ -8,11 +8,13 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
+from ndm.async_diloco import AsyncDiLoCoCheckpointCadence
 from ndm.async_diloco_real import (
     RealAsyncDiLoCoConfig,
     RealAsyncWorkerSpec,
     default_tiny_e97_train_args,
     run_real_async_diloco,
+    _run_real_worker,
 )
 
 
@@ -182,6 +184,10 @@ def test_real_async_trainer_cli_smoke_runs_one_generation(tmp_path):
             "1",
             "--local-steps",
             "1",
+            "--dim",
+            "8",
+            "--depth",
+            "1",
         ],
         cwd=Path(__file__).resolve().parents[1],
         text=True,
@@ -219,6 +225,88 @@ def test_real_async_trainer_accepts_initial_checkpoint(tmp_path):
 
     assert result.latest_generation == 0
     assert Path(result.metrics_json).exists()
+
+
+def test_real_async_worker_converts_model_to_bf16_before_training(monkeypatch):
+    observed = {}
+
+    class OneParamModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.zeros(1))
+
+    class DummyOptimizer:
+        pass
+
+    args = _args(bf16=True)
+
+    monkeypatch.setattr(
+        "ndm.async_diloco_real.train.build_training_model",
+        lambda _args: OneParamModel(),
+    )
+    monkeypatch.setattr(
+        "ndm.async_diloco_real.train.build_training_optimizer",
+        lambda model, _args: DummyOptimizer(),
+    )
+
+    def fake_train_one_optimizer_step(model, optimizer, _args, **kwargs):
+        del optimizer, kwargs
+        observed["dtype"] = next(model.parameters()).dtype
+        with torch.no_grad():
+            model.weight.add_(1.0)
+        return {"loss": 2.0, "tokens_processed": 9, "hidden_state": None}
+
+    monkeypatch.setattr(
+        "ndm.async_diloco_real.train.train_one_optimizer_step",
+        fake_train_one_optimizer_step,
+    )
+
+    report = _run_real_worker(
+        run_id="bf16-worker",
+        generation=0,
+        base_state={"weight": torch.zeros(1)},
+        train_args=args,
+        spec=RealAsyncWorkerSpec(worker_id="worker-0", local_steps=1),
+        synthetic_token_stream=True,
+        synthetic_vocab_size=8,
+    )
+
+    assert observed["dtype"] is torch.bfloat16
+    assert report.update is not None
+    assert report.update.delta["weight"].dtype is torch.float32
+    assert report.losses == (2.0,)
+
+
+def test_real_async_trainer_checkpoint_cadence_records_recovery_and_finalization(tmp_path):
+    result = run_real_async_diloco(RealAsyncDiLoCoConfig(
+        run_id="real-cadence",
+        run_dir=tmp_path / "run",
+        train_args=_args(),
+        worker_specs=(
+            RealAsyncWorkerSpec(worker_id="worker-0", local_steps=1),
+        ),
+        local_quorum=1,
+        global_quorum=1,
+        global_node_count=1,
+        synthetic_token_stream=True,
+        walltime_remaining_s=0.0,
+        estimated_finalization_duration_s=0.0,
+        checkpoint_cadence=AsyncDiLoCoCheckpointCadence(
+            recovery_every_generations=1,
+            recovery_every_seconds=None,
+            export_every_generations=None,
+            export_every_seconds=None,
+            finalization_reserve_seconds=1200.0,
+        ),
+    ))
+
+    paths = result.generations[0].metrics.checkpoint_paths
+    assert len(paths) >= 3
+    assert any("/recovery_checkpoints/" in path and "initial" in path for path in paths)
+    assert any(
+        "/recovery_checkpoints/" in path and "walltime_finalization" in path
+        for path in paths
+    )
 
 
 def test_multinode_entrypoint_no_longer_imports_synthetic_debug_harness():

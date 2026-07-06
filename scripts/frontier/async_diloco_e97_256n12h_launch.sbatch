@@ -25,6 +25,7 @@ DEFAULT_E97_SEED_LATEST=/lustre/orion/bif148/proj-shared/emender/checkpoints/eme
 SEED_LATEST_PATH=${SEED_LATEST_PATH:-${E97_CHECKPOINT:-$DEFAULT_E97_SEED_LATEST}}
 E97_CHECKPOINT=${E97_CHECKPOINT:-$SEED_LATEST_PATH}
 DATA=${DATA:-/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt}
+TIKTOKEN_CACHE_DIR=${TIKTOKEN_CACHE_DIR:-/lustre/orion/bif148/proj-shared/tiktoken_cache}
 OUTPUT_ROOT=${OUTPUT_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/async_diloco}
 DEFAULT_ENV_PREFIX="${REPO}/.envs/olcf-rocm711-torch210-py312"
 if [[ ! -d "$DEFAULT_ENV_PREFIX" && -d /lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312 ]]; then
@@ -68,8 +69,26 @@ GENERATIONS=${GENERATIONS:-1}
 LEARNING_RATE=${LEARNING_RATE:-1e-3}
 MODEL_LEVEL=${MODEL_LEVEL:-E97}
 MODEL_PARAMS=${MODEL_PARAMS:-1.3b}
-MODEL_DIM=${MODEL_DIM:-}
-MODEL_DEPTH=${MODEL_DEPTH:-}
+MODEL_TOKENIZER=${MODEL_TOKENIZER:-p50k_base}
+MODEL_DIM=${MODEL_DIM:-1792}
+MODEL_DEPTH=${MODEL_DEPTH:-11}
+MODEL_N_HEADS=${MODEL_N_HEADS:-216}
+MODEL_N_STATE=${MODEL_N_STATE:-32}
+MODEL_N_GROUPS=${MODEL_N_GROUPS:-32}
+MODEL_N_SLOTS=${MODEL_N_SLOTS:-64}
+MODEL_EXPANSION=${MODEL_EXPANSION:-1.0}
+MODEL_STATE_EXPANSION=${MODEL_STATE_EXPANSION:-2}
+MODEL_GATE_ACTIVATION=${MODEL_GATE_ACTIVATION:-silu}
+MODEL_LINEAR_STATE=${MODEL_LINEAR_STATE:-1}
+MODEL_MLP_RATIO=${MODEL_MLP_RATIO:-2.2623}
+MODEL_MLP_MULTIPLE=${MODEL_MLP_MULTIPLE:-64}
+ASYNC_E97_BF16=${ASYNC_E97_BF16:-1}
+ASYNC_E97_USE_CHUNKED=${ASYNC_E97_USE_CHUNKED:-1}
+ASYNC_E97_CHUNK_SIZE=${ASYNC_E97_CHUNK_SIZE:-32}
+ASYNC_E97_CHECKPOINT_INTERVAL=${ASYNC_E97_CHECKPOINT_INTERVAL:-64}
+ASYNC_E97_GRADIENT_CHECKPOINTING=${ASYNC_E97_GRADIENT_CHECKPOINTING:-1}
+ASYNC_E97_PROJECTION_CHUNK_SIZE=${ASYNC_E97_PROJECTION_CHUNK_SIZE:-256}
+ASYNC_E97_LOSS_CHUNK_SIZE=${ASYNC_E97_LOSS_CHUNK_SIZE:-256}
 TOKENS_PER_LOCAL_STEP=${TOKENS_PER_LOCAL_STEP:-16777216}
 TOKENS_PER_DILOCO_GENERATION=${TOKENS_PER_DILOCO_GENERATION:-671088640}
 TRAIN_MINUTES=${TRAIN_MINUTES:-700}
@@ -85,6 +104,7 @@ RECOVERY_EVERY_SECONDS=${RECOVERY_EVERY_SECONDS:-600}
 EXPORT_EVERY_GENERATIONS=${EXPORT_EVERY_GENERATIONS:-45}
 EXPORT_EVERY_SECONDS=${EXPORT_EVERY_SECONDS:-3600}
 FINALIZATION_BUFFER_SECONDS=${FINALIZATION_BUFFER_SECONDS:-1200}
+ASYNC_DILOCO_FORCE_FINALIZATION_CHECKPOINT=${ASYNC_DILOCO_FORCE_FINALIZATION_CHECKPOINT:-$ASYNC_DILOCO_NON_PRODUCTION_DEBUG}
 CHAIN_UPDATE_ON_FAILURE=${CHAIN_UPDATE_ON_FAILURE:-0}
 PRODUCTION_LATEST_GUARD=${PRODUCTION_LATEST_GUARD:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/chains/E97_1.3B_step489920_b4_k80_64n_hier_g4_bucket64m_avg/latest.pt}
 PRODUCTION_LATEST_POLICY=${PRODUCTION_LATEST_POLICY:-run-local-latest-json-with-external-chain-latest-guard}
@@ -103,10 +123,18 @@ fi
 source "${REPO}/scripts/frontier/frontier_runtime_env.sh"
 frontier_load_default_modules
 frontier_activate_emender_conda_env
+export TIKTOKEN_CACHE_DIR
 PYTHON_BIN=$(command -v python)
 [[ -n "$PYTHON_BIN" ]] || { echo "Activated runtime did not provide python" >&2; exit 66; }
 
 [[ -r "$E97_CHECKPOINT" ]] || { echo "E97_CHECKPOINT is not readable: $E97_CHECKPOINT" >&2; exit 4; }
+[[ -d "$TIKTOKEN_CACHE_DIR" ]] || { echo "TIKTOKEN_CACHE_DIR is missing: $TIKTOKEN_CACHE_DIR" >&2; exit 4; }
+if [[ "$MODEL_TOKENIZER" == "p50k_base" ]]; then
+  [[ -r "$TIKTOKEN_CACHE_DIR/ec7223a39ce59f226a68acc30dc1af2788490e15" || -r "$TIKTOKEN_CACHE_DIR/p50k_base.tiktoken" ]] || {
+    echo "p50k_base tokenizer cache is missing under TIKTOKEN_CACHE_DIR=$TIKTOKEN_CACHE_DIR" >&2
+    exit 4
+  }
+fi
 if [[ "$ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM" != "1" ]]; then
   [[ -r "$DATA" ]] || { echo "DATA is not readable: $DATA" >&2; exit 4; }
 fi
@@ -146,16 +174,68 @@ CMD=(
   --timeout-s "$ASYNC_GLOBAL_TIMEOUT_S"
   --level "$MODEL_LEVEL"
   --params "$MODEL_PARAMS"
+  --tokenizer "$MODEL_TOKENIZER"
   --batch-size "$BATCH_SIZE"
   --chunk-size "$CHUNK_SIZE"
   --lr "$LEARNING_RATE"
   --steps "$DILOCO_K"
+  --e97-chunk-size "$ASYNC_E97_CHUNK_SIZE"
+  --checkpoint-interval "$ASYNC_E97_CHECKPOINT_INTERVAL"
+  --projection-chunk-size "$ASYNC_E97_PROJECTION_CHUNK_SIZE"
+  --loss-chunk-size "$ASYNC_E97_LOSS_CHUNK_SIZE"
+  --recovery-every-generations "$RECOVERY_EVERY_GENERATIONS"
+  --recovery-every-seconds "$RECOVERY_EVERY_SECONDS"
+  --export-every-generations "$EXPORT_EVERY_GENERATIONS"
+  --export-every-seconds "$EXPORT_EVERY_SECONDS"
+  --finalization-reserve-seconds "$FINALIZATION_BUFFER_SECONDS"
 )
+if [[ "$ASYNC_E97_BF16" == "1" ]]; then
+  CMD+=(--bf16)
+fi
+if [[ "$ASYNC_E97_USE_CHUNKED" == "1" ]]; then
+  CMD+=(--use-chunked-e97)
+fi
+if [[ "$ASYNC_E97_GRADIENT_CHECKPOINTING" == "1" ]]; then
+  CMD+=(--gradient-checkpointing)
+fi
+if [[ "$ASYNC_DILOCO_FORCE_FINALIZATION_CHECKPOINT" == "1" ]]; then
+  CMD+=(--walltime-remaining-s "$FINALIZATION_BUFFER_SECONDS")
+fi
 if [[ -n "$MODEL_DIM" ]]; then
   CMD+=(--dim "$MODEL_DIM")
 fi
 if [[ -n "$MODEL_DEPTH" ]]; then
   CMD+=(--depth "$MODEL_DEPTH")
+fi
+if [[ -n "$MODEL_N_HEADS" ]]; then
+  CMD+=(--n-heads "$MODEL_N_HEADS")
+fi
+if [[ -n "$MODEL_N_STATE" ]]; then
+  CMD+=(--n-state "$MODEL_N_STATE")
+fi
+if [[ -n "$MODEL_N_GROUPS" ]]; then
+  CMD+=(--n-groups "$MODEL_N_GROUPS")
+fi
+if [[ -n "$MODEL_N_SLOTS" ]]; then
+  CMD+=(--n-slots "$MODEL_N_SLOTS")
+fi
+if [[ -n "$MODEL_EXPANSION" ]]; then
+  CMD+=(--expansion "$MODEL_EXPANSION")
+fi
+if [[ -n "$MODEL_STATE_EXPANSION" ]]; then
+  CMD+=(--state-expansion "$MODEL_STATE_EXPANSION")
+fi
+if [[ -n "$MODEL_GATE_ACTIVATION" ]]; then
+  CMD+=(--gate-activation "$MODEL_GATE_ACTIVATION")
+fi
+if [[ -n "$MODEL_LINEAR_STATE" ]]; then
+  CMD+=(--linear-state "$MODEL_LINEAR_STATE")
+fi
+if [[ -n "$MODEL_MLP_RATIO" ]]; then
+  CMD+=(--mlp-ratio "$MODEL_MLP_RATIO")
+fi
+if [[ -n "$MODEL_MLP_MULTIPLE" ]]; then
+  CMD+=(--mlp-multiple "$MODEL_MLP_MULTIPLE")
 fi
 if [[ "$ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM" == "1" ]]; then
   CMD+=(--synthetic-token-stream)
@@ -170,6 +250,7 @@ printf '\n' >> "$COMMAND_FILE"
   echo "seed_latest_path=$SEED_LATEST_PATH"
   echo "e97_checkpoint=$E97_CHECKPOINT"
   echo "data=$DATA"
+  echo "tiktoken_cache_dir=$TIKTOKEN_CACHE_DIR"
   echo "async_entrypoint=$ASYNC_ENTRYPOINT"
   echo "scaleout_variant=$SCALEOUT_VARIANT"
   echo "run_root=$RUN_ROOT"
@@ -200,8 +281,26 @@ printf '\n' >> "$COMMAND_FILE"
   echo "learning_rate=$LEARNING_RATE"
   echo "model_level=$MODEL_LEVEL"
   echo "model_params=$MODEL_PARAMS"
+  echo "model_tokenizer=$MODEL_TOKENIZER"
   echo "model_dim=$MODEL_DIM"
   echo "model_depth=$MODEL_DEPTH"
+  echo "model_n_heads=$MODEL_N_HEADS"
+  echo "model_n_state=$MODEL_N_STATE"
+  echo "model_n_groups=$MODEL_N_GROUPS"
+  echo "model_n_slots=$MODEL_N_SLOTS"
+  echo "model_expansion=$MODEL_EXPANSION"
+  echo "model_state_expansion=$MODEL_STATE_EXPANSION"
+  echo "model_gate_activation=$MODEL_GATE_ACTIVATION"
+  echo "model_linear_state=$MODEL_LINEAR_STATE"
+  echo "model_mlp_ratio=$MODEL_MLP_RATIO"
+  echo "model_mlp_multiple=$MODEL_MLP_MULTIPLE"
+  echo "async_e97_bf16=$ASYNC_E97_BF16"
+  echo "async_e97_use_chunked=$ASYNC_E97_USE_CHUNKED"
+  echo "async_e97_chunk_size=$ASYNC_E97_CHUNK_SIZE"
+  echo "async_e97_checkpoint_interval=$ASYNC_E97_CHECKPOINT_INTERVAL"
+  echo "async_e97_gradient_checkpointing=$ASYNC_E97_GRADIENT_CHECKPOINTING"
+  echo "async_e97_projection_chunk_size=$ASYNC_E97_PROJECTION_CHUNK_SIZE"
+  echo "async_e97_loss_chunk_size=$ASYNC_E97_LOSS_CHUNK_SIZE"
   echo "tokens_per_local_step=$TOKENS_PER_LOCAL_STEP"
   echo "tokens_per_diloco_generation=$TOKENS_PER_DILOCO_GENERATION"
   echo "generation_manifest_every=$GENERATION_MANIFEST_EVERY"
@@ -210,6 +309,7 @@ printf '\n' >> "$COMMAND_FILE"
   echo "export_every_generations=$EXPORT_EVERY_GENERATIONS"
   echo "export_every_seconds=$EXPORT_EVERY_SECONDS"
   echo "finalization_buffer_seconds=$FINALIZATION_BUFFER_SECONDS"
+  echo "async_diloco_force_finalization_checkpoint=$ASYNC_DILOCO_FORCE_FINALIZATION_CHECKPOINT"
   echo "chain_update_on_failure=$CHAIN_UPDATE_ON_FAILURE"
   echo "production_latest_guard=$PRODUCTION_LATEST_GUARD"
   echo "production_latest_policy=$PRODUCTION_LATEST_POLICY"

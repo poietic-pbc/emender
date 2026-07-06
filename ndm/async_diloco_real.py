@@ -71,6 +71,8 @@ class RealAsyncDiLoCoConfig:
     synthetic_token_stream: bool = False
     synthetic_vocab_size: int = 256
     metrics_json: str | Path | None = None
+    walltime_remaining_s: float | None = None
+    estimated_finalization_duration_s: float | None = None
     checkpoint_cadence: AsyncDiLoCoCheckpointCadence = field(
         default_factory=lambda: AsyncDiLoCoCheckpointCadence(
             recovery_every_generations=None,
@@ -323,6 +325,8 @@ def run_real_async_diloco(config: RealAsyncDiLoCoConfig) -> RealAsyncDiLoCoRunRe
             weight_by=config.weight_by,
             generation_duration_s=max(0.0, time.monotonic() - generation_start_s),
             manager=manager,
+            walltime_remaining_s=config.walltime_remaining_s,
+            estimated_finalization_duration_s=config.estimated_finalization_duration_s,
         )
         global_results.append(global_result)
         summary_metrics.append(global_result.metrics)
@@ -445,6 +449,8 @@ def _run_real_global_supervisor(
     weight_by: str,
     generation_duration_s: float,
     manager: AsyncDiLoCoCheckpointManager,
+    walltime_remaining_s: float | None,
+    estimated_finalization_duration_s: float | None,
 ) -> RealAsyncGlobalResult:
     node_updates = [
         result.node_update for result in node_results
@@ -475,7 +481,11 @@ def _run_real_global_supervisor(
     )
     publish_paths: tuple[str, ...] = ()
     if merge_result.advanced:
-        publish_result = manager.publish_global_generation(metrics)
+        publish_result = manager.publish_global_generation(
+            metrics,
+            walltime_remaining_s=walltime_remaining_s,
+            estimated_finalization_duration_s=estimated_finalization_duration_s,
+        )
         metrics = publish_result.metrics
         publish_paths = tuple(metrics.checkpoint_paths)
     return RealAsyncGlobalResult(
@@ -509,6 +519,8 @@ def _run_real_worker(
         device = torch.device(spec.device)
         model = train.build_training_model(args).to(device)
         model.load_state_dict(base_state, strict=False)
+        if bool(getattr(args, "bf16", False)):
+            model = model.bfloat16()
         optimizer = train.build_training_optimizer(model, args)
         batch_iter = _build_batch_iter(
             args,
@@ -533,12 +545,12 @@ def _run_real_worker(
             hidden_state = metrics.get("hidden_state")
             losses.append(float(metrics["loss"]))
             tokens += int(metrics["tokens_processed"])
-        worker_state = _floating_state_dict(model)
+        worker_delta = _floating_delta_from_model(base_state, model)
         base_generation = generation if spec.stale_generation is None else int(spec.stale_generation)
         update = AsyncDiLoCoUpdate(
             worker_id=spec.worker_id,
             base_generation=base_generation,
-            delta=compute_dense_delta(base_state, worker_state),
+            delta=worker_delta,
             tokens=tokens,
             local_steps=max(1, int(spec.local_steps)),
             loss_moving_average={
@@ -617,6 +629,31 @@ def _floating_state_dict(model: torch.nn.Module) -> dict[str, torch.Tensor]:
         for name, tensor in model.state_dict().items()
         if torch.is_tensor(tensor) and torch.is_floating_point(tensor)
     }
+
+
+def _floating_delta_from_model(
+    base_state: Mapping[str, torch.Tensor],
+    model: torch.nn.Module,
+) -> dict[str, torch.Tensor]:
+    """Return a CPU dense delta without first cloning the full worker state."""
+
+    worker_state = model.state_dict()
+    missing = sorted(set(base_state) - set(worker_state))
+    if missing:
+        raise ValueError(f"worker state missing base tensors: {missing}")
+
+    delta: dict[str, torch.Tensor] = {}
+    for name, base_tensor in base_state.items():
+        worker_tensor = worker_state[name]
+        if not torch.is_tensor(worker_tensor) or not torch.is_floating_point(worker_tensor):
+            raise ValueError(f"worker tensor {name!r} is not a floating tensor")
+        if base_tensor.shape != worker_tensor.shape:
+            raise ValueError(
+                f"tensor {name!r} shape differs: {tuple(base_tensor.shape)} "
+                f"!= {tuple(worker_tensor.shape)}")
+        worker_cpu = worker_tensor.detach().to(device="cpu", dtype=base_tensor.dtype)
+        delta[name] = worker_cpu - base_tensor.detach()
+    return delta
 
 
 def _status_worker_report(
