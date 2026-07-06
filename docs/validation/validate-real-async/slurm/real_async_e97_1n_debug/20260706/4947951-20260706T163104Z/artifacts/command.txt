@@ -1,0 +1,22 @@
+Prepared command. The prepare task does not execute it; the downstream
+human-approval task must set ASYNC_DILOCO_HUMAN_APPROVED=1 before this wrapper
+will attempt it:
+
+"/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/bin/python" -u "scripts/frontier/e97_async_diloco_train.py" \
+  --run-id "validate-real-async-${SLURM_JOB_ID:-manual}-20260706T163104Z" \
+  --checkpoint "/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt" \
+  --run-dir "/lustre/orion/bif148/scratch/erikgarrison/emender/docs/validation/validate-real-async/slurm/real_async_e97_1n_debug/20260706/4947951-20260706T163104Z/async_run" \
+  --metrics-json "/lustre/orion/bif148/scratch/erikgarrison/emender/docs/validation/validate-real-async/slurm/real_async_e97_1n_debug/20260706/4947951-20260706T163104Z/artifacts/async_diloco_e97_256n_metrics.json" \
+  --node-count "1" \
+  --worker-count-per-node "1" \
+  --local-quorum "1" \
+  --global-quorum "1" \
+  --local-steps "40" \
+  --tokens-per-step "16777216" \
+  --timeout-s "60" \
+  --recovery-every-generations "1" \
+  --recovery-every-seconds "300" \
+  --export-every-generations "1" \
+  --export-every-seconds "600" \
+  --production-latest-path /lustre/orion/bif148/proj-shared/emender/frontier_runs/chains/E97_1.3B_step489920_b4_k80_64n_hier_g4_bucket64m_avg/latest.pt \
+  --training-target "E97_1.3B_step1065000_async_diloco_256n12h_20260706"
