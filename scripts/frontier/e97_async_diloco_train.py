@@ -32,6 +32,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--metrics-json", default="")
+    parser.add_argument("--checkpoint", default="",
+                        help="Optional train.py checkpoint used as the initial global state.")
     parser.add_argument("--data", default="")
     parser.add_argument("--synthetic-token-stream", action="store_true",
                         help="Use deterministic local token batches for smoke tests.")
@@ -103,6 +105,7 @@ def main() -> int:
         eta_outer=args.eta_outer,
         timeout_s=args.timeout_s,
         synthetic_token_stream=args.synthetic_token_stream,
+        initial_checkpoint=(Path(args.checkpoint) if args.checkpoint else None),
     ))
     print(stable_json_dumps({
         "run_id": result.run_id,

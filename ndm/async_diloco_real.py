@@ -67,6 +67,7 @@ class RealAsyncDiLoCoConfig:
     weight_by: str = "tokens"
     timeout_s: float = 900.0
     initial_generation: int = 0
+    initial_checkpoint: str | Path | None = None
     synthetic_token_stream: bool = False
     synthetic_vocab_size: int = 256
     metrics_json: str | Path | None = None
@@ -273,6 +274,8 @@ def run_real_async_diloco(config: RealAsyncDiLoCoConfig) -> RealAsyncDiLoCoRunRe
 
     torch.manual_seed(int(getattr(train_args, "seed", 42)))
     global_model = train.build_training_model(train_args)
+    if config.initial_checkpoint is not None:
+        train.load_checkpoint(str(config.initial_checkpoint), global_model)
     base_state = _floating_state_dict(global_model)
     latest_generation = int(config.initial_generation)
     manager = AsyncDiLoCoCheckpointManager(

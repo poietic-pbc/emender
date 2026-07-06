@@ -111,12 +111,15 @@ def test_async_diloco_multinode_entrypoint_and_wrappers_are_main_relative():
     wrapper_text = debug_text + "\n" + launch_text
 
     expected_entrypoint = "scripts/frontier/async_diloco_e97_multinode.py"
+    expected_production_entrypoint = "scripts/frontier/e97_async_diloco_train.py"
     assert f"ASYNC_ENTRYPOINT=${{ASYNC_ENTRYPOINT:-{expected_entrypoint}}}" in debug_text
-    assert f"ASYNC_ENTRYPOINT=${{ASYNC_ENTRYPOINT:-{expected_entrypoint}}}" in launch_text
+    assert f"ASYNC_ENTRYPOINT=${{ASYNC_ENTRYPOINT:-{expected_production_entrypoint}}}" in launch_text
     assert 'python -u "$ASYNC_ENTRYPOINT"' in debug_text
     assert 'frontier_activate_emender_conda_env\nPYTHON_BIN=$(command -v python)' in launch_text
     assert '"$PYTHON_BIN" -u "$ASYNC_ENTRYPOINT"' in launch_text
-    assert "ASYNC_DILOCO_RUNTIME_PROBE_ONLY" in launch_text
+    assert "Production validation rejects ASYNC_DILOCO_RUNTIME_PROBE_ONLY=1" in launch_text
+    assert "ASYNC_DILOCO_NON_PRODUCTION_DEBUG" in launch_text
+    assert "*async_diloco_e97_multinode.py|*async_diloco_e97_2n8n_debug.py" in launch_text
     assert "  python -u \"$ASYNC_ENTRYPOINT\"" not in launch_text
     assert ".wg-worktrees" not in wrapper_text
 
@@ -142,9 +145,11 @@ def test_async_diloco_launch_wrappers_expose_required_env_knobs():
         "TRAINING_TARGET=${TRAINING_TARGET:-E97_1.3B_step1065000_async_diloco_256n12h_20260706}",
         "SCALEOUT_VARIANT=${SCALEOUT_VARIANT:-E97_1.3B_step1065000_async_quorum_b4_k40_256n12h}",
         "OUTPUT_ROOT=${OUTPUT_ROOT:-",
-        "ASYNC_LOCAL_QUORUM=${ASYNC_LOCAL_QUORUM:-",
-        "ASYNC_GLOBAL_QUORUM=${ASYNC_GLOBAL_QUORUM:-",
+        "ASYNC_LOCAL_QUORUM=${ASYNC_LOCAL_QUORUM:-6}",
+        "ASYNC_GLOBAL_QUORUM=${ASYNC_GLOBAL_QUORUM:-$(((2 * ASYNC_NODE_COUNT + 2) / 3))}",
         "DILOCO_K=${DILOCO_K:-",
+        "BATCH_SIZE=${BATCH_SIZE:-4}",
+        "CHUNK_SIZE=${CHUNK_SIZE:-2048}",
         "RECOVERY_EVERY_GENERATIONS=${RECOVERY_EVERY_GENERATIONS:-",
         "RECOVERY_EVERY_SECONDS=${RECOVERY_EVERY_SECONDS:-",
         "EXPORT_EVERY_GENERATIONS=${EXPORT_EVERY_GENERATIONS:-",
@@ -154,3 +159,27 @@ def test_async_diloco_launch_wrappers_expose_required_env_knobs():
         "PRODUCTION_LATEST_POLICY=${PRODUCTION_LATEST_POLICY:-run-local-latest-json-with-external-chain-latest-guard}",
     ):
         assert token in launch_text
+
+
+def test_production_async_launcher_records_artifacts_and_real_command_branch():
+    launch_text = (ROOT / "scripts/frontier/async_diloco_e97_256n12h_launch.sbatch").read_text(encoding="utf-8")
+
+    assert 'COMMAND_FILE="${ARTIFACT_DIR}/command.txt"' in launch_text
+    assert 'ENV_FILE="${ARTIFACT_DIR}/env.txt"' in launch_text
+    assert "printf '%q ' \"${CMD[@]}\" > \"$COMMAND_FILE\"" in launch_text
+    assert "} | tee \"$ENV_FILE\"" in launch_text
+    assert 'echo "command_file=$COMMAND_FILE"' in launch_text
+    assert 'echo "env_file=$ENV_FILE"' in launch_text
+    assert 'echo "async_entrypoint=$ASYNC_ENTRYPOINT"' in launch_text
+    assert 'echo "python_bin=$PYTHON_BIN"' in launch_text
+    assert 'CMD=(\n  "$PYTHON_BIN" -u "$ASYNC_ENTRYPOINT"' in launch_text
+    assert '--checkpoint "$E97_CHECKPOINT"' in launch_text
+    assert '--data "$DATA"' in launch_text
+    assert '--worker-count "$ASYNC_WORKER_COUNT"' in launch_text
+    assert '--batch-size "$BATCH_SIZE"' in launch_text
+    assert '--chunk-size "$CHUNK_SIZE"' in launch_text
+    assert '--local-steps "$DILOCO_K"' in launch_text
+    assert '--steps "$DILOCO_K"' in launch_text
+    assert 'if [[ "$ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM" == "1" ]]; then' in launch_text
+    assert 'CMD+=(--synthetic-token-stream)' in launch_text
+    assert 'exec "${CMD[@]}"' in launch_text

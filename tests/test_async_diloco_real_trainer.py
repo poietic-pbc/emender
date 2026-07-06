@@ -197,6 +197,30 @@ def test_real_async_trainer_cli_smoke_runs_one_generation(tmp_path):
     assert payload["node_generations"][0]["metrics"]["loss_moving_average"]["loss"] > 1.0
 
 
+def test_real_async_trainer_accepts_initial_checkpoint(tmp_path):
+    checkpoint = tmp_path / "seed.pt"
+    seed_args = _args(seed=999)
+    model = __import__("train").build_training_model(seed_args)
+    torch.save({"model_state_dict": model.state_dict(), "step": 1065000}, checkpoint)
+
+    result = run_real_async_diloco(RealAsyncDiLoCoConfig(
+        run_id="real-checkpoint-seed",
+        run_dir=tmp_path / "run",
+        train_args=seed_args,
+        initial_checkpoint=checkpoint,
+        worker_specs=(
+            RealAsyncWorkerSpec(worker_id="worker-0", local_steps=1),
+        ),
+        local_quorum=1,
+        global_quorum=1,
+        global_node_count=1,
+        synthetic_token_stream=True,
+    ))
+
+    assert result.latest_generation == 0
+    assert Path(result.metrics_json).exists()
+
+
 def test_multinode_entrypoint_no_longer_imports_synthetic_debug_harness():
     source = Path("scripts/frontier/async_diloco_e97_multinode.py").read_text(encoding="utf-8")
     assert "from e97_async_diloco_train import main" in source
