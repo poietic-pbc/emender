@@ -51,6 +51,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--params", default="100m")
     parser.add_argument("--dim", type=int, default=8)
     parser.add_argument("--depth", type=int, default=1)
+    parser.add_argument("--tokenizer", default="")
+    parser.add_argument("--n-heads", type=int, default=2)
+    parser.add_argument("--n-state", type=int, default=4)
+    parser.add_argument("--n-slots", type=int, default=4)
+    parser.add_argument("--n-groups", type=int, default=2)
+    parser.add_argument("--expansion", type=float, default=1.0)
+    parser.add_argument("--use-triton", type=int, default=0)
+    parser.add_argument("--use-chunked-e97", type=int, default=0)
+    parser.add_argument("--e97-chunk-size", type=int, default=4)
+    parser.add_argument("--linear-state", type=int, default=1)
+    parser.add_argument("--use-write-gate", type=int, default=0)
+    parser.add_argument("--use-gate", type=int, default=1)
+    parser.add_argument("--gate-activation", default="sigmoid")
+    parser.add_argument("--mlp-ratio", type=float, default=0.0)
+    parser.add_argument("--mlp-multiple", type=int, default=8)
+    parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--chunk-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -75,6 +91,22 @@ def main() -> int:
         params=args.params,
         dim=args.dim,
         depth=args.depth,
+        tokenizer=(args.tokenizer or None),
+        n_heads=args.n_heads,
+        n_state=args.n_state,
+        n_slots=args.n_slots,
+        n_groups=args.n_groups,
+        expansion=args.expansion,
+        use_triton=args.use_triton,
+        use_chunked_e97=args.use_chunked_e97,
+        e97_chunk_size=args.e97_chunk_size,
+        linear_state=args.linear_state,
+        use_write_gate=args.use_write_gate,
+        use_gate=args.use_gate,
+        gate_activation=args.gate_activation,
+        mlp_ratio=args.mlp_ratio,
+        mlp_multiple=args.mlp_multiple,
+        weight_decay=args.weight_decay,
         batch_size=args.batch_size,
         chunk_size=args.chunk_size,
         lr=args.lr,

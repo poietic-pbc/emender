@@ -197,6 +197,92 @@ def test_real_async_trainer_cli_smoke_runs_one_generation(tmp_path):
     assert payload["node_generations"][0]["metrics"]["loss_moving_average"]["loss"] > 1.0
 
 
+def test_real_async_trainer_cli_accepts_model_geometry_overrides(tmp_path):
+    checkpoint = tmp_path / "seed.pt"
+    seed_args = _args(
+        tokenizer="p50k_base",
+        dim=16,
+        depth=1,
+        n_heads=2,
+        n_state=4,
+        n_slots=4,
+        n_groups=2,
+        linear_state=0,
+        use_triton=0,
+        use_chunked_e97=0,
+        e97_chunk_size=4,
+        gate_activation="silu",
+        mlp_ratio=0.5,
+        mlp_multiple=8,
+    )
+    model = __import__("train").build_training_model(seed_args)
+    torch.save({"model_state_dict": model.state_dict(), "step": 1065000}, checkpoint)
+    metrics_json = tmp_path / "metrics.json"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/frontier/e97_async_diloco_train.py",
+            "--run-id",
+            "cli-geometry",
+            "--run-dir",
+            str(tmp_path / "run"),
+            "--metrics-json",
+            str(metrics_json),
+            "--checkpoint",
+            str(checkpoint),
+            "--synthetic-token-stream",
+            "--worker-count",
+            "1",
+            "--local-quorum",
+            "1",
+            "--global-quorum",
+            "1",
+            "--generations",
+            "1",
+            "--local-steps",
+            "1",
+            "--tokenizer",
+            "p50k_base",
+            "--dim",
+            "16",
+            "--depth",
+            "1",
+            "--n-heads",
+            "2",
+            "--n-state",
+            "4",
+            "--n-slots",
+            "4",
+            "--n-groups",
+            "2",
+            "--linear-state",
+            "0",
+            "--use-triton",
+            "0",
+            "--use-chunked-e97",
+            "0",
+            "--e97-chunk-size",
+            "4",
+            "--gate-activation",
+            "silu",
+            "--mlp-ratio",
+            "0.5",
+            "--mlp-multiple",
+            "8",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    stdout = json.loads(completed.stdout)
+    assert stdout["latest_generation"] == 0
+    payload = json.loads(metrics_json.read_text(encoding="utf-8"))
+    assert payload["global_generations"][0]["metrics"]["latest_advanced"] is True
+
+
 def test_real_async_trainer_accepts_initial_checkpoint(tmp_path):
     checkpoint = tmp_path / "seed.pt"
     seed_args = _args(seed=999)

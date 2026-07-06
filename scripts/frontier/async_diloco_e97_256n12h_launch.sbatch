@@ -32,6 +32,8 @@ if [[ ! -d "$DEFAULT_ENV_PREFIX" && -d /lustre/orion/bif148/scratch/erikgarrison
 fi
 ENV_PREFIX=${ENV_PREFIX:-$DEFAULT_ENV_PREFIX}
 export EMENDER_CONDA_ENV=${EMENDER_CONDA_ENV:-$ENV_PREFIX}
+TIKTOKEN_CACHE_DIR=${TIKTOKEN_CACHE_DIR:-/lustre/orion/bif148/proj-shared/emender/tiktoken-cache}
+export TIKTOKEN_CACHE_DIR
 SCALEOUT_VARIANT=${SCALEOUT_VARIANT:-E97_1.3B_step1065000_async_quorum_b4_k40_256n12h}
 RUN_DATE=$(date -u +%Y%m%d)
 RUN_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
@@ -67,9 +69,25 @@ DILOCO_K=${DILOCO_K:-40}
 GENERATIONS=${GENERATIONS:-1}
 LEARNING_RATE=${LEARNING_RATE:-1e-3}
 MODEL_LEVEL=${MODEL_LEVEL:-E97}
-MODEL_PARAMS=${MODEL_PARAMS:-1.3b}
-MODEL_DIM=${MODEL_DIM:-}
-MODEL_DEPTH=${MODEL_DEPTH:-}
+MODEL_PARAMS=${MODEL_PARAMS:-100m}
+MODEL_DIM=${MODEL_DIM:-1792}
+MODEL_DEPTH=${MODEL_DEPTH:-11}
+MODEL_TOKENIZER=${MODEL_TOKENIZER:-p50k_base}
+MODEL_N_HEADS=${MODEL_N_HEADS:-216}
+MODEL_N_STATE=${MODEL_N_STATE:-32}
+MODEL_N_SLOTS=${MODEL_N_SLOTS:-64}
+MODEL_N_GROUPS=${MODEL_N_GROUPS:-32}
+MODEL_EXPANSION=${MODEL_EXPANSION:-1.0}
+MODEL_USE_TRITON=${MODEL_USE_TRITON:-1}
+MODEL_USE_CHUNKED_E97=${MODEL_USE_CHUNKED_E97:-0}
+MODEL_E97_CHUNK_SIZE=${MODEL_E97_CHUNK_SIZE:-32}
+MODEL_LINEAR_STATE=${MODEL_LINEAR_STATE:-0}
+MODEL_USE_WRITE_GATE=${MODEL_USE_WRITE_GATE:-0}
+MODEL_USE_GATE=${MODEL_USE_GATE:-1}
+MODEL_GATE_ACTIVATION=${MODEL_GATE_ACTIVATION:-silu}
+MODEL_MLP_RATIO=${MODEL_MLP_RATIO:-2.2623}
+MODEL_MLP_MULTIPLE=${MODEL_MLP_MULTIPLE:-64}
+WEIGHT_DECAY=${WEIGHT_DECAY:-0.01}
 TOKENS_PER_LOCAL_STEP=${TOKENS_PER_LOCAL_STEP:-16777216}
 TOKENS_PER_DILOCO_GENERATION=${TOKENS_PER_DILOCO_GENERATION:-671088640}
 TRAIN_MINUTES=${TRAIN_MINUTES:-700}
@@ -146,9 +164,25 @@ CMD=(
   --timeout-s "$ASYNC_GLOBAL_TIMEOUT_S"
   --level "$MODEL_LEVEL"
   --params "$MODEL_PARAMS"
+  --tokenizer "$MODEL_TOKENIZER"
+  --n-heads "$MODEL_N_HEADS"
+  --n-state "$MODEL_N_STATE"
+  --n-slots "$MODEL_N_SLOTS"
+  --n-groups "$MODEL_N_GROUPS"
+  --expansion "$MODEL_EXPANSION"
+  --use-triton "$MODEL_USE_TRITON"
+  --use-chunked-e97 "$MODEL_USE_CHUNKED_E97"
+  --e97-chunk-size "$MODEL_E97_CHUNK_SIZE"
+  --linear-state "$MODEL_LINEAR_STATE"
+  --use-write-gate "$MODEL_USE_WRITE_GATE"
+  --use-gate "$MODEL_USE_GATE"
+  --gate-activation "$MODEL_GATE_ACTIVATION"
+  --mlp-ratio "$MODEL_MLP_RATIO"
+  --mlp-multiple "$MODEL_MLP_MULTIPLE"
   --batch-size "$BATCH_SIZE"
   --chunk-size "$CHUNK_SIZE"
   --lr "$LEARNING_RATE"
+  --weight-decay "$WEIGHT_DECAY"
   --steps "$DILOCO_K"
 )
 if [[ -n "$MODEL_DIM" ]]; then
@@ -179,6 +213,7 @@ printf '\n' >> "$COMMAND_FILE"
   echo "env_file=$ENV_FILE"
   echo "env_prefix=$ENV_PREFIX"
   echo "emender_conda_env=$EMENDER_CONDA_ENV"
+  echo "tiktoken_cache_dir=$TIKTOKEN_CACHE_DIR"
   echo "python_bin=$PYTHON_BIN"
   echo "requested_walltime=$REQUESTED_WALLTIME"
   echo "requested_node_hours=$REQUESTED_NODE_HOURS"
@@ -202,6 +237,22 @@ printf '\n' >> "$COMMAND_FILE"
   echo "model_params=$MODEL_PARAMS"
   echo "model_dim=$MODEL_DIM"
   echo "model_depth=$MODEL_DEPTH"
+  echo "model_tokenizer=$MODEL_TOKENIZER"
+  echo "model_n_heads=$MODEL_N_HEADS"
+  echo "model_n_state=$MODEL_N_STATE"
+  echo "model_n_slots=$MODEL_N_SLOTS"
+  echo "model_n_groups=$MODEL_N_GROUPS"
+  echo "model_expansion=$MODEL_EXPANSION"
+  echo "model_use_triton=$MODEL_USE_TRITON"
+  echo "model_use_chunked_e97=$MODEL_USE_CHUNKED_E97"
+  echo "model_e97_chunk_size=$MODEL_E97_CHUNK_SIZE"
+  echo "model_linear_state=$MODEL_LINEAR_STATE"
+  echo "model_use_write_gate=$MODEL_USE_WRITE_GATE"
+  echo "model_use_gate=$MODEL_USE_GATE"
+  echo "model_gate_activation=$MODEL_GATE_ACTIVATION"
+  echo "model_mlp_ratio=$MODEL_MLP_RATIO"
+  echo "model_mlp_multiple=$MODEL_MLP_MULTIPLE"
+  echo "weight_decay=$WEIGHT_DECAY"
   echo "tokens_per_local_step=$TOKENS_PER_LOCAL_STEP"
   echo "tokens_per_diloco_generation=$TOKENS_PER_DILOCO_GENERATION"
   echo "generation_manifest_every=$GENERATION_MANIFEST_EVERY"
