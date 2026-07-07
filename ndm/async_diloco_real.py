@@ -13,6 +13,8 @@ import copy
 import json
 import math
 from pathlib import Path
+import socket
+import struct
 import time
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -177,7 +179,12 @@ class RealAsyncDiLoCoRunResult:
 
 @dataclass(frozen=True)
 class RealAsyncFileRankConfig:
-    """Configuration for one Slurm-launched node rank in the debug file path."""
+    """Configuration for one Slurm-launched rank in the TCP quorum path.
+
+    The class name is kept for compatibility with existing callers. The live
+    quorum path no longer scans shared-storage update files; workers submit
+    per-rank metadata to a coordinator TCP socket.
+    """
 
     run_id: str
     run_dir: str | Path
@@ -195,6 +202,10 @@ class RealAsyncFileRankConfig:
     allow_synthetic_token_stream: bool = False
     synthetic_vocab_size: int = 256
     device: str = "cpu"
+    coordinator_host: str = "127.0.0.1"
+    coordinator_bind_host: str = "0.0.0.0"
+    coordinator_port: int = 29497
+    connect_retry_interval_s: float = 0.2
     walltime_remaining_s: float | None = None
     estimated_finalization_duration_s: float | None = None
     checkpoint_cadence: AsyncDiLoCoCheckpointCadence = field(default_factory=AsyncDiLoCoCheckpointCadence)
@@ -266,13 +277,13 @@ def default_tiny_e97_train_args(**overrides: Any) -> Namespace:
 
 
 def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str, Any]:
-    """Run one actual node process and let rank 0 publish a quorum record.
+    """Run one actual process and let rank 0 publish a TCP quorum record.
 
     This path is intentionally bounded for Frontier debug validation: every
     Slurm task runs real local token training from the same seed checkpoint and
-    writes durable per-node artifacts, while rank 0 merges node metadata through
-    shared storage. It avoids claiming a dense tensor allreduce/storage exchange
-    that this debug path does not implement.
+    submits per-rank metadata to a rank-0 TCP coordinator. Durable files are
+    written only as metrics/checkpoint/post-run artifacts, not as the live
+    quorum/update collection path.
     """
 
     if config.node_count <= 0:
@@ -286,7 +297,7 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
 
     run_dir = Path(config.run_dir)
     progress_dir = run_dir / "progress"
-    nodes_dir = run_dir / "node_updates"
+    nodes_dir = run_dir / "node_update_artifacts"
     progress_dir.mkdir(parents=True, exist_ok=True)
     nodes_dir.mkdir(parents=True, exist_ok=True)
 
@@ -346,28 +357,45 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
         node_result,
         elapsed_s=max(0.0, time.monotonic() - start_s),
     )
-    _atomic_write_json(nodes_dir / f"{node_id}.json", node_payload)
     _write_rank_heartbeat(
         progress_dir,
         node_rank=config.node_rank,
         node_id=node_id,
-        stage="node_update_written",
+        stage="node_update_ready",
         generation=generation,
         extra={
             "node_update_submitted": node_result.node_update is not None,
             "tokens": node_result.metrics.tokens_per_generation,
             "loss": node_result.metrics.loss_moving_average.get("loss"),
+            "transport": "tcp",
         },
     )
 
     root_payload: dict[str, Any] | None = None
     if int(config.node_rank) == 0:
-        root_payload = _coordinate_file_rank_quorum(
+        root_payload = _coordinate_network_rank_quorum(
             config=config,
             start_s=start_s,
-            nodes_dir=nodes_dir,
+            own_payload=node_payload,
+            artifact_dir=nodes_dir,
             progress_dir=progress_dir,
             generation=generation,
+        )
+    else:
+        submit = _submit_network_rank_payload(config, node_payload, start_s=start_s)
+        node_payload = {
+            **node_payload,
+            "transport_submit_latency_s": submit["submit_latency_s"],
+            "transport_bytes_sent": submit["bytes_sent"],
+        }
+        _atomic_write_json(nodes_dir / f"{node_id}.json", node_payload)
+        _write_rank_heartbeat(
+            progress_dir,
+            node_rank=config.node_rank,
+            node_id=node_id,
+            stage="node_update_submitted",
+            generation=generation,
+            extra=submit,
         )
 
     return {
@@ -377,6 +405,7 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
         "node_update_path": str(nodes_dir / f"{node_id}.json"),
         "node_update_submitted": node_result.node_update is not None,
         "coordinator": int(config.node_rank) == 0,
+        "transport": "tcp",
         "global_result": root_payload,
     }
 
@@ -920,6 +949,18 @@ def _mean(values: Sequence[float]) -> float:
     return float(sum(values) / len(values))
 
 
+def _distribution(values: Sequence[float]) -> dict[str, float | int]:
+    if not values:
+        return {"count": 0, "min": 0.0, "max": 0.0, "avg": 0.0}
+    ordered = sorted(float(value) for value in values)
+    return {
+        "count": len(ordered),
+        "min": ordered[0],
+        "max": ordered[-1],
+        "avg": float(sum(ordered) / len(ordered)),
+    }
+
+
 def _node_result_payload(
     config: RealAsyncFileRankConfig,
     node_result: RealAsyncNodeResult,
@@ -962,61 +1003,164 @@ def _node_result_payload(
     }
 
 
-def _coordinate_file_rank_quorum(
+def _submit_network_rank_payload(
+    config: RealAsyncFileRankConfig,
+    payload: Mapping[str, Any],
+    *,
+    start_s: float,
+) -> dict[str, Any]:
+    deadline_s = start_s + float(config.timeout_s)
+    retry_s = max(0.05, float(config.connect_retry_interval_s))
+    last_error: str | None = None
+    submit_start_s = time.monotonic()
+    wire_payload = {
+        **dict(payload),
+        "transport": "tcp",
+        "transport_submit_wall_s": time.time(),
+    }
+    payload_bytes = stable_json_dumps(wire_payload).encode("utf-8")
+    frame = struct.pack("!Q", len(payload_bytes)) + payload_bytes
+    while time.monotonic() < deadline_s:
+        try:
+            with socket.create_connection(
+                (str(config.coordinator_host), int(config.coordinator_port)),
+                timeout=min(5.0, max(0.1, deadline_s - time.monotonic())),
+            ) as sock:
+                sock.sendall(frame)
+                ack_size = _recv_exact(sock, 8)
+                ack_len = struct.unpack("!Q", ack_size)[0]
+                ack = json.loads(_recv_exact(sock, ack_len).decode("utf-8"))
+                if ack.get("ok") is not True:
+                    raise RuntimeError(str(ack.get("error", "coordinator rejected update")))
+                return {
+                    "coordinator_host": str(config.coordinator_host),
+                    "coordinator_port": int(config.coordinator_port),
+                    "submit_latency_s": max(0.0, time.monotonic() - submit_start_s),
+                    "bytes_sent": len(frame),
+                    "ack": ack,
+                }
+        except (OSError, RuntimeError, json.JSONDecodeError, struct.error) as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            time.sleep(min(retry_s, max(0.0, deadline_s - time.monotonic())))
+    raise TimeoutError(
+        f"timed out submitting rank payload to tcp coordinator "
+        f"{config.coordinator_host}:{config.coordinator_port}: {last_error}"
+    )
+
+
+def _coordinate_network_rank_quorum(
     *,
     config: RealAsyncFileRankConfig,
     start_s: float,
-    nodes_dir: Path,
+    own_payload: Mapping[str, Any],
+    artifact_dir: Path,
     progress_dir: Path,
     generation: int,
 ) -> dict[str, Any]:
     deadline_s = start_s + float(config.timeout_s)
     metrics_path = Path(config.metrics_json) if config.metrics_json is not None else Path(config.run_dir) / "real_async_metrics.json"
-    accepted: list[dict[str, Any]] = []
-    all_payloads: list[dict[str, Any]] = []
+    received_by_node: dict[str, dict[str, Any]] = {}
+    own_wire_bytes = len(stable_json_dumps(own_payload).encode("utf-8")) + 8
+    own = {
+        **dict(own_payload),
+        "transport": "tcp",
+        "transport_submit_latency_s": 0.0,
+        "transport_bytes_sent": own_wire_bytes,
+        "transport_submit_wall_s": time.time(),
+    }
+    received_by_node[str(own.get("node_id"))] = own
+    _atomic_write_json(artifact_dir / f"{own.get('node_id')}.json", own)
     last_partial_write_s = 0.0
 
-    while time.monotonic() < deadline_s:
-        all_payloads = _read_node_payloads(nodes_dir)
-        accepted = [
-            payload for payload in all_payloads
-            if payload.get("node_update_submitted") is True
-            and int(payload.get("generation", -1)) == generation
-        ]
-        partial = _file_quorum_payload(
-            config=config,
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind((str(config.coordinator_bind_host), int(config.coordinator_port)))
+        server.listen(max(1, int(config.node_count)))
+        server.settimeout(0.2)
+        _write_rank_heartbeat(
+            progress_dir,
+            node_rank=config.node_rank,
+            node_id="node-00000",
+            stage="coordinator_listening",
             generation=generation,
-            accepted=accepted,
-            all_payloads=all_payloads,
-            start_s=start_s,
-            latest_advanced=False,
-            checkpoint_paths=(),
-            checkpoint_sizes={},
+            extra={
+                "transport": "tcp",
+                "bind_host": str(config.coordinator_bind_host),
+                "coordinator_port": int(config.coordinator_port),
+                "global_quorum": int(config.global_quorum),
+            },
         )
-        now_s = time.monotonic()
-        if now_s - last_partial_write_s >= 5.0 or len(accepted) >= config.global_quorum:
-            _atomic_write_json(metrics_path, partial)
-            _write_rank_heartbeat(
-                progress_dir,
-                node_rank=config.node_rank,
-                node_id="node-00000",
-                stage="coordinator_waiting",
+        while time.monotonic() < deadline_s:
+            all_payloads = _sorted_node_payloads(received_by_node.values())
+            accepted = _accepted_network_payloads(all_payloads, generation)
+            partial = _network_quorum_payload(
+                config=config,
                 generation=generation,
-                extra={
-                    "accepted_nodes": len(accepted),
-                    "seen_nodes": len(all_payloads),
-                    "global_quorum": config.global_quorum,
-                    "partial_metrics_json": str(metrics_path),
-                },
+                accepted=accepted,
+                all_payloads=all_payloads,
+                start_s=start_s,
+                latest_advanced=False,
+                checkpoint_paths=(),
+                checkpoint_sizes={},
             )
-            last_partial_write_s = now_s
-        if len(accepted) >= config.global_quorum:
-            break
-        time.sleep(1.0)
+            now_s = time.monotonic()
+            if now_s - last_partial_write_s >= 5.0 or len(accepted) >= config.global_quorum:
+                _atomic_write_json(metrics_path, partial)
+                _write_rank_heartbeat(
+                    progress_dir,
+                    node_rank=config.node_rank,
+                    node_id="node-00000",
+                    stage="coordinator_waiting",
+                    generation=generation,
+                    extra={
+                        "transport": "tcp",
+                        "accepted_nodes": len(accepted),
+                        "seen_nodes": len(all_payloads),
+                        "global_quorum": config.global_quorum,
+                        "partial_metrics_json": str(metrics_path),
+                    },
+                )
+                last_partial_write_s = now_s
+            if len(accepted) >= config.global_quorum:
+                break
+            try:
+                conn, _addr = server.accept()
+            except socket.timeout:
+                continue
+            with conn:
+                try:
+                    payload = _recv_framed_json(conn)
+                    node_id = str(payload.get("node_id", ""))
+                    if not node_id:
+                        raise ValueError("payload missing node_id")
+                    received = {
+                        **payload,
+                        "transport": "tcp",
+                        "transport_receive_wall_s": time.time(),
+                        "transport_receive_latency_s": max(
+                            0.0,
+                            time.time() - float(payload.get("transport_submit_wall_s", time.time())),
+                        ),
+                        "transport_bytes_sent": int(
+                            payload.get("transport_bytes_sent")
+                            or (len(stable_json_dumps(payload).encode("utf-8")) + 8)
+                        ),
+                    }
+                    received.setdefault(
+                        "transport_submit_latency_s",
+                        received["transport_receive_latency_s"],
+                    )
+                    received_by_node[node_id] = received
+                    _atomic_write_json(artifact_dir / f"{node_id}.json", received)
+                    _send_framed_json(conn, {"ok": True, "node_id": node_id})
+                except Exception as exc:
+                    _send_framed_json(conn, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
 
+    all_payloads = _sorted_node_payloads(received_by_node.values())
+    accepted = _accepted_network_payloads(all_payloads, generation)
     timed_out = max(0, int(config.node_count) - len(all_payloads))
     failed = sum(1 for payload in all_payloads if payload.get("node_update_submitted") is not True)
-    metrics = _file_quorum_metrics(
+    metrics = _network_quorum_metrics(
         config=config,
         generation=generation,
         accepted=accepted,
@@ -1046,7 +1190,7 @@ def _coordinate_file_rank_quorum(
         checkpoint_sizes = dict(metrics.checkpoint_sizes)
         latest_advanced = True
 
-    final_payload = _file_quorum_payload(
+    final_payload = _network_quorum_payload(
         config=config,
         generation=generation,
         accepted=accepted,
@@ -1065,6 +1209,7 @@ def _coordinate_file_rank_quorum(
         stage="coordinator_finalized" if latest_advanced else "coordinator_deferred",
         generation=generation,
         extra={
+            "transport": "tcp",
             "accepted_nodes": len(accepted),
             "seen_nodes": len(all_payloads),
             "global_quorum": config.global_quorum,
@@ -1074,17 +1219,49 @@ def _coordinate_file_rank_quorum(
     return final_payload
 
 
-def _read_node_payloads(nodes_dir: Path) -> list[dict[str, Any]]:
-    payloads: list[dict[str, Any]] = []
-    for path in sorted(nodes_dir.glob("node-*.json")):
-        try:
-            payloads.append(json.loads(path.read_text(encoding="utf-8")))
-        except (OSError, json.JSONDecodeError):
-            continue
-    return payloads
+def _recv_exact(sock: socket.socket, size: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = int(size)
+    while remaining > 0:
+        chunk = sock.recv(remaining)
+        if not chunk:
+            raise EOFError("socket closed before frame completed")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
 
 
-def _file_quorum_metrics(
+def _recv_framed_json(sock: socket.socket) -> dict[str, Any]:
+    size = struct.unpack("!Q", _recv_exact(sock, 8))[0]
+    if size <= 0 or size > 64 * 1024 * 1024:
+        raise ValueError(f"invalid frame size: {size}")
+    payload = json.loads(_recv_exact(sock, size).decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("framed payload must be a JSON object")
+    return payload
+
+
+def _send_framed_json(sock: socket.socket, payload: Mapping[str, Any]) -> None:
+    data = stable_json_dumps(payload).encode("utf-8")
+    sock.sendall(struct.pack("!Q", len(data)) + data)
+
+
+def _accepted_network_payloads(
+    payloads: Sequence[Mapping[str, Any]],
+    generation: int,
+) -> list[dict[str, Any]]:
+    return [
+        dict(payload) for payload in payloads
+        if payload.get("node_update_submitted") is True
+        and int(payload.get("generation", -1)) == int(generation)
+    ]
+
+
+def _sorted_node_payloads(payloads: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    return sorted((dict(payload) for payload in payloads), key=lambda item: str(item.get("node_id", "")))
+
+
+def _network_quorum_metrics(
     *,
     config: RealAsyncFileRankConfig,
     generation: int,
@@ -1096,6 +1273,9 @@ def _file_quorum_metrics(
 ) -> AsyncDiLoCoGenerationMetrics:
     duration_s = max(0.0, time.monotonic() - start_s)
     tokens = sum(int(payload.get("tokens", 0)) for payload in accepted)
+    payload_bytes = sum(int(payload.get("transport_bytes_sent", 0) or 0) for payload in accepted)
+    if payload_bytes <= 0:
+        payload_bytes = sum(len(stable_json_dumps(payload)) for payload in accepted)
     losses = [
         float(payload["loss"])
         for payload in accepted
@@ -1120,7 +1300,10 @@ def _file_quorum_metrics(
         checkpoint_duration_s=0.0,
         tokens_per_sec=(float(tokens) / duration_s if duration_s > 0.0 else 0.0),
         tokens_per_generation=int(tokens),
-        update_bytes={"node_metadata": sum(len(stable_json_dumps(payload)) for payload in accepted)},
+        update_bytes={
+            "tcp_payload": int(payload_bytes),
+            "node_metadata": sum(len(stable_json_dumps(payload)) for payload in accepted),
+        },
         loss_moving_average={"loss": _mean(losses), "loss_100": _mean(losses)} if losses else {},
         update_norms={},
         latest_advanced=False,
@@ -1128,7 +1311,7 @@ def _file_quorum_metrics(
     )
 
 
-def _file_quorum_payload(
+def _network_quorum_payload(
     *,
     config: RealAsyncFileRankConfig,
     generation: int,
@@ -1143,7 +1326,7 @@ def _file_quorum_payload(
     timed_out = max(0, int(config.node_count) - len(all_payloads))
     failed = sum(1 for payload in all_payloads if payload.get("node_update_submitted") is not True)
     if metrics is None:
-        metrics = _file_quorum_metrics(
+        metrics = _network_quorum_metrics(
             config=config,
             generation=generation,
             accepted=accepted,
@@ -1157,13 +1340,41 @@ def _file_quorum_payload(
         metrics_dict["checkpoint_paths"] = list(checkpoint_paths)
         metrics_dict["checkpoint_sizes"] = dict(checkpoint_sizes)
         metrics_dict["latest_advanced"] = bool(latest_advanced)
+    submit_latencies = [
+        float(payload["transport_submit_latency_s"])
+        for payload in all_payloads
+        if payload.get("transport_submit_latency_s") is not None
+    ]
+    receive_latencies = [
+        float(payload["transport_receive_latency_s"])
+        for payload in all_payloads
+        if payload.get("transport_receive_latency_s") is not None
+    ]
+    transport_bytes = sum(int(payload.get("transport_bytes_sent", 0) or 0) for payload in all_payloads)
+    seen_node_ids = {str(payload.get("node_id")) for payload in all_payloads}
+    timed_out_node_ids = [
+        f"node-{idx:05d}"
+        for idx in range(int(config.node_count))
+        if f"node-{idx:05d}" not in seen_node_ids
+    ]
     return {
         "schema_version": 1,
         "run_id": config.run_id,
-        "mode": "actual_multinode_file_quorum_debug",
+        "mode": "actual_multinode_tcp_quorum_debug",
+        "transport": {
+            "name": "tcp",
+            "coordinator_host": str(config.coordinator_host),
+            "coordinator_bind_host": str(config.coordinator_bind_host),
+            "coordinator_port": int(config.coordinator_port),
+            "filesystem_live_quorum": False,
+            "bytes_sent": int(transport_bytes),
+            "submit_latency_s": _distribution(submit_latencies),
+            "receive_latency_s": _distribution(receive_latencies),
+            "timed_out_node_ids": timed_out_node_ids,
+        },
         "bounded_debug_alternative": {
-            "dense_delta_exchange": "not_implemented_for_debug_shared_storage",
-            "proof": "one Slurm-launched process per node runs real local token training and rank 0 merges node metadata quorum",
+            "dense_delta_exchange": "mpi_p2p_target_not_python_debug_payload",
+            "proof": "one Slurm-launched process per GPU runs real local token training and rank 0 merges TCP-submitted rank metadata quorum",
         },
         "synthetic_token_stream": bool(config.synthetic_token_stream),
         "node_count": int(config.node_count),

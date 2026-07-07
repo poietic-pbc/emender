@@ -118,9 +118,9 @@ def test_async_diloco_multinode_entrypoint_and_wrappers_are_main_relative():
     assert "frontier_activate_emender_conda_env" in launch_text
     assert "export TIKTOKEN_CACHE_DIR\nPYTHON_BIN=$(command -v python)" in launch_text
     assert '"$PYTHON_BIN" -u "$ASYNC_ENTRYPOINT"' in launch_text
-    assert "ASYNC_ACTUAL_MULTINODE_FILE_QUORUM=${ASYNC_ACTUAL_MULTINODE_FILE_QUORUM:-$ASYNC_DILOCO_NON_PRODUCTION_DEBUG}" in launch_text
+    assert "ASYNC_ACTUAL_MULTINODE_TCP_QUORUM=${ASYNC_ACTUAL_MULTINODE_TCP_QUORUM:-$ASYNC_DILOCO_NON_PRODUCTION_DEBUG}" in launch_text
     assert "LAUNCH_CMD=(\n    srun\n    -N \"$ASYNC_NODE_COUNT\"\n    -n \"$ASYNC_NODE_COUNT\"\n    --ntasks-per-node=1" in launch_text
-    assert "CMD+=(--actual-multinode-file-quorum)" in launch_text
+    assert "CMD+=(--actual-multinode-tcp-quorum)" in launch_text
     assert "Production validation rejects ASYNC_DILOCO_RUNTIME_PROBE_ONLY=1" in launch_text
     assert "ASYNC_REQUIRE_CORRECTED_B4_LADDER=${ASYNC_REQUIRE_CORRECTED_B4_LADDER:-1}" in launch_text
     assert "Corrected E97 B4 smoke ladder pre-submit gate failed" in launch_text
@@ -197,7 +197,7 @@ def test_production_async_launcher_records_artifacts_and_real_command_branch():
     assert 'echo "async_entrypoint=$ASYNC_ENTRYPOINT"' in launch_text
     assert 'echo "tiktoken_cache_dir=$TIKTOKEN_CACHE_DIR"' in launch_text
     assert 'echo "python_bin=$PYTHON_BIN"' in launch_text
-    assert 'echo "async_launch_uses_srun=$([[ "$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM" == "1" && "$ASYNC_NODE_COUNT" -gt 1 ]] && echo 1 || echo 0)"' in launch_text
+    assert 'echo "async_launch_uses_srun=$([[ "$ASYNC_ACTUAL_MULTINODE_TCP_QUORUM" == "1" && "$ASYNC_NODE_COUNT" -gt 1 ]] && echo 1 || echo 0)"' in launch_text
     assert 'echo "presubmit_status=$PRESUBMIT_STATUS"' in launch_text
     assert 'echo "presubmit_failure_count=${#PRESUBMIT_FAILURES[@]}"' in launch_text
     assert 'echo "presubmit_failure_${idx}=${PRESUBMIT_FAILURES[$idx]}"' in launch_text
@@ -237,7 +237,7 @@ def test_production_async_launcher_records_artifacts_and_real_command_branch():
 def test_production_async_launcher_debug_multinode_uses_srun_not_bare_python():
     launch_text = (ROOT / "scripts/frontier/async_diloco_e97_256n12h_launch.sbatch").read_text(encoding="utf-8")
 
-    assert "--actual-multinode-file-quorum" in launch_text
+    assert "--actual-multinode-tcp-quorum" in launch_text
     assert "LAUNCH_CMD=(\n    srun" in launch_text
     assert '-N "$ASYNC_NODE_COUNT"' in launch_text
     assert '-n "$ASYNC_NODE_COUNT"' in launch_text
@@ -253,7 +253,7 @@ def test_production_async_launcher_refuses_non_comparable_corrected_ladder_by_de
     for token in (
         'if [[ "$ASYNC_REQUIRE_CORRECTED_B4_LADDER" == "1" && "$PRESUBMIT_STATUS" != "pass" ]]; then',
         'exit 70',
-        "actual_multinode_file_quorum is metadata-only shared-storage quorum",
+        "actual_multinode_tcp_quorum is metadata-only TCP control transport",
         "Slurm topology uses $SLURM_INTENDED_NTASKS_PER_NODE task(s) per node",
         "Slurm GPU request uses --gpus-per-task=$SLURM_INTENDED_GPUS_PER_TASK",
         "Slurm GPU binding is $SLURM_INTENDED_GPU_BIND",

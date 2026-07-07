@@ -46,7 +46,7 @@ ENV_FILE="${ARTIFACT_DIR}/env.txt"
 ASYNC_ENTRYPOINT=${ASYNC_ENTRYPOINT:-scripts/frontier/e97_async_diloco_train.py}
 ASYNC_DILOCO_NON_PRODUCTION_DEBUG=${ASYNC_DILOCO_NON_PRODUCTION_DEBUG:-0}
 ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM=${ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM:-0}
-ASYNC_ACTUAL_MULTINODE_FILE_QUORUM=${ASYNC_ACTUAL_MULTINODE_FILE_QUORUM:-$ASYNC_DILOCO_NON_PRODUCTION_DEBUG}
+ASYNC_ACTUAL_MULTINODE_TCP_QUORUM=${ASYNC_ACTUAL_MULTINODE_TCP_QUORUM:-$ASYNC_DILOCO_NON_PRODUCTION_DEBUG}
 ASYNC_REQUIRE_CORRECTED_B4_LADDER=${ASYNC_REQUIRE_CORRECTED_B4_LADDER:-1}
 SLURM_INTENDED_NTASKS_PER_NODE=${SLURM_INTENDED_NTASKS_PER_NODE:-1}
 SLURM_INTENDED_GPUS_PER_TASK=${SLURM_INTENDED_GPUS_PER_TASK:-0}
@@ -245,12 +245,12 @@ fi
 if [[ "$ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM" == "1" ]]; then
   CMD+=(--synthetic-token-stream)
 fi
-if [[ "$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM" == "1" ]]; then
-  CMD+=(--actual-multinode-file-quorum)
+if [[ "$ASYNC_ACTUAL_MULTINODE_TCP_QUORUM" == "1" ]]; then
+  CMD+=(--actual-multinode-tcp-quorum)
 fi
 
 LAUNCH_CMD=("${CMD[@]}")
-if [[ "$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM" == "1" && "$ASYNC_NODE_COUNT" -gt 1 ]]; then
+if [[ "$ASYNC_ACTUAL_MULTINODE_TCP_QUORUM" == "1" && "$ASYNC_NODE_COUNT" -gt 1 ]]; then
   LAUNCH_CMD=(
     srun
     -N "$ASYNC_NODE_COUNT"
@@ -272,8 +272,8 @@ fi
 if [[ "$ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM" == "1" ]]; then
   PRESUBMIT_FAILURES+=("synthetic token stream is not acceptable for corrected E97 ladder")
 fi
-if [[ "$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM" == "1" ]]; then
-  PRESUBMIT_FAILURES+=("actual_multinode_file_quorum is metadata-only shared-storage quorum; dense async DiLoCo delta/state exchange is not implemented")
+if [[ "$ASYNC_ACTUAL_MULTINODE_TCP_QUORUM" == "1" ]]; then
+  PRESUBMIT_FAILURES+=("actual_multinode_tcp_quorum is metadata-only TCP control transport; dense async DiLoCo MPI P2P delta exchange is not implemented")
 fi
 if [[ "$SLURM_INTENDED_NTASKS_PER_NODE" != "8" ]]; then
   PRESUBMIT_FAILURES+=("Slurm topology uses $SLURM_INTENDED_NTASKS_PER_NODE task(s) per node, not stable B4 8 GPU tasks per node")
@@ -358,8 +358,8 @@ printf '\n' >> "$COMMAND_FILE"
   echo "async_node_count=$ASYNC_NODE_COUNT"
   echo "async_worker_count_per_node=$ASYNC_WORKER_COUNT_PER_NODE"
   echo "async_worker_count=$ASYNC_WORKER_COUNT"
-  echo "async_actual_multinode_file_quorum=$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM"
-  echo "async_launch_uses_srun=$([[ "$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM" == "1" && "$ASYNC_NODE_COUNT" -gt 1 ]] && echo 1 || echo 0)"
+  echo "async_actual_multinode_tcp_quorum=$ASYNC_ACTUAL_MULTINODE_TCP_QUORUM"
+  echo "async_launch_uses_srun=$([[ "$ASYNC_ACTUAL_MULTINODE_TCP_QUORUM" == "1" && "$ASYNC_NODE_COUNT" -gt 1 ]] && echo 1 || echo 0)"
   echo "async_local_quorum=$ASYNC_LOCAL_QUORUM"
   echo "async_global_quorum=$ASYNC_GLOBAL_QUORUM"
   echo "async_global_timeout_s=$ASYNC_GLOBAL_TIMEOUT_S"

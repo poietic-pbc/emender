@@ -92,12 +92,19 @@ def parse_args() -> argparse.Namespace:
                         help="If set, publish a finalization checkpoint when inside the reserve window.")
     parser.add_argument("--estimated-finalization-duration-s", type=float, default=-1.0)
     parser.add_argument("--device", default=os.environ.get("ASYNC_DILOCO_DEVICE", "cpu"))
-    parser.add_argument("--actual-multinode-file-quorum", action="store_true",
-                        help="Run one Slurm-launched node rank and use rank 0 as a file quorum coordinator.")
+    parser.add_argument("--actual-multinode-tcp-quorum", action="store_true",
+                        help="Run one Slurm-launched rank and use rank 0 as a TCP quorum coordinator.")
+    parser.add_argument("--coordinator-host", default=os.environ.get("ASYNC_COORDINATOR_HOST", "127.0.0.1"),
+                        help="Host/IP of rank 0 TCP quorum coordinator.")
+    parser.add_argument("--coordinator-bind-host", default=os.environ.get("ASYNC_COORDINATOR_BIND_HOST", "0.0.0.0"),
+                        help="Bind host for rank 0 TCP quorum coordinator.")
+    parser.add_argument("--coordinator-port", type=int,
+                        default=int(os.environ.get("ASYNC_COORDINATOR_PORT", "29497")),
+                        help="TCP port for the async quorum coordinator.")
     parser.add_argument("--allow-actual-multinode-synthetic-token-stream", action="store_true",
                         help="Allow explicitly labeled synthetic-token fallback in the debug file-quorum path.")
     parser.add_argument("--node-rank", type=int, default=None,
-                        help="Actual node rank for --actual-multinode-file-quorum; defaults to SLURM_PROCID.")
+                        help="Actual rank for --actual-multinode-tcp-quorum; defaults to SLURM_PROCID.")
     return parser.parse_args()
 
 
@@ -118,11 +125,11 @@ def main() -> int:
     if not args.synthetic_token_stream and not args.data:
         raise ValueError("--data is required unless --synthetic-token-stream is set")
     if (
-        args.actual_multinode_file_quorum
+        args.actual_multinode_tcp_quorum
         and args.synthetic_token_stream
         and not args.allow_actual_multinode_synthetic_token_stream
     ):
-        raise ValueError("--actual-multinode-file-quorum requires real data; synthetic token stream is disabled")
+        raise ValueError("actual multinode quorum requires real data; synthetic token stream is disabled")
 
     train_overrides = {
         key: value
@@ -162,7 +169,7 @@ def main() -> int:
         projection_chunk_size=args.projection_chunk_size,
         loss_chunk_size=args.loss_chunk_size,
     )
-    if args.actual_multinode_file_quorum:
+    if args.actual_multinode_tcp_quorum:
         node_rank = args.node_rank
         if node_rank is None:
             node_rank = int(os.environ.get("SLURM_PROCID", os.environ.get("PMI_RANK", "0")))
@@ -184,6 +191,9 @@ def main() -> int:
             synthetic_token_stream=bool(args.synthetic_token_stream),
             allow_synthetic_token_stream=bool(args.allow_actual_multinode_synthetic_token_stream),
             device=args.device,
+            coordinator_host=args.coordinator_host,
+            coordinator_bind_host=args.coordinator_bind_host,
+            coordinator_port=int(args.coordinator_port),
             walltime_remaining_s=_optional_positive_float(args.walltime_remaining_s),
             estimated_finalization_duration_s=_optional_positive_float(
                 args.estimated_finalization_duration_s
