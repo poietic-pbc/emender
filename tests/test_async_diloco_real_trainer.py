@@ -415,6 +415,193 @@ def test_actual_multinode_file_rank_writes_progress_and_global_quorum(tmp_path, 
     assert (tmp_path / "run" / "node_updates" / "node-00001.json").exists()
 
 
+def test_real_worker_nonfinite_loss_writes_progress_and_invalid_report(tmp_path, monkeypatch):
+    class OneParamModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.zeros(1))
+
+    class DummyOptimizer:
+        pass
+
+    monkeypatch.setattr(
+        "ndm.async_diloco_real.train.build_training_model",
+        lambda _args: OneParamModel(),
+    )
+    monkeypatch.setattr(
+        "ndm.async_diloco_real.train.build_training_optimizer",
+        lambda model, _args: DummyOptimizer(),
+    )
+    monkeypatch.setattr(
+        "ndm.async_diloco_real.train.train_one_optimizer_step",
+        lambda *_args, **_kwargs: {
+            "loss": float("nan"),
+            "tokens_processed": 11,
+            "hidden_state": None,
+        },
+    )
+
+    report = _run_real_worker(
+        run_id="nan-loss",
+        generation=0,
+        base_state={"weight": torch.zeros(1)},
+        train_args=_args(),
+        spec=RealAsyncWorkerSpec(
+            worker_id="node-00000/worker-00000",
+            node_id="node-00000",
+            local_steps=2,
+        ),
+        synthetic_token_stream=True,
+        synthetic_vocab_size=8,
+        progress_dir=tmp_path / "progress",
+        node_rank=0,
+    )
+
+    assert report.update is None
+    assert report.invalid is True
+    assert report.failed is False
+    assert "non-finite loss at local_step=0" in str(report.error)
+    progress_paths = sorted((tmp_path / "progress" / "steps").glob("*.json"))
+    assert len(progress_paths) == 1
+    payload = json.loads(progress_paths[0].read_text(encoding="utf-8"))
+    assert payload["loss"] is None
+    assert payload["loss_finite"] is False
+    assert payload["tokens"] == 11
+    assert payload["invalid"] is True
+
+
+def test_real_worker_exception_writes_progress_error_state(tmp_path, monkeypatch):
+    class OneParamModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.zeros(1))
+
+    class DummyOptimizer:
+        pass
+
+    monkeypatch.setattr(
+        "ndm.async_diloco_real.train.build_training_model",
+        lambda _args: OneParamModel(),
+    )
+    monkeypatch.setattr(
+        "ndm.async_diloco_real.train.build_training_optimizer",
+        lambda model, _args: DummyOptimizer(),
+    )
+
+    def raise_training_error(*_args, **_kwargs):
+        raise RuntimeError("synthetic training failure")
+
+    monkeypatch.setattr(
+        "ndm.async_diloco_real.train.train_one_optimizer_step",
+        raise_training_error,
+    )
+
+    report = _run_real_worker(
+        run_id="step-error",
+        generation=0,
+        base_state={"weight": torch.zeros(1)},
+        train_args=_args(),
+        spec=RealAsyncWorkerSpec(
+            worker_id="node-00000/worker-00000",
+            node_id="node-00000",
+            local_steps=2,
+        ),
+        synthetic_token_stream=True,
+        synthetic_vocab_size=8,
+        progress_dir=tmp_path / "progress",
+        node_rank=0,
+    )
+
+    assert report.update is None
+    assert report.failed is True
+    assert report.invalid is False
+    assert "RuntimeError: synthetic training failure" == report.error
+    progress_paths = sorted((tmp_path / "progress" / "steps").glob("*.json"))
+    assert len(progress_paths) == 1
+    payload = json.loads(progress_paths[0].read_text(encoding="utf-8"))
+    assert payload["local_step"] == 0
+    assert payload["failed"] is True
+    assert payload["invalid"] is True
+    assert payload["error"] == "RuntimeError: synthetic training failure"
+
+
+def test_actual_multinode_file_rank_serializes_invalid_node_without_nan(tmp_path, monkeypatch):
+    class OneParamModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.zeros(1))
+
+    monkeypatch.setattr("ndm.async_diloco_real.train.build_training_model", lambda _args: OneParamModel())
+
+    def fake_node_supervisor(**kwargs):
+        spec = kwargs["worker_specs"][0]
+        worker = RealAsyncWorkerReport(
+            worker_id=spec.worker_id,
+            node_id=kwargs["node_id"],
+            base_generation=kwargs["generation"],
+            update=None,
+            elapsed_s=0.1,
+            tokens=0,
+            losses=(),
+            invalid=True,
+            error="delta tensor 'weight' contains non-finite values",
+        )
+        metrics = AsyncDiLoCoGenerationMetrics(
+            run_id=kwargs["run_id"],
+            generation=kwargs["generation"],
+            requested_workers=1,
+            participating_workers=1,
+            quorum_threshold=1,
+            quorum_size=0,
+            accepted_updates=0,
+            stale_updates=0,
+            timed_out_updates=0,
+            failed_updates=0,
+            invalid_updates=1,
+            generation_duration_s=0.1,
+            merge_duration_s=0.0,
+            rebase_duration_s=0.0,
+            checkpoint_duration_s=0.0,
+            tokens_per_sec=0.0,
+            tokens_per_generation=0,
+            update_bytes={"worker": 0, "node": 0},
+            loss_moving_average={},
+            quorum_status="deferred",
+        )
+        return RealAsyncNodeResult(
+            node_id=kwargs["node_id"],
+            generation=kwargs["generation"],
+            node_update=None,
+            worker_reports=(worker,),
+            metrics=metrics,
+        )
+
+    monkeypatch.setattr("ndm.async_diloco_real._run_real_node_supervisor", fake_node_supervisor)
+
+    result = run_real_async_diloco_file_rank(RealAsyncFileRankConfig(
+        run_id="invalid-node",
+        run_dir=tmp_path / "run",
+        metrics_json=tmp_path / "metrics.json",
+        train_args=_args(data=str(tmp_path / "real_tokens.txt")),
+        node_rank=0,
+        node_count=1,
+        global_quorum=1,
+        local_steps=10,
+        timeout_s=0.1,
+        synthetic_token_stream=False,
+    ))
+
+    assert result["node_update_submitted"] is False
+    node_payload = json.loads((tmp_path / "run" / "node_updates" / "node-00000.json").read_text(encoding="utf-8"))
+    assert node_payload["loss"] is None
+    assert node_payload["loss_finite"] is False
+    assert node_payload["invalid_reasons"] == ["delta tensor 'weight' contains non-finite values"]
+    metrics_payload = json.loads((tmp_path / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics_payload["partial"] is True
+    assert metrics_payload["global_generations"][0]["metrics"]["quorum_status"] == "deferred"
+    assert metrics_payload["global_generations"][0]["metrics"]["invalid_updates"] == 1
+
+
 def test_actual_multinode_file_rank_rejects_synthetic_stream(tmp_path):
     with pytest.raises(ValueError, match="synthetic_token_stream is disabled"):
         run_real_async_diloco_file_rank(RealAsyncFileRankConfig(

@@ -339,6 +339,8 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
         timeout_s=config.timeout_s,
         synthetic_token_stream=False,
         synthetic_vocab_size=config.synthetic_vocab_size,
+        progress_dir=progress_dir,
+        node_rank=config.node_rank,
     )
     node_payload = _node_result_payload(
         config,
@@ -511,6 +513,8 @@ def _run_real_node_supervisor(
     timeout_s: float,
     synthetic_token_stream: bool,
     synthetic_vocab_size: int,
+    progress_dir: str | Path | None = None,
+    node_rank: int | None = None,
 ) -> RealAsyncNodeResult:
     start_s = time.monotonic()
     deadline_s = start_s + float(timeout_s)
@@ -528,6 +532,8 @@ def _run_real_node_supervisor(
             spec=spec,
             synthetic_token_stream=synthetic_token_stream,
             synthetic_vocab_size=synthetic_vocab_size,
+            progress_dir=progress_dir,
+            node_rank=node_rank,
         ))
 
     reported = {report.worker_id for report in reports}
@@ -536,6 +542,7 @@ def _run_real_node_supervisor(
             continue
         reports.append(_status_worker_report(spec, generation, base_state, timed_out=True))
 
+    reports = [_sanitize_report_for_quorum(report, base_state, generation) for report in reports]
     updates = [_report_update_or_status(report, base_state, generation) for report in reports]
     merge_start_s = time.monotonic()
     merge_result = quorum_merge(
@@ -646,6 +653,8 @@ def _run_real_worker(
     spec: RealAsyncWorkerSpec,
     synthetic_token_stream: bool,
     synthetic_vocab_size: int,
+    progress_dir: str | Path | None = None,
+    node_rank: int | None = None,
 ) -> RealAsyncWorkerReport:
     del run_id
     start_s = time.monotonic()
@@ -673,7 +682,9 @@ def _run_real_worker(
         losses: list[float] = []
         tokens = 0
         hidden_state = None
+        current_step = -1
         for step in range(max(1, int(spec.local_steps))):
+            current_step = step
             metrics = train.train_one_optimizer_step(
                 model,
                 optimizer,
@@ -684,8 +695,46 @@ def _run_real_worker(
                 hidden_state=hidden_state,
             )
             hidden_state = metrics.get("hidden_state")
-            losses.append(float(metrics["loss"]))
-            tokens += int(metrics["tokens_processed"])
+            loss = float(metrics["loss"])
+            step_tokens = int(metrics["tokens_processed"])
+            tokens += step_tokens
+            if not math.isfinite(loss):
+                error = f"non-finite loss at local_step={step}: {loss}"
+                _write_worker_step_progress(
+                    progress_dir,
+                    node_rank=node_rank,
+                    node_id=spec.node_id,
+                    worker_id=spec.worker_id,
+                    generation=generation,
+                    local_step=step,
+                    tokens=tokens,
+                    elapsed_s=max(0.0, time.monotonic() - start_s),
+                    loss=loss,
+                    error=error,
+                )
+                return RealAsyncWorkerReport(
+                    worker_id=spec.worker_id,
+                    node_id=spec.node_id,
+                    base_generation=generation,
+                    update=None,
+                    elapsed_s=max(0.0, time.monotonic() - start_s),
+                    tokens=tokens,
+                    losses=tuple(losses),
+                    invalid=True,
+                    error=error,
+                )
+            losses.append(loss)
+            _write_worker_step_progress(
+                progress_dir,
+                node_rank=node_rank,
+                node_id=spec.node_id,
+                worker_id=spec.worker_id,
+                generation=generation,
+                local_step=step,
+                tokens=tokens,
+                elapsed_s=max(0.0, time.monotonic() - start_s),
+                loss=loss,
+            )
         worker_delta = _floating_delta_from_model(base_state, model)
         base_generation = generation if spec.stale_generation is None else int(spec.stale_generation)
         update = AsyncDiLoCoUpdate(
@@ -699,6 +748,19 @@ def _run_real_worker(
                 "loss_100": _mean(losses),
             },
         )
+        nonfinite_reason = _update_nonfinite_reason(update)
+        if nonfinite_reason is not None:
+            return RealAsyncWorkerReport(
+                worker_id=spec.worker_id,
+                node_id=spec.node_id,
+                base_generation=base_generation,
+                update=None,
+                elapsed_s=max(0.0, time.monotonic() - start_s),
+                tokens=tokens,
+                losses=tuple(losses),
+                invalid=True,
+                error=nonfinite_reason,
+            )
         return RealAsyncWorkerReport(
             worker_id=spec.worker_id,
             node_id=spec.node_id,
@@ -709,15 +771,27 @@ def _run_real_worker(
             losses=tuple(losses),
         )
     except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        _write_worker_step_progress(
+            progress_dir,
+            node_rank=node_rank,
+            node_id=spec.node_id,
+            worker_id=spec.worker_id,
+            generation=generation,
+            local_step=max(0, locals().get("current_step", 0)),
+            tokens=locals().get("tokens", 0),
+            elapsed_s=max(0.0, time.monotonic() - start_s),
+            error=error,
+        )
         return RealAsyncWorkerReport(
             worker_id=spec.worker_id,
             node_id=spec.node_id,
             base_generation=generation,
             update=None,
             elapsed_s=max(0.0, time.monotonic() - start_s),
-            tokens=0,
+            tokens=locals().get("tokens", 0),
             failed=True,
-            error=f"{type(exc).__name__}: {exc}",
+            error=error,
         )
 
 
@@ -849,6 +923,27 @@ def _status_update(
     )
 
 
+def _sanitize_report_for_quorum(
+    report: RealAsyncWorkerReport,
+    base_state: Mapping[str, torch.Tensor],
+    generation: int,
+) -> RealAsyncWorkerReport:
+    reason = _update_nonfinite_reason(report.update)
+    if reason is None:
+        return report
+    return RealAsyncWorkerReport(
+        worker_id=report.worker_id,
+        node_id=report.node_id,
+        base_generation=report.base_generation,
+        update=_status_update(report.worker_id, generation, base_state, invalid=True),
+        elapsed_s=report.elapsed_s,
+        tokens=report.tokens,
+        losses=tuple(loss for loss in report.losses if math.isfinite(float(loss))),
+        invalid=True,
+        error=reason,
+    )
+
+
 def _report_update_or_status(
     report: RealAsyncWorkerReport,
     base_state: Mapping[str, torch.Tensor],
@@ -914,9 +1009,78 @@ def _copy_train_args(args: Namespace) -> Namespace:
 
 
 def _mean(values: Sequence[float]) -> float:
-    if not values:
+    finite = [float(value) for value in values if math.isfinite(float(value))]
+    if not finite:
         return math.nan
-    return float(sum(values) / len(values))
+    return float(sum(finite) / len(finite))
+
+
+def _finite_json_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        scalar = float(value)
+    except (TypeError, ValueError):
+        return None
+    return scalar if math.isfinite(scalar) else None
+
+
+def _update_nonfinite_reason(update: AsyncDiLoCoUpdate | None) -> str | None:
+    if update is None:
+        return None
+    for key, value in update.loss_moving_average.items():
+        try:
+            scalar = float(value)
+        except (TypeError, ValueError):
+            return f"loss_moving_average[{key!r}] is not numeric: {value!r}"
+        if not math.isfinite(scalar):
+            return f"loss_moving_average[{key!r}] is non-finite: {scalar}"
+    for name, tensor in update.delta.items():
+        if not torch.is_tensor(tensor):
+            return f"delta tensor {name!r} is not a tensor"
+        if not torch.isfinite(tensor.detach()).all().item():
+            return f"delta tensor {name!r} contains non-finite values"
+    return None
+
+
+def _write_worker_step_progress(
+    progress_dir: str | Path | None,
+    *,
+    node_rank: int | None,
+    node_id: str,
+    worker_id: str,
+    generation: int,
+    local_step: int,
+    tokens: int,
+    elapsed_s: float,
+    loss: Any = None,
+    error: str | None = None,
+) -> None:
+    if progress_dir is None:
+        return
+    safe_loss = _finite_json_float(loss)
+    payload = {
+        "schema_version": 1,
+        "node_rank": (None if node_rank is None else int(node_rank)),
+        "node_id": node_id,
+        "worker_id": worker_id,
+        "generation": int(generation),
+        "local_step": int(local_step),
+        "tokens": int(tokens),
+        "elapsed_s": float(max(0.0, elapsed_s)),
+        "loss": safe_loss,
+        "loss_finite": safe_loss is not None,
+        "tokens_finite": math.isfinite(float(tokens)),
+        "elapsed_finite": math.isfinite(float(elapsed_s)),
+        "failed": error is not None,
+        "invalid": error is not None,
+        "error": error,
+    }
+    name = (
+        f"{node_id}.{worker_id.replace('/', '_')}"
+        f".gen{int(generation):06d}.step{int(local_step):06d}.json"
+    )
+    _atomic_write_json(Path(progress_dir) / "steps" / name, payload)
 
 
 def _node_result_payload(
@@ -931,6 +1095,16 @@ def _node_result_payload(
         for loss in report.losses
         if math.isfinite(float(loss))
     ]
+    invalid_reasons = [
+        report.error
+        for report in node_result.worker_reports
+        if report.invalid and report.error
+    ]
+    failed_reasons = [
+        report.error
+        for report in node_result.worker_reports
+        if report.failed and report.error
+    ]
     return {
         "schema_version": 1,
         "run_id": config.run_id,
@@ -942,15 +1116,22 @@ def _node_result_payload(
         "bounded_debug_update_kind": "metadata_quorum_no_dense_delta_storage",
         "metrics": node_result.metrics.to_dict(),
         "tokens": int(node_result.metrics.tokens_per_generation),
-        "loss": (_mean(losses) if losses else math.nan),
+        "loss": (_finite_json_float(_mean(losses)) if losses else None),
+        "loss_finite": bool(losses),
         "losses": [float(loss) for loss in losses],
+        "invalid_reasons": invalid_reasons,
+        "failed_reasons": failed_reasons,
         "worker_reports": [
             {
                 "worker_id": report.worker_id,
                 "node_id": report.node_id,
                 "base_generation": report.base_generation,
                 "tokens": report.tokens,
-                "losses": list(report.losses),
+                "losses": [
+                    float(loss)
+                    for loss in report.losses
+                    if math.isfinite(float(loss))
+                ],
                 "failed": report.failed,
                 "timed_out": report.timed_out,
                 "invalid": report.invalid,
@@ -1015,6 +1196,7 @@ def _coordinate_file_rank_quorum(
 
     timed_out = max(0, int(config.node_count) - len(all_payloads))
     failed = sum(1 for payload in all_payloads if payload.get("node_update_submitted") is not True)
+    invalid = sum(1 for payload in all_payloads if payload.get("invalid_reasons"))
     metrics = _file_quorum_metrics(
         config=config,
         generation=generation,
@@ -1023,6 +1205,7 @@ def _coordinate_file_rank_quorum(
         start_s=start_s,
         timed_out=timed_out,
         failed=failed,
+        invalid=invalid,
     )
 
     checkpoint_paths: tuple[str, ...] = ()
@@ -1092,6 +1275,7 @@ def _file_quorum_metrics(
     start_s: float,
     timed_out: int,
     failed: int,
+    invalid: int,
 ) -> AsyncDiLoCoGenerationMetrics:
     duration_s = max(0.0, time.monotonic() - start_s)
     tokens = sum(int(payload.get("tokens", 0)) for payload in accepted)
@@ -1112,7 +1296,7 @@ def _file_quorum_metrics(
         stale_updates=0,
         timed_out_updates=int(timed_out),
         failed_updates=int(failed),
-        invalid_updates=0,
+        invalid_updates=int(invalid),
         generation_duration_s=duration_s,
         merge_duration_s=0.0,
         rebase_duration_s=0.0,
@@ -1141,6 +1325,7 @@ def _file_quorum_payload(
 ) -> dict[str, Any]:
     timed_out = max(0, int(config.node_count) - len(all_payloads))
     failed = sum(1 for payload in all_payloads if payload.get("node_update_submitted") is not True)
+    invalid = sum(1 for payload in all_payloads if payload.get("invalid_reasons"))
     if metrics is None:
         metrics = _file_quorum_metrics(
             config=config,
@@ -1150,6 +1335,7 @@ def _file_quorum_payload(
             start_s=start_s,
             timed_out=timed_out,
             failed=failed,
+            invalid=invalid,
         )
     metrics_dict = metrics.to_dict()
     if checkpoint_paths:

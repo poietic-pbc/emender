@@ -160,6 +160,49 @@ def test_quorum_miss_still_rejects_corrupt_accepted_delta():
         )
 
 
+def test_quorum_merge_ignores_nonfinite_scalar_metric_without_dropping_update():
+    base = _state([1.0, 2.0, 3.0, 4.0])
+    updates = [
+        AsyncDiLoCoUpdate(
+            worker_id="nan-metric",
+            base_generation=0,
+            delta={
+                "x": torch.tensor([1.0, 0.0], dtype=torch.float32),
+                "z": torch.tensor([0.0, 1.0], dtype=torch.float32),
+            },
+            tokens=2,
+            local_steps=1,
+            loss_moving_average={"loss": float("nan")},
+        ),
+        AsyncDiLoCoUpdate(
+            worker_id="finite-metric",
+            base_generation=0,
+            delta={
+                "x": torch.tensor([3.0, 0.0], dtype=torch.float32),
+                "z": torch.tensor([0.0, 3.0], dtype=torch.float32),
+            },
+            tokens=2,
+            local_steps=1,
+            loss_moving_average={"loss": 5.0},
+        ),
+    ]
+
+    result = quorum_merge(
+        base,
+        updates,
+        run_id="nan-metric",
+        generation=0,
+        requested_workers=2,
+        quorum_threshold=2,
+        generation_duration_s=1.0,
+    )
+
+    assert result.advanced
+    assert result.metrics.accepted_updates == 2
+    assert result.metrics.loss_moving_average == {"loss": 5.0}
+    assert result.metrics.to_dict()["loss_moving_average"] == {"loss": 5.0}
+
+
 def test_default_quorum_helpers_expose_local_6_of_8_and_global_two_thirds():
     assert default_local_quorum() == 6
     assert default_local_quorum(8) == 6

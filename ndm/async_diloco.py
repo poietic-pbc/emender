@@ -1326,8 +1326,13 @@ def _weighted_scalar_mean(
     sums: dict[str, float] = {}
     weight_sums: dict[str, float] = {}
     for row, weight in zip(rows, weights):
+        if not math.isfinite(weight) or weight <= 0.0:
+            continue
         for key, value in row.items():
-            sums[str(key)] = sums.get(str(key), 0.0) + float(value) * weight
+            scalar = float(value)
+            if not math.isfinite(scalar):
+                continue
+            sums[str(key)] = sums.get(str(key), 0.0) + scalar * weight
             weight_sums[str(key)] = weight_sums.get(str(key), 0.0) + weight
     return {
         key: sums[key] / weight_sums[key]
