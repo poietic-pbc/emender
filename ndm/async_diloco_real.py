@@ -36,6 +36,7 @@ from ndm.async_diloco import (
     stable_json_dumps,
     state_num_bytes,
 )
+from ndm.async_diloco_mpi import run_mpi_dense_quorum
 
 import train
 
@@ -206,6 +207,8 @@ class RealAsyncFileRankConfig:
     coordinator_bind_host: str = "0.0.0.0"
     coordinator_port: int = 29497
     connect_retry_interval_s: float = 0.2
+    transport: str = "tcp"
+    mpi_bucket_bytes: int = 64 * 1024 * 1024
     walltime_remaining_s: float | None = None
     estimated_finalization_duration_s: float | None = None
     checkpoint_cadence: AsyncDiLoCoCheckpointCadence = field(default_factory=AsyncDiLoCoCheckpointCadence)
@@ -277,13 +280,17 @@ def default_tiny_e97_train_args(**overrides: Any) -> Namespace:
 
 
 def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str, Any]:
-    """Run one actual process and let rank 0 publish a TCP quorum record.
+    """Run one actual process and let rank 0 publish a quorum record.
 
-    This path is intentionally bounded for Frontier debug validation: every
+    The TCP mode is intentionally bounded for Frontier debug validation: every
     Slurm task runs real local token training from the same seed checkpoint and
     submits per-rank metadata to a rank-0 TCP coordinator. Durable files are
     written only as metrics/checkpoint/post-run artifacts, not as the live
     quorum/update collection path.
+
+    The MPI mode is the dense data-plane path: every rank packs its node delta
+    into checksummed buckets and sends those bytes over nonblocking MPI
+    point-to-point. Shared storage remains limited to metrics/checkpoints.
     """
 
     if config.node_count <= 0:
@@ -296,6 +303,10 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
         raise ValueError("synthetic_token_stream is disabled for actual multinode validation")
 
     run_dir = Path(config.run_dir)
+    transport = str(config.transport).strip().lower()
+    if transport not in {"tcp", "mpi-dense"}:
+        raise ValueError("transport must be 'tcp' or 'mpi-dense'")
+
     progress_dir = run_dir / "progress"
     nodes_dir = run_dir / "node_update_artifacts"
     progress_dir.mkdir(parents=True, exist_ok=True)
@@ -367,12 +378,22 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
             "node_update_submitted": node_result.node_update is not None,
             "tokens": node_result.metrics.tokens_per_generation,
             "loss": node_result.metrics.loss_moving_average.get("loss"),
-            "transport": "tcp",
+            "transport": transport,
         },
     )
 
     root_payload: dict[str, Any] | None = None
-    if int(config.node_rank) == 0:
+    if transport == "mpi-dense":
+        root_payload = _coordinate_mpi_dense_rank(
+            config=config,
+            start_s=start_s,
+            base_state=base_state,
+            node_result=node_result,
+            artifact_dir=nodes_dir,
+            progress_dir=progress_dir,
+            generation=generation,
+        )
+    elif int(config.node_rank) == 0:
         root_payload = _coordinate_network_rank_quorum(
             config=config,
             start_s=start_s,
@@ -405,7 +426,7 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
         "node_update_path": str(nodes_dir / f"{node_id}.json"),
         "node_update_submitted": node_result.node_update is not None,
         "coordinator": int(config.node_rank) == 0,
-        "transport": "tcp",
+        "transport": transport,
         "global_result": root_payload,
     }
 
@@ -1214,6 +1235,127 @@ def _coordinate_network_rank_quorum(
             "seen_nodes": len(all_payloads),
             "global_quorum": config.global_quorum,
             "latest_advanced": latest_advanced,
+        },
+    )
+    return final_payload
+
+
+def _coordinate_mpi_dense_rank(
+    *,
+    config: RealAsyncFileRankConfig,
+    start_s: float,
+    base_state: Mapping[str, torch.Tensor],
+    node_result: RealAsyncNodeResult,
+    artifact_dir: Path,
+    progress_dir: Path,
+    generation: int,
+) -> dict[str, Any] | None:
+    metrics_path = Path(config.metrics_json) if config.metrics_json is not None else Path(config.run_dir) / "real_async_metrics.json"
+    node_id = f"node-{int(config.node_rank):05d}"
+    if node_result.node_update is None:
+        local_update = _status_update(node_id, generation, base_state, failed=True)
+    else:
+        local_update = node_result.node_update
+    _write_rank_heartbeat(
+        progress_dir,
+        node_rank=config.node_rank,
+        node_id=node_id,
+        stage="mpi_dense_send_starting",
+        generation=generation,
+        extra={
+            "transport": "mpi-dense",
+            "global_quorum": int(config.global_quorum),
+            "mpi_bucket_bytes": int(config.mpi_bucket_bytes),
+        },
+    )
+    payload = run_mpi_dense_quorum(
+        base_state=base_state,
+        local_update=local_update,
+        run_id=config.run_id,
+        generation=generation,
+        requested_ranks=config.node_count,
+        quorum=config.global_quorum,
+        timeout_s=config.timeout_s,
+        bucket_bytes=config.mpi_bucket_bytes,
+        base_checkpoint=(None if config.initial_checkpoint is None else str(config.initial_checkpoint)),
+    )
+    _atomic_write_json(artifact_dir / f"{node_id}.json", {
+        "schema_version": 1,
+        "run_id": config.run_id,
+        "node_rank": int(config.node_rank),
+        "node_id": node_id,
+        "generation": int(generation),
+        "node_update_submitted": node_result.node_update is not None,
+        "transport": "mpi-dense",
+        "dense_delta_bytes": state_num_bytes(local_update.delta),
+        "metrics": node_result.metrics.to_dict(),
+    })
+    if int(config.node_rank) != 0:
+        _write_rank_heartbeat(
+            progress_dir,
+            node_rank=config.node_rank,
+            node_id=node_id,
+            stage="mpi_dense_result_received",
+            generation=generation,
+            extra={"transport": "mpi-dense"},
+        )
+        return None
+
+    if payload is None:
+        raise RuntimeError("MPI dense root did not produce a quorum payload")
+    global_metrics_payload = ((payload.get("global_generations") or [{}])[0].get("metrics") or {})
+    metrics = AsyncDiLoCoGenerationMetrics.from_dict(global_metrics_payload)
+    latest_advanced = False
+    checkpoint_paths: tuple[str, ...] = ()
+    if metrics.quorum_status == "advanced":
+        manager = AsyncDiLoCoCheckpointManager(
+            config.run_dir,
+            run_id=config.run_id,
+            role=GLOBAL_MERGER_ROLE,
+            cadence=config.checkpoint_cadence,
+        )
+        publish = manager.publish_global_generation(
+            metrics,
+            walltime_remaining_s=config.walltime_remaining_s,
+            estimated_finalization_duration_s=config.estimated_finalization_duration_s,
+        )
+        metrics = publish.metrics
+        checkpoint_paths = tuple(metrics.checkpoint_paths)
+        latest_advanced = True
+    final_payload = {
+        **payload,
+        "mode": "actual_multinode_mpi_dense_quorum",
+        "node_count": int(config.node_count),
+        "global_quorum": int(config.global_quorum),
+        "generation": int(generation),
+        "latest_generation": (int(generation) if latest_advanced else -1),
+        "latest_path": str(Path(config.run_dir) / "latest.json"),
+        "partial": not latest_advanced,
+        "global_generations": [{
+            "generation": int(generation),
+            "metrics": metrics.to_dict(),
+            "publish_paths": list(checkpoint_paths),
+        }],
+        "metrics_summary": build_metrics_summary(
+            run_id=config.run_id,
+            requested_workers=int(config.node_count),
+            participating_workers=int(metrics.participating_workers),
+            generations=(metrics,),
+        ).to_dict(),
+    }
+    _atomic_write_json(metrics_path, final_payload)
+    _write_rank_heartbeat(
+        progress_dir,
+        node_rank=config.node_rank,
+        node_id=node_id,
+        stage="mpi_dense_coordinator_finalized" if latest_advanced else "mpi_dense_coordinator_deferred",
+        generation=generation,
+        extra={
+            "transport": "mpi-dense",
+            "accepted_nodes": int(metrics.accepted_updates),
+            "global_quorum": int(config.global_quorum),
+            "latest_advanced": latest_advanced,
+            "metrics_json": str(metrics_path),
         },
     )
     return final_payload
