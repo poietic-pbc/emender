@@ -36,6 +36,8 @@ import re
 import tempfile
 import ctypes.util
 from contextlib import nullcontext
+from dataclasses import dataclass, field
+from typing import Any, Mapping
 
 _SHUTDOWN_REQUEST = {
     'requested': False,
@@ -1564,6 +1566,425 @@ def checkpoint_metadata_with_diloco_bootstrap(metadata, bootstrap_metadata):
         out['diloco_outer_state_bootstrap'] = bootstrap_metadata
         return out
     return metadata
+
+
+@dataclass(frozen=True)
+class TrainAsyncRankUpdate:
+    """Rank-local dense delta submitted to a train.py async DiLoCo generation."""
+
+    rank: int
+    base_generation: int
+    delta: Mapping[str, torch.Tensor]
+    tokens: int
+    local_steps: int
+    loss_window: Mapping[str, float] = field(default_factory=dict)
+    rank_step: int = 0
+    submitted_at: float | None = None
+    timed_out: bool = False
+    failed: bool = False
+    invalid: bool = False
+
+
+@dataclass(frozen=True)
+class TrainAsyncCoordinatorResult:
+    status: str
+    generation: int
+    next_generation: int
+    accepted: bool
+    advanced: bool
+    state: Mapping[str, torch.Tensor]
+    metrics: Mapping[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class TrainAsyncRankResync:
+    rank: int
+    generation: int
+    state: Mapping[str, torch.Tensor]
+    recovered: bool
+
+
+class TrainAsyncTransport:
+    """High-volume async update/state transport boundary.
+
+    The coordinator depends on this surface for update movement and global-state
+    publication. Durable Lustre checkpoint publication remains separate.
+    """
+
+    def submit_update(self, update: TrainAsyncRankUpdate) -> None:
+        raise NotImplementedError
+
+    def read_updates(self) -> list[TrainAsyncRankUpdate]:
+        raise NotImplementedError
+
+    def publish_state(self, generation: int, state: Mapping[str, torch.Tensor],
+                      metrics: Mapping[str, Any]) -> None:
+        raise NotImplementedError
+
+    def fetch_state(self, generation: int | None = None) -> tuple[int, Mapping[str, torch.Tensor]] | None:
+        raise NotImplementedError
+
+
+class TrainAsyncDebugLocalTransport(TrainAsyncTransport):
+    """In-process debug transport for deterministic 1n/2n coordinator tests."""
+
+    def __init__(self):
+        self._updates: list[TrainAsyncRankUpdate] = []
+        self._states: dict[int, dict[str, torch.Tensor]] = {}
+        self._metrics: dict[int, dict[str, Any]] = {}
+
+    def submit_update(self, update: TrainAsyncRankUpdate) -> None:
+        self._updates.append(update)
+
+    def read_updates(self) -> list[TrainAsyncRankUpdate]:
+        updates = self._updates
+        self._updates = []
+        return updates
+
+    def publish_state(self, generation: int, state: Mapping[str, torch.Tensor],
+                      metrics: Mapping[str, Any]) -> None:
+        self._states[int(generation)] = _clone_train_async_state(state)
+        self._metrics[int(generation)] = dict(metrics)
+
+    def fetch_state(self, generation: int | None = None) -> tuple[int, Mapping[str, torch.Tensor]] | None:
+        if not self._states:
+            return None
+        selected = max(self._states) if generation is None else int(generation)
+        if selected not in self._states:
+            return None
+        return selected, _clone_train_async_state(self._states[selected])
+
+
+def _clone_train_async_state(state: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    return {str(name): tensor.detach().clone() for name, tensor in state.items()}
+
+
+def _validate_train_async_delta(base: Mapping[str, torch.Tensor],
+                                update: TrainAsyncRankUpdate) -> None:
+    if set(base) != set(update.delta):
+        missing = sorted(set(base) - set(update.delta))
+        extra = sorted(set(update.delta) - set(base))
+        raise ValueError(f"async update rank={update.rank} delta keys differ: missing={missing} extra={extra}")
+    for name, base_tensor in base.items():
+        delta_tensor = update.delta[name]
+        if not isinstance(delta_tensor, torch.Tensor):
+            raise ValueError(f"async update rank={update.rank} delta {name!r} is not a tensor")
+        if delta_tensor.shape != base_tensor.shape:
+            raise ValueError(
+                f"async update rank={update.rank} delta {name!r} shape "
+                f"{tuple(delta_tensor.shape)} != {tuple(base_tensor.shape)}")
+        if not torch.isfinite(delta_tensor.detach()).all().item():
+            raise ValueError(f"async update rank={update.rank} delta {name!r} contains non-finite values")
+    if update.tokens < 0:
+        raise ValueError(f"async update rank={update.rank} has negative token count")
+    if update.local_steps <= 0:
+        raise ValueError(f"async update rank={update.rank} has non-positive local_steps")
+
+
+def train_async_state_delta(before: Mapping[str, torch.Tensor],
+                            after: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    if set(before) != set(after):
+        missing = sorted(set(before) - set(after))
+        extra = sorted(set(after) - set(before))
+        raise ValueError(f"async state keys differ: missing={missing} extra={extra}")
+    out = {}
+    for name, base_tensor in before.items():
+        after_tensor = after[name]
+        if base_tensor.shape != after_tensor.shape:
+            raise ValueError(f"async state tensor {name!r} shape differs")
+        out[name] = after_tensor.detach() - base_tensor.detach()
+    return out
+
+
+def train_async_rebase_state(local_state: Mapping[str, torch.Tensor],
+                             old_base: Mapping[str, torch.Tensor],
+                             new_base: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    if set(local_state) != set(old_base) or set(local_state) != set(new_base):
+        raise ValueError("local_state, old_base, and new_base must have identical async tensor keys")
+    return {
+        name: local_state[name].detach() + (new_base[name].detach() - old_base[name].detach())
+        for name in local_state
+    }
+
+
+def _train_async_weight(update: TrainAsyncRankUpdate, weight_by: str) -> float:
+    if weight_by == 'tokens':
+        weight = update.tokens
+    elif weight_by == 'local_steps':
+        weight = update.local_steps
+    elif weight_by == 'equal':
+        weight = 1
+    else:
+        raise ValueError(f"unknown async quorum weight_by mode: {weight_by!r}")
+    if weight <= 0:
+        raise ValueError(f"async update rank={update.rank} has non-positive {weight_by} weight")
+    return float(weight)
+
+
+def train_async_avg_outer_merge(base: Mapping[str, torch.Tensor],
+                                updates: list[TrainAsyncRankUpdate],
+                                *,
+                                weight_by: str = 'tokens',
+                                outer_lr: float = 1.0) -> dict[str, torch.Tensor]:
+    if not updates:
+        raise ValueError("cannot merge an empty async quorum update set")
+    for update in updates:
+        _validate_train_async_delta(base, update)
+    weights = [_train_async_weight(update, weight_by) for update in updates]
+    weight_sum = sum(weights)
+    merged = _clone_train_async_state(base)
+    for name in sorted(base):
+        delta = torch.zeros_like(base[name])
+        for update, weight in zip(updates, weights):
+            delta = delta + update.delta[name].detach() * (weight / weight_sum)
+        merged[name] = base[name].detach() + float(outer_lr) * delta
+    return merged
+
+
+class TrainAsyncQuorumCoordinator:
+    """train.py-native async quorum coordinator for avg outer DiLoCo merges."""
+
+    def __init__(
+        self,
+        *,
+        initial_state: Mapping[str, torch.Tensor],
+        world_size: int,
+        quorum: int,
+        run_id: str,
+        metrics_path: str | Path | None = None,
+        transport: TrainAsyncTransport | None = None,
+        weight_by: str = 'tokens',
+        outer_lr: float = 1.0,
+        timeout_s: float | None = None,
+        timeout_min_updates: int = 1,
+        now_fn=time.time,
+    ):
+        self.global_state = _clone_train_async_state(initial_state)
+        self._generation_bases: dict[int, dict[str, torch.Tensor]] = {
+            0: _clone_train_async_state(initial_state),
+        }
+        self.world_size = int(world_size)
+        self.quorum = int(quorum)
+        if self.world_size <= 0:
+            raise ValueError("world_size must be positive")
+        if self.quorum <= 0 or self.quorum > self.world_size:
+            raise ValueError("quorum must be in [1, world_size]")
+        self.run_id = str(run_id)
+        self.metrics_path = None if metrics_path is None else Path(metrics_path)
+        self.transport = transport or TrainAsyncDebugLocalTransport()
+        self.weight_by = str(weight_by)
+        self.outer_lr = float(outer_lr)
+        self.timeout_s = None if timeout_s is None else float(timeout_s)
+        self.timeout_min_updates = int(timeout_min_updates)
+        self.now_fn = now_fn
+        self.current_generation = 0
+        self.opened_at_s = float(self.now_fn())
+        self.accepted: dict[int, TrainAsyncRankUpdate] = {}
+        self.accepted_updates = 0
+        self.rejected_updates = 0
+        self.stale_updates = 0
+        self.timed_out_updates = 0
+        self.failed_updates = 0
+        self.invalid_updates = 0
+        self.metrics_records: list[dict[str, Any]] = []
+
+    def open_generation(self) -> int:
+        if not self.accepted:
+            self.opened_at_s = float(self.now_fn())
+        return self.current_generation
+
+    def submit_update(self, update: TrainAsyncRankUpdate) -> TrainAsyncCoordinatorResult:
+        now = float(self.now_fn() if update.submitted_at is None else update.submitted_at)
+        status = self._classify_update(update)
+        if status != 'accepted':
+            self.rejected_updates += 1
+            if status == 'stale':
+                self.stale_updates += 1
+            elif status == 'timed_out':
+                self.timed_out_updates += 1
+            elif status == 'failed':
+                self.failed_updates += 1
+            elif status == 'invalid':
+                self.invalid_updates += 1
+            return TrainAsyncCoordinatorResult(
+                status=status,
+                generation=self.current_generation,
+                next_generation=self.current_generation,
+                accepted=False,
+                advanced=False,
+                state=_clone_train_async_state(self.global_state),
+            )
+
+        _validate_train_async_delta(self.global_state, update)
+        self.accepted[int(update.rank)] = update
+        self.accepted_updates += 1
+        if len(self.accepted) < self.quorum:
+            return TrainAsyncCoordinatorResult(
+                status='accepted',
+                generation=self.current_generation,
+                next_generation=self.current_generation,
+                accepted=True,
+                advanced=False,
+                state=_clone_train_async_state(self.global_state),
+            )
+        return self._advance(now, cause='quorum')
+
+    def poll_transport(self) -> list[TrainAsyncCoordinatorResult]:
+        return [self.submit_update(update) for update in self.transport.read_updates()]
+
+    def maybe_timeout(self, now: float | None = None) -> TrainAsyncCoordinatorResult | None:
+        if self.timeout_s is None:
+            return None
+        now_s = float(self.now_fn() if now is None else now)
+        if now_s - self.opened_at_s < self.timeout_s:
+            return None
+        missing = self.world_size - len(self.accepted)
+        self.timed_out_updates += max(0, missing)
+        if len(self.accepted) < self.timeout_min_updates:
+            self.opened_at_s = now_s
+            return TrainAsyncCoordinatorResult(
+                status='timeout-deferred',
+                generation=self.current_generation,
+                next_generation=self.current_generation,
+                accepted=False,
+                advanced=False,
+                state=_clone_train_async_state(self.global_state),
+            )
+        return self._advance(now_s, cause='timeout')
+
+    def resync_rank(self, *, rank: int, local_state: Mapping[str, torch.Tensor],
+                    base_generation: int) -> TrainAsyncRankResync:
+        if int(base_generation) == self.current_generation:
+            state = _clone_train_async_state(local_state)
+            recovered = False
+        elif int(base_generation) < self.current_generation:
+            state = train_async_rebase_state(
+                local_state,
+                self._generation_base_hint(base_generation),
+                self.global_state,
+            )
+            recovered = True
+        else:
+            raise ValueError(
+                f"rank {rank} base_generation {base_generation} is ahead of "
+                f"coordinator generation {self.current_generation}")
+        return TrainAsyncRankResync(
+            rank=int(rank),
+            generation=self.current_generation,
+            state=state,
+            recovered=recovered,
+        )
+
+    def _generation_base_hint(self, base_generation: int) -> Mapping[str, torch.Tensor]:
+        generation = int(base_generation)
+        if generation in self._generation_bases:
+            return self._generation_bases[generation]
+        fetched = self.transport.fetch_state(generation)
+        if fetched is not None:
+            return fetched[1]
+        raise ValueError(f"no published async state for generation {generation}")
+
+    def _classify_update(self, update: TrainAsyncRankUpdate) -> str:
+        if update.base_generation < self.current_generation:
+            return 'stale'
+        if update.base_generation > self.current_generation:
+            return 'future'
+        if update.timed_out:
+            return 'timed_out'
+        if update.failed:
+            return 'failed'
+        if update.invalid:
+            return 'invalid'
+        if int(update.rank) in self.accepted:
+            return 'duplicate'
+        return 'accepted'
+
+    def _advance(self, now: float, *, cause: str) -> TrainAsyncCoordinatorResult:
+        generation = self.current_generation
+        accepted = [self.accepted[rank] for rank in sorted(self.accepted)]
+        t0 = time.time()
+        next_state = train_async_avg_outer_merge(
+            self.global_state,
+            accepted,
+            weight_by=self.weight_by,
+            outer_lr=self.outer_lr,
+        )
+        merge_latency_s = time.time() - t0
+        self.global_state = next_state
+        self.current_generation += 1
+        self._generation_bases[self.current_generation] = _clone_train_async_state(self.global_state)
+        metrics = self._build_metrics(generation, accepted, now, merge_latency_s, cause)
+        self.metrics_records.append(dict(metrics))
+        self._write_metrics_jsonl(metrics)
+        self.transport.publish_state(self.current_generation, self.global_state, metrics)
+        self.accepted = {}
+        self.opened_at_s = now
+        return TrainAsyncCoordinatorResult(
+            status='advanced',
+            generation=generation,
+            next_generation=self.current_generation,
+            accepted=True,
+            advanced=True,
+            state=_clone_train_async_state(self.global_state),
+            metrics=metrics,
+        )
+
+    def _build_metrics(self, generation: int, updates: list[TrainAsyncRankUpdate],
+                       now: float, merge_latency_s: float, cause: str) -> dict[str, Any]:
+        tokens = int(sum(update.tokens for update in updates))
+        loss_acc: dict[str, float] = {}
+        loss_weight: dict[str, float] = {}
+        for update in updates:
+            weight = float(max(1, update.tokens))
+            for key, value in update.loss_window.items():
+                loss_acc[str(key)] = loss_acc.get(str(key), 0.0) + float(value) * weight
+                loss_weight[str(key)] = loss_weight.get(str(key), 0.0) + weight
+        loss_window = {
+            key: loss_acc[key] / max(1.0, loss_weight[key])
+            for key in sorted(loss_acc)
+        }
+        rank_progress = {
+            str(update.rank): int(update.rank_step)
+            for update in sorted(updates, key=lambda item: item.rank)
+        }
+        staleness = {
+            str(update.rank): int(generation - update.base_generation)
+            for update in sorted(updates, key=lambda item: item.rank)
+        }
+        return {
+            'schema_version': 1,
+            'run_id': self.run_id,
+            'generation': int(generation),
+            'next_generation': int(generation + 1),
+            'cause': cause,
+            'world_size': self.world_size,
+            'quorum_threshold': self.quorum,
+            'quorum_size': len(updates),
+            'accepted_updates': len(updates),
+            'rejected_updates': int(self.rejected_updates),
+            'stale_updates': int(self.stale_updates),
+            'timed_out_updates': int(self.timed_out_updates),
+            'failed_updates': int(self.failed_updates),
+            'invalid_updates': int(self.invalid_updates),
+            'staleness': staleness,
+            'max_staleness': max(staleness.values()) if staleness else 0,
+            'merge_latency_s': float(merge_latency_s),
+            'generation_latency_s': float(max(0.0, now - self.opened_at_s)),
+            'tokens': tokens,
+            'tokens_per_accepted_update': tokens / max(1, len(updates)),
+            'per_rank_progress': rank_progress,
+            'loss_window': loss_window,
+            'latest_advanced': True,
+        }
+
+    def _write_metrics_jsonl(self, metrics: Mapping[str, Any]) -> None:
+        if self.metrics_path is None:
+            return
+        payload = json.dumps(metrics, sort_keys=True, separators=(',', ':'))
+        self.metrics_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.metrics_path.open('a', encoding='utf-8') as handle:
+            handle.write(payload)
+            handle.write('\n')
 
 
 def bootstrap_diloco_outer_state_from_loaded_model(core_model, optimizer, args,
