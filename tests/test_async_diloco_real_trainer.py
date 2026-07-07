@@ -1,7 +1,9 @@
 import json
 import math
+import socket
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -33,6 +35,12 @@ def _args(**overrides):
     }
     values.update(overrides)
     return default_tiny_e97_train_args(**values)
+
+
+def _free_tcp_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 
 def test_real_async_trainer_one_node_reduces_real_worker_updates(tmp_path):
@@ -314,7 +322,7 @@ def test_real_async_trainer_checkpoint_cadence_records_recovery_and_finalization
     )
 
 
-def test_actual_multinode_file_rank_writes_progress_and_global_quorum(tmp_path, monkeypatch):
+def test_actual_multinode_tcp_rank_writes_progress_and_global_quorum(tmp_path, monkeypatch):
     class OneParamModel(torch.nn.Module):
         def __init__(self):
             super().__init__()
@@ -376,7 +384,7 @@ def test_actual_multinode_file_rank_writes_progress_and_global_quorum(tmp_path, 
     monkeypatch.setattr("ndm.async_diloco_real._run_real_node_supervisor", fake_node_supervisor)
 
     base = {
-        "run_id": "file-rank",
+        "run_id": "tcp-rank",
         "run_dir": tmp_path / "run",
         "metrics_json": tmp_path / "metrics.json",
         "train_args": _args(data=str(tmp_path / "real_tokens.txt")),
@@ -385,6 +393,9 @@ def test_actual_multinode_file_rank_writes_progress_and_global_quorum(tmp_path, 
         "local_steps": 2,
         "timeout_s": 3.0,
         "synthetic_token_stream": False,
+        "coordinator_host": "127.0.0.1",
+        "coordinator_bind_host": "127.0.0.1",
+        "coordinator_port": _free_tcp_port(),
         "walltime_remaining_s": 0.0,
         "estimated_finalization_duration_s": 0.0,
         "checkpoint_cadence": AsyncDiLoCoCheckpointCadence(
@@ -394,13 +405,28 @@ def test_actual_multinode_file_rank_writes_progress_and_global_quorum(tmp_path, 
     }
     (tmp_path / "real_tokens.txt").write_text("real token source placeholder\n", encoding="utf-8")
 
+    result_box = {}
+
+    def run_rank0():
+        result_box["rank0"] = run_real_async_diloco_file_rank(
+            RealAsyncFileRankConfig(node_rank=0, **base)
+        )
+
+    rank0_thread = threading.Thread(target=run_rank0)
+    rank0_thread.start()
     rank1 = run_real_async_diloco_file_rank(RealAsyncFileRankConfig(node_rank=1, **base))
-    rank0 = run_real_async_diloco_file_rank(RealAsyncFileRankConfig(node_rank=0, **base))
+    rank0_thread.join(timeout=5.0)
+    assert not rank0_thread.is_alive()
+    rank0 = result_box["rank0"]
 
     assert rank1["node_update_submitted"] is True
     assert rank0["coordinator"] is True
+    assert rank1["transport"] == "tcp"
     payload = json.loads((tmp_path / "metrics.json").read_text(encoding="utf-8"))
-    assert payload["mode"] == "actual_multinode_file_quorum_debug"
+    assert payload["mode"] == "actual_multinode_tcp_quorum_debug"
+    assert payload["transport"]["filesystem_live_quorum"] is False
+    assert payload["transport"]["bytes_sent"] > 0
+    assert payload["transport"]["submit_latency_s"]["count"] >= 1
     assert payload["synthetic_token_stream"] is False
     assert payload["latest_generation"] == 0
     assert payload["global_generations"][0]["metrics"]["quorum_status"] == "advanced"
@@ -411,11 +437,11 @@ def test_actual_multinode_file_rank_writes_progress_and_global_quorum(tmp_path, 
     assert (tmp_path / "run" / "latest.json").exists()
     assert (tmp_path / "run" / "progress" / "node-00000.heartbeat.json").exists()
     assert (tmp_path / "run" / "progress" / "node-00001.heartbeat.json").exists()
-    assert (tmp_path / "run" / "node_updates" / "node-00000.json").exists()
-    assert (tmp_path / "run" / "node_updates" / "node-00001.json").exists()
+    assert (tmp_path / "run" / "node_update_artifacts" / "node-00000.json").exists()
+    assert (tmp_path / "run" / "node_update_artifacts" / "node-00001.json").exists()
 
 
-def test_actual_multinode_file_rank_rejects_synthetic_stream(tmp_path):
+def test_actual_multinode_tcp_rank_rejects_synthetic_stream(tmp_path):
     with pytest.raises(ValueError, match="synthetic_token_stream is disabled"):
         run_real_async_diloco_file_rank(RealAsyncFileRankConfig(
             run_id="reject-synthetic",
@@ -430,7 +456,7 @@ def test_actual_multinode_file_rank_rejects_synthetic_stream(tmp_path):
         ))
 
 
-def test_actual_multinode_file_rank_serializes_failed_rank_payload(tmp_path, monkeypatch):
+def test_actual_multinode_tcp_rank_serializes_failed_rank_payload(tmp_path, monkeypatch):
     class OneParamModel(torch.nn.Module):
         def __init__(self):
             super().__init__()
@@ -482,7 +508,7 @@ def test_actual_multinode_file_rank_serializes_failed_rank_payload(tmp_path, mon
     monkeypatch.setattr("ndm.async_diloco_real._run_real_node_supervisor", failed_node_supervisor)
 
     result = run_real_async_diloco_file_rank(RealAsyncFileRankConfig(
-        run_id="failed-file-rank",
+        run_id="failed-tcp-rank",
         run_dir=tmp_path / "run",
         metrics_json=tmp_path / "metrics.json",
         train_args=_args(data=str(tmp_path / "real_tokens.txt")),
@@ -494,13 +520,13 @@ def test_actual_multinode_file_rank_serializes_failed_rank_payload(tmp_path, mon
     ))
 
     assert result["node_update_submitted"] is False
-    node_payload = json.loads((tmp_path / "run" / "node_updates" / "node-00000.json").read_text(encoding="utf-8"))
+    node_payload = json.loads((tmp_path / "run" / "node_update_artifacts" / "node-00000.json").read_text(encoding="utf-8"))
     assert node_payload["loss"] is None
     assert node_payload["worker_reports"][0]["failed"] is True
     assert node_payload["worker_reports"][0]["error"] == "configured failure"
 
 
-def test_actual_multinode_file_rank_allows_explicit_synthetic_fallback(tmp_path, monkeypatch):
+def test_actual_multinode_tcp_rank_allows_explicit_synthetic_fallback(tmp_path, monkeypatch):
     class OneParamModel(torch.nn.Module):
         def __init__(self):
             super().__init__()
@@ -562,7 +588,7 @@ def test_actual_multinode_file_rank_allows_explicit_synthetic_fallback(tmp_path,
     monkeypatch.setattr("ndm.async_diloco_real._run_real_node_supervisor", fake_node_supervisor)
 
     result = run_real_async_diloco_file_rank(RealAsyncFileRankConfig(
-        run_id="synthetic-file-rank",
+        run_id="synthetic-tcp-rank",
         run_dir=tmp_path / "run",
         metrics_json=tmp_path / "metrics.json",
         train_args=_args(),
@@ -576,7 +602,7 @@ def test_actual_multinode_file_rank_allows_explicit_synthetic_fallback(tmp_path,
 
     assert result["node_update_submitted"] is True
     payload = json.loads((tmp_path / "metrics.json").read_text(encoding="utf-8"))
-    assert payload["mode"] == "actual_multinode_file_quorum_debug"
+    assert payload["mode"] == "actual_multinode_tcp_quorum_debug"
     assert payload["synthetic_token_stream"] is True
     assert payload["latest_generation"] == 0
 

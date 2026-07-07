@@ -2,11 +2,11 @@
 # Shared runner for train.py-backed async quorum DiLoCo debug smokes.
 #
 # This intentionally uses one Slurm task per GPU and calls the train.py-backed
-# async entrypoint once per task. The current debug transport is the bounded
-# file-quorum path in scripts/frontier/e97_async_diloco_train.py: each GPU rank
-# runs real train.py local token training, writes a per-rank update manifest, and
-# rank 0 publishes the authoritative latest.json/latest checkpoint metadata when
-# quorum is reached.
+# async entrypoint once per task. The live quorum transport is TCP: each GPU rank
+# runs real train.py local token training, submits metadata to rank 0 over a
+# socket, and rank 0 publishes the authoritative run-local latest/checkpoint
+# metadata when quorum is reached. Shared storage is used only for metrics,
+# checkpoints, manifests, logs, and post-run artifacts.
 
 set -euo pipefail
 
@@ -49,6 +49,8 @@ ASYNC_EXPECTED_MISSING_UPDATES=${ASYNC_EXPECTED_MISSING_UPDATES:-$((ASYNC_EXPECT
 ASYNC_TIMEOUT_S=${ASYNC_TIMEOUT_S:-120}
 ASYNC_LOCAL_STEPS=${ASYNC_LOCAL_STEPS:-${DILOCO_K:-1}}
 ASYNC_GENERATIONS=${ASYNC_GENERATIONS:-1}
+ASYNC_COORDINATOR_PORT=${ASYNC_COORDINATOR_PORT:-29497}
+ASYNC_COORDINATOR_BIND_HOST=${ASYNC_COORDINATOR_BIND_HOST:-0.0.0.0}
 ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM=${ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM:-0}
 ALLOW_SYNTHETIC_TOKEN_FALLBACK=${ALLOW_SYNTHETIC_TOKEN_FALLBACK:-0}
 TRAINING_DATA_MODE=real-token
@@ -137,6 +139,14 @@ if [[ "$ASYNC_GLOBAL_QUORUM" -gt "$ASYNC_TRAINPY_RANKS" ]]; then
   echo "ASYNC_GLOBAL_QUORUM=$ASYNC_GLOBAL_QUORUM cannot exceed launched ranks=$ASYNC_TRAINPY_RANKS" >&2
   exit 64
 fi
+if [[ -z "${ASYNC_COORDINATOR_HOST:-}" ]]; then
+  if command -v scontrol >/dev/null 2>&1 && [[ -n "${SLURM_NODELIST:-}" ]]; then
+    ASYNC_COORDINATOR_HOST=$(scontrol show hostnames "$SLURM_NODELIST" | head -n 1)
+  else
+    ASYNC_COORDINATOR_HOST=127.0.0.1
+  fi
+fi
+export ASYNC_COORDINATOR_HOST ASYNC_COORDINATOR_PORT ASYNC_COORDINATOR_BIND_HOST
 
 RUN_ID="${TASK_ID}-${SMOKE_NAME}-${SLURM_JOB_ID:-manual}-${RUN_STAMP}"
 CMD=(
@@ -181,7 +191,10 @@ CMD=(
   --finalization-reserve-seconds "$FINALIZATION_BUFFER_SECONDS"
   --walltime-remaining-s "$FINALIZATION_BUFFER_SECONDS"
   --estimated-finalization-duration-s "$ESTIMATED_FINALIZATION_DURATION_SECONDS"
-  --actual-multinode-file-quorum
+  --actual-multinode-tcp-quorum
+  --coordinator-host "$ASYNC_COORDINATOR_HOST"
+  --coordinator-bind-host "$ASYNC_COORDINATOR_BIND_HOST"
+  --coordinator-port "$ASYNC_COORDINATOR_PORT"
 )
 if [[ -r "$E97_CHECKPOINT" ]]; then
   CMD+=(--checkpoint "$E97_CHECKPOINT")
@@ -246,12 +259,15 @@ printf '\n' >> "$COMMAND_FILE"
   echo "async_expected_missing_updates=$ASYNC_EXPECTED_MISSING_UPDATES"
   echo "async_timeout_s=$ASYNC_TIMEOUT_S"
   echo "async_local_steps=$ASYNC_LOCAL_STEPS"
+  echo "async_quorum_transport=tcp"
+  echo "async_coordinator_host=$ASYNC_COORDINATOR_HOST"
+  echo "async_coordinator_port=$ASYNC_COORDINATOR_PORT"
   echo "requested_walltime=$REQUESTED_WALLTIME"
   echo "requested_node_hours=$REQUESTED_NODE_HOURS"
   echo "human_approval_record=$HUMAN_APPROVAL_RECORD"
   echo "ddp_wrapper_expected=0"
   echo "per_step_all_reduce_expected=0"
-  echo "bounded_debug_transport=actual_multinode_file_quorum"
+  echo "bounded_debug_transport=actual_multinode_tcp_quorum"
   echo "git_commit=$(git rev-parse HEAD)"
   echo
   echo "=== modules ==="
