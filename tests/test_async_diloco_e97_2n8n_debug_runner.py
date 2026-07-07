@@ -122,6 +122,8 @@ def test_async_diloco_multinode_entrypoint_and_wrappers_are_main_relative():
     assert "LAUNCH_CMD=(\n    srun\n    -N \"$ASYNC_NODE_COUNT\"\n    -n \"$ASYNC_NODE_COUNT\"\n    --ntasks-per-node=1" in launch_text
     assert "CMD+=(--actual-multinode-file-quorum)" in launch_text
     assert "Production validation rejects ASYNC_DILOCO_RUNTIME_PROBE_ONLY=1" in launch_text
+    assert "ASYNC_REQUIRE_CORRECTED_B4_LADDER=${ASYNC_REQUIRE_CORRECTED_B4_LADDER:-1}" in launch_text
+    assert "Corrected E97 B4 smoke ladder pre-submit gate failed" in launch_text
     assert "ASYNC_DILOCO_NON_PRODUCTION_DEBUG" in launch_text
     assert "export TIKTOKEN_CACHE_DIR" in launch_text
     assert "p50k_base tokenizer cache is missing under TIKTOKEN_CACHE_DIR" in launch_text
@@ -176,6 +178,9 @@ def test_async_diloco_launch_wrappers_expose_required_env_knobs():
         "REQUESTED_WALLTIME=${REQUESTED_WALLTIME:-",
         "PRODUCTION_LATEST_GUARD=${PRODUCTION_LATEST_GUARD:-",
         "PRODUCTION_LATEST_POLICY=${PRODUCTION_LATEST_POLICY:-run-local-latest-json-with-external-chain-latest-guard}",
+        "SLURM_INTENDED_NTASKS_PER_NODE=${SLURM_INTENDED_NTASKS_PER_NODE:-1}",
+        "SLURM_INTENDED_GPUS_PER_TASK=${SLURM_INTENDED_GPUS_PER_TASK:-0}",
+        "SLURM_INTENDED_GPU_BIND=${SLURM_INTENDED_GPU_BIND:-unset}",
     ):
         assert token in launch_text
 
@@ -193,6 +198,13 @@ def test_production_async_launcher_records_artifacts_and_real_command_branch():
     assert 'echo "tiktoken_cache_dir=$TIKTOKEN_CACHE_DIR"' in launch_text
     assert 'echo "python_bin=$PYTHON_BIN"' in launch_text
     assert 'echo "async_launch_uses_srun=$([[ "$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM" == "1" && "$ASYNC_NODE_COUNT" -gt 1 ]] && echo 1 || echo 0)"' in launch_text
+    assert 'echo "presubmit_status=$PRESUBMIT_STATUS"' in launch_text
+    assert 'echo "presubmit_failure_count=${#PRESUBMIT_FAILURES[@]}"' in launch_text
+    assert 'echo "presubmit_failure_${idx}=${PRESUBMIT_FAILURES[$idx]}"' in launch_text
+    assert 'echo "runtime_flag_drift_count=${#RUNTIME_FLAG_DRIFT[@]}"' in launch_text
+    assert 'echo "runtime_flag_drift_${idx}=${RUNTIME_FLAG_DRIFT[$idx]}"' in launch_text
+    assert 'echo "stable_b4_reference_ntasks_per_node=8"' in launch_text
+    assert 'echo "slurm_intended_gpu_bind=$SLURM_INTENDED_GPU_BIND"' in launch_text
     assert 'CMD=(\n  "$PYTHON_BIN" -u "$ASYNC_ENTRYPOINT"' in launch_text
     assert '--checkpoint "$E97_CHECKPOINT"' in launch_text
     assert '--data "$DATA"' in launch_text
@@ -233,3 +245,22 @@ def test_production_async_launcher_debug_multinode_uses_srun_not_bare_python():
     assert "printf '%q ' \"${LAUNCH_CMD[@]}\" > \"$COMMAND_FILE\"" in launch_text
     assert 'exec "${LAUNCH_CMD[@]}"' in launch_text
     assert 'exec "${CMD[@]}"' not in launch_text
+
+
+def test_production_async_launcher_refuses_non_comparable_corrected_ladder_by_default():
+    launch_text = (ROOT / "scripts/frontier/async_diloco_e97_256n12h_launch.sbatch").read_text(encoding="utf-8")
+
+    for token in (
+        'if [[ "$ASYNC_REQUIRE_CORRECTED_B4_LADDER" == "1" && "$PRESUBMIT_STATUS" != "pass" ]]; then',
+        'exit 70',
+        "actual_multinode_file_quorum is metadata-only shared-storage quorum",
+        "Slurm topology uses $SLURM_INTENDED_NTASKS_PER_NODE task(s) per node",
+        "Slurm GPU request uses --gpus-per-task=$SLURM_INTENDED_GPUS_PER_TASK",
+        "Slurm GPU binding is $SLURM_INTENDED_GPU_BIND",
+        "runtime flag drift from stable train.py B4 path",
+        "linear_state=$MODEL_LINEAR_STATE vs stable train.py B4 linear_state=0",
+        "use_chunked_e97=$ASYNC_E97_USE_CHUNKED vs stable train.py B4 use_chunked_e97=0",
+        "checkpoint_interval=$ASYNC_E97_CHECKPOINT_INTERVAL vs stable train.py B4 checkpoint_interval=16",
+        "Set ASYNC_REQUIRE_CORRECTED_B4_LADDER=0 only for explicitly labeled diagnostic/non-comparable runs.",
+    ):
+        assert token in launch_text
