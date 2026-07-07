@@ -1,0 +1,1064 @@
+=== e97 1.3B pretrained canary env ===
+task_id=enable-olcf-rccl
+variant=E97_1.3B_step1065000_b4_k40_trainpy_2n_olcf_rccl
+start_utc=2026-07-07T12:18:00Z
+repo=/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-757
+run_root=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/trainpy_e97_step1065000_b4_smoke/20260707/E97_1.3B_step1065000_b4_k40_trainpy_2n_olcf_rccl/4951475-20260707T121753Z
+stdout=logs/frontier/scaleout/e97-s1065-b4-k40-2n-rccl-4951475.out
+stderr=logs/frontier/scaleout/e97-s1065-b4-k40-2n-rccl-4951475.err
+human_approval_record=WG enable-olcf-rccl: 2-node debug-QOS train.py smoke
+resume_checkpoint=/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt
+default_resume_checkpoint=/lustre/orion/bif148/proj-shared/emender/checkpoints/E97_1.3B_diloco_20260623_103742_step260500/checkpoint_E97_1.3B_diloco_20260623_103742_step260500_loss_2.7481.pt
+chain_latest_path=
+chain_seed_checkpoint=/lustre/orion/bif148/proj-shared/emender/checkpoints/E97_1.3B_diloco_20260623_103742_step260500/checkpoint_E97_1.3B_diloco_20260623_103742_step260500_loss_2.7481.pt
+chain_manifest_path=
+chain_update_on_failure=1
+requested_node_hours=0.666667
+diloco_k=40
+diloco_island_size=1
+diloco_merge_topology=global
+diloco_merge_group_size=8
+diloco_merge_group_create_barrier_every=8
+diloco_merge_completion_barrier=1
+diloco_merge_bucket_numel=0
+diloco_merge_debug=1
+diloco_merge_debug_ranks=0
+distributed_init_timeout_seconds=
+disable_scalar_status_collectives=0
+status_request_poll_seconds=1.0
+frontier_rccl_env=recommended
+rccl_net_plugin_status=/sw/frontier/rccl-plugins/aws-ofi-nccl/1.19.2/rocm/7.1.1/lib/librccl-net.so
+require_rccl_net_plugin=1
+rank_start_log=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/trainpy_e97_step1065000_b4_smoke/20260707/E97_1.3B_step1065000_b4_k40_trainpy_2n_olcf_rccl/4951475-20260707T121753Z/artifacts/rank-start.tsv
+frontier_per_rank_triton_cache=1
+frontier_train_env_preflight=1
+emender_conda_env=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312
+conda_prefix=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312
+train_python_bin=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/bin/python
+frontier_triton_cache_base=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/trainpy_e97_step1065000_b4_smoke/20260707/E97_1.3B_step1065000_b4_k40_trainpy_2n_olcf_rccl/4951475-20260707T121753Z/artifacts/triton-cache
+
+=== slurm ===
+CONDA_PREFIX=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312
+CONDA_PREFIX_1=/autofs/nccs-svm1_sw/frontier/miniforge3/23.11.0-0
+DATA=/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt
+DILOCO_EXPORT_BASIS=x
+DILOCO_ISLAND_SIZE=1
+DILOCO_K=40
+DILOCO_MERGE_BUCKET_NUMEL=0
+DILOCO_MERGE_COMPLETION_BARRIER=1
+DILOCO_MERGE_DEBUG=1
+DILOCO_MERGE_DEBUG_RANKS=0
+DILOCO_MERGE_GROUP_CREATE_BARRIER_EVERY=8
+DILOCO_MERGE_GROUP_SIZE=8
+DILOCO_MERGE_TOPOLOGY=global
+DILOCO_OUTER_BETA=0.0
+DILOCO_OUTER_LR=1.0
+DILOCO_OUTER_OPTIMIZER=avg
+EMENDER_CONDA_ENV=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312
+FI_CXI_ATS=0
+FI_CXI_DEFAULT_CQ_SIZE=131072
+FI_CXI_DEFAULT_TX_SIZE=2048
+FI_CXI_DISABLE_HOST_REGISTER=1
+FI_CXI_RDZV_EAGER_SIZE=0
+FI_CXI_RDZV_GET_MIN=0
+FI_CXI_RDZV_PROTO=alt_read
+FI_CXI_RDZV_THRESHOLD=0
+FI_CXI_RX_MATCH_MODE=hybrid
+FI_MR_CACHE_MONITOR=kdreg2
+FRONTIER_ENABLE_OLCF_RCCL_PLUGIN=1
+FRONTIER_PER_RANK_TRITON_CACHE=1
+FRONTIER_RCCL_ALT_RDZV=1
+FRONTIER_RCCL_ENV=recommended
+FRONTIER_RCCL_NET_PLUGIN_MODULE=rccl-net-plugin/1.0
+FRONTIER_RUNTIME_PROFILE=olcf-rccl-debug
+FRONTIER_TRAIN_ENV_PREFLIGHT=1
+FRONTIER_TRITON_CACHE_BASE=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/trainpy_e97_step1065000_b4_smoke/20260707/E97_1.3B_step1065000_b4_k40_trainpy_2n_olcf_rccl/4951475-20260707T121753Z/artifacts/triton-cache
+HIP_LIB_PATH=/opt/rocm-7.1.1/lib
+HSA_ENABLE_IPC_MODE_LEGACY=1
+HSA_FORCE_FINE_GRAIN_PCIE=1
+HUMAN_APPROVAL_RECORD=WG enable-olcf-rccl: 2-node debug-QOS train.py smoke
+LD_LIBRARY_PATH=/opt/cray/pe/perftools/26.03.0/lib64:/opt/cray/pe/pmi/6.1.17/lib:/opt/cray/pe/mpich/9.1.0/ofi/gnu/12.3/lib:/opt/cray/pe/mpich/9.1.0/gtl/lib:/opt/cray/pe/libsci/26.03.0/GNU/12/x86_64/lib:/opt/cray/pe/dsmml/0.3.0/dsmml/lib:/opt/cray/pe/lib64:/opt/cray/lib64:/sw/frontier/rccl-plugins/aws-ofi-nccl/1.19.2/rocm/7.1.1/lib:/opt/rocm-7.1.1/lib/roctracer:/opt/rocm-7.1.1/lib/rocprofiler:/opt/rocm-7.1.1/lib:/sw/frontier/spack-envs/cpe26.03-cpu/opt/__spack_path_placeholder__/__spack_path_placeholder__/__spack_path_placeholder__/__spac/gcc-14.2/darshan-runtime-3.4.7-i6lglufb3nzhpr6gneuq2bjdaonwtv66/lib:/opt/cray/pe/papi/7.3.0.1/lib64:/sw/frontier/spack-envs/core-25.03/opt/gcc-13.2/emacs-29.4-unh4yuyvxeg5vnbffszz5xml33f5ahvv/lib:/opt/cray/libfabric/2.3.1/lib64
+MASTER_ADDR=frontier02161
+MASTER_PORT=51475
+MPICH_DIR=/opt/cray/pe/mpich/9.1.0/ofi/gnu/12.3
+MPICH_GPU_SUPPORT_ENABLED=1
+MPICH_OFI_NIC_POLICY=NUMA
+NCCL_CROSS_NIC=1
+NCCL_NET_GDR_LEVEL=PHB
+NCCL_NET_PLUGIN=librccl-net.so
+NCCL_SOCKET_IFNAME=hsn0,hsn1,hsn2,hsn3
+NDM_PIN_TRITON_AUTOTUNE=1
+OMPI_MCA_plm_slurm_args=--external-launcher
+OMP_NUM_THREADS=7
+RESUME_CHECKPOINT=/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt
+ROCR_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+SCALEOUT_VARIANT=E97_1.3B_step1065000_b4_k40_trainpy_2n_olcf_rccl
+SLURMD_NODENAME=frontier02161
+SLURM_CLUSTER_NAME=frontier
+SLURM_CONF=/var/spool/slurmd/conf-cache/slurm.conf
+SLURM_CPUS_ON_NODE=56
+SLURM_CPUS_PER_TASK=7
+SLURM_EXPORT_ENV=ALL,WG_TASK_ID=enable-olcf-rccl,SCALEOUT_VARIANT=E97_1.3B_step1065000_b4_k40_trainpy_2n_olcf_rccl,TRAIN_MINUTES=10,REQUESTED_SECONDS=1200,REQUESTED_WALLTIME=00:20:00,REQUESTED_NODE_HOURS=0.666667,HUMAN_APPROVAL_RECORD=WG enable-olcf-rccl: 2-node debug-QOS train.py smoke, E97 1.3B step1065000, B4, K40, OLCF RCCL plugin required.
+SLURM_GET_USER_ENV=1
+SLURM_GPUS_ON_NODE=8
+SLURM_GTIDS=0
+SLURM_JOBID=4951475
+SLURM_JOB_ACCOUNT=bif148
+SLURM_JOB_CPUS_PER_NODE=56(x2)
+SLURM_JOB_END_TIME=1783427869
+SLURM_JOB_GID=31761
+SLURM_JOB_GPUS=0,1,2,3,4,5,6,7
+SLURM_JOB_ID=4951475
+SLURM_JOB_NAME=e97-s1065-b4-k40-2n-rccl
+SLURM_JOB_NODELIST=frontier[02161,02163]
+SLURM_JOB_NUM_NODES=2
+SLURM_JOB_PARTITION=batch
+SLURM_JOB_QOS=debug
+SLURM_JOB_START_TIME=1783426669
+SLURM_JOB_UID=19032
+SLURM_JOB_USER=erikgarrison
+SLURM_LOCALID=0
+SLURM_MPI_TYPE=cray_shasta
+SLURM_NNODES=2
+SLURM_NODEID=0
+SLURM_NODELIST=frontier[02161,02163]
+SLURM_NPROCS=16
+SLURM_NTASKS=16
+SLURM_NTASKS_PER_NODE=8
+SLURM_OOM_KILL_STEP=0
+SLURM_PRIO_PROCESS=0
+SLURM_PROCID=0
+SLURM_SPANK_GPU_COUNTERS=0
+SLURM_SPANK_GPU_COUNTERS_SRC=default
+SLURM_SPANK_GPU_POWER_CAP=560
+SLURM_SPANK_GPU_POWER_CAP_SRC=default
+SLURM_SPANK_GPU_SRANGE=500-1700
+SLURM_SPANK_GPU_SRANGE_SRC=default
+SLURM_SUBMIT_DIR=/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-757
+SLURM_SUBMIT_HOST=login04
+SLURM_TASKS_PER_NODE=8(x2)
+SLURM_TASK_PID=1898402
+SLURM_THREADS_PER_CORE=1
+SLURM_TOPOLOGY_ADDR=root.s2104.frontier02161
+SLURM_TOPOLOGY_ADDR_PATTERN=switch.switch.node
+SLURM_TRES_BIND=gres/gpu:closest
+SLURM_TRES_PER_TASK=cpu=7,gres/gpu=1
+TIKTOKEN_CACHE_DIR=/lustre/orion/bif148/proj-shared/tiktoken_cache
+TRAIN_MINUTES=10
+VAL_DATA=/lustre/orion/bif148/scratch/erikgarrison/emender/data/commapile_mainmix_val_smoke.txt
+
+=== command ===
+srun -N 2 -n 16 -c7 --gpus-per-task=1 --gpu-bind=closest bash -lc source\ \"\$\{REPO\}/scripts/frontier/frontier_runtime_env.sh\"\;\ frontier_activate_emender_conda_env\;\ frontier_assert_emender_conda_env\;\ :\ \"\$\{TRAIN_PYTHON_BIN:\?TRAIN_PYTHON_BIN\ unset\}\"\;\ printf\ \"%s\\t%s\\t%s\\t%s\\t%s\\n\"\ \"\$\(date\ -u\ +%Y-%m-%dT%H:%M:%SZ\)\"\ \"\$\{SLURM_PROCID:-\}\"\ \"\$\{SLURM_LOCALID:-\}\"\ \"\$\{SLURMD_NODENAME:-\$\(hostname\)\}\"\ \"\$\{SLURM_NTASKS:-\}\"\ \>\>\ \"\$RANK_START_LOG\"\;\ if\ \[\[\ \"\$\{FRONTIER_PER_RANK_TRITON_CACHE:-0\}\"\ ==\ \"1\"\ \]\]\;\ then\ export\ TRITON_CACHE_DIR=\"\$\{FRONTIER_TRITON_CACHE_BASE%/\}/rank-\$\{SLURM_PROCID\}\"\;\ mkdir\ -p\ \"\$TRITON_CACHE_DIR\"\;\ fi\;\ export\ RANK=\$SLURM_PROCID\ WORLD_SIZE=\$SLURM_NTASKS\ LOCAL_RANK=0\;\ exec\ \"\$TRAIN_PYTHON_BIN\"\ -u\ train.py\ \"\$@\" bash --data /lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt --val_data /lustre/orion/bif148/scratch/erikgarrison/emender/data/commapile_mainmix_val_smoke.txt --bf16 --batch_size 4 --chunk_size 2048 --tokenizer p50k_base --optimizer schedulefree --seed 42 --lr 0.001007 --train_minutes 10 --timer_after_compile_warmup --compile_warmup_steps 1 --log_every 1 --val_every 10000 --save_every 40 --keep_checkpoints 3 --walltime_final_checkpoint_margin_seconds 600 --walltime_check_every 10 --distributed_health_check_every 10 --output /lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/trainpy_e97_step1065000_b4_smoke/20260707/E97_1.3B_step1065000_b4_k40_trainpy_2n_olcf_rccl/4951475-20260707T121753Z/train --resume /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt --diloco --diloco_k 40 --diloco_outer_optimizer avg --diloco_outer_lr 1.0 --diloco_outer_beta 0.0 --diloco_export_basis x --diloco_island_size 1 --diloco_merge_topology global --diloco_merge_group_size 8 --diloco_merge_group_create_barrier_every 8 --diloco_merge_completion_barrier 1 --diloco_merge_bucket_numel 0 --diloco_merge_debug 1 --diloco_merge_debug_ranks 0 --level E97 --params 100m --dim 1792 --depth 11 --n_heads 216 --n_state 32 --n_groups 32 --n_slots 64 --state_expansion 2 --expansion 1.0 --use_gate 1 --use_permutation 1 --gate_activation silu --linear_state 0 --use_write_gate 0 --use_triton 1 --use_chunked_e97 0 --e97_chunk_size 32 --mlp_ratio 2.2623 --mlp_multiple 64 --checkpoint_interval 16 --weight_decay 0.01 --grad_accum 1 --grad_clip 1.0 
+
+=== delegated srun training env preflight ===
+Deactivating conda environments
+delegated_python_executable=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/bin/python
+delegated_python_version=3.12.13
+delegated_torch_version=2.10.0+rocm7.1
+delegated_torch_hip=7.1.25424
+delegated_triton_version=3.6.0
+frontier_runtime_profile=olcf-rccl-debug
+frontier_enable_olcf_rccl_plugin=1
+frontier_rocm_module=rocm/7.1.1
+frontier_rccl_net_plugin_module=rccl-net-plugin/1.0
+EMENDER_CONDA_ENV=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312
+CONDA_PREFIX=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312
+OLCF_OFI_NCCL_ROOT=/sw/frontier/rccl-plugins/aws-ofi-nccl/1.19.2/rocm/7.1.1
+NCCL_NET_PLUGIN=librccl-net.so
+librccl_net_path=/sw/frontier/rccl-plugins/aws-ofi-nccl/1.19.2/rocm/7.1.1/lib/librccl-net.so
+
+=== frontier communication env ===
+CONDA_PREFIX=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312
+EMENDER_CONDA_ENV=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312
+FRONTIER_ENABLE_OLCF_RCCL_PLUGIN=1
+FRONTIER_RCCL_NET_PLUGIN_MODULE=rccl-net-plugin/1.0
+FRONTIER_RUNTIME_PROFILE=olcf-rccl-debug
+HSA_FORCE_FINE_GRAIN_PCIE=1
+LD_LIBRARY_PATH=/opt/cray/pe/perftools/26.03.0/lib64:/opt/cray/pe/pmi/6.1.17/lib:/opt/cray/pe/mpich/9.1.0/ofi/gnu/12.3/lib:/opt/cray/pe/mpich/9.1.0/gtl/lib:/opt/cray/pe/libsci/26.03.0/GNU/12/x86_64/lib:/opt/cray/pe/dsmml/0.3.0/dsmml/lib:/opt/cray/pe/lib64:/opt/cray/lib64:/sw/frontier/rccl-plugins/aws-ofi-nccl/1.19.2/rocm/7.1.1/lib:/opt/rocm-7.1.1/lib/roctracer:/opt/rocm-7.1.1/lib/rocprofiler:/opt/rocm-7.1.1/lib:/sw/frontier/spack-envs/cpe26.03-cpu/opt/__spack_path_placeholder__/__spack_path_placeholder__/__spack_path_placeholder__/__spac/gcc-14.2/darshan-runtime-3.4.7-i6lglufb3nzhpr6gneuq2bjdaonwtv66/lib:/opt/cray/pe/papi/7.3.0.1/lib64:/sw/frontier/spack-envs/core-25.03/opt/gcc-13.2/emacs-29.4-unh4yuyvxeg5vnbffszz5xml33f5ahvv/lib:/opt/cray/libfabric/2.3.1/lib64
+OLCF_OFI_NCCL_ROOT=/sw/frontier/rccl-plugins/aws-ofi-nccl/1.19.2/rocm/7.1.1
+
+=== python runtime versions ===
+python_executable=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/bin/python
+python_version=3.12.13
+torch.__version__=2.10.0+rocm7.1
+torch.version.hip=7.1.25424
+triton.__version__=3.6.0
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[W707 08:18:30.156056064 socket.cpp:764] [c10d] The client socket cannot be initialized to connect to [frontier02161.frontier.olcf.ornl.gov]:51475 (errno: 97 - Address family not supported by protocol).
+[W707 08:18:30.156082875 socket.cpp:764] [c10d] The client socket cannot be initialized to connect to [frontier02161.frontier.olcf.ornl.gov]:51475 (errno: 97 - Address family not supported by protocol).
+[W707 08:18:30.156109175 socket.cpp:764] [c10d] The client socket cannot be initialized to connect to [frontier02161.frontier.olcf.ornl.gov]:51475 (errno: 97 - Address family not supported by protocol).
+[W707 08:18:30.157268738 socket.cpp:764] [c10d] The client socket cannot be initialized to connect to [frontier02161.frontier.olcf.ornl.gov]:51475 (errno: 97 - Address family not supported by protocol).
+[W707 08:18:30.157329915 socket.cpp:764] [c10d] The client socket cannot be initialized to connect to [frontier02161.frontier.olcf.ornl.gov]:51475 (errno: 97 - Address family not supported by protocol).
+[W707 08:18:30.157385981 socket.cpp:764] [c10d] The client socket cannot be initialized to connect to [frontier02161.frontier.olcf.ornl.gov]:51475 (errno: 97 - Address family not supported by protocol).
+[W707 08:18:30.157788055 socket.cpp:764] [c10d] The client socket cannot be initialized to connect to [frontier02161.frontier.olcf.ornl.gov]:51475 (errno: 97 - Address family not supported by protocol).
+[W707 08:18:30.225797121 socket.cpp:764] [c10d] The client socket cannot be initialized to connect to [frontier02161.frontier.olcf.ornl.gov]:51475 (errno: 97 - Address family not supported by protocol).
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[W707 08:18:33.350417855 socket.cpp:764] [c10d] The client socket cannot be initialized to connect to [frontier02161.frontier.olcf.ornl.gov]:51475 (errno: 97 - Address family not supported by protocol).
+[W707 08:18:33.354901071 socket.cpp:764] [c10d] The client socket cannot be initialized to connect to [frontier02161.frontier.olcf.ornl.gov]:51475 (errno: 97 - Address family not supported by protocol).
+[W707 08:18:33.357239373 socket.cpp:764] [c10d] The client socket cannot be initialized to connect to [frontier02161.frontier.olcf.ornl.gov]:51475 (errno: 97 - Address family not supported by protocol).
+[W707 08:18:33.359489878 socket.cpp:764] [c10d] The client socket cannot be initialized to connect to [frontier02161.frontier.olcf.ornl.gov]:51475 (errno: 97 - Address family not supported by protocol).
+[W707 08:18:33.362113372 socket.cpp:764] [c10d] The client socket cannot be initialized to connect to [frontier02161.frontier.olcf.ornl.gov]:51475 (errno: 97 - Address family not supported by protocol).
+[W707 08:18:33.366752103 socket.cpp:764] [c10d] The client socket cannot be initialized to connect to [frontier02161.frontier.olcf.ornl.gov]:51475 (errno: 97 - Address family not supported by protocol).
+[W707 08:18:33.367654216 socket.cpp:764] [c10d] The client socket cannot be initialized to connect to [frontier02161.frontier.olcf.ornl.gov]:51475 (errno: 97 - Address family not supported by protocol).
+[W707 08:18:33.369138416 socket.cpp:764] [c10d] The client socket cannot be initialized to connect to [frontier02161.frontier.olcf.ornl.gov]:51475 (errno: 97 - Address family not supported by protocol).
+[DiLoCo] world_size=16 backend=nccl; this is rank 0 on cuda:0
+[DiLoCo] periodic model-weight averaging: K=40 outer_lr=1.0 outer_beta=0.0 (no per-step gradient all-reduce)
+[DiLoCo] rank 0/16 bound to cuda:0
+[DiLoCo] rank 2/16 bound to cuda:0
+[DiLoCo] rank 3/16 bound to cuda:0
+[DiLoCo] rank 5/16 bound to cuda:0
+[DiLoCo] rank 6/16 bound to cuda:0
+[DiLoCo] rank 7/16 bound to cuda:0
+[DiLoCo] rank 8/16 bound to cuda:0
+[DiLoCo] rank 10/16 bound to cuda:0
+[DiLoCo] rank 12/16 bound to cuda:0
+[DiLoCo] rank 14/16 bound to cuda:0
+[DiLoCo] rank 15/16 bound to cuda:0
+[DiLoCo] rank 9/16 bound to cuda:0
+[DiLoCo] rank 1/16 bound to cuda:0
+[DiLoCo] rank 4/16 bound to cuda:0
+[DiLoCo] rank 11/16 bound to cuda:0
+[DiLoCo] rank 13/16 bound to cuda:0
+[final-checkpoint] armed: source=SLURM_JOB_END_TIME remaining_s=1146.0 margin_s=600.0 check_every=10 model_variant=level=E97,params_arg=100m,mlp_ratio=2.2623 head_rank=0/16
+[fused-guard] rank 0/16: level=E97 bf16 use_triton=1 -> fused split-edit Triton kernel, NO eager fallback
+Auto r_h_mode: none (level 0 has bounded/no W_h)
+[fused-guard] rank 8/16: level=E97 bf16 use_triton=1 -> fused split-edit Triton kernel, NO eager fallback
+[fused-guard] rank 2/16: level=E97 bf16 use_triton=1 -> fused split-edit Triton kernel, NO eager fallback
+Auto r_h_mode: none (level 0 has bounded/no W_h)
+[fused-guard] rank 11/16: level=E97 bf16 use_triton=1 -> fused split-edit Triton kernel, NO eager fallback
+[fused-guard] rank 3/16: level=E97 bf16 use_triton=1 -> fused split-edit Triton kernel, NO eager fallback
+Auto r_h_mode: none (level 0 has bounded/no W_h)
+[fused-guard] rank 12/16: level=E97 bf16 use_triton=1 -> fused split-edit Triton kernel, NO eager fallback
+[fused-guard] rank 4/16: level=E97 bf16 use_triton=1 -> fused split-edit Triton kernel, NO eager fallback
+Auto r_h_mode: none (level 0 has bounded/no W_h)
+[fused-guard] rank 14/16: level=E97 bf16 use_triton=1 -> fused split-edit Triton kernel, NO eager fallback
+Auto r_h_mode: none (level 0 has bounded/no W_h)
+[fused-guard] rank 5/16: level=E97 bf16 use_triton=1 -> fused split-edit Triton kernel, NO eager fallback
+Auto r_h_mode: none (level 0 has bounded/no W_h)
+[fused-guard] rank 15/16: level=E97 bf16 use_triton=1 -> fused split-edit Triton kernel, NO eager fallback
+Auto r_h_mode: none (level 0 has bounded/no W_h)
+Auto r_h_mode: none (level 0 has bounded/no W_h)
+Auto r_h_mode: none (level 0 has bounded/no W_h)
+Auto r_h_mode: none (level 0 has bounded/no W_h)
+[fused-guard] rank 13/16: level=E97 bf16 use_triton=1 -> fused split-edit Triton kernel, NO eager fallback
+Auto r_h_mode: none (level 0 has bounded/no W_h)
+[fused-guard] rank 1/16: level=E97 bf16 use_triton=1 -> fused split-edit Triton kernel, NO eager fallback
+Auto r_h_mode: none (level 0 has bounded/no W_h)
+[fused-guard] rank 6/16: level=E97 bf16 use_triton=1 -> fused split-edit Triton kernel, NO eager fallback
+[fused-guard] rank 7/16: level=E97 bf16 use_triton=1 -> fused split-edit Triton kernel, NO eager fallback
+Auto r_h_mode: none (level 0 has bounded/no W_h)
+Auto r_h_mode: none (level 0 has bounded/no W_h)
+[fused-guard] rank 9/16: level=E97 bf16 use_triton=1 -> fused split-edit Triton kernel, NO eager fallback
+Auto r_h_mode: none (level 0 has bounded/no W_h)
+[fused-guard] rank 10/16: level=E97 bf16 use_triton=1 -> fused split-edit Triton kernel, NO eager fallback
+Auto r_h_mode: none (level 0 has bounded/no W_h)
+Tokenizer: p50k_base, vocab_size=50281
+Tokenizer: p50k_base, vocab_size=50281
+Tokenizer: p50k_base, vocab_size=50281
+Tokenizer: p50k_base, vocab_size=50281
+Tokenizer: p50k_base, vocab_size=50281
+Tokenizer: p50k_base, vocab_size=50281
+Tokenizer: p50k_base, vocab_size=50281
+Tokenizer: p50k_base, vocab_size=50281
+Tokenizer: p50k_base, vocab_size=50281
+Tokenizer: p50k_base, vocab_size=50281
+Tokenizer: p50k_base, vocab_size=50281
+Tokenizer: p50k_base, vocab_size=50281
+Tokenizer: p50k_base, vocab_size=50281
+Tokenizer: p50k_base, vocab_size=50281
+Tokenizer: p50k_base, vocab_size=50281
+Tokenizer: p50k_base, vocab_size=50281
+Run label prefix: emender_E97_1.3B (params_arg=100m, total_params=1,286,589,072, trainable_params=1,286,589,072)
+Output directory: /lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/trainpy_e97_step1065000_b4_smoke/20260707/E97_1.3B_step1065000_b4_k40_trainpy_2n_olcf_rccl/4951475-20260707T121753Z/train/emender_E97_1.3B_20260707_081851
+[DiLoCo] broadcast rank-0 W_0 to all 16 ranks (identical start)
+[DiLoCo-merge] topology=global bucket_numel=0
+Model: Level E97, 1,286,589,072 parameters
+Using schedule-free AdamW (lr=0.001007, warmup_steps=0)
+Resuming from /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt
+Using schedule-free AdamW (lr=0.001007, warmup_steps=0)
+Resuming from /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt
+Using schedule-free AdamW (lr=0.001007, warmup_steps=0)
+Resuming from /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt
+Using schedule-free AdamW (lr=0.001007, warmup_steps=0)
+Resuming from /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt
+Using schedule-free AdamW (lr=0.001007, warmup_steps=0)
+Resuming from /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt
+Using schedule-free AdamW (lr=0.001007, warmup_steps=0)
+Resuming from /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt
+Using schedule-free AdamW (lr=0.001007, warmup_steps=0)
+Resuming from /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt
+Using schedule-free AdamW (lr=0.001007, warmup_steps=0)
+Resuming from /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt
+Using schedule-free AdamW (lr=0.001007, warmup_steps=0)
+Resuming from /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt
+Using schedule-free AdamW (lr=0.001007, warmup_steps=0)
+Resuming from /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt
+Using schedule-free AdamW (lr=0.001007, warmup_steps=0)
+Resuming from /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt
+Using schedule-free AdamW (lr=0.001007, warmup_steps=0)
+Resuming from /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt
+Using schedule-free AdamW (lr=0.001007, warmup_steps=0)
+Resuming from /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt
+Using schedule-free AdamW (lr=0.001007, warmup_steps=0)
+Resuming from /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt
+Using schedule-free AdamW (lr=0.001007, warmup_steps=0)
+Resuming from /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt
+Using schedule-free AdamW (lr=0.001007, warmup_steps=0)
+Resuming from /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt
+Resumed at step 1065000
+Resumed at step 1065000
+Resumed at step 1065000
+Resumed at step 1065000
+Resumed at step 1065000
+Resumed at step 1065000
+Resumed at step 1065000
+Resumed at step 1065000
+Compile/autotune warmup: 1 untimed fwd+bwd step(s)
+Compile/autotune warmup: 1 untimed fwd+bwd step(s)
+Compile/autotune warmup: 1 untimed fwd+bwd step(s)
+Resumed at step 1065000
+Compile/autotune warmup: 1 untimed fwd+bwd step(s)
+Compile/autotune warmup: 1 untimed fwd+bwd step(s)
+Compile/autotune warmup: 1 untimed fwd+bwd step(s)
+Resumed at step 1065000
+Compile/autotune warmup: 1 untimed fwd+bwd step(s)
+Resumed at step 1065000
+Resumed at step 1065000
+Resumed at step 1065000
+Resumed at step 1065000
+Resumed at step 1065000
+Compile/autotune warmup: 1 untimed fwd+bwd step(s)
+Resumed at step 1065000
+Compile/autotune warmup: 1 untimed fwd+bwd step(s)
+Compile/autotune warmup: 1 untimed fwd+bwd step(s)
+Compile/autotune warmup: 1 untimed fwd+bwd step(s)
+[DiLoCo] outer optimizer: avg (stateless periodic averaging)
+Compile/autotune warmup: 1 untimed fwd+bwd step(s)
+Compile/autotune warmup: 1 untimed fwd+bwd step(s)
+Compile/autotune warmup: 1 untimed fwd+bwd step(s)
+Compile/autotune warmup: 1 untimed fwd+bwd step(s)
+Compile/autotune warmup: 1 untimed fwd+bwd step(s)
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+  warmup 1/1 | loss 2.9496
+Compile/autotune warmup took 8.7s
+
+Starting training from step 1065000...
+Batch size: 4, Chunk size: 2048
+Gradient accumulation: 1, Effective batch: 4
+
+Time-based training: 10.0 min budget (after compile warmup). Init took 50.3s, 600.0s remaining for training.
+  warmup 1/1 | loss 2.0943
+Compile/autotune warmup took 8.7s
+
+Starting training from step 1065000...
+Batch size: 4, Chunk size: 2048
+Gradient accumulation: 1, Effective batch: 4
+
+Time-based training: 10.0 min budget (after compile warmup). Init took 50.3s, 600.0s remaining for training.
+  warmup 1/1 | loss 3.3018
+Compile/autotune warmup took 8.6s
+
+Starting training from step 1065000...
+Batch size: 4, Chunk size: 2048
+Gradient accumulation: 1, Effective batch: 4
+
+Time-based training: 10.0 min budget (after compile warmup). Init took 50.3s, 600.0s remaining for training.
+  warmup 1/1 | loss 2.4725
+Compile/autotune warmup took 8.7s
+
+Starting training from step 1065000...
+Batch size: 4, Chunk size: 2048
+Gradient accumulation: 1, Effective batch: 4
+
+Time-based training: 10.0 min budget (after compile warmup). Init took 50.3s, 600.0s remaining for training.
+  warmup 1/1 | loss 2.8820
+Compile/autotune warmup took 8.7s
+
+Starting training from step 1065000...
+Batch size: 4, Chunk size: 2048
+Gradient accumulation: 1, Effective batch: 4
+
+Time-based training: 10.0 min budget (after compile warmup). Init took 50.3s, 600.0s remaining for training.
+  warmup 1/1 | loss 2.6060
+Compile/autotune warmup took 8.7s
+
+Starting training from step 1065000...
+Batch size: 4, Chunk size: 2048
+Gradient accumulation: 1, Effective batch: 4
+
+Time-based training: 10.0 min budget (after compile warmup). Init took 50.4s, 600.0s remaining for training.
+  warmup 1/1 | loss 2.6352
+Compile/autotune warmup took 8.7s
+
+Starting training from step 1065000...
+Batch size: 4, Chunk size: 2048
+Gradient accumulation: 1, Effective batch: 4
+
+Time-based training: 10.0 min budget (after compile warmup). Init took 50.4s, 600.0s remaining for training.
+  warmup 1/1 | loss 3.0453
+Compile/autotune warmup took 8.7s
+
+Starting training from step 1065000...
+Batch size: 4, Chunk size: 2048
+Gradient accumulation: 1, Effective batch: 4
+
+Time-based training: 10.0 min budget (after compile warmup). Init took 50.4s, 600.0s remaining for training.
+  warmup 1/1 | loss 2.2114
+Compile/autotune warmup took 13.0s
+
+Starting training from step 1065000...
+Batch size: 4, Chunk size: 2048
+Gradient accumulation: 1, Effective batch: 4
+
+Time-based training: 10.0 min budget (after compile warmup). Init took 56.6s, 600.0s remaining for training.
+  warmup 1/1 | loss 2.9932
+Compile/autotune warmup took 13.0s
+
+Starting training from step 1065000...
+Batch size: 4, Chunk size: 2048
+Gradient accumulation: 1, Effective batch: 4
+
+Time-based training: 10.0 min budget (after compile warmup). Init took 56.7s, 600.0s remaining for training.
+  warmup 1/1 | loss 2.4729
+Compile/autotune warmup took 13.0s
+
+Starting training from step 1065000...
+Batch size: 4, Chunk size: 2048
+Gradient accumulation: 1, Effective batch: 4
+
+Time-based training: 10.0 min budget (after compile warmup). Init took 56.7s, 600.0s remaining for training.
+  warmup 1/1 | loss 1.8761
+Compile/autotune warmup took 13.0s
+
+Starting training from step 1065000...
+Batch size: 4, Chunk size: 2048
+Gradient accumulation: 1, Effective batch: 4
+
+Time-based training: 10.0 min budget (after compile warmup). Init took 56.7s, 600.0s remaining for training.
+  warmup 1/1 | loss 2.2457
+Compile/autotune warmup took 13.0s
+
+Starting training from step 1065000...
+Batch size: 4, Chunk size: 2048
+Gradient accumulation: 1, Effective batch: 4
+
+Time-based training: 10.0 min budget (after compile warmup). Init took 56.7s, 600.0s remaining for training.
+  warmup 1/1 | loss 2.1030
+Compile/autotune warmup took 13.0s
+
+Starting training from step 1065000...
+Batch size: 4, Chunk size: 2048
+Gradient accumulation: 1, Effective batch: 4
+
+Time-based training: 10.0 min budget (after compile warmup). Init took 56.7s, 600.0s remaining for training.
+  warmup 1/1 | loss 2.5911
+Compile/autotune warmup took 13.1s
+
+Starting training from step 1065000...
+Batch size: 4, Chunk size: 2048
+Gradient accumulation: 1, Effective batch: 4
+
+Time-based training: 10.0 min budget (after compile warmup). Init took 56.7s, 600.0s remaining for training.
+  warmup 1/1 | loss 2.6776
+Compile/autotune warmup took 13.1s
+
+Starting training from step 1065000...
+Batch size: 4, Chunk size: 2048
+Gradient accumulation: 1, Effective batch: 4
+
+Time-based training: 10.0 min budget (after compile warmup). Init took 56.7s, 600.0s remaining for training.
+step 1065001 | loss 1.7864 | lr 1.01e-03 | grad 1.22 | tok/s 1872 | global_tok/s 29947 | elapsed_h 0.001 | time 2026-07-07T12:19:14+00:00
+step 1065002 | loss 2.8771 | lr 1.01e-03 | grad 0.85 | tok/s 5510 | global_tok/s 88161 | elapsed_h 0.002 | time 2026-07-07T12:19:16+00:00
+step 1065003 | loss 1.9302 | lr 1.01e-03 | grad 0.65 | tok/s 5534 | global_tok/s 88548 | elapsed_h 0.002 | time 2026-07-07T12:19:17+00:00
+step 1065004 | loss 2.3968 | lr 1.01e-03 | grad 0.83 | tok/s 5484 | global_tok/s 87741 | elapsed_h 0.003 | time 2026-07-07T12:19:19+00:00
+step 1065005 | loss 2.5789 | lr 1.01e-03 | grad 0.84 | tok/s 5515 | global_tok/s 88245 | elapsed_h 0.003 | time 2026-07-07T12:19:20+00:00
+step 1065006 | loss 2.6119 | lr 1.01e-03 | grad 0.85 | tok/s 5468 | global_tok/s 87488 | elapsed_h 0.003 | time 2026-07-07T12:19:22+00:00
+step 1065007 | loss 2.5480 | lr 1.01e-03 | grad 0.90 | tok/s 5504 | global_tok/s 88060 | elapsed_h 0.004 | time 2026-07-07T12:19:23+00:00
+step 1065008 | loss 2.4788 | lr 1.01e-03 | grad 0.71 | tok/s 5536 | global_tok/s 88580 | elapsed_h 0.004 | time 2026-07-07T12:19:25+00:00
+step 1065009 | loss 2.3885 | lr 1.01e-03 | grad 0.92 | tok/s 5540 | global_tok/s 88642 | elapsed_h 0.005 | time 2026-07-07T12:19:26+00:00
+step 1065010 | loss 2.4175 | lr 1.01e-03 | grad 0.90 | tok/s 5521 | global_tok/s 88341 | elapsed_h 0.005 | time 2026-07-07T12:19:28+00:00
+step 1065011 | loss 2.3374 | lr 1.01e-03 | grad 0.97 | tok/s 4407 | global_tok/s 70513 | elapsed_h 0.006 | time 2026-07-07T12:19:30+00:00
+step 1065012 | loss 2.8203 | lr 1.01e-03 | grad 0.77 | tok/s 5459 | global_tok/s 87339 | elapsed_h 0.006 | time 2026-07-07T12:19:32+00:00
+step 1065013 | loss 2.8380 | lr 1.01e-03 | grad 0.81 | tok/s 5514 | global_tok/s 88223 | elapsed_h 0.006 | time 2026-07-07T12:19:33+00:00
+step 1065014 | loss 2.3716 | lr 1.01e-03 | grad 0.91 | tok/s 5374 | global_tok/s 85984 | elapsed_h 0.007 | time 2026-07-07T12:19:35+00:00
+step 1065015 | loss 2.4271 | lr 1.01e-03 | grad 0.84 | tok/s 5454 | global_tok/s 87263 | elapsed_h 0.007 | time 2026-07-07T12:19:36+00:00
+step 1065016 | loss 2.5580 | lr 1.01e-03 | grad 0.79 | tok/s 5404 | global_tok/s 86466 | elapsed_h 0.008 | time 2026-07-07T12:19:38+00:00
+step 1065017 | loss 2.2024 | lr 1.01e-03 | grad 0.78 | tok/s 5464 | global_tok/s 87423 | elapsed_h 0.008 | time 2026-07-07T12:19:39+00:00
+step 1065018 | loss 2.6630 | lr 1.01e-03 | grad 0.89 | tok/s 5516 | global_tok/s 88262 | elapsed_h 0.009 | time 2026-07-07T12:19:41+00:00
+step 1065019 | loss 2.8163 | lr 1.01e-03 | grad 0.89 | tok/s 5544 | global_tok/s 88712 | elapsed_h 0.009 | time 2026-07-07T12:19:42+00:00
+step 1065020 | loss 2.8254 | lr 1.01e-03 | grad 0.80 | tok/s 5474 | global_tok/s 87588 | elapsed_h 0.010 | time 2026-07-07T12:19:44+00:00
+step 1065021 | loss 2.5401 | lr 1.01e-03 | grad 0.74 | tok/s 4523 | global_tok/s 72374 | elapsed_h 0.010 | time 2026-07-07T12:19:46+00:00
+step 1065022 | loss 1.7908 | lr 1.01e-03 | grad 0.72 | tok/s 5395 | global_tok/s 86314 | elapsed_h 0.010 | time 2026-07-07T12:19:47+00:00
+step 1065023 | loss 2.0588 | lr 1.01e-03 | grad 0.69 | tok/s 5467 | global_tok/s 87480 | elapsed_h 0.011 | time 2026-07-07T12:19:49+00:00
+step 1065024 | loss 2.2058 | lr 1.01e-03 | grad 0.87 | tok/s 5473 | global_tok/s 87571 | elapsed_h 0.011 | time 2026-07-07T12:19:51+00:00
+step 1065025 | loss 2.9109 | lr 1.01e-03 | grad 0.76 | tok/s 5497 | global_tok/s 87947 | elapsed_h 0.012 | time 2026-07-07T12:19:52+00:00
+step 1065026 | loss 2.6241 | lr 1.01e-03 | grad 0.85 | tok/s 5541 | global_tok/s 88649 | elapsed_h 0.012 | time 2026-07-07T12:19:54+00:00
+step 1065027 | loss 2.1986 | lr 1.01e-03 | grad 0.79 | tok/s 5503 | global_tok/s 88053 | elapsed_h 0.013 | time 2026-07-07T12:19:55+00:00
+step 1065028 | loss 2.2349 | lr 1.01e-03 | grad 0.80 | tok/s 5389 | global_tok/s 86230 | elapsed_h 0.013 | time 2026-07-07T12:19:57+00:00
+step 1065029 | loss 2.8364 | lr 1.01e-03 | grad 0.75 | tok/s 5432 | global_tok/s 86906 | elapsed_h 0.013 | time 2026-07-07T12:19:58+00:00
+step 1065030 | loss 2.4599 | lr 1.01e-03 | grad 0.73 | tok/s 5457 | global_tok/s 87306 | elapsed_h 0.014 | time 2026-07-07T12:20:00+00:00
+step 1065031 | loss 2.9376 | lr 1.01e-03 | grad 0.77 | tok/s 4508 | global_tok/s 72127 | elapsed_h 0.014 | time 2026-07-07T12:20:02+00:00
+step 1065032 | loss 2.4523 | lr 1.01e-03 | grad 0.80 | tok/s 5339 | global_tok/s 85425 | elapsed_h 0.015 | time 2026-07-07T12:20:03+00:00
+step 1065033 | loss 2.1689 | lr 1.01e-03 | grad 0.78 | tok/s 5469 | global_tok/s 87508 | elapsed_h 0.015 | time 2026-07-07T12:20:05+00:00
+step 1065034 | loss 2.2983 | lr 1.01e-03 | grad 0.92 | tok/s 5442 | global_tok/s 87079 | elapsed_h 0.016 | time 2026-07-07T12:20:07+00:00
+step 1065035 | loss 2.8026 | lr 1.01e-03 | grad 0.76 | tok/s 5503 | global_tok/s 88055 | elapsed_h 0.016 | time 2026-07-07T12:20:08+00:00
+step 1065036 | loss 3.0640 | lr 1.01e-03 | grad 0.74 | tok/s 5516 | global_tok/s 88261 | elapsed_h 0.017 | time 2026-07-07T12:20:10+00:00
+step 1065037 | loss 2.3189 | lr 1.01e-03 | grad 0.78 | tok/s 5431 | global_tok/s 86890 | elapsed_h 0.017 | time 2026-07-07T12:20:11+00:00
+step 1065038 | loss 2.7630 | lr 1.01e-03 | grad 0.80 | tok/s 5462 | global_tok/s 87393 | elapsed_h 0.017 | time 2026-07-07T12:20:13+00:00
+step 1065039 | loss 2.6897 | lr 1.01e-03 | grad 0.88 | tok/s 5420 | global_tok/s 86721 | elapsed_h 0.018 | time 2026-07-07T12:20:14+00:00
+[DiLoCoMergeDebug] rank=0 step=1065040 merge=1 label=sf_x bucket=0 numel=1286589072 dtype=torch.bfloat16 phase=enter
+[DiLoCoMergeDebug] rank=0 step=1065040 merge=1 label=sf_x bucket=0 numel=1286589072 dtype=torch.bfloat16 phase=exit elapsed_s=0.000278
+[DiLoCoMergeDebug] rank=0 step=1065040 merge=1 label=sf_z bucket=0 numel=1286586696 dtype=torch.bfloat16 phase=enter
+[DiLoCoMergeDebug] rank=0 step=1065040 merge=1 label=sf_z bucket=0 numel=1286586696 dtype=torch.bfloat16 phase=exit elapsed_s=0.000137
+  >>> [DiLoCo] merge #1 at step 1065040: averaged model weights across 16 ranks in 467 ms (amortized over 40 steps)
+step 1065040 | loss 2.9188 | lr 1.01e-03 | grad 0.84 | tok/s 4192 | global_tok/s 67067 | elapsed_h 0.018 | time 2026-07-07T12:20:16+00:00
+  >>> saved checkpoint: checkpoint_step_1065040_loss_2.9188.pt
+step 1065041 | loss 2.0683 | lr 1.01e-03 | grad 0.78 | tok/s 976 | global_tok/s 15614 | elapsed_h 0.021 | time 2026-07-07T12:20:25+00:00
+step 1065042 | loss 1.6732 | lr 1.01e-03 | grad 0.63 | tok/s 5496 | global_tok/s 87930 | elapsed_h 0.021 | time 2026-07-07T12:20:26+00:00
+step 1065043 | loss 2.5323 | lr 1.01e-03 | grad 0.75 | tok/s 5524 | global_tok/s 88392 | elapsed_h 0.022 | time 2026-07-07T12:20:28+00:00
+step 1065044 | loss 2.3084 | lr 1.01e-03 | grad 0.89 | tok/s 5460 | global_tok/s 87359 | elapsed_h 0.022 | time 2026-07-07T12:20:29+00:00
+step 1065045 | loss 2.2639 | lr 1.01e-03 | grad 0.84 | tok/s 5435 | global_tok/s 86965 | elapsed_h 0.023 | time 2026-07-07T12:20:31+00:00
+step 1065046 | loss 2.7014 | lr 1.01e-03 | grad 0.78 | tok/s 5537 | global_tok/s 88598 | elapsed_h 0.023 | time 2026-07-07T12:20:32+00:00
+step 1065047 | loss 2.5839 | lr 1.01e-03 | grad 0.80 | tok/s 5469 | global_tok/s 87505 | elapsed_h 0.023 | time 2026-07-07T12:20:34+00:00
+step 1065048 | loss 2.4251 | lr 1.01e-03 | grad 0.72 | tok/s 5489 | global_tok/s 87830 | elapsed_h 0.024 | time 2026-07-07T12:20:36+00:00
+step 1065049 | loss 2.1975 | lr 1.01e-03 | grad 0.71 | tok/s 5453 | global_tok/s 87242 | elapsed_h 0.024 | time 2026-07-07T12:20:37+00:00
+step 1065050 | loss 2.5964 | lr 1.01e-03 | grad 0.73 | tok/s 5411 | global_tok/s 86582 | elapsed_h 0.025 | time 2026-07-07T12:20:39+00:00
+step 1065051 | loss 2.9827 | lr 1.01e-03 | grad 0.81 | tok/s 4404 | global_tok/s 70466 | elapsed_h 0.025 | time 2026-07-07T12:20:41+00:00
+step 1065052 | loss 2.3335 | lr 1.01e-03 | grad 0.76 | tok/s 5500 | global_tok/s 87994 | elapsed_h 0.026 | time 2026-07-07T12:20:42+00:00
+step 1065053 | loss 2.7069 | lr 1.01e-03 | grad 0.73 | tok/s 5448 | global_tok/s 87166 | elapsed_h 0.026 | time 2026-07-07T12:20:44+00:00
+step 1065054 | loss 2.3474 | lr 1.01e-03 | grad 0.80 | tok/s 5420 | global_tok/s 86713 | elapsed_h 0.027 | time 2026-07-07T12:20:45+00:00
+step 1065055 | loss 2.7860 | lr 1.01e-03 | grad 0.77 | tok/s 5498 | global_tok/s 87965 | elapsed_h 0.027 | time 2026-07-07T12:20:47+00:00
+step 1065056 | loss 2.8829 | lr 1.01e-03 | grad 0.76 | tok/s 5345 | global_tok/s 85519 | elapsed_h 0.027 | time 2026-07-07T12:20:48+00:00
+step 1065057 | loss 2.4619 | lr 1.01e-03 | grad 0.78 | tok/s 5497 | global_tok/s 87953 | elapsed_h 0.028 | time 2026-07-07T12:20:50+00:00
+step 1065058 | loss 2.5960 | lr 1.01e-03 | grad 0.74 | tok/s 5479 | global_tok/s 87657 | elapsed_h 0.028 | time 2026-07-07T12:20:52+00:00
+step 1065059 | loss 2.7427 | lr 1.01e-03 | grad 0.73 | tok/s 5462 | global_tok/s 87387 | elapsed_h 0.029 | time 2026-07-07T12:20:53+00:00
+step 1065060 | loss 2.6361 | lr 1.01e-03 | grad 0.99 | tok/s 5501 | global_tok/s 88016 | elapsed_h 0.029 | time 2026-07-07T12:20:55+00:00
+step 1065061 | loss 2.5230 | lr 1.01e-03 | grad 0.83 | tok/s 4567 | global_tok/s 73067 | elapsed_h 0.030 | time 2026-07-07T12:20:57+00:00
+step 1065062 | loss 2.0982 | lr 1.01e-03 | grad 0.82 | tok/s 5364 | global_tok/s 85830 | elapsed_h 0.030 | time 2026-07-07T12:20:58+00:00
+step 1065063 | loss 2.8134 | lr 1.01e-03 | grad 0.75 | tok/s 5411 | global_tok/s 86582 | elapsed_h 0.031 | time 2026-07-07T12:21:00+00:00
+step 1065064 | loss 2.7286 | lr 1.01e-03 | grad 0.89 | tok/s 5421 | global_tok/s 86743 | elapsed_h 0.031 | time 2026-07-07T12:21:01+00:00
+step 1065065 | loss 2.5918 | lr 1.01e-03 | grad 0.76 | tok/s 5446 | global_tok/s 87138 | elapsed_h 0.031 | time 2026-07-07T12:21:03+00:00
+step 1065066 | loss 2.3992 | lr 1.01e-03 | grad 0.81 | tok/s 5463 | global_tok/s 87402 | elapsed_h 0.032 | time 2026-07-07T12:21:04+00:00
+step 1065067 | loss 2.0214 | lr 1.01e-03 | grad 0.80 | tok/s 5492 | global_tok/s 87870 | elapsed_h 0.032 | time 2026-07-07T12:21:06+00:00
+step 1065068 | loss 2.8541 | lr 1.01e-03 | grad 0.79 | tok/s 5448 | global_tok/s 87163 | elapsed_h 0.033 | time 2026-07-07T12:21:07+00:00
+step 1065069 | loss 2.4233 | lr 1.01e-03 | grad 0.82 | tok/s 5526 | global_tok/s 88420 | elapsed_h 0.033 | time 2026-07-07T12:21:09+00:00
+step 1065070 | loss 2.8405 | lr 1.01e-03 | grad 0.75 | tok/s 5387 | global_tok/s 86195 | elapsed_h 0.034 | time 2026-07-07T12:21:11+00:00
+step 1065071 | loss 2.6202 | lr 1.01e-03 | grad 0.81 | tok/s 4856 | global_tok/s 77689 | elapsed_h 0.034 | time 2026-07-07T12:21:12+00:00
+step 1065072 | loss 3.1659 | lr 1.01e-03 | grad 0.87 | tok/s 5391 | global_tok/s 86259 | elapsed_h 0.034 | time 2026-07-07T12:21:14+00:00
+step 1065073 | loss 2.3368 | lr 1.01e-03 | grad 0.79 | tok/s 5476 | global_tok/s 87613 | elapsed_h 0.035 | time 2026-07-07T12:21:15+00:00
+step 1065074 | loss 2.6805 | lr 1.01e-03 | grad 0.80 | tok/s 5461 | global_tok/s 87369 | elapsed_h 0.035 | time 2026-07-07T12:21:17+00:00
+step 1065075 | loss 2.4351 | lr 1.01e-03 | grad 0.73 | tok/s 5413 | global_tok/s 86601 | elapsed_h 0.036 | time 2026-07-07T12:21:19+00:00
+step 1065076 | loss 2.5590 | lr 1.01e-03 | grad 0.82 | tok/s 5498 | global_tok/s 87974 | elapsed_h 0.036 | time 2026-07-07T12:21:20+00:00
+step 1065077 | loss 2.2612 | lr 1.01e-03 | grad 0.71 | tok/s 5427 | global_tok/s 86831 | elapsed_h 0.037 | time 2026-07-07T12:21:22+00:00
+step 1065078 | loss 2.8431 | lr 1.01e-03 | grad 0.76 | tok/s 5463 | global_tok/s 87412 | elapsed_h 0.037 | time 2026-07-07T12:21:23+00:00
+step 1065079 | loss 1.6138 | lr 1.01e-03 | grad 0.73 | tok/s 5538 | global_tok/s 88615 | elapsed_h 0.038 | time 2026-07-07T12:21:25+00:00
+[DiLoCoMergeDebug] rank=0 step=1065080 merge=2 label=sf_x bucket=0 numel=1286589072 dtype=torch.bfloat16 phase=enter
+[DiLoCoMergeDebug] rank=0 step=1065080 merge=2 label=sf_x bucket=0 numel=1286589072 dtype=torch.bfloat16 phase=exit elapsed_s=0.000168
+[DiLoCoMergeDebug] rank=0 step=1065080 merge=2 label=sf_z bucket=0 numel=1286586696 dtype=torch.bfloat16 phase=enter
+[DiLoCoMergeDebug] rank=0 step=1065080 merge=2 label=sf_z bucket=0 numel=1286586696 dtype=torch.bfloat16 phase=exit elapsed_s=0.000105
+  >>> [DiLoCo] merge #2 at step 1065080: averaged model weights across 16 ranks in 448 ms (amortized over 40 steps)
+step 1065080 | loss 2.4870 | lr 1.01e-03 | grad 0.84 | tok/s 4142 | global_tok/s 66265 | elapsed_h 0.038 | time 2026-07-07T12:21:27+00:00
+  >>> saved checkpoint: checkpoint_step_1065080_loss_2.4870.pt
+step 1065081 | loss 2.3816 | lr 1.01e-03 | grad 0.82 | tok/s 965 | global_tok/s 15447 | elapsed_h 0.040 | time 2026-07-07T12:21:35+00:00
+step 1065082 | loss 2.3593 | lr 1.01e-03 | grad 0.74 | tok/s 5445 | global_tok/s 87125 | elapsed_h 0.041 | time 2026-07-07T12:21:37+00:00
+step 1065083 | loss 3.0842 | lr 1.01e-03 | grad 0.74 | tok/s 5455 | global_tok/s 87284 | elapsed_h 0.041 | time 2026-07-07T12:21:38+00:00
+step 1065084 | loss 2.6444 | lr 1.01e-03 | grad 0.75 | tok/s 5559 | global_tok/s 88941 | elapsed_h 0.042 | time 2026-07-07T12:21:40+00:00
+step 1065085 | loss 2.8630 | lr 1.01e-03 | grad 0.78 | tok/s 5551 | global_tok/s 88823 | elapsed_h 0.042 | time 2026-07-07T12:21:42+00:00
+step 1065086 | loss 2.4371 | lr 1.01e-03 | grad 0.76 | tok/s 5540 | global_tok/s 88645 | elapsed_h 0.043 | time 2026-07-07T12:21:43+00:00
+step 1065087 | loss 2.5492 | lr 1.01e-03 | grad 0.75 | tok/s 5519 | global_tok/s 88312 | elapsed_h 0.043 | time 2026-07-07T12:21:45+00:00
+step 1065088 | loss 2.7909 | lr 1.01e-03 | grad 0.76 | tok/s 5336 | global_tok/s 85374 | elapsed_h 0.043 | time 2026-07-07T12:21:46+00:00
+step 1065089 | loss 2.8847 | lr 1.01e-03 | grad 0.86 | tok/s 5406 | global_tok/s 86489 | elapsed_h 0.044 | time 2026-07-07T12:21:48+00:00
+step 1065090 | loss 2.7234 | lr 1.01e-03 | grad 0.78 | tok/s 5404 | global_tok/s 86462 | elapsed_h 0.044 | time 2026-07-07T12:21:49+00:00
+step 1065091 | loss 2.9409 | lr 1.01e-03 | grad 0.86 | tok/s 4504 | global_tok/s 72061 | elapsed_h 0.045 | time 2026-07-07T12:21:51+00:00
+step 1065092 | loss 2.8403 | lr 1.01e-03 | grad 0.82 | tok/s 5527 | global_tok/s 88435 | elapsed_h 0.045 | time 2026-07-07T12:21:53+00:00
+step 1065093 | loss 1.7660 | lr 1.01e-03 | grad 0.66 | tok/s 5323 | global_tok/s 85166 | elapsed_h 0.046 | time 2026-07-07T12:21:54+00:00
+step 1065094 | loss 3.0596 | lr 1.01e-03 | grad 0.79 | tok/s 5515 | global_tok/s 88237 | elapsed_h 0.046 | time 2026-07-07T12:21:56+00:00
+step 1065095 | loss 2.6899 | lr 1.01e-03 | grad 0.78 | tok/s 5518 | global_tok/s 88280 | elapsed_h 0.047 | time 2026-07-07T12:21:58+00:00
+step 1065096 | loss 2.3697 | lr 1.01e-03 | grad 0.78 | tok/s 5391 | global_tok/s 86259 | elapsed_h 0.047 | time 2026-07-07T12:21:59+00:00
+step 1065097 | loss 2.4167 | lr 1.01e-03 | grad 0.77 | tok/s 5493 | global_tok/s 87890 | elapsed_h 0.047 | time 2026-07-07T12:22:01+00:00
+step 1065098 | loss 2.7202 | lr 1.01e-03 | grad 0.77 | tok/s 5344 | global_tok/s 85504 | elapsed_h 0.048 | time 2026-07-07T12:22:02+00:00
+step 1065099 | loss 2.9011 | lr 1.01e-03 | grad 0.75 | tok/s 5514 | global_tok/s 88219 | elapsed_h 0.048 | time 2026-07-07T12:22:04+00:00
+step 1065100 | loss 2.4879 | lr 1.01e-03 | grad 0.79 | tok/s 5491 | global_tok/s 87852 | elapsed_h 0.049 | time 2026-07-07T12:22:05+00:00
+step 1065101 | loss 2.3413 | lr 1.01e-03 | grad 0.89 | tok/s 4654 | global_tok/s 74463 | elapsed_h 0.049 | time 2026-07-07T12:22:07+00:00
+step 1065102 | loss 2.7174 | lr 1.01e-03 | grad 0.75 | tok/s 5374 | global_tok/s 85987 | elapsed_h 0.050 | time 2026-07-07T12:22:09+00:00
+step 1065103 | loss 2.3921 | lr 1.01e-03 | grad 0.75 | tok/s 5498 | global_tok/s 87968 | elapsed_h 0.050 | time 2026-07-07T12:22:10+00:00
+step 1065104 | loss 2.1566 | lr 1.01e-03 | grad 0.84 | tok/s 5490 | global_tok/s 87841 | elapsed_h 0.051 | time 2026-07-07T12:22:12+00:00
+step 1065105 | loss 2.6370 | lr 1.01e-03 | grad 0.76 | tok/s 5399 | global_tok/s 86382 | elapsed_h 0.051 | time 2026-07-07T12:22:13+00:00
+step 1065106 | loss 3.3094 | lr 1.01e-03 | grad 0.86 | tok/s 5485 | global_tok/s 87758 | elapsed_h 0.051 | time 2026-07-07T12:22:15+00:00
+step 1065107 | loss 2.5745 | lr 1.01e-03 | grad 0.77 | tok/s 5520 | global_tok/s 88312 | elapsed_h 0.052 | time 2026-07-07T12:22:16+00:00
+step 1065108 | loss 3.0522 | lr 1.01e-03 | grad 0.77 | tok/s 5471 | global_tok/s 87536 | elapsed_h 0.052 | time 2026-07-07T12:22:18+00:00
+step 1065109 | loss 2.2157 | lr 1.01e-03 | grad 0.79 | tok/s 5451 | global_tok/s 87219 | elapsed_h 0.053 | time 2026-07-07T12:22:20+00:00
+step 1065110 | loss 2.4603 | lr 1.01e-03 | grad 0.79 | tok/s 5558 | global_tok/s 88924 | elapsed_h 0.053 | time 2026-07-07T12:22:21+00:00
+step 1065111 | loss 2.7487 | lr 1.01e-03 | grad 0.79 | tok/s 4615 | global_tok/s 73844 | elapsed_h 0.054 | time 2026-07-07T12:22:23+00:00
+step 1065112 | loss 2.0375 | lr 1.01e-03 | grad 0.73 | tok/s 5419 | global_tok/s 86696 | elapsed_h 0.054 | time 2026-07-07T12:22:25+00:00
+step 1065113 | loss 2.6778 | lr 1.01e-03 | grad 0.83 | tok/s 5427 | global_tok/s 86839 | elapsed_h 0.055 | time 2026-07-07T12:22:26+00:00
+step 1065114 | loss 2.0837 | lr 1.01e-03 | grad 0.74 | tok/s 5409 | global_tok/s 86539 | elapsed_h 0.055 | time 2026-07-07T12:22:28+00:00
+step 1065115 | loss 2.1637 | lr 1.01e-03 | grad 0.93 | tok/s 5439 | global_tok/s 87021 | elapsed_h 0.055 | time 2026-07-07T12:22:29+00:00
+step 1065116 | loss 2.7235 | lr 1.01e-03 | grad 0.77 | tok/s 5419 | global_tok/s 86702 | elapsed_h 0.056 | time 2026-07-07T12:22:31+00:00
+step 1065117 | loss 2.4472 | lr 1.01e-03 | grad 1.20 | tok/s 5550 | global_tok/s 88804 | elapsed_h 0.056 | time 2026-07-07T12:22:32+00:00
+step 1065118 | loss 2.6651 | lr 1.01e-03 | grad 0.80 | tok/s 5459 | global_tok/s 87349 | elapsed_h 0.057 | time 2026-07-07T12:22:34+00:00
+step 1065119 | loss 2.5566 | lr 1.01e-03 | grad 0.73 | tok/s 5512 | global_tok/s 88197 | elapsed_h 0.057 | time 2026-07-07T12:22:35+00:00
+[DiLoCoMergeDebug] rank=0 step=1065120 merge=3 label=sf_x bucket=0 numel=1286589072 dtype=torch.bfloat16 phase=enter
+[DiLoCoMergeDebug] rank=0 step=1065120 merge=3 label=sf_x bucket=0 numel=1286589072 dtype=torch.bfloat16 phase=exit elapsed_s=0.000210
+[DiLoCoMergeDebug] rank=0 step=1065120 merge=3 label=sf_z bucket=0 numel=1286586696 dtype=torch.bfloat16 phase=enter
+[DiLoCoMergeDebug] rank=0 step=1065120 merge=3 label=sf_z bucket=0 numel=1286586696 dtype=torch.bfloat16 phase=exit elapsed_s=0.000103
+  >>> [DiLoCo] merge #3 at step 1065120: averaged model weights across 16 ranks in 458 ms (amortized over 40 steps)
+step 1065120 | loss 2.6784 | lr 1.01e-03 | grad 0.79 | tok/s 4179 | global_tok/s 66863 | elapsed_h 0.058 | time 2026-07-07T12:22:38+00:00
+  >>> saved checkpoint: checkpoint_step_1065120_loss_2.6784.pt
+step 1065121 | loss 2.6333 | lr 1.01e-03 | grad 0.74 | tok/s 975 | global_tok/s 15600 | elapsed_h 0.060 | time 2026-07-07T12:22:46+00:00
+step 1065122 | loss 2.4653 | lr 1.01e-03 | grad 0.81 | tok/s 5490 | global_tok/s 87847 | elapsed_h 0.060 | time 2026-07-07T12:22:47+00:00
+step 1065123 | loss 2.4334 | lr 1.01e-03 | grad 0.72 | tok/s 5390 | global_tok/s 86241 | elapsed_h 0.061 | time 2026-07-07T12:22:49+00:00
+step 1065124 | loss 2.9901 | lr 1.01e-03 | grad 0.82 | tok/s 5516 | global_tok/s 88256 | elapsed_h 0.061 | time 2026-07-07T12:22:51+00:00
+step 1065125 | loss 2.6051 | lr 1.01e-03 | grad 0.72 | tok/s 5477 | global_tok/s 87635 | elapsed_h 0.062 | time 2026-07-07T12:22:52+00:00
+step 1065126 | loss 2.4369 | lr 1.01e-03 | grad 0.74 | tok/s 5486 | global_tok/s 87780 | elapsed_h 0.062 | time 2026-07-07T12:22:54+00:00
+step 1065127 | loss 2.5343 | lr 1.01e-03 | grad 0.83 | tok/s 5537 | global_tok/s 88589 | elapsed_h 0.063 | time 2026-07-07T12:22:55+00:00
+step 1065128 | loss 2.8158 | lr 1.01e-03 | grad 0.75 | tok/s 5396 | global_tok/s 86332 | elapsed_h 0.063 | time 2026-07-07T12:22:57+00:00
+step 1065129 | loss 2.3495 | lr 1.01e-03 | grad 0.85 | tok/s 5398 | global_tok/s 86365 | elapsed_h 0.064 | time 2026-07-07T12:22:58+00:00
+step 1065130 | loss 2.9427 | lr 1.01e-03 | grad 0.76 | tok/s 5504 | global_tok/s 88062 | elapsed_h 0.064 | time 2026-07-07T12:23:00+00:00
+step 1065131 | loss 2.3604 | lr 1.01e-03 | grad 0.75 | tok/s 4586 | global_tok/s 73379 | elapsed_h 0.064 | time 2026-07-07T12:23:02+00:00
+step 1065132 | loss 3.0861 | lr 1.01e-03 | grad 0.82 | tok/s 5445 | global_tok/s 87112 | elapsed_h 0.065 | time 2026-07-07T12:23:03+00:00
+step 1065133 | loss 2.1856 | lr 1.01e-03 | grad 0.76 | tok/s 5476 | global_tok/s 87611 | elapsed_h 0.065 | time 2026-07-07T12:23:05+00:00
+step 1065134 | loss 2.1087 | lr 1.01e-03 | grad 0.76 | tok/s 5371 | global_tok/s 85937 | elapsed_h 0.066 | time 2026-07-07T12:23:06+00:00
+step 1065135 | loss 1.9945 | lr 1.01e-03 | grad 0.87 | tok/s 5479 | global_tok/s 87668 | elapsed_h 0.066 | time 2026-07-07T12:23:08+00:00
+step 1065136 | loss 1.5726 | lr 1.01e-03 | grad 0.72 | tok/s 5413 | global_tok/s 86609 | elapsed_h 0.067 | time 2026-07-07T12:23:10+00:00
+step 1065137 | loss 2.6652 | lr 1.01e-03 | grad 0.74 | tok/s 5499 | global_tok/s 87977 | elapsed_h 0.067 | time 2026-07-07T12:23:11+00:00
+step 1065138 | loss 2.7932 | lr 1.01e-03 | grad 0.83 | tok/s 5503 | global_tok/s 88049 | elapsed_h 0.067 | time 2026-07-07T12:23:13+00:00
+step 1065139 | loss 2.6565 | lr 1.01e-03 | grad 0.73 | tok/s 5506 | global_tok/s 88100 | elapsed_h 0.068 | time 2026-07-07T12:23:14+00:00
+step 1065140 | loss 2.4072 | lr 1.01e-03 | grad 0.82 | tok/s 5493 | global_tok/s 87884 | elapsed_h 0.068 | time 2026-07-07T12:23:16+00:00
+step 1065141 | loss 2.6388 | lr 1.01e-03 | grad 0.78 | tok/s 4637 | global_tok/s 74191 | elapsed_h 0.069 | time 2026-07-07T12:23:18+00:00
+step 1065142 | loss 2.3499 | lr 1.01e-03 | grad 0.75 | tok/s 5377 | global_tok/s 86031 | elapsed_h 0.069 | time 2026-07-07T12:23:19+00:00
+step 1065143 | loss 2.2345 | lr 1.01e-03 | grad 0.73 | tok/s 5538 | global_tok/s 88609 | elapsed_h 0.070 | time 2026-07-07T12:23:21+00:00
+step 1065144 | loss 2.4205 | lr 1.01e-03 | grad 0.80 | tok/s 5488 | global_tok/s 87814 | elapsed_h 0.070 | time 2026-07-07T12:23:22+00:00
+step 1065145 | loss 2.2012 | lr 1.01e-03 | grad 0.80 | tok/s 5449 | global_tok/s 87182 | elapsed_h 0.071 | time 2026-07-07T12:23:24+00:00
+step 1065146 | loss 2.2790 | lr 1.01e-03 | grad 0.86 | tok/s 5437 | global_tok/s 86997 | elapsed_h 0.071 | time 2026-07-07T12:23:25+00:00
+step 1065147 | loss 2.2917 | lr 1.01e-03 | grad 0.77 | tok/s 5493 | global_tok/s 87889 | elapsed_h 0.071 | time 2026-07-07T12:23:27+00:00
+step 1065148 | loss 2.2230 | lr 1.01e-03 | grad 0.85 | tok/s 5544 | global_tok/s 88698 | elapsed_h 0.072 | time 2026-07-07T12:23:29+00:00
+step 1065149 | loss 2.5666 | lr 1.01e-03 | grad 0.84 | tok/s 5471 | global_tok/s 87528 | elapsed_h 0.072 | time 2026-07-07T12:23:30+00:00
+step 1065150 | loss 2.7045 | lr 1.01e-03 | grad 0.81 | tok/s 5529 | global_tok/s 88467 | elapsed_h 0.073 | time 2026-07-07T12:23:32+00:00
+step 1065151 | loss 1.9216 | lr 1.01e-03 | grad 0.81 | tok/s 4456 | global_tok/s 71302 | elapsed_h 0.073 | time 2026-07-07T12:23:34+00:00
+step 1065152 | loss 2.3638 | lr 1.01e-03 | grad 0.94 | tok/s 5463 | global_tok/s 87411 | elapsed_h 0.074 | time 2026-07-07T12:23:35+00:00
+step 1065153 | loss 2.5099 | lr 1.01e-03 | grad 0.74 | tok/s 5475 | global_tok/s 87603 | elapsed_h 0.074 | time 2026-07-07T12:23:37+00:00
+step 1065154 | loss 2.4978 | lr 1.01e-03 | grad 0.83 | tok/s 5504 | global_tok/s 88058 | elapsed_h 0.075 | time 2026-07-07T12:23:38+00:00
+step 1065155 | loss 2.4666 | lr 1.01e-03 | grad 0.80 | tok/s 5468 | global_tok/s 87493 | elapsed_h 0.075 | time 2026-07-07T12:23:40+00:00
+step 1065156 | loss 2.1973 | lr 1.01e-03 | grad 0.76 | tok/s 5367 | global_tok/s 85865 | elapsed_h 0.075 | time 2026-07-07T12:23:41+00:00
+step 1065157 | loss 2.8700 | lr 1.01e-03 | grad 0.82 | tok/s 5500 | global_tok/s 88006 | elapsed_h 0.076 | time 2026-07-07T12:23:43+00:00
+step 1065158 | loss 3.0565 | lr 1.01e-03 | grad 0.86 | tok/s 5537 | global_tok/s 88595 | elapsed_h 0.076 | time 2026-07-07T12:23:44+00:00
+step 1065159 | loss 2.3483 | lr 1.01e-03 | grad 0.79 | tok/s 5493 | global_tok/s 87887 | elapsed_h 0.077 | time 2026-07-07T12:23:46+00:00
+[DiLoCoMergeDebug] rank=0 step=1065160 merge=4 label=sf_x bucket=0 numel=1286589072 dtype=torch.bfloat16 phase=enter
+[DiLoCoMergeDebug] rank=0 step=1065160 merge=4 label=sf_x bucket=0 numel=1286589072 dtype=torch.bfloat16 phase=exit elapsed_s=0.000224
+[DiLoCoMergeDebug] rank=0 step=1065160 merge=4 label=sf_z bucket=0 numel=1286586696 dtype=torch.bfloat16 phase=enter
+[DiLoCoMergeDebug] rank=0 step=1065160 merge=4 label=sf_z bucket=0 numel=1286586696 dtype=torch.bfloat16 phase=exit elapsed_s=0.000144
+  >>> [DiLoCo] merge #4 at step 1065160: averaged model weights across 16 ranks in 488 ms (amortized over 40 steps)
+step 1065160 | loss 2.7080 | lr 1.01e-03 | grad 0.86 | tok/s 4031 | global_tok/s 64500 | elapsed_h 0.077 | time 2026-07-07T12:23:48+00:00
+  >>> saved checkpoint: checkpoint_step_1065160_loss_2.7080.pt
+step 1065161 | loss 2.4490 | lr 1.01e-03 | grad 0.75 | tok/s 849 | global_tok/s 13590 | elapsed_h 0.080 | time 2026-07-07T12:23:58+00:00
+step 1065162 | loss 2.8919 | lr 1.01e-03 | grad 0.93 | tok/s 5539 | global_tok/s 88617 | elapsed_h 0.080 | time 2026-07-07T12:23:59+00:00
+step 1065163 | loss 2.5469 | lr 1.01e-03 | grad 0.73 | tok/s 5471 | global_tok/s 87540 | elapsed_h 0.081 | time 2026-07-07T12:24:01+00:00
+step 1065164 | loss 2.1691 | lr 1.01e-03 | grad 0.67 | tok/s 5446 | global_tok/s 87134 | elapsed_h 0.081 | time 2026-07-07T12:24:02+00:00
+step 1065165 | loss 2.6676 | lr 1.01e-03 | grad 0.91 | tok/s 5507 | global_tok/s 88114 | elapsed_h 0.082 | time 2026-07-07T12:24:04+00:00
+step 1065166 | loss 2.1830 | lr 1.01e-03 | grad 0.70 | tok/s 5476 | global_tok/s 87617 | elapsed_h 0.082 | time 2026-07-07T12:24:05+00:00
+step 1065167 | loss 2.8183 | lr 1.01e-03 | grad 0.84 | tok/s 5485 | global_tok/s 87764 | elapsed_h 0.083 | time 2026-07-07T12:24:07+00:00
+step 1065168 | loss 2.2257 | lr 1.01e-03 | grad 0.78 | tok/s 5357 | global_tok/s 85706 | elapsed_h 0.083 | time 2026-07-07T12:24:09+00:00
+step 1065169 | loss 2.2853 | lr 1.01e-03 | grad 0.73 | tok/s 5476 | global_tok/s 87610 | elapsed_h 0.083 | time 2026-07-07T12:24:10+00:00
+step 1065170 | loss 2.8168 | lr 1.01e-03 | grad 0.73 | tok/s 5433 | global_tok/s 86924 | elapsed_h 0.084 | time 2026-07-07T12:24:12+00:00
+step 1065171 | loss 2.3146 | lr 1.01e-03 | grad 0.89 | tok/s 4681 | global_tok/s 74897 | elapsed_h 0.084 | time 2026-07-07T12:24:14+00:00
+step 1065172 | loss 2.7577 | lr 1.01e-03 | grad 0.84 | tok/s 5498 | global_tok/s 87970 | elapsed_h 0.085 | time 2026-07-07T12:24:15+00:00
+step 1065173 | loss 2.3797 | lr 1.01e-03 | grad 0.82 | tok/s 5414 | global_tok/s 86616 | elapsed_h 0.085 | time 2026-07-07T12:24:17+00:00
+step 1065174 | loss 2.4514 | lr 1.01e-03 | grad 0.71 | tok/s 5462 | global_tok/s 87387 | elapsed_h 0.086 | time 2026-07-07T12:24:18+00:00
+step 1065175 | loss 2.6218 | lr 1.01e-03 | grad 0.76 | tok/s 5475 | global_tok/s 87605 | elapsed_h 0.086 | time 2026-07-07T12:24:20+00:00
+step 1065176 | loss 2.3376 | lr 1.01e-03 | grad 0.78 | tok/s 5469 | global_tok/s 87499 | elapsed_h 0.087 | time 2026-07-07T12:24:21+00:00
+step 1065177 | loss 2.8396 | lr 1.01e-03 | grad 0.79 | tok/s 5474 | global_tok/s 87592 | elapsed_h 0.087 | time 2026-07-07T12:24:23+00:00
+step 1065178 | loss 2.4361 | lr 1.01e-03 | grad 0.80 | tok/s 5483 | global_tok/s 87722 | elapsed_h 0.087 | time 2026-07-07T12:24:24+00:00
+step 1065179 | loss 2.2005 | lr 1.01e-03 | grad 0.87 | tok/s 4064 | global_tok/s 65019 | elapsed_h 0.088 | time 2026-07-07T12:24:27+00:00
+step 1065180 | loss 2.2807 | lr 1.01e-03 | grad 0.76 | tok/s 5475 | global_tok/s 87603 | elapsed_h 0.088 | time 2026-07-07T12:24:28+00:00
+step 1065181 | loss 2.2052 | lr 1.01e-03 | grad 0.73 | tok/s 5190 | global_tok/s 83036 | elapsed_h 0.089 | time 2026-07-07T12:24:30+00:00
+step 1065182 | loss 2.7412 | lr 1.01e-03 | grad 0.88 | tok/s 5489 | global_tok/s 87821 | elapsed_h 0.089 | time 2026-07-07T12:24:31+00:00
+step 1065183 | loss 2.6863 | lr 1.01e-03 | grad 0.77 | tok/s 5492 | global_tok/s 87873 | elapsed_h 0.090 | time 2026-07-07T12:24:33+00:00
+step 1065184 | loss 2.4658 | lr 1.01e-03 | grad 0.85 | tok/s 5446 | global_tok/s 87137 | elapsed_h 0.090 | time 2026-07-07T12:24:34+00:00
+step 1065185 | loss 2.3428 | lr 1.01e-03 | grad 0.80 | tok/s 5504 | global_tok/s 88068 | elapsed_h 0.091 | time 2026-07-07T12:24:36+00:00
+step 1065186 | loss 2.7600 | lr 1.01e-03 | grad 0.83 | tok/s 5435 | global_tok/s 86963 | elapsed_h 0.091 | time 2026-07-07T12:24:38+00:00
+step 1065187 | loss 2.3944 | lr 1.01e-03 | grad 0.83 | tok/s 5373 | global_tok/s 85965 | elapsed_h 0.091 | time 2026-07-07T12:24:39+00:00
+step 1065188 | loss 2.2841 | lr 1.01e-03 | grad 0.93 | tok/s 5448 | global_tok/s 87170 | elapsed_h 0.092 | time 2026-07-07T12:24:41+00:00
+step 1065189 | loss 2.6826 | lr 1.01e-03 | grad 0.79 | tok/s 5403 | global_tok/s 86442 | elapsed_h 0.092 | time 2026-07-07T12:24:42+00:00
+step 1065190 | loss 2.1613 | lr 1.01e-03 | grad 0.75 | tok/s 5416 | global_tok/s 86664 | elapsed_h 0.093 | time 2026-07-07T12:24:44+00:00
+step 1065191 | loss 2.4858 | lr 1.01e-03 | grad 0.75 | tok/s 4666 | global_tok/s 74651 | elapsed_h 0.093 | time 2026-07-07T12:24:46+00:00
+step 1065192 | loss 2.8365 | lr 1.01e-03 | grad 0.77 | tok/s 5400 | global_tok/s 86398 | elapsed_h 0.094 | time 2026-07-07T12:24:47+00:00
+step 1065193 | loss 2.9071 | lr 1.01e-03 | grad 0.73 | tok/s 5426 | global_tok/s 86819 | elapsed_h 0.094 | time 2026-07-07T12:24:49+00:00
+step 1065194 | loss 2.0282 | lr 1.01e-03 | grad 0.68 | tok/s 5507 | global_tok/s 88112 | elapsed_h 0.095 | time 2026-07-07T12:24:50+00:00
+step 1065195 | loss 2.4113 | lr 1.01e-03 | grad 0.82 | tok/s 5521 | global_tok/s 88337 | elapsed_h 0.095 | time 2026-07-07T12:24:52+00:00
+step 1065196 | loss 2.5644 | lr 1.01e-03 | grad 0.81 | tok/s 5500 | global_tok/s 87997 | elapsed_h 0.095 | time 2026-07-07T12:24:53+00:00
+step 1065197 | loss 2.6295 | lr 1.01e-03 | grad 0.75 | tok/s 5455 | global_tok/s 87281 | elapsed_h 0.096 | time 2026-07-07T12:24:55+00:00
+step 1065198 | loss 2.1131 | lr 1.01e-03 | grad 0.73 | tok/s 5543 | global_tok/s 88690 | elapsed_h 0.096 | time 2026-07-07T12:24:57+00:00
+step 1065199 | loss 2.8636 | lr 1.01e-03 | grad 0.76 | tok/s 5574 | global_tok/s 89187 | elapsed_h 0.097 | time 2026-07-07T12:24:58+00:00
+[DiLoCoMergeDebug] rank=0 step=1065200 merge=5 label=sf_x bucket=0 numel=1286589072 dtype=torch.bfloat16 phase=enter
+[DiLoCoMergeDebug] rank=0 step=1065200 merge=5 label=sf_x bucket=0 numel=1286589072 dtype=torch.bfloat16 phase=exit elapsed_s=0.000169
+[DiLoCoMergeDebug] rank=0 step=1065200 merge=5 label=sf_z bucket=0 numel=1286586696 dtype=torch.bfloat16 phase=enter
+[DiLoCoMergeDebug] rank=0 step=1065200 merge=5 label=sf_z bucket=0 numel=1286586696 dtype=torch.bfloat16 phase=exit elapsed_s=0.000107
+  >>> [DiLoCo] merge #5 at step 1065200: averaged model weights across 16 ranks in 547 ms (amortized over 40 steps)
+step 1065200 | loss 2.6571 | lr 1.01e-03 | grad 0.85 | tok/s 3975 | global_tok/s 63599 | elapsed_h 0.097 | time 2026-07-07T12:25:00+00:00
+  >>> saved checkpoint: checkpoint_step_1065200_loss_2.6571.pt
+step 1065201 | loss 2.1311 | lr 1.01e-03 | grad 0.79 | tok/s 865 | global_tok/s 13843 | elapsed_h 0.100 | time 2026-07-07T12:25:10+00:00
+step 1065202 | loss 2.4814 | lr 1.01e-03 | grad 0.79 | tok/s 5473 | global_tok/s 87564 | elapsed_h 0.100 | time 2026-07-07T12:25:11+00:00
+step 1065203 | loss 2.3367 | lr 1.01e-03 | grad 0.83 | tok/s 5476 | global_tok/s 87616 | elapsed_h 0.101 | time 2026-07-07T12:25:13+00:00
+step 1065204 | loss 2.2446 | lr 1.01e-03 | grad 0.80 | tok/s 5502 | global_tok/s 88030 | elapsed_h 0.101 | time 2026-07-07T12:25:14+00:00
+step 1065205 | loss 2.6013 | lr 1.01e-03 | grad 0.77 | tok/s 5531 | global_tok/s 88499 | elapsed_h 0.102 | time 2026-07-07T12:25:16+00:00
+step 1065206 | loss 2.3759 | lr 1.01e-03 | grad 0.83 | tok/s 5466 | global_tok/s 87459 | elapsed_h 0.102 | time 2026-07-07T12:25:17+00:00
+step 1065207 | loss 2.3691 | lr 1.01e-03 | grad 0.79 | tok/s 5531 | global_tok/s 88499 | elapsed_h 0.103 | time 2026-07-07T12:25:19+00:00
+step 1065208 | loss 2.9413 | lr 1.01e-03 | grad 0.86 | tok/s 5485 | global_tok/s 87752 | elapsed_h 0.103 | time 2026-07-07T12:25:21+00:00
+step 1065209 | loss 1.9711 | lr 1.01e-03 | grad 0.79 | tok/s 5357 | global_tok/s 85716 | elapsed_h 0.103 | time 2026-07-07T12:25:22+00:00
+step 1065210 | loss 2.5470 | lr 1.01e-03 | grad 0.77 | tok/s 5418 | global_tok/s 86692 | elapsed_h 0.104 | time 2026-07-07T12:25:24+00:00
+step 1065211 | loss 2.0421 | lr 1.01e-03 | grad 0.70 | tok/s 4470 | global_tok/s 71515 | elapsed_h 0.104 | time 2026-07-07T12:25:26+00:00
+step 1065212 | loss 2.8258 | lr 1.01e-03 | grad 0.76 | tok/s 5561 | global_tok/s 88983 | elapsed_h 0.105 | time 2026-07-07T12:25:27+00:00
+step 1065213 | loss 2.2246 | lr 1.01e-03 | grad 0.73 | tok/s 5532 | global_tok/s 88507 | elapsed_h 0.105 | time 2026-07-07T12:25:29+00:00
+step 1065214 | loss 2.0723 | lr 1.01e-03 | grad 0.79 | tok/s 5532 | global_tok/s 88516 | elapsed_h 0.106 | time 2026-07-07T12:25:30+00:00
+step 1065215 | loss 2.4848 | lr 1.01e-03 | grad 0.77 | tok/s 5420 | global_tok/s 86724 | elapsed_h 0.106 | time 2026-07-07T12:25:32+00:00
+step 1065216 | loss 2.5654 | lr 1.01e-03 | grad 0.75 | tok/s 5438 | global_tok/s 87012 | elapsed_h 0.107 | time 2026-07-07T12:25:33+00:00
+step 1065217 | loss 2.8110 | lr 1.01e-03 | grad 0.79 | tok/s 5402 | global_tok/s 86439 | elapsed_h 0.107 | time 2026-07-07T12:25:35+00:00
+step 1065218 | loss 2.5687 | lr 1.01e-03 | grad 0.74 | tok/s 5478 | global_tok/s 87645 | elapsed_h 0.107 | time 2026-07-07T12:25:36+00:00
+step 1065219 | loss 3.6667 | lr 1.01e-03 | grad 0.81 | tok/s 5422 | global_tok/s 86746 | elapsed_h 0.108 | time 2026-07-07T12:25:38+00:00
+step 1065220 | loss 3.0385 | lr 1.01e-03 | grad 0.80 | tok/s 5400 | global_tok/s 86400 | elapsed_h 0.108 | time 2026-07-07T12:25:40+00:00
+step 1065221 | loss 3.2442 | lr 1.01e-03 | grad 0.78 | tok/s 4673 | global_tok/s 74775 | elapsed_h 0.109 | time 2026-07-07T12:25:41+00:00
+step 1065222 | loss 1.7230 | lr 1.01e-03 | grad 0.81 | tok/s 5517 | global_tok/s 88274 | elapsed_h 0.109 | time 2026-07-07T12:25:43+00:00
+step 1065223 | loss 2.5399 | lr 1.01e-03 | grad 0.82 | tok/s 5451 | global_tok/s 87221 | elapsed_h 0.110 | time 2026-07-07T12:25:45+00:00
+step 1065224 | loss 2.8826 | lr 1.01e-03 | grad 0.74 | tok/s 5495 | global_tok/s 87926 | elapsed_h 0.110 | time 2026-07-07T12:25:46+00:00
+step 1065225 | loss 2.2245 | lr 1.01e-03 | grad 0.76 | tok/s 5500 | global_tok/s 87992 | elapsed_h 0.111 | time 2026-07-07T12:25:48+00:00
+step 1065226 | loss 2.2965 | lr 1.01e-03 | grad 0.77 | tok/s 5382 | global_tok/s 86105 | elapsed_h 0.111 | time 2026-07-07T12:25:49+00:00
+step 1065227 | loss 2.4129 | lr 1.01e-03 | grad 0.79 | tok/s 5471 | global_tok/s 87532 | elapsed_h 0.111 | time 2026-07-07T12:25:51+00:00
+step 1065228 | loss 2.8112 | lr 1.01e-03 | grad 0.93 | tok/s 5472 | global_tok/s 87553 | elapsed_h 0.112 | time 2026-07-07T12:25:52+00:00
+step 1065229 | loss 2.2532 | lr 1.01e-03 | grad 0.74 | tok/s 5481 | global_tok/s 87703 | elapsed_h 0.112 | time 2026-07-07T12:25:54+00:00
+step 1065230 | loss 1.9619 | lr 1.01e-03 | grad 0.75 | tok/s 5429 | global_tok/s 86865 | elapsed_h 0.113 | time 2026-07-07T12:25:55+00:00
+step 1065231 | loss 2.6648 | lr 1.01e-03 | grad 0.86 | tok/s 4625 | global_tok/s 73992 | elapsed_h 0.113 | time 2026-07-07T12:25:57+00:00
+step 1065232 | loss 2.4863 | lr 1.01e-03 | grad 0.74 | tok/s 5466 | global_tok/s 87454 | elapsed_h 0.114 | time 2026-07-07T12:25:59+00:00
+step 1065233 | loss 2.3455 | lr 1.01e-03 | grad 0.81 | tok/s 5454 | global_tok/s 87264 | elapsed_h 0.114 | time 2026-07-07T12:26:00+00:00
+step 1065234 | loss 2.4794 | lr 1.01e-03 | grad 0.73 | tok/s 5513 | global_tok/s 88209 | elapsed_h 0.114 | time 2026-07-07T12:26:02+00:00
+step 1065235 | loss 1.4539 | lr 1.01e-03 | grad 0.80 | tok/s 5463 | global_tok/s 87406 | elapsed_h 0.115 | time 2026-07-07T12:26:03+00:00
+step 1065236 | loss 2.6387 | lr 1.01e-03 | grad 0.80 | tok/s 5478 | global_tok/s 87644 | elapsed_h 0.115 | time 2026-07-07T12:26:05+00:00
+step 1065237 | loss 2.3000 | lr 1.01e-03 | grad 0.78 | tok/s 5507 | global_tok/s 88119 | elapsed_h 0.116 | time 2026-07-07T12:26:07+00:00
+step 1065238 | loss 2.7247 | lr 1.01e-03 | grad 0.78 | tok/s 5539 | global_tok/s 88617 | elapsed_h 0.116 | time 2026-07-07T12:26:08+00:00
+step 1065239 | loss 2.0503 | lr 1.01e-03 | grad 0.73 | tok/s 5521 | global_tok/s 88331 | elapsed_h 0.117 | time 2026-07-07T12:26:10+00:00
+[DiLoCoMergeDebug] rank=0 step=1065240 merge=6 label=sf_x bucket=0 numel=1286589072 dtype=torch.bfloat16 phase=enter
+[DiLoCoMergeDebug] rank=0 step=1065240 merge=6 label=sf_x bucket=0 numel=1286589072 dtype=torch.bfloat16 phase=exit elapsed_s=0.000182
+[DiLoCoMergeDebug] rank=0 step=1065240 merge=6 label=sf_z bucket=0 numel=1286586696 dtype=torch.bfloat16 phase=enter
+[DiLoCoMergeDebug] rank=0 step=1065240 merge=6 label=sf_z bucket=0 numel=1286586696 dtype=torch.bfloat16 phase=exit elapsed_s=0.000108
+  >>> [DiLoCo] merge #6 at step 1065240: averaged model weights across 16 ranks in 522 ms (amortized over 40 steps)
+step 1065240 | loss 3.0089 | lr 1.01e-03 | grad 0.76 | tok/s 4046 | global_tok/s 64729 | elapsed_h 0.117 | time 2026-07-07T12:26:12+00:00
+  >>> saved checkpoint: checkpoint_step_1065240_loss_3.0089.pt
+step 1065241 | loss 2.3775 | lr 1.01e-03 | grad 0.79 | tok/s 844 | global_tok/s 13500 | elapsed_h 0.120 | time 2026-07-07T12:26:21+00:00
+step 1065242 | loss 2.2938 | lr 1.01e-03 | grad 0.73 | tok/s 5491 | global_tok/s 87860 | elapsed_h 0.120 | time 2026-07-07T12:26:23+00:00
+step 1065243 | loss 2.4761 | lr 1.01e-03 | grad 0.84 | tok/s 5525 | global_tok/s 88402 | elapsed_h 0.121 | time 2026-07-07T12:26:25+00:00
+step 1065244 | loss 2.3679 | lr 1.01e-03 | grad 0.78 | tok/s 5526 | global_tok/s 88417 | elapsed_h 0.121 | time 2026-07-07T12:26:26+00:00
+step 1065245 | loss 2.4464 | lr 1.01e-03 | grad 0.74 | tok/s 5436 | global_tok/s 86971 | elapsed_h 0.122 | time 2026-07-07T12:26:28+00:00
+step 1065246 | loss 2.6656 | lr 1.01e-03 | grad 0.75 | tok/s 5418 | global_tok/s 86691 | elapsed_h 0.122 | time 2026-07-07T12:26:29+00:00
+step 1065247 | loss 2.4139 | lr 1.01e-03 | grad 0.74 | tok/s 5472 | global_tok/s 87545 | elapsed_h 0.123 | time 2026-07-07T12:26:31+00:00
+step 1065248 | loss 2.6368 | lr 1.01e-03 | grad 0.80 | tok/s 5511 | global_tok/s 88173 | elapsed_h 0.123 | time 2026-07-07T12:26:32+00:00
+step 1065249 | loss 2.5858 | lr 1.01e-03 | grad 0.79 | tok/s 5479 | global_tok/s 87658 | elapsed_h 0.123 | time 2026-07-07T12:26:34+00:00
+step 1065250 | loss 3.0719 | lr 1.01e-03 | grad 0.89 | tok/s 5393 | global_tok/s 86284 | elapsed_h 0.124 | time 2026-07-07T12:26:35+00:00
+step 1065251 | loss 2.8165 | lr 1.01e-03 | grad 0.73 | tok/s 4533 | global_tok/s 72533 | elapsed_h 0.124 | time 2026-07-07T12:26:37+00:00
+step 1065252 | loss 2.2053 | lr 1.01e-03 | grad 0.78 | tok/s 5497 | global_tok/s 87947 | elapsed_h 0.125 | time 2026-07-07T12:26:39+00:00
+step 1065253 | loss 2.4015 | lr 1.01e-03 | grad 0.79 | tok/s 5457 | global_tok/s 87312 | elapsed_h 0.125 | time 2026-07-07T12:26:40+00:00
+step 1065254 | loss 2.7761 | lr 1.01e-03 | grad 0.80 | tok/s 5485 | global_tok/s 87763 | elapsed_h 0.126 | time 2026-07-07T12:26:42+00:00
+step 1065255 | loss 3.0106 | lr 1.01e-03 | grad 0.76 | tok/s 5460 | global_tok/s 87357 | elapsed_h 0.126 | time 2026-07-07T12:26:44+00:00
+step 1065256 | loss 2.7677 | lr 1.01e-03 | grad 1.02 | tok/s 5481 | global_tok/s 87698 | elapsed_h 0.126 | time 2026-07-07T12:26:45+00:00
+step 1065257 | loss 2.0570 | lr 1.01e-03 | grad 0.68 | tok/s 5334 | global_tok/s 85346 | elapsed_h 0.127 | time 2026-07-07T12:26:47+00:00
+step 1065258 | loss 2.1513 | lr 1.01e-03 | grad 0.74 | tok/s 5481 | global_tok/s 87702 | elapsed_h 0.127 | time 2026-07-07T12:26:48+00:00
+step 1065259 | loss 2.8755 | lr 1.01e-03 | grad 1.00 | tok/s 5456 | global_tok/s 87292 | elapsed_h 0.128 | time 2026-07-07T12:26:50+00:00
+step 1065260 | loss 2.5927 | lr 1.01e-03 | grad 0.76 | tok/s 5498 | global_tok/s 87966 | elapsed_h 0.128 | time 2026-07-07T12:26:51+00:00
+step 1065261 | loss 2.5222 | lr 1.01e-03 | grad 0.82 | tok/s 4618 | global_tok/s 73880 | elapsed_h 0.129 | time 2026-07-07T12:26:53+00:00
+step 1065262 | loss 2.2938 | lr 1.01e-03 | grad 0.89 | tok/s 5558 | global_tok/s 88922 | elapsed_h 0.129 | time 2026-07-07T12:26:55+00:00
+step 1065263 | loss 2.2398 | lr 1.01e-03 | grad 0.78 | tok/s 5363 | global_tok/s 85815 | elapsed_h 0.130 | time 2026-07-07T12:26:56+00:00
+step 1065264 | loss 2.3623 | lr 1.01e-03 | grad 0.80 | tok/s 5328 | global_tok/s 85244 | elapsed_h 0.130 | time 2026-07-07T12:26:58+00:00
+step 1065265 | loss 2.1771 | lr 1.01e-03 | grad 0.76 | tok/s 5405 | global_tok/s 86485 | elapsed_h 0.130 | time 2026-07-07T12:27:00+00:00
+step 1065266 | loss 2.1296 | lr 1.01e-03 | grad 0.81 | tok/s 5450 | global_tok/s 87196 | elapsed_h 0.131 | time 2026-07-07T12:27:01+00:00
+step 1065267 | loss 2.6513 | lr 1.01e-03 | grad 0.78 | tok/s 5394 | global_tok/s 86303 | elapsed_h 0.131 | time 2026-07-07T12:27:03+00:00
+step 1065268 | loss 2.2556 | lr 1.01e-03 | grad 0.86 | tok/s 5422 | global_tok/s 86752 | elapsed_h 0.132 | time 2026-07-07T12:27:04+00:00
+step 1065269 | loss 3.0767 | lr 1.01e-03 | grad 0.77 | tok/s 5525 | global_tok/s 88402 | elapsed_h 0.132 | time 2026-07-07T12:27:06+00:00
+step 1065270 | loss 2.5106 | lr 1.01e-03 | grad 0.71 | tok/s 5534 | global_tok/s 88547 | elapsed_h 0.133 | time 2026-07-07T12:27:07+00:00
+step 1065271 | loss 2.8540 | lr 1.01e-03 | grad 0.76 | tok/s 4571 | global_tok/s 73134 | elapsed_h 0.133 | time 2026-07-07T12:27:09+00:00
+step 1065272 | loss 2.1418 | lr 1.01e-03 | grad 0.75 | tok/s 5474 | global_tok/s 87589 | elapsed_h 0.134 | time 2026-07-07T12:27:11+00:00
+step 1065273 | loss 2.2578 | lr 1.01e-03 | grad 0.84 | tok/s 5435 | global_tok/s 86954 | elapsed_h 0.134 | time 2026-07-07T12:27:12+00:00
+step 1065274 | loss 1.8333 | lr 1.01e-03 | grad 0.71 | tok/s 5505 | global_tok/s 88086 | elapsed_h 0.134 | time 2026-07-07T12:27:14+00:00
+step 1065275 | loss 3.0046 | lr 1.01e-03 | grad 0.78 | tok/s 5489 | global_tok/s 87819 | elapsed_h 0.135 | time 2026-07-07T12:27:15+00:00
+step 1065276 | loss 2.7970 | lr 1.01e-03 | grad 0.74 | tok/s 5470 | global_tok/s 87519 | elapsed_h 0.135 | time 2026-07-07T12:27:17+00:00
+step 1065277 | loss 2.2540 | lr 1.01e-03 | grad 0.88 | tok/s 5552 | global_tok/s 88832 | elapsed_h 0.136 | time 2026-07-07T12:27:18+00:00
+step 1065278 | loss 2.9249 | lr 1.01e-03 | grad 0.74 | tok/s 5484 | global_tok/s 87740 | elapsed_h 0.136 | time 2026-07-07T12:27:20+00:00
+step 1065279 | loss 2.5943 | lr 1.01e-03 | grad 0.79 | tok/s 5374 | global_tok/s 85991 | elapsed_h 0.137 | time 2026-07-07T12:27:22+00:00
+[DiLoCoMergeDebug] rank=0 step=1065280 merge=7 label=sf_x bucket=0 numel=1286589072 dtype=torch.bfloat16 phase=enter
+[DiLoCoMergeDebug] rank=0 step=1065280 merge=7 label=sf_x bucket=0 numel=1286589072 dtype=torch.bfloat16 phase=exit elapsed_s=0.000180
+[DiLoCoMergeDebug] rank=0 step=1065280 merge=7 label=sf_z bucket=0 numel=1286586696 dtype=torch.bfloat16 phase=enter
+[DiLoCoMergeDebug] rank=0 step=1065280 merge=7 label=sf_z bucket=0 numel=1286586696 dtype=torch.bfloat16 phase=exit elapsed_s=0.000105
+  >>> [DiLoCo] merge #7 at step 1065280: averaged model weights across 16 ranks in 518 ms (amortized over 40 steps)
+step 1065280 | loss 2.2867 | lr 1.01e-03 | grad 0.82 | tok/s 4017 | global_tok/s 64272 | elapsed_h 0.137 | time 2026-07-07T12:27:24+00:00
+  >>> saved checkpoint: checkpoint_step_1065280_loss_2.2867.pt
+step 1065281 | loss 1.7202 | lr 1.01e-03 | grad 0.79 | tok/s 866 | global_tok/s 13854 | elapsed_h 0.140 | time 2026-07-07T12:27:33+00:00
+step 1065282 | loss 2.3657 | lr 1.01e-03 | grad 0.78 | tok/s 5485 | global_tok/s 87755 | elapsed_h 0.140 | time 2026-07-07T12:27:35+00:00
+step 1065283 | loss 1.6946 | lr 1.01e-03 | grad 0.74 | tok/s 5382 | global_tok/s 86108 | elapsed_h 0.141 | time 2026-07-07T12:27:36+00:00
+step 1065284 | loss 2.6826 | lr 1.01e-03 | grad 0.79 | tok/s 5367 | global_tok/s 85878 | elapsed_h 0.141 | time 2026-07-07T12:27:38+00:00
+step 1065285 | loss 2.5756 | lr 1.01e-03 | grad 0.77 | tok/s 5483 | global_tok/s 87732 | elapsed_h 0.142 | time 2026-07-07T12:27:39+00:00
+step 1065286 | loss 1.9627 | lr 1.01e-03 | grad 0.80 | tok/s 5345 | global_tok/s 85525 | elapsed_h 0.142 | time 2026-07-07T12:27:41+00:00
+step 1065287 | loss 2.7632 | lr 1.01e-03 | grad 0.73 | tok/s 5389 | global_tok/s 86216 | elapsed_h 0.142 | time 2026-07-07T12:27:43+00:00
+step 1065288 | loss 2.4926 | lr 1.01e-03 | grad 0.70 | tok/s 5443 | global_tok/s 87088 | elapsed_h 0.143 | time 2026-07-07T12:27:44+00:00
+step 1065289 | loss 2.5020 | lr 1.01e-03 | grad 0.80 | tok/s 5493 | global_tok/s 87891 | elapsed_h 0.143 | time 2026-07-07T12:27:46+00:00
+step 1065290 | loss 1.7356 | lr 1.01e-03 | grad 0.78 | tok/s 5512 | global_tok/s 88188 | elapsed_h 0.144 | time 2026-07-07T12:27:47+00:00
+step 1065291 | loss 2.5809 | lr 1.01e-03 | grad 0.75 | tok/s 4650 | global_tok/s 74406 | elapsed_h 0.144 | time 2026-07-07T12:27:49+00:00
+step 1065292 | loss 2.6582 | lr 1.01e-03 | grad 0.79 | tok/s 5410 | global_tok/s 86566 | elapsed_h 0.145 | time 2026-07-07T12:27:51+00:00
+step 1065293 | loss 2.7138 | lr 1.01e-03 | grad 0.76 | tok/s 5477 | global_tok/s 87627 | elapsed_h 0.145 | time 2026-07-07T12:27:52+00:00
+step 1065294 | loss 2.3110 | lr 1.01e-03 | grad 0.72 | tok/s 5536 | global_tok/s 88570 | elapsed_h 0.146 | time 2026-07-07T12:27:54+00:00
+step 1065295 | loss 2.8901 | lr 1.01e-03 | grad 0.71 | tok/s 5451 | global_tok/s 87215 | elapsed_h 0.146 | time 2026-07-07T12:27:55+00:00
+step 1065296 | loss 2.3694 | lr 1.01e-03 | grad 0.71 | tok/s 5495 | global_tok/s 87925 | elapsed_h 0.146 | time 2026-07-07T12:27:57+00:00
+step 1065297 | loss 3.1465 | lr 1.01e-03 | grad 0.79 | tok/s 5359 | global_tok/s 85747 | elapsed_h 0.147 | time 2026-07-07T12:27:58+00:00
+step 1065298 | loss 2.4655 | lr 1.01e-03 | grad 0.73 | tok/s 5405 | global_tok/s 86474 | elapsed_h 0.147 | time 2026-07-07T12:28:00+00:00
+step 1065299 | loss 2.8963 | lr 1.01e-03 | grad 0.79 | tok/s 5515 | global_tok/s 88245 | elapsed_h 0.148 | time 2026-07-07T12:28:02+00:00
+step 1065300 | loss 2.4397 | lr 1.01e-03 | grad 0.76 | tok/s 5392 | global_tok/s 86275 | elapsed_h 0.148 | time 2026-07-07T12:28:03+00:00
+[final-checkpoint] rank 0/16 entering finalization at step=1065300 reason=walltime:SLURM_JOB_END_TIME remaining_s=585.3 model_variant=level=E97,params_arg=100m,derived_params=1.3B,total_params=1286589072,mlp_ratio=2.2623 is_head=True
+[final-checkpoint] rank 2/16 entering finalization at step=1065300 reason=walltime:SLURM_JOB_END_TIME remaining_s=585.2 model_variant=level=E97,params_arg=100m,derived_params=1.3B,total_params=1286589072,mlp_ratio=2.2623 is_head=False
+[final-checkpoint] rank 3/16 entering finalization at step=1065300 reason=walltime:SLURM_JOB_END_TIME remaining_s=585.3 model_variant=level=E97,params_arg=100m,derived_params=1.3B,total_params=1286589072,mlp_ratio=2.2623 is_head=False
+[final-checkpoint] rank 4/16 entering finalization at step=1065300 reason=walltime:SLURM_JOB_END_TIME remaining_s=585.5 model_variant=level=E97,params_arg=100m,derived_params=1.3B,total_params=1286589072,mlp_ratio=2.2623 is_head=False
+[final-checkpoint] rank 5/16 entering finalization at step=1065300 reason=walltime:SLURM_JOB_END_TIME remaining_s=585.2 model_variant=level=E97,params_arg=100m,derived_params=1.3B,total_params=1286589072,mlp_ratio=2.2623 is_head=False
+[final-checkpoint] rank 10/16 entering finalization at step=1065300 reason=walltime:SLURM_JOB_END_TIME remaining_s=585.3 model_variant=level=E97,params_arg=100m,derived_params=1.3B,total_params=1286589072,mlp_ratio=2.2623 is_head=False
+[final-checkpoint] rank 12/16 entering finalization at step=1065300 reason=walltime:SLURM_JOB_END_TIME remaining_s=585.2 model_variant=level=E97,params_arg=100m,derived_params=1.3B,total_params=1286589072,mlp_ratio=2.2623 is_head=False
+[final-checkpoint] rank 1/16 entering finalization at step=1065300 reason=walltime:SLURM_JOB_END_TIME remaining_s=585.2 model_variant=level=E97,params_arg=100m,derived_params=1.3B,total_params=1286589072,mlp_ratio=2.2623 is_head=False
+[final-checkpoint] rank 6/16 entering finalization at step=1065300 reason=walltime:SLURM_JOB_END_TIME remaining_s=585.4 model_variant=level=E97,params_arg=100m,derived_params=1.3B,total_params=1286589072,mlp_ratio=2.2623 is_head=False
+[final-checkpoint] rank 7/16 entering finalization at step=1065300 reason=walltime:SLURM_JOB_END_TIME remaining_s=585.4 model_variant=level=E97,params_arg=100m,derived_params=1.3B,total_params=1286589072,mlp_ratio=2.2623 is_head=False
+[final-checkpoint] rank 9/16 entering finalization at step=1065300 reason=walltime:SLURM_JOB_END_TIME remaining_s=585.1 model_variant=level=E97,params_arg=100m,derived_params=1.3B,total_params=1286589072,mlp_ratio=2.2623 is_head=False
+[final-checkpoint] rank 11/16 entering finalization at step=1065300 reason=walltime:SLURM_JOB_END_TIME remaining_s=585.3 model_variant=level=E97,params_arg=100m,derived_params=1.3B,total_params=1286589072,mlp_ratio=2.2623 is_head=False
+[final-checkpoint] rank 13/16 entering finalization at step=1065300 reason=walltime:SLURM_JOB_END_TIME remaining_s=585.1 model_variant=level=E97,params_arg=100m,derived_params=1.3B,total_params=1286589072,mlp_ratio=2.2623 is_head=False
+[final-checkpoint] rank 8/16 entering finalization at step=1065300 reason=walltime:SLURM_JOB_END_TIME remaining_s=585.3 model_variant=level=E97,params_arg=100m,derived_params=1.3B,total_params=1286589072,mlp_ratio=2.2623 is_head=False
+[final-checkpoint] rank 14/16 entering finalization at step=1065300 reason=walltime:SLURM_JOB_END_TIME remaining_s=585.3 model_variant=level=E97,params_arg=100m,derived_params=1.3B,total_params=1286589072,mlp_ratio=2.2623 is_head=False
+[final-checkpoint] rank 15/16 entering finalization at step=1065300 reason=walltime:SLURM_JOB_END_TIME remaining_s=585.3 model_variant=level=E97,params_arg=100m,derived_params=1.3B,total_params=1286589072,mlp_ratio=2.2623 is_head=False
+[DiLoCoMergeDebug] rank=0 step=1065300 merge=8 label=sf_x bucket=0 numel=1286589072 dtype=torch.bfloat16 phase=enter
+[DiLoCoMergeDebug] rank=0 step=1065300 merge=8 label=sf_x bucket=0 numel=1286589072 dtype=torch.bfloat16 phase=exit elapsed_s=0.000147
+[DiLoCoMergeDebug] rank=0 step=1065300 merge=8 label=sf_z bucket=0 numel=1286586696 dtype=torch.bfloat16 phase=enter
+[DiLoCoMergeDebug] rank=0 step=1065300 merge=8 label=sf_z bucket=0 numel=1286586696 dtype=torch.bfloat16 phase=exit elapsed_s=0.000104
+  >>> [DiLoCo] FINAL merge #8 at step 1065300: consensus model averaged across 16 ranks (186 ms)
+[rank 3] PEAK_MEMORY_MB: 26397 | RESERVED_MEMORY_MB: 34152
+[rank 1] PEAK_MEMORY_MB: 26397 | RESERVED_MEMORY_MB: 34152
+[rank 2] PEAK_MEMORY_MB: 26397 | RESERVED_MEMORY_MB: 34152
+[rank 9] PEAK_MEMORY_MB: 26397 | RESERVED_MEMORY_MB: 34152
+[rank 11] PEAK_MEMORY_MB: 26397 | RESERVED_MEMORY_MB: 34152
+[rank 8] PEAK_MEMORY_MB: 26397 | RESERVED_MEMORY_MB: 34152
+[rank 10] PEAK_MEMORY_MB: 26397 | RESERVED_MEMORY_MB: 34152
+[final-checkpoint] START kind=final reason=walltime:SLURM_JOB_END_TIME step=1065300 loss=2.4793 remaining_s=584.3 model_variant=level=E97,params_arg=100m,derived_params=1.3B,total_params=1286589072,mlp_ratio=2.2623 rank=0/16 is_head=True
+[rank 6] PEAK_MEMORY_MB: 26397 | RESERVED_MEMORY_MB: 34152
+[rank 14] PEAK_MEMORY_MB: 26397 | RESERVED_MEMORY_MB: 34152
+[rank 7] PEAK_MEMORY_MB: 26397 | RESERVED_MEMORY_MB: 34152
+[rank 5] PEAK_MEMORY_MB: 26397 | RESERVED_MEMORY_MB: 34152
+[rank 4] PEAK_MEMORY_MB: 26397 | RESERVED_MEMORY_MB: 34152
+[rank 15] PEAK_MEMORY_MB: 26397 | RESERVED_MEMORY_MB: 34152
+[rank 12] PEAK_MEMORY_MB: 26397 | RESERVED_MEMORY_MB: 34152
+[rank 13] PEAK_MEMORY_MB: 26397 | RESERVED_MEMORY_MB: 34152
+[final-checkpoint] END path=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/trainpy_e97_step1065000_b4_smoke/20260707/E97_1.3B_step1065000_b4_k40_trainpy_2n_olcf_rccl/4951475-20260707T121753Z/train/emender_E97_1.3B_20260707_081851/checkpoint_step_1065300_loss_2.4793.pt latest=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/trainpy_e97_step1065000_b4_smoke/20260707/E97_1.3B_step1065000_b4_k40_trainpy_2n_olcf_rccl/4951475-20260707T121753Z/train/emender_E97_1.3B_20260707_081851/latest.pt model_variant=level=E97,params_arg=100m,derived_params=1.3B,total_params=1286589072,mlp_ratio=2.2623 rank=0/16 is_head=True
+[rank 0] PEAK_MEMORY_MB: 26397 | RESERVED_MEMORY_MB: 34152
+
+Training complete! Final step: 1065300
+FINAL_LOSS_LAST100: 2.4793
+PEAK_MEMORY_MB: 26397
+RESERVED_MEMORY_MB: 34152
+DILOCO_MERGES: 8
+DILOCO_K: 40
+DILOCO_SYNC_TOTAL_S: 3.633
+DILOCO_SYNC_AVG_MS: 454.1

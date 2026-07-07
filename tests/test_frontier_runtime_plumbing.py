@@ -16,6 +16,8 @@ def test_frontier_runtime_helper_loads_olcf_plugin_after_rocm():
     assert 'export NCCL_NET_PLUGIN="${NCCL_NET_PLUGIN:-librccl-net.so}"' in helper
     assert "OLCF_OFI_NCCL_ROOT" in helper
     assert "librccl_net_path" in helper
+    assert "frontier_require_requested_rccl_net_plugin()" in helper
+    assert '"/rocm/*/lib/librccl-net.so' in helper
     assert "torch.version.hip" in helper
     assert "triton.__version__" in helper
     assert "python_version" in helper
@@ -53,10 +55,24 @@ def test_e97_ladder_forces_olcf_runtime_and_plugin_gate():
     assert "NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS=${NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS:-1800}" in ladder
     assert "frontier_load_default_modules" in canary
     assert "frontier_derive_master_port" in canary
-    assert "RCCL_NET_PLUGIN_STATUS=$(frontier_resolve_librccl_net)" in canary
-    assert "refusing to start ladder training" in canary
+    assert 'RCCL_NET_PLUGIN_STATUS=$(frontier_require_requested_rccl_net_plugin "runtime setup")' in canary
+    assert 'frontier_require_requested_rccl_net_plugin "delegated srun preflight"' in canary
+    assert 'frontier_require_requested_rccl_net_plugin "delegated srun rank ${SLURM_PROCID:-unknown}"' in canary
     assert "--distributed_init_timeout_seconds" in canary
     assert "RANK_START_LOG" in canary
+
+
+def test_trainpy_step1065000_smoke_requires_olcf_rccl_plugin():
+    smoke = (ROOT / "scripts/frontier/e97_1p3b_step1065000_b4_trainpy_smoke.sbatch").read_text()
+
+    assert "BATCH_SIZE=${BATCH_SIZE:-4}" in smoke
+    assert "DILOCO_K=${DILOCO_K:-40}" in smoke
+    assert "DILOCO_ISLAND_SIZE=${DILOCO_ISLAND_SIZE:-1}" in smoke
+    assert "FRONTIER_ENABLE_OLCF_RCCL_PLUGIN=${FRONTIER_ENABLE_OLCF_RCCL_PLUGIN:-1}" in smoke
+    assert "FRONTIER_RUNTIME_PROFILE=${FRONTIER_RUNTIME_PROFILE:-olcf-rccl-debug}" in smoke
+    assert "FRONTIER_RCCL_NET_PLUGIN_MODULE=${FRONTIER_RCCL_NET_PLUGIN_MODULE:-rccl-net-plugin/1.0}" in smoke
+    assert "REQUIRE_RCCL_NET_PLUGIN=${REQUIRE_RCCL_NET_PLUGIN:-1}" in smoke
+    assert "FRONTIER_TRAIN_ENV_PREFLIGHT=${FRONTIER_TRAIN_ENV_PREFLIGHT:-1}" in smoke
 
 
 def test_e97_canary_reasserts_emender_conda_env_inside_srun_ranks():
@@ -124,3 +140,20 @@ def test_train_runtime_manifest_resolves_olcf_librccl_net(monkeypatch, tmp_path)
     assert manifest["torch_version"]
     assert "python_version" in manifest
     assert "triton_version" in manifest
+
+
+def test_train_runtime_manifest_resolves_olcf_rocm_scoped_librccl_net(monkeypatch, tmp_path):
+    import train
+
+    lib_dir = tmp_path / "rocm" / "7.1.1" / "lib"
+    lib_dir.mkdir(parents=True)
+    plugin = lib_dir / "librccl-net.so"
+    plugin.write_text("placeholder")
+
+    monkeypatch.setenv("OLCF_OFI_NCCL_ROOT", str(tmp_path))
+    monkeypatch.delenv("FRONTIER_ROCM_MODULE", raising=False)
+    monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
+
+    manifest = train.frontier_runtime_manifest()
+
+    assert manifest["librccl_net_path"] == str(plugin)

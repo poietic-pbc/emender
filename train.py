@@ -873,6 +873,11 @@ def _resolve_library_from_ld_path(name):
                 os.path.join(root, 'lib', name),
                 os.path.join(root, 'lib64', name),
             ])
+            if root_var == 'OLCF_OFI_NCCL_ROOT':
+                rocm_module = os.environ.get('FRONTIER_ROCM_MODULE')
+                if rocm_module:
+                    paths.append(os.path.join(root, rocm_module, 'lib', name))
+                paths.extend(glob.glob(os.path.join(root, 'rocm', '*', 'lib', name)))
     for part in os.environ.get('LD_LIBRARY_PATH', '').split(':'):
         if part:
             paths.append(os.path.join(part, name))

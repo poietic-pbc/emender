@@ -65,11 +65,17 @@ frontier_activate_emender_conda_env() {
 
 frontier_resolve_librccl_net() {
   local candidates=()
+  local globbed=()
   local part
 
   if [[ -n "${OLCF_OFI_NCCL_ROOT:-}" ]]; then
     candidates+=("${OLCF_OFI_NCCL_ROOT%/}/lib/librccl-net.so")
     candidates+=("${OLCF_OFI_NCCL_ROOT%/}/lib64/librccl-net.so")
+    if [[ -n "${FRONTIER_ROCM_MODULE:-}" ]]; then
+      candidates+=("${OLCF_OFI_NCCL_ROOT%/}/${FRONTIER_ROCM_MODULE%/}/lib/librccl-net.so")
+    fi
+    globbed=("${OLCF_OFI_NCCL_ROOT%/}"/rocm/*/lib/librccl-net.so)
+    candidates+=("${globbed[@]}")
   fi
   if [[ -n "${AWS_OFI_RCCL_PLUGIN_DIR:-}" ]]; then
     candidates+=("${AWS_OFI_RCCL_PLUGIN_DIR%/}/lib/librccl-net.so")
@@ -86,6 +92,18 @@ frontier_resolve_librccl_net() {
     fi
   done
   printf 'not-found\n'
+}
+
+frontier_require_requested_rccl_net_plugin() {
+  local context="${1:-runtime setup}"
+  local librccl_net_path
+
+  librccl_net_path=$(frontier_resolve_librccl_net)
+  if [[ "${REQUIRE_RCCL_NET_PLUGIN:-0}" == "1" && "$librccl_net_path" == "not-found" ]]; then
+    echo "librccl-net.so was not found after ${context}; refusing to start training" >&2
+    return 4
+  fi
+  printf '%s\n' "$librccl_net_path"
 }
 
 frontier_capture_runtime_env() {
