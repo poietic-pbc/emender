@@ -688,17 +688,51 @@ Scale ladder:
 
 ## Follow-up WG graph
 
-The implementation/testing graph created from this design is:
+Review note (`review-train-py`, 2026-07-07): the design is coherent enough to
+unblock implementation with one graph correction. `implement-train-py` and
+`implement-train-py-2` both touch `train.py`, so the helper-extraction task is
+serialized after the mode-flag task rather than running in parallel. The WG
+dependency was updated accordingly during review.
+
+The reviewed implementation/testing graph is:
 
 | Task ID | Purpose | Depends on |
 | --- | --- | --- |
 | `review-train-py` | Review this design before implementation. | `design-train-py` |
 | `implement-train-py` | Add train.py async quorum mode flags and compatibility checks. | `review-train-py` |
-| `implement-train-py-2` | Extract/apply async tensor state and delta helpers. | `review-train-py` |
+| `implement-train-py-2` | Extract/apply async tensor state and delta helpers. | `review-train-py`, `implement-train-py` |
 | `implement-train-py-3` | Implement train.py async quorum coordinator using the reviewed helpers. | `implement-train-py`, `implement-train-py-2` |
 | `integrate-async-checkpoint` | Wire authoritative checkpoint/latest semantics. | `implement-train-py-3` |
 | `add-train-py` | Add 1n/2n train.py-native async quorum smokes. | `integrate-async-checkpoint` |
 | `validate-train-py` | Run/report 8n, 64n, and larger-scale validation ladder. | `add-train-py` |
+
+## Review verdict
+
+`review-train-py` passes the design for implementation with the serialized
+follow-up graph above.
+
+- One-rank-per-GPU and no-DDP semantics are explicit: async quorum mode is
+  train.py-native, keeps one learner process per GPU, and must not wrap the
+  model in `DistributedDataParallel` or introduce per-step gradient all-reduce.
+- Math and state ownership are internally consistent for v1: updates are named
+  deltas against `S_g`, quorum accepts only `base_generation == current`, stale
+  updates are discarded rather than down-weighted, and avg with `eta_outer=1.0`
+  reduces to synchronous DiLoCo averaging under full participation.
+- ScheduleFree handling is coherent for the initial scope: x/eval basis and z
+  state are both represented, scalar clocks stay metadata rather than a reduced
+  tensor in v1, and non-avg outer optimizers are fail-closed pending a separate
+  async outer-state design.
+- Checkpoint/latest semantics are coherent: only the global merger advances
+  authoritative `latest.json`/`latest.pt`; worker `update.pt` and cache
+  manifests are non-authoritative; `latest.pt` may lag `latest.json` only when
+  generation manifests advance more frequently than full recovery checkpoints.
+- Metrics schema is sufficient for rollout decisions: it includes quorum
+  status, accepted/stale/timed-out/failed/invalid counts, staleness histogram,
+  merge/checkpoint timings, accepted-token coverage, per-rank progress, loss
+  windows, and update byte estimates.
+- Rollout ladder is correctly gated after review: flags and state helpers are
+  tested before coordinator wiring, checkpoint semantics precede 1n/2n smokes,
+  and 8n/64n/larger Frontier validation requires report-level go/no-go evidence.
 
 ## Open risks
 
