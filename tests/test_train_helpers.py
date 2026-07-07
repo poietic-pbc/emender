@@ -1,6 +1,8 @@
 import math
+import sys
 from argparse import Namespace
 
+import pytest
 import torch
 
 import train
@@ -67,6 +69,28 @@ def _tiny_e97_args(**overrides):
     return Namespace(**values)
 
 
+def _parallel_args(**overrides):
+    values = {
+        "diloco": False,
+        "async_quorum_diloco": False,
+        "diloco_k": 250,
+        "diloco_outer_lr": 1.0,
+        "diloco_outer_beta": 0.0,
+        "diloco_outer_optimizer": "avg",
+        "diloco_island_size": 0,
+        "async_quorum_min_workers": 0,
+        "async_quorum_fraction": 1.0,
+        "async_quorum_timeout_seconds": 300.0,
+        "async_quorum_staleness_policy": "reject-stale",
+        "async_quorum_max_staleness": 0,
+        "async_quorum_update_representation": "delta",
+        "async_quorum_metrics_path": None,
+        "async_quorum_run_id": None,
+    }
+    values.update(overrides)
+    return Namespace(**values)
+
+
 def _fixed_batches(batch):
     lengths = torch.full((batch.shape[0],), batch.shape[1], dtype=torch.long)
     doc_end = torch.zeros(batch.shape[0], dtype=torch.bool)
@@ -108,3 +132,143 @@ def test_train_one_optimizer_step_runs_real_tiny_e97_path():
     assert math.isfinite(metrics["loss"])
     assert metrics["tokens_processed"] == args.batch_size * (args.chunk_size + 1)
     assert any(not torch.equal(a, b) for a, b in zip(before, after))
+
+
+def test_async_quorum_mode_selection_disables_ddp_but_keeps_distributed_rank_mapping():
+    args = _parallel_args(
+        async_quorum_diloco=True,
+        async_quorum_min_workers=6,
+        async_quorum_fraction=0.75,
+        async_quorum_timeout_seconds=45.0,
+        async_quorum_metrics_path="metrics.jsonl",
+        async_quorum_run_id="run-123",
+    )
+
+    mode = train.resolve_training_parallel_mode(
+        args,
+        dist_enabled=True,
+        rank=3,
+        local_rank=3,
+        world_size=8,
+    )
+
+    assert mode.name == "async_quorum_diloco"
+    assert mode.use_ddp is False
+    assert mode.use_diloco is False
+    assert mode.use_async_quorum_diloco is True
+    assert mode.rank == 3
+    assert mode.local_rank == 3
+    assert mode.world_size == 8
+    assert mode.is_main is False
+    assert mode.one_rank_per_gpu is True
+    assert mode.quorum_threshold == 6
+    assert args._ddp_enabled is False
+    assert args._dist_enabled is True
+    assert args._use_diloco is False
+    assert args._use_async_quorum_diloco is True
+    assert args._async_quorum_threshold == 6
+
+
+def test_async_quorum_cli_flags_parse(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "train.py",
+            "--data",
+            "train.bin",
+            "--async_quorum_diloco",
+            "--diloco_k",
+            "40",
+            "--async_quorum_min_workers",
+            "7",
+            "--async_quorum_fraction",
+            "0.875",
+            "--async_quorum_timeout_seconds",
+            "90",
+            "--async_quorum_staleness_policy",
+            "reject-stale",
+            "--async_quorum_update_representation",
+            "delta",
+            "--async_quorum_metrics_path",
+            "metrics.jsonl",
+            "--async_quorum_run_id",
+            "e97-async",
+        ],
+    )
+
+    args = train.parse_args()
+
+    assert args.async_quorum_diloco is True
+    assert args.diloco_k == 40
+    assert args.async_quorum_min_workers == 7
+    assert args.async_quorum_fraction == 0.875
+    assert args.async_quorum_timeout_seconds == 90
+    assert args.async_quorum_staleness_policy == "reject-stale"
+    assert args.async_quorum_update_representation == "delta"
+    assert args.async_quorum_metrics_path == "metrics.jsonl"
+    assert args.async_quorum_run_id == "e97-async"
+
+
+def test_async_quorum_rejects_diloco_hybrid_island_ddp():
+    args = _parallel_args(async_quorum_diloco=True, diloco_island_size=2)
+
+    with pytest.raises(ValueError, match="diloco_island_size"):
+        train.resolve_training_parallel_mode(
+            args,
+            dist_enabled=True,
+            rank=0,
+            local_rank=0,
+            world_size=8,
+        )
+
+
+def test_async_quorum_rejects_sync_diloco_and_non_avg_outer_state():
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        train.resolve_training_parallel_mode(
+            _parallel_args(async_quorum_diloco=True, diloco=True),
+            dist_enabled=True,
+            rank=0,
+            local_rank=0,
+            world_size=8,
+        )
+
+    with pytest.raises(ValueError, match="diloco_outer_optimizer"):
+        train.resolve_training_parallel_mode(
+            _parallel_args(
+                async_quorum_diloco=True,
+                diloco_outer_optimizer="momentum",
+            ),
+            dist_enabled=True,
+            rank=0,
+            local_rank=0,
+            world_size=8,
+        )
+
+
+def test_existing_ddp_and_sync_diloco_mode_selection_unchanged():
+    ddp_args = _parallel_args()
+    ddp_mode = train.resolve_training_parallel_mode(
+        ddp_args,
+        dist_enabled=True,
+        rank=0,
+        local_rank=0,
+        world_size=4,
+    )
+    assert ddp_mode.name == "ddp"
+    assert ddp_mode.use_ddp is True
+    assert ddp_mode.use_diloco is False
+    assert ddp_mode.use_async_quorum_diloco is False
+
+    diloco_args = _parallel_args(diloco=True)
+    diloco_mode = train.resolve_training_parallel_mode(
+        diloco_args,
+        dist_enabled=True,
+        rank=0,
+        local_rank=0,
+        world_size=4,
+    )
+    assert diloco_mode.name == "diloco"
+    assert diloco_mode.use_ddp is False
+    assert diloco_mode.use_diloco is True
+    assert diloco_mode.use_async_quorum_diloco is False

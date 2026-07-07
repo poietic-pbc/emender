@@ -20,6 +20,7 @@ import sys
 import time
 STARTUP_TIME = time.time()
 import argparse
+import math
 import signal
 import torch
 import torch.nn as nn
@@ -35,6 +36,7 @@ import glob
 import re
 import tempfile
 import ctypes.util
+from dataclasses import dataclass
 from contextlib import nullcontext
 
 _SHUTDOWN_REQUEST = {
@@ -371,6 +373,38 @@ def parse_args():
                              'steps. world_size must be divisible by island_size. 0/1 = pure '
                              'DiLoCo (no intra-island DDP). Trades some throughput for '
                              'sample-efficiency when pure-DiLoCo lags DDP at matched tokens.')
+    parser.add_argument('--async_quorum_diloco', action='store_true',
+                        help='Enable train.py-native async quorum DiLoCo mode. This keeps '
+                             'one learner rank per GPU and does not wrap the model in DDP; '
+                             'K-boundary updates are owned by the async quorum protocol.')
+    parser.add_argument('--async_quorum_min_workers', type=int, default=0,
+                        help='Minimum fresh learner updates required to advance an async '
+                             'quorum generation. 0 means use only --async_quorum_fraction.')
+    parser.add_argument('--async_quorum_fraction', type=float, default=1.0,
+                        help='Fraction of requested workers required for async quorum '
+                             'advancement; effective threshold is '
+                             'max(min_workers, ceil(fraction * world_size)).')
+    parser.add_argument('--async_quorum_timeout_seconds', type=float, default=300.0,
+                        help='Seconds to wait at an async quorum generation boundary before '
+                             'classifying missing workers as timed out.')
+    parser.add_argument('--async_quorum_staleness_policy', type=str, default='reject-stale',
+                        choices=['reject-stale', 'bounded-stale'],
+                        help='Async update staleness policy. v1 production is reject-stale; '
+                             'bounded-stale is accepted only when max_staleness > 0.')
+    parser.add_argument('--async_quorum_max_staleness', type=int, default=0,
+                        help='Maximum generation staleness accepted by bounded-stale policy. '
+                             'Must remain 0 with reject-stale.')
+    parser.add_argument('--async_quorum_update_representation', type=str, default='delta',
+                        choices=['delta', 'endpoint'],
+                        help='Async update tensor semantics recorded in metadata. delta names '
+                             'the base generation; endpoint is reserved for debug/transport '
+                             'experiments that compute deltas at the merger.')
+    parser.add_argument('--async_quorum_metrics_path', type=str, default=None,
+                        help='Optional JSONL path for async quorum generation and rank '
+                             'heartbeat metrics.')
+    parser.add_argument('--async_quorum_run_id', type=str, default=None,
+                        help='Stable async quorum run identifier written into update and '
+                             'metrics metadata. Defaults to the train.py run label when unset.')
     parser.add_argument('--diloco_merge_bucket_numel', type=int,
                         default=_env_int('NDM_DILOCO_MERGE_BUCKET_NUMEL', 0),
                         help='Optional DiLoCo merge all-reduce bucket size in elements. '
@@ -496,6 +530,143 @@ def parse_args():
                         help='Run 1 fwd+bwd step, print peak GPU memory in MB, then exit')
 
     return parser.parse_args()
+
+
+@dataclass(frozen=True)
+class TrainingParallelMode:
+    name: str
+    dist_enabled: bool
+    use_ddp: bool
+    use_diloco: bool
+    use_async_quorum_diloco: bool
+    rank: int
+    local_rank: int
+    world_size: int
+    is_main: bool
+    one_rank_per_gpu: bool
+    quorum_threshold: int | None = None
+
+
+def _resolve_async_quorum_threshold(args, world_size):
+    min_workers = int(getattr(args, 'async_quorum_min_workers', 0) or 0)
+    quorum_fraction = float(getattr(args, 'async_quorum_fraction', 1.0))
+    if min_workers < 0:
+        raise ValueError("--async_quorum_min_workers must be >= 0")
+    if not (0.0 < quorum_fraction <= 1.0):
+        raise ValueError("--async_quorum_fraction must be in (0, 1]")
+    threshold = max(min_workers, math.ceil(quorum_fraction * max(1, world_size)))
+    if threshold < 1:
+        raise ValueError("async quorum threshold must be >= 1")
+    if threshold > max(1, world_size):
+        raise ValueError(
+            f"async quorum threshold {threshold} exceeds world_size {world_size}")
+    return threshold
+
+
+def validate_async_quorum_diloco_args(args, *, world_size):
+    if not bool(getattr(args, 'async_quorum_diloco', False)):
+        return None
+
+    if bool(getattr(args, 'diloco', False)):
+        raise ValueError("--async_quorum_diloco and --diloco are mutually exclusive")
+
+    island_size = int(getattr(args, 'diloco_island_size', 0) or 0)
+    if island_size > 1:
+        raise ValueError(
+            "--async_quorum_diloco requires one independent learner rank per GPU; "
+            "--diloco_island_size > 1 would wrap island ranks in DDP")
+
+    outer_optimizer = str(getattr(args, 'diloco_outer_optimizer', 'avg') or 'avg')
+    if outer_optimizer != 'avg':
+        raise ValueError(
+            "--async_quorum_diloco currently supports only "
+            "--diloco_outer_optimizer avg")
+
+    if float(getattr(args, 'diloco_outer_beta', 0.0) or 0.0) != 0.0:
+        raise ValueError("--async_quorum_diloco requires --diloco_outer_beta 0.0")
+
+    timeout_s = float(getattr(args, 'async_quorum_timeout_seconds', 300.0))
+    if timeout_s <= 0.0:
+        raise ValueError("--async_quorum_timeout_seconds must be > 0")
+
+    staleness_policy = str(
+        getattr(args, 'async_quorum_staleness_policy', 'reject-stale')
+        or 'reject-stale')
+    if staleness_policy not in ('reject-stale', 'bounded-stale'):
+        raise ValueError(
+            "--async_quorum_staleness_policy must be reject-stale or bounded-stale")
+    max_staleness = int(getattr(args, 'async_quorum_max_staleness', 0) or 0)
+    if max_staleness < 0:
+        raise ValueError("--async_quorum_max_staleness must be >= 0")
+    if staleness_policy == 'reject-stale' and max_staleness != 0:
+        raise ValueError(
+            "--async_quorum_staleness_policy reject-stale requires "
+            "--async_quorum_max_staleness 0")
+    if staleness_policy == 'bounded-stale' and max_staleness <= 0:
+        raise ValueError(
+            "--async_quorum_staleness_policy bounded-stale requires "
+            "--async_quorum_max_staleness > 0")
+
+    update_representation = str(
+        getattr(args, 'async_quorum_update_representation', 'delta') or 'delta')
+    if update_representation not in ('delta', 'endpoint'):
+        raise ValueError(
+            "--async_quorum_update_representation must be delta or endpoint")
+
+    return _resolve_async_quorum_threshold(args, world_size)
+
+
+def resolve_training_parallel_mode(args, *, dist_enabled, rank, local_rank, world_size):
+    """Resolve train.py distributed semantics without constructing torch DDP.
+
+    ``--async_quorum_diloco`` is intentionally a distributed learner mode, not
+    a DDP mode: every process keeps its rank-local GPU and data shard, but the
+    model remains unwrapped so no per-step gradient all-reduce is registered.
+    """
+    dist_enabled = bool(dist_enabled)
+    rank = int(rank)
+    local_rank = int(local_rank)
+    world_size = int(world_size)
+    use_async_quorum_diloco = bool(getattr(args, 'async_quorum_diloco', False))
+    quorum_threshold = None
+    if bool(getattr(args, 'async_quorum_diloco', False)):
+        quorum_threshold = validate_async_quorum_diloco_args(
+            args, world_size=max(1, world_size))
+
+    use_diloco = dist_enabled and bool(getattr(args, 'diloco', False))
+    use_ddp = dist_enabled and not use_diloco and not use_async_quorum_diloco
+    if use_async_quorum_diloco:
+        name = 'async_quorum_diloco'
+    elif use_diloco:
+        name = 'diloco'
+    elif use_ddp:
+        name = 'ddp'
+    else:
+        name = 'single'
+
+    args._ddp_enabled = use_ddp
+    args._dist_enabled = dist_enabled
+    args._use_diloco = use_diloco
+    args._use_async_quorum_diloco = use_async_quorum_diloco
+    args._rank = rank
+    args._local_rank = local_rank
+    args._world_size = world_size
+    args._is_main = (rank == 0)
+    args._async_quorum_threshold = quorum_threshold
+
+    return TrainingParallelMode(
+        name=name,
+        dist_enabled=dist_enabled,
+        use_ddp=use_ddp,
+        use_diloco=use_diloco,
+        use_async_quorum_diloco=use_async_quorum_diloco,
+        rank=rank,
+        local_rank=local_rank,
+        world_size=world_size,
+        is_main=(rank == 0),
+        one_rank_per_gpu=dist_enabled and world_size > 1,
+        quorum_threshold=quorum_threshold,
+    )
 
 
 def _handle_shutdown_signal(signum, _frame):
@@ -2222,7 +2393,7 @@ def train(args):
     # Activates ONLY under torchrun (WORLD_SIZE>1). Single-GPU/no-torchrun runs are
     # byte-identical to before: dist_enabled=False, rank=0, world_size=1, is_main=True.
     #
-    # Two distributed modes share the same process-group / data-sharding / rank-0
+    # Distributed modes share the same process-group / data-sharding / rank-0
     # gating plumbing but differ in HOW gradients/weights are synchronized:
     #   * DDP (default):  per-step gradient all-reduce. use_ddp=True. Exact SGD
     #                     equivalence but the 1.29B bf16 all-reduce dominates on a
@@ -2230,22 +2401,27 @@ def train(args):
     #   * DiLoCo (--diloco): each rank trains INDEPENDENTLY (no per-step comm) and
     #                     model weights are averaged every --diloco_k steps. Recovers
     #                     the ~62k tok/s independent ceiling. use_ddp=False.
+    #   * Async quorum DiLoCo (--async_quorum_diloco): one learner rank per GPU,
+    #                     no DDP wrapping and no per-step gradient all-reduce; K
+    #                     boundaries are routed to the async quorum protocol.
     slurm_env_status = resolve_distributed_env_from_slurm()
     dist_enabled = int(os.environ.get('WORLD_SIZE', '1')) > 1
     rank = int(os.environ.get('RANK', '0'))
     local_rank = int(os.environ.get('LOCAL_RANK', '0'))
     world_size = int(os.environ.get('WORLD_SIZE', '1'))
-    is_main = (rank == 0)
-    use_ddp = dist_enabled and not args.diloco
-    use_diloco = dist_enabled and args.diloco
+    parallel_mode = resolve_training_parallel_mode(
+        args,
+        dist_enabled=dist_enabled,
+        rank=rank,
+        local_rank=local_rank,
+        world_size=world_size,
+    )
+    is_main = parallel_mode.is_main
+    use_ddp = parallel_mode.use_ddp
+    use_diloco = parallel_mode.use_diloco
+    use_async_quorum_diloco = parallel_mode.use_async_quorum_diloco
     # _ddp_enabled retained for back-compat with downstream references; it now means
     # "wrapped in torch DDP" (per-step sync), NOT merely "distributed".
-    args._ddp_enabled = use_ddp
-    args._dist_enabled = dist_enabled
-    args._use_diloco = use_diloco
-    args._rank = rank
-    args._world_size = world_size
-    args._is_main = is_main
     args._model_variant = model_variant_label(args)
 
     # Setup
@@ -2264,7 +2440,11 @@ def train(args):
                 dist.init_process_group(backend='nccl', device_id=device, **init_kwargs)
             except TypeError:
                 dist.init_process_group(backend='nccl', **init_kwargs)
-        _mode = 'DiLoCo' if use_diloco else 'DDP'
+        _mode = (
+            'AsyncQuorumDiLoCo'
+            if use_async_quorum_diloco
+            else ('DiLoCo' if use_diloco else 'DDP')
+        )
         if is_main:
             print(f"[{_mode}] world_size={world_size} backend=nccl; this is rank {rank} "
                   f"on {device}", flush=True)
@@ -2276,6 +2456,16 @@ def train(args):
                 print(f"[DiLoCo] periodic model-weight averaging: K={args.diloco_k} "
                       f"outer_lr={args.diloco_outer_lr} outer_beta={args.diloco_outer_beta} "
                       f"(no per-step gradient all-reduce)", flush=True)
+            if use_async_quorum_diloco:
+                print(
+                    "[AsyncQuorumDiLoCo] native learner mode: "
+                    f"K={args.diloco_k} quorum_threshold={parallel_mode.quorum_threshold}/"
+                    f"{world_size} timeout_s={args.async_quorum_timeout_seconds:g} "
+                    f"staleness={args.async_quorum_staleness_policy} "
+                    f"update={args.async_quorum_update_representation} "
+                    "(no DDP wrapper, no per-step gradient all-reduce)",
+                    flush=True,
+                )
         print(f"[{_mode}] rank {rank}/{world_size} bound to {device}", flush=True)
     else:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -2850,6 +3040,20 @@ def train(args):
                       f"DDP gradient all-reduce WITHIN island + DiLoCo periodic averaging "
                       f"ACROSS islands every K={args.diloco_k} (subgroup comms warmed "
                       f"sequentially)", flush=True)
+    elif use_async_quorum_diloco:
+        # Async quorum DiLoCo is deliberately train.py-native learner mode:
+        # model remains unwrapped so no DDP gradient hooks or per-step all-reduce
+        # are installed. The coordinator/state tasks wire the K-boundary exchange.
+        if is_main:
+            metrics_path = (
+                getattr(args, 'async_quorum_metrics_path', None)
+                or '<output_dir>/async_quorum/metrics.jsonl')
+            run_id = getattr(args, 'async_quorum_run_id', None) or '<run_label>'
+            print(
+                "[AsyncQuorumDiLoCo] model left unwrapped; "
+                f"run_id={run_id} metrics_path={metrics_path}",
+                flush=True,
+            )
 
     if is_main:
         print(f"Model: Level {args.level}, {core_model.get_num_params():,} parameters")
