@@ -1755,6 +1755,244 @@ def initialize_diloco_outer_state(core_model, optimizer, args, loaded_state=None
     raise ValueError(f"unknown DiLoCo outer optimizer: {args.diloco_outer_optimizer}")
 
 
+def _diloco_param_items(core_model):
+    return list(core_model.named_parameters())
+
+
+def _diloco_schedulefree_enabled(args, optimizer):
+    return optimizer is not None and getattr(args, 'optimizer', None) == 'schedulefree'
+
+
+def _diloco_schedulefree_train_modes(optimizer):
+    return [bool(group.get('train_mode', False)) for group in optimizer.param_groups]
+
+
+def _diloco_restore_schedulefree_train_modes(optimizer, modes):
+    # AdamWScheduleFree exposes whole-optimizer train()/eval() transitions. The
+    # train.py path keeps groups homogeneous, so restoring the first saved mode is
+    # the side-effect-safe inverse of the temporary eval-basis extraction/apply.
+    if not modes:
+        return
+    if modes[0]:
+        optimizer.train()
+    else:
+        optimizer.eval()
+
+
+def _diloco_clone_tensor_map(items):
+    return {name: tensor.detach().clone() for name, tensor in items}
+
+
+def extract_diloco_tensor_state(core_model, optimizer=None, args=None):
+    """Extract train.py-native DiLoCo tensor state.
+
+    Non-ScheduleFree optimizers export model parameters as ``{"params": ...}``.
+    ScheduleFree exports the eval/x parameter basis plus optimizer z tensors as
+    ``{"x": ..., "z": ...}``. The helper may temporarily switch
+    AdamWScheduleFree into eval mode to read x, then restores the prior optimizer
+    train/eval mode; it does not touch ``core_model.training``.
+    """
+    params = _diloco_param_items(core_model)
+    if _diloco_schedulefree_enabled(args, optimizer):
+        modes = _diloco_schedulefree_train_modes(optimizer)
+        optimizer.eval()
+        try:
+            x_state = _diloco_clone_tensor_map(
+                (name, param.data) for name, param in params)
+            z_state = {}
+            for name, param in params:
+                z = optimizer.state.get(param, {}).get('z')
+                z_state[name] = (z if z is not None else param.data).detach().clone()
+            return {'kind': 'schedulefree', 'x': x_state, 'z': z_state}
+        finally:
+            _diloco_restore_schedulefree_train_modes(optimizer, modes)
+
+    return {
+        'kind': 'params',
+        'params': _diloco_clone_tensor_map((name, param.data) for name, param in params),
+    }
+
+
+def _diloco_state_bases(state):
+    kind = state.get('kind', 'params')
+    if kind == 'schedulefree':
+        bases = ('x', 'z')
+    elif kind == 'params':
+        bases = ('params',)
+    else:
+        raise ValueError(f"unknown DiLoCo tensor state kind: {kind!r}")
+    for basis in bases:
+        if basis not in state:
+            raise ValueError(f"DiLoCo tensor state missing {basis!r} basis")
+    return kind, bases
+
+
+def _diloco_validate_matching_state(reference, candidate, *, label):
+    ref_kind, bases = _diloco_state_bases(reference)
+    cand_kind, cand_bases = _diloco_state_bases(candidate)
+    if cand_kind != ref_kind or cand_bases != bases:
+        raise ValueError(
+            f"{label} kind/bases differ: {cand_kind}:{cand_bases} "
+            f"!= {ref_kind}:{bases}")
+    for basis in bases:
+        ref_map = reference[basis]
+        cand_map = candidate[basis]
+        if set(ref_map) != set(cand_map):
+            missing = sorted(set(ref_map) - set(cand_map))
+            extra = sorted(set(cand_map) - set(ref_map))
+            raise ValueError(
+                f"{label} {basis} keys differ: missing={missing} extra={extra}")
+        for name, ref_tensor in ref_map.items():
+            cand_tensor = cand_map[name]
+            if ref_tensor.shape != cand_tensor.shape:
+                raise ValueError(
+                    f"{label} {basis}.{name} shape differs: "
+                    f"{tuple(cand_tensor.shape)} != {tuple(ref_tensor.shape)}")
+
+
+def compute_diloco_dense_delta(base_state, local_state):
+    """Return dense ``local_state - base_state`` for every DiLoCo tensor basis."""
+    kind, bases = _diloco_state_bases(base_state)
+    _diloco_validate_matching_state(base_state, local_state, label='local_state')
+    delta = {'kind': kind}
+    for basis in bases:
+        delta[basis] = {
+            name: local_state[basis][name].detach() - base_tensor.detach()
+            for name, base_tensor in base_state[basis].items()
+        }
+    return delta
+
+
+def apply_diloco_dense_delta(base_state, delta_state, *, scale=1.0):
+    """Return ``base_state + scale * delta_state`` without mutating inputs."""
+    kind, bases = _diloco_state_bases(base_state)
+    _diloco_validate_matching_state(base_state, delta_state, label='delta_state')
+    out = {'kind': kind}
+    scale = float(scale)
+    for basis in bases:
+        out[basis] = {
+            name: base_tensor.detach() + delta_state[basis][name].detach() * scale
+            for name, base_tensor in base_state[basis].items()
+        }
+    return out
+
+
+def merge_diloco_dense_deltas(base_state, delta_states, *, weights=None,
+                              eta_outer=1.0):
+    """Apply a weighted mean dense delta to ``base_state``.
+
+    ``eta_outer=1`` with equal weights is equivalent to direct averaging of all
+    local states that produced the deltas. Token-weighted async callers can pass
+    token counts as ``weights``.
+    """
+    if not delta_states:
+        raise ValueError("at least one DiLoCo delta is required")
+    kind, bases = _diloco_state_bases(base_state)
+    for idx, delta_state in enumerate(delta_states):
+        _diloco_validate_matching_state(
+            base_state, delta_state, label=f'delta_states[{idx}]')
+
+    if weights is None:
+        weights = [1.0] * len(delta_states)
+    if len(weights) != len(delta_states):
+        raise ValueError("weights length must match delta_states length")
+    weights = [float(weight) for weight in weights]
+    weight_sum = sum(weights)
+    if weight_sum <= 0.0 or any(weight <= 0.0 for weight in weights):
+        raise ValueError("DiLoCo merge weights must be positive")
+
+    mean_delta = {'kind': kind}
+    for basis in bases:
+        mean_delta[basis] = {}
+        for name, base_tensor in base_state[basis].items():
+            acc = torch.zeros_like(base_tensor)
+            for delta_state, weight in zip(delta_states, weights):
+                acc.add_(delta_state[basis][name], alpha=weight / weight_sum)
+            mean_delta[basis][name] = acc
+    return apply_diloco_dense_delta(base_state, mean_delta, scale=float(eta_outer))
+
+
+def rebase_diloco_tensor_state(local_state, old_base_state, new_base_state):
+    """Move a local state from an old global base to a new one.
+
+    The local displacement from the old base is preserved independently for each
+    exported tensor basis. For ScheduleFree, that means both x and z are rebased,
+    preserving the learner's x/z geometry while aligning it to the newer global
+    generation.
+    """
+    kind, bases = _diloco_state_bases(local_state)
+    _diloco_validate_matching_state(local_state, old_base_state, label='old_base_state')
+    _diloco_validate_matching_state(local_state, new_base_state, label='new_base_state')
+    out = {'kind': kind}
+    for basis in bases:
+        out[basis] = {}
+        for name, local_tensor in local_state[basis].items():
+            out[basis][name] = (
+                local_tensor.detach()
+                + (new_base_state[basis][name].detach()
+                   - old_base_state[basis][name].detach())
+            )
+    return out
+
+
+def apply_diloco_tensor_state(core_model, optimizer, args, tensor_state):
+    """Load a DiLoCo tensor state into a live train.py model/optimizer.
+
+    ScheduleFree states are loaded in eval/x basis and z is written into the
+    real optimizer state. The optimizer's prior train/eval mode is restored, so
+    callers can safely apply a global generation at async K-boundaries without
+    accidentally leaving the learner in the wrong ScheduleFree mode.
+    """
+    params = _diloco_param_items(core_model)
+    param_names = {name for name, _ in params}
+    kind, bases = _diloco_state_bases(tensor_state)
+
+    if _diloco_schedulefree_enabled(args, optimizer):
+        if kind != 'schedulefree':
+            raise ValueError("ScheduleFree optimizer requires schedulefree tensor_state")
+        for basis in bases:
+            if set(tensor_state[basis]) != param_names:
+                missing = sorted(param_names - set(tensor_state[basis]))
+                extra = sorted(set(tensor_state[basis]) - param_names)
+                raise ValueError(
+                    f"tensor_state {basis} keys differ: missing={missing} extra={extra}")
+        modes = _diloco_schedulefree_train_modes(optimizer)
+        optimizer.eval()
+        try:
+            for name, param in params:
+                x = tensor_state['x'][name].detach().to(
+                    device=param.data.device, dtype=param.data.dtype)
+                z = tensor_state['z'][name].detach().to(
+                    device=param.data.device, dtype=param.data.dtype)
+                if param.data.shape != x.shape or param.data.shape != z.shape:
+                    raise ValueError(
+                        f"tensor_state {name!r} shape does not match parameter")
+                param.data.copy_(x)
+                param_state = optimizer.state.setdefault(param, {})
+                if 'z' in param_state:
+                    param_state['z'].copy_(z)
+                else:
+                    param_state['z'] = z.clone()
+                param_state.setdefault('exp_avg_sq', torch.zeros_like(param.data))
+        finally:
+            _diloco_restore_schedulefree_train_modes(optimizer, modes)
+        return
+
+    if kind != 'params':
+        raise ValueError("non-ScheduleFree optimizer requires params tensor_state")
+    if set(tensor_state['params']) != param_names:
+        missing = sorted(param_names - set(tensor_state['params']))
+        extra = sorted(set(tensor_state['params']) - param_names)
+        raise ValueError(
+            f"tensor_state params keys differ: missing={missing} extra={extra}")
+    for name, param in params:
+        value = tensor_state['params'][name].detach().to(
+            device=param.data.device, dtype=param.data.dtype)
+        if param.data.shape != value.shape:
+            raise ValueError(f"tensor_state {name!r} shape does not match parameter")
+        param.data.copy_(value)
+
+
 def _diloco_merge_debug_rank_enabled(args):
     if int(getattr(args, 'diloco_merge_debug', 0) or 0) != 1:
         return False
