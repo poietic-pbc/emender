@@ -47,6 +47,10 @@ ASYNC_ENTRYPOINT=${ASYNC_ENTRYPOINT:-scripts/frontier/e97_async_diloco_train.py}
 ASYNC_DILOCO_NON_PRODUCTION_DEBUG=${ASYNC_DILOCO_NON_PRODUCTION_DEBUG:-0}
 ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM=${ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM:-0}
 ASYNC_ACTUAL_MULTINODE_FILE_QUORUM=${ASYNC_ACTUAL_MULTINODE_FILE_QUORUM:-$ASYNC_DILOCO_NON_PRODUCTION_DEBUG}
+ASYNC_REQUIRE_CORRECTED_B4_LADDER=${ASYNC_REQUIRE_CORRECTED_B4_LADDER:-1}
+SLURM_INTENDED_NTASKS_PER_NODE=${SLURM_INTENDED_NTASKS_PER_NODE:-1}
+SLURM_INTENDED_GPUS_PER_TASK=${SLURM_INTENDED_GPUS_PER_TASK:-0}
+SLURM_INTENDED_GPU_BIND=${SLURM_INTENDED_GPU_BIND:-unset}
 
 # Async quorum recipe. Local quorum is six of eight workers per node; global
 # quorum defaults to ceil(2/3 * nodes), including scaled debug node counts.
@@ -256,6 +260,52 @@ if [[ "$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM" == "1" && "$ASYNC_NODE_COUNT" -gt 1 
   )
 fi
 
+PRESUBMIT_STATUS=pass
+PRESUBMIT_FAILURES=()
+RUNTIME_FLAG_DRIFT=()
+if [[ "$BATCH_SIZE" != "4" ]]; then
+  PRESUBMIT_FAILURES+=("batch_size=$BATCH_SIZE does not match corrected B4 ladder batch_size=4")
+fi
+if [[ "$CHUNK_SIZE" != "2048" ]]; then
+  PRESUBMIT_FAILURES+=("chunk_size=$CHUNK_SIZE does not match corrected B4 ladder chunk_size=2048")
+fi
+if [[ "$ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM" == "1" ]]; then
+  PRESUBMIT_FAILURES+=("synthetic token stream is not acceptable for corrected E97 ladder")
+fi
+if [[ "$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM" == "1" ]]; then
+  PRESUBMIT_FAILURES+=("actual_multinode_file_quorum is metadata-only shared-storage quorum; dense async DiLoCo delta/state exchange is not implemented")
+fi
+if [[ "$SLURM_INTENDED_NTASKS_PER_NODE" != "8" ]]; then
+  PRESUBMIT_FAILURES+=("Slurm topology uses $SLURM_INTENDED_NTASKS_PER_NODE task(s) per node, not stable B4 8 GPU tasks per node")
+fi
+if [[ "$SLURM_INTENDED_GPUS_PER_TASK" != "1" ]]; then
+  PRESUBMIT_FAILURES+=("Slurm GPU request uses --gpus-per-task=$SLURM_INTENDED_GPUS_PER_TASK, not stable B4 --gpus-per-task=1")
+fi
+if [[ "$SLURM_INTENDED_GPU_BIND" != "closest" ]]; then
+  PRESUBMIT_FAILURES+=("Slurm GPU binding is $SLURM_INTENDED_GPU_BIND, not stable B4 --gpu-bind=closest")
+fi
+if [[ "$ASYNC_WORKER_COUNT_PER_NODE" != "8" ]]; then
+  PRESUBMIT_FAILURES+=("configured worker_count_per_node=$ASYNC_WORKER_COUNT_PER_NODE, not B4 GPU-island 8")
+fi
+if [[ "$ASYNC_DENSE_UPDATE_STORAGE" != "1" ]]; then
+  PRESUBMIT_FAILURES+=("ASYNC_DENSE_UPDATE_STORAGE=$ASYNC_DENSE_UPDATE_STORAGE, so dense update exchange is not recorded")
+fi
+if [[ "$MODEL_LINEAR_STATE" != "0" ]]; then
+  RUNTIME_FLAG_DRIFT+=("linear_state=$MODEL_LINEAR_STATE vs stable train.py B4 linear_state=0")
+fi
+if [[ "$ASYNC_E97_USE_CHUNKED" != "0" ]]; then
+  RUNTIME_FLAG_DRIFT+=("use_chunked_e97=$ASYNC_E97_USE_CHUNKED vs stable train.py B4 use_chunked_e97=0")
+fi
+if [[ "$ASYNC_E97_CHECKPOINT_INTERVAL" != "16" ]]; then
+  RUNTIME_FLAG_DRIFT+=("checkpoint_interval=$ASYNC_E97_CHECKPOINT_INTERVAL vs stable train.py B4 checkpoint_interval=16")
+fi
+if ((${#RUNTIME_FLAG_DRIFT[@]} > 0)); then
+  PRESUBMIT_FAILURES+=("runtime flag drift from stable train.py B4 path: ${RUNTIME_FLAG_DRIFT[*]}")
+fi
+if ((${#PRESUBMIT_FAILURES[@]} > 0)); then
+  PRESUBMIT_STATUS=fail
+fi
+
 printf '%q ' "${LAUNCH_CMD[@]}" > "$COMMAND_FILE"
 printf '\n' >> "$COMMAND_FILE"
 
@@ -278,6 +328,33 @@ printf '\n' >> "$COMMAND_FILE"
   echo "python_bin=$PYTHON_BIN"
   echo "requested_walltime=$REQUESTED_WALLTIME"
   echo "requested_node_hours=$REQUESTED_NODE_HOURS"
+  echo "presubmit_status=$PRESUBMIT_STATUS"
+  echo "presubmit_requires_corrected_b4_ladder=$ASYNC_REQUIRE_CORRECTED_B4_LADDER"
+  echo "presubmit_failure_count=${#PRESUBMIT_FAILURES[@]}"
+  if ((${#PRESUBMIT_FAILURES[@]} == 0)); then
+    echo "presubmit_failure_0=none"
+  else
+    for idx in "${!PRESUBMIT_FAILURES[@]}"; do
+      echo "presubmit_failure_${idx}=${PRESUBMIT_FAILURES[$idx]}"
+    done
+  fi
+  echo "runtime_flag_drift_count=${#RUNTIME_FLAG_DRIFT[@]}"
+  if ((${#RUNTIME_FLAG_DRIFT[@]} == 0)); then
+    echo "runtime_flag_drift_0=none"
+  else
+    for idx in "${!RUNTIME_FLAG_DRIFT[@]}"; do
+      echo "runtime_flag_drift_${idx}=${RUNTIME_FLAG_DRIFT[$idx]}"
+    done
+  fi
+  echo "stable_b4_reference_ntasks_per_node=8"
+  echo "stable_b4_reference_gpus_per_task=1"
+  echo "stable_b4_reference_gpu_bind=closest"
+  echo "stable_b4_reference_linear_state=0"
+  echo "stable_b4_reference_use_chunked_e97=0"
+  echo "stable_b4_reference_checkpoint_interval=16"
+  echo "slurm_intended_ntasks_per_node=$SLURM_INTENDED_NTASKS_PER_NODE"
+  echo "slurm_intended_gpus_per_task=$SLURM_INTENDED_GPUS_PER_TASK"
+  echo "slurm_intended_gpu_bind=$SLURM_INTENDED_GPU_BIND"
   echo "async_node_count=$ASYNC_NODE_COUNT"
   echo "async_worker_count_per_node=$ASYNC_WORKER_COUNT_PER_NODE"
   echo "async_worker_count=$ASYNC_WORKER_COUNT"
@@ -346,6 +423,15 @@ printf '\n' >> "$COMMAND_FILE"
   echo "=== command ==="
   cat "$COMMAND_FILE"
 } | tee "$ENV_FILE"
+
+if [[ "$ASYNC_REQUIRE_CORRECTED_B4_LADDER" == "1" && "$PRESUBMIT_STATUS" != "pass" ]]; then
+  {
+    echo "Corrected E97 B4 smoke ladder pre-submit gate failed; refusing to start Slurm payload."
+    printf ' - %s\n' "${PRESUBMIT_FAILURES[@]}"
+    echo "Set ASYNC_REQUIRE_CORRECTED_B4_LADDER=0 only for explicitly labeled diagnostic/non-comparable runs."
+  } >&2
+  exit 70
+fi
 
 if [[ "${ASYNC_DILOCO_HUMAN_APPROVED:-0}" != "1" && "$ASYNC_DILOCO_NON_PRODUCTION_DEBUG" != "1" ]]; then
   echo "Prepared launch package only. Refusing to start 256-node async DiLoCo without ASYNC_DILOCO_HUMAN_APPROVED=1 from WG human approval task." >&2

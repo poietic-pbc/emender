@@ -1,0 +1,28 @@
+
+Lmod is automatically replacing "cce/18.0.1" with "gcc-native/13.2".
+
+
+Lmod is automatically replacing "PrgEnv-cray/8.6.0" with "PrgEnv-gnu/8.7.0".
+
+
+Due to MODULEPATH changes, the following have been reloaded:
+  1) cray-libsci/24.11.0     2) cray-mpich/8.1.31     3) darshan-runtime/3.4.6-mpi
+
+
+The following have been reloaded with a version change:
+  1) cray-libsci/24.11.0 => cray-libsci/26.03.0
+  2) cray-mpich/8.1.31 => cray-mpich/9.1.0
+  3) cray-pmi/6.1.15 => cray-pmi/6.1.17
+  4) craype/2.7.33 => craype/2.7.36
+  5) darshan-runtime/3.4.6-mpi => darshan-runtime/3.4.7-mpi
+  6) gcc-native/13.2 => gcc-native/14.2
+  7) perftools-base/24.11.0 => perftools-base/26.03.0
+
+Corrected E97 B4 smoke ladder pre-submit gate failed; refusing to start Slurm payload.
+ - actual_multinode_file_quorum is metadata-only shared-storage quorum; dense async DiLoCo delta/state exchange is not implemented
+ - Slurm topology uses 1 task(s) per node, not stable B4 8 GPU tasks per node
+ - Slurm GPU request uses --gpus-per-task=0, not stable B4 --gpus-per-task=1
+ - Slurm GPU binding is unset, not stable B4 --gpu-bind=closest
+ - ASYNC_DENSE_UPDATE_STORAGE=0, so dense update exchange is not recorded
+ - runtime flag drift from stable train.py B4 path: linear_state=1 vs stable train.py B4 linear_state=0 use_chunked_e97=1 vs stable train.py B4 use_chunked_e97=0 checkpoint_interval=64 vs stable train.py B4 checkpoint_interval=16
+Set ASYNC_REQUIRE_CORRECTED_B4_LADDER=0 only for explicitly labeled diagnostic/non-comparable runs.
