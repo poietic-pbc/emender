@@ -2,11 +2,10 @@
 # Shared runner for train.py-backed async quorum DiLoCo debug smokes.
 #
 # This intentionally uses one Slurm task per GPU and calls the train.py-backed
-# async entrypoint once per task. The production dense data plane is MPI
-# point-to-point: each GPU rank runs real train.py local token training and sends
-# checksummed tensor-delta buckets to rank 0, which publishes the authoritative
-# run-local latest/checkpoint metadata when quorum is reached. TCP remains
-# selectable only as a bounded metadata/control-plane debug backend.
+# async entrypoint once per task. The production dense data plane is the
+# compiled Cray MPICH helper: each GPU rank runs real train.py local token
+# training and hands checksummed tensor-delta buckets to a C++ MPI helper. TCP
+# remains selectable only as a bounded metadata/control-plane debug backend.
 
 set -euo pipefail
 
@@ -51,13 +50,15 @@ ASYNC_LOCAL_STEPS=${ASYNC_LOCAL_STEPS:-${DILOCO_K:-1}}
 ASYNC_GENERATIONS=${ASYNC_GENERATIONS:-1}
 ASYNC_COORDINATOR_PORT=${ASYNC_COORDINATOR_PORT:-29497}
 ASYNC_COORDINATOR_BIND_HOST=${ASYNC_COORDINATOR_BIND_HOST:-0.0.0.0}
-ASYNC_QUORUM_TRANSPORT=${ASYNC_QUORUM_TRANSPORT:-mpi-dense}
+ASYNC_QUORUM_TRANSPORT=${ASYNC_QUORUM_TRANSPORT:-compiled-cray-mpich-helper-p2p}
 ASYNC_MPI_DENSE_BUCKET_BYTES=${ASYNC_MPI_DENSE_BUCKET_BYTES:-67108864}
+ASYNC_COMPILED_MPICH_HELPER_BIN=${ASYNC_COMPILED_MPICH_HELPER_BIN:-${ARTIFACT_DIR}/compiled_mpich_dense_helper}
+ASYNC_COMPILED_MPICH_IPC_DIR=${ASYNC_COMPILED_MPICH_IPC_DIR:-${RUN_DIR}/ipc}
 ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM=${ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM:-0}
 ALLOW_SYNTHETIC_TOKEN_FALLBACK=${ALLOW_SYNTHETIC_TOKEN_FALLBACK:-0}
 TRAINING_DATA_MODE=real-token
 
-if [[ "$ASYNC_QUORUM_TRANSPORT" == "mpi-dense" && "$ASYNC_EXPECTED_RANKS" -gt "$ASYNC_TRAINPY_RANKS" ]]; then
+if [[ "$ASYNC_QUORUM_TRANSPORT" != "tcp" && "$ASYNC_EXPECTED_RANKS" -gt "$ASYNC_TRAINPY_RANKS" ]]; then
   ASYNC_EXPECTED_RANKS=$ASYNC_TRAINPY_RANKS
   ASYNC_EXPECTED_MISSING_UPDATES=0
 fi
@@ -124,7 +125,7 @@ frontier_activate_emender_conda_env
 PYTHON_BIN=$(command -v python)
 export REPO TIKTOKEN_CACHE_DIR PYTHON_BIN RANK_START_LOG ASYNC_ENTRYPOINT
 export MPICH_GPU_SUPPORT_ENABLED=${MPICH_GPU_SUPPORT_ENABLED:-0}
-export ASYNC_MPI_DENSE_BUCKET_BYTES
+export ASYNC_MPI_DENSE_BUCKET_BYTES ASYNC_COMPILED_MPICH_HELPER_BIN ASYNC_COMPILED_MPICH_IPC_DIR
 export CRAY_MPI4PY_SITE=${CRAY_MPI4PY_SITE:-/opt/cray/pe/python/3.10.10/lib/python3.10/site-packages}
 
 [[ -f "$ASYNC_ENTRYPOINT" ]] || { echo "ASYNC_ENTRYPOINT is missing: $ASYNC_ENTRYPOINT" >&2; exit 65; }
@@ -148,6 +149,10 @@ fi
 if [[ "$ASYNC_GLOBAL_QUORUM" -gt "$ASYNC_TRAINPY_RANKS" ]]; then
   echo "ASYNC_GLOBAL_QUORUM=$ASYNC_GLOBAL_QUORUM cannot exceed launched ranks=$ASYNC_TRAINPY_RANKS" >&2
   exit 64
+fi
+if [[ "$ASYNC_QUORUM_TRANSPORT" == "compiled-cray-mpich-helper-p2p" && ! -x "$ASYNC_COMPILED_MPICH_HELPER_BIN" ]]; then
+  ARTIFACT_DIR="$ARTIFACT_DIR" OUT="$ASYNC_COMPILED_MPICH_HELPER_BIN" scripts/frontier/build_compiled_mpich_dense_helper.sh \
+    2>&1 | tee "${LOG_DIR}/compiled_mpich_helper_build.log"
 fi
 if [[ -z "${ASYNC_COORDINATOR_HOST:-}" ]]; then
   if command -v scontrol >/dev/null 2>&1 && [[ -n "${SLURM_NODELIST:-}" ]]; then
@@ -205,8 +210,13 @@ CMD=(
   --coordinator-bind-host "$ASYNC_COORDINATOR_BIND_HOST"
   --coordinator-port "$ASYNC_COORDINATOR_PORT"
   --mpi-dense-bucket-bytes "$ASYNC_MPI_DENSE_BUCKET_BYTES"
+  --compiled-mpich-helper-bin "$ASYNC_COMPILED_MPICH_HELPER_BIN"
+  --compiled-mpich-ipc-dir "$ASYNC_COMPILED_MPICH_IPC_DIR"
 )
 case "$ASYNC_QUORUM_TRANSPORT" in
+  compiled-cray-mpich-helper-p2p)
+    CMD+=(--actual-multinode-compiled-mpich-quorum)
+    ;;
   mpi-dense)
     CMD+=(--actual-multinode-mpi-dense-quorum)
     ;;
@@ -214,7 +224,7 @@ case "$ASYNC_QUORUM_TRANSPORT" in
     CMD+=(--actual-multinode-tcp-quorum)
     ;;
   *)
-    echo "ASYNC_QUORUM_TRANSPORT must be mpi-dense or tcp, got: $ASYNC_QUORUM_TRANSPORT" >&2
+    echo "ASYNC_QUORUM_TRANSPORT must be compiled-cray-mpich-helper-p2p, mpi-dense, or tcp; got: $ASYNC_QUORUM_TRANSPORT" >&2
     exit 64
     ;;
 esac
@@ -253,6 +263,8 @@ printf '\n' >> "$COMMAND_FILE"
 
 if [[ "$ASYNC_QUORUM_TRANSPORT" == "tcp" ]]; then
   BOUNDED_DEBUG_TRANSPORT=actual_multinode_tcp_quorum
+elif [[ "$ASYNC_QUORUM_TRANSPORT" == "compiled-cray-mpich-helper-p2p" ]]; then
+  BOUNDED_DEBUG_TRANSPORT=actual_multinode_compiled_mpich_quorum
 else
   BOUNDED_DEBUG_TRANSPORT=actual_multinode_mpi_dense_quorum
 fi
@@ -289,6 +301,8 @@ fi
   echo "async_local_steps=$ASYNC_LOCAL_STEPS"
   echo "async_quorum_transport=$ASYNC_QUORUM_TRANSPORT"
   echo "async_mpi_dense_bucket_bytes=$ASYNC_MPI_DENSE_BUCKET_BYTES"
+  echo "async_compiled_mpich_helper_bin=$ASYNC_COMPILED_MPICH_HELPER_BIN"
+  echo "async_compiled_mpich_ipc_dir=$ASYNC_COMPILED_MPICH_IPC_DIR"
   echo "mpich_gpu_support_enabled=$MPICH_GPU_SUPPORT_ENABLED"
   echo "cray_mpi4py_site=$CRAY_MPI4PY_SITE"
   echo "async_coordinator_host=$ASYNC_COORDINATOR_HOST"

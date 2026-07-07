@@ -18,6 +18,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from ndm.async_diloco import stable_json_dumps
 from ndm.async_diloco import AsyncDiLoCoCheckpointCadence
+from ndm.async_diloco_compiled_mpich import COMPILED_MPICH_TRANSPORT
 from ndm.async_diloco_real import (
     RealAsyncDiLoCoConfig,
     RealAsyncFileRankConfig,
@@ -95,10 +96,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--actual-multinode-tcp-quorum", action="store_true",
                         help="Run one Slurm-launched rank and use rank 0 as a TCP quorum coordinator.")
     parser.add_argument("--actual-multinode-mpi-dense-quorum", action="store_true",
-                        help="Run one Slurm-launched rank and use MPI point-to-point for dense tensor deltas.")
+                        help="Explicit legacy comparison path: use mpi4py MPI point-to-point for dense tensor deltas.")
+    parser.add_argument("--actual-multinode-compiled-mpich-quorum", action="store_true",
+                        help="Run one Slurm-launched rank and use the compiled Cray MPICH dense helper.")
     parser.add_argument("--mpi-dense-bucket-bytes", type=int,
                         default=int(os.environ.get("ASYNC_MPI_DENSE_BUCKET_BYTES", str(64 * 1024 * 1024))),
                         help="Target dense delta bucket size for MPI point-to-point payloads.")
+    parser.add_argument("--compiled-mpich-helper-bin",
+                        default=os.environ.get("ASYNC_COMPILED_MPICH_HELPER_BIN", ""),
+                        help="Path to compiled_mpich_dense_helper binary.")
+    parser.add_argument("--compiled-mpich-ipc-dir",
+                        default=os.environ.get("ASYNC_COMPILED_MPICH_IPC_DIR", ""),
+                        help="Run-local IPC directory for compiled MPICH helper manifests and payload files.")
     parser.add_argument("--coordinator-host", default=os.environ.get("ASYNC_COORDINATOR_HOST", "127.0.0.1"),
                         help="Host/IP of rank 0 TCP quorum coordinator.")
     parser.add_argument("--coordinator-bind-host", default=os.environ.get("ASYNC_COORDINATOR_BIND_HOST", "0.0.0.0"),
@@ -130,13 +139,27 @@ def main() -> int:
     if not args.synthetic_token_stream and not args.data:
         raise ValueError("--data is required unless --synthetic-token-stream is set")
     if (
-        (args.actual_multinode_tcp_quorum or args.actual_multinode_mpi_dense_quorum)
+        (
+            args.actual_multinode_tcp_quorum
+            or args.actual_multinode_mpi_dense_quorum
+            or args.actual_multinode_compiled_mpich_quorum
+        )
         and args.synthetic_token_stream
         and not args.allow_actual_multinode_synthetic_token_stream
     ):
         raise ValueError("actual multinode quorum requires real data; synthetic token stream is disabled")
-    if args.actual_multinode_tcp_quorum and args.actual_multinode_mpi_dense_quorum:
+    selected_transports = sum(
+        bool(value)
+        for value in (
+            args.actual_multinode_tcp_quorum,
+            args.actual_multinode_mpi_dense_quorum,
+            args.actual_multinode_compiled_mpich_quorum,
+        )
+    )
+    if selected_transports > 1:
         raise ValueError("choose only one actual multinode quorum transport")
+    if args.actual_multinode_compiled_mpich_quorum and not args.compiled_mpich_helper_bin:
+        raise ValueError("--compiled-mpich-helper-bin is required for compiled MPICH transport")
 
     train_overrides = {
         key: value
@@ -176,7 +199,11 @@ def main() -> int:
         projection_chunk_size=args.projection_chunk_size,
         loss_chunk_size=args.loss_chunk_size,
     )
-    if args.actual_multinode_tcp_quorum or args.actual_multinode_mpi_dense_quorum:
+    if (
+        args.actual_multinode_tcp_quorum
+        or args.actual_multinode_mpi_dense_quorum
+        or args.actual_multinode_compiled_mpich_quorum
+    ):
         node_rank = args.node_rank
         if node_rank is None:
             node_rank = int(os.environ.get("SLURM_PROCID", os.environ.get("PMI_RANK", "0")))
@@ -201,8 +228,14 @@ def main() -> int:
             coordinator_host=args.coordinator_host,
             coordinator_bind_host=args.coordinator_bind_host,
             coordinator_port=int(args.coordinator_port),
-            transport=("mpi-dense" if args.actual_multinode_mpi_dense_quorum else "tcp"),
+            transport=(
+                COMPILED_MPICH_TRANSPORT
+                if args.actual_multinode_compiled_mpich_quorum else
+                ("mpi-dense" if args.actual_multinode_mpi_dense_quorum else "tcp")
+            ),
             mpi_bucket_bytes=int(args.mpi_dense_bucket_bytes),
+            compiled_mpich_helper_bin=(args.compiled_mpich_helper_bin or None),
+            compiled_mpich_ipc_dir=(args.compiled_mpich_ipc_dir or None),
             walltime_remaining_s=_optional_positive_float(args.walltime_remaining_s),
             estimated_finalization_duration_s=_optional_positive_float(
                 args.estimated_finalization_duration_s

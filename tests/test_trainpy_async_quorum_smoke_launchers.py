@@ -41,12 +41,16 @@ def test_trainpy_async_quorum_smokes_record_metrics_checkpoint_and_no_ddp_valida
         'MANIFEST_FILE="${ARTIFACT_DIR}/manifest.json"',
         'COMMAND_FILE="${ARTIFACT_DIR}/command.txt"',
         'RANK_START_LOG="${ARTIFACT_DIR}/rank-start.tsv"',
-        "ASYNC_QUORUM_TRANSPORT=${ASYNC_QUORUM_TRANSPORT:-mpi-dense}",
-        "--actual-multinode-mpi-dense-quorum",
+        "ASYNC_QUORUM_TRANSPORT=${ASYNC_QUORUM_TRANSPORT:-compiled-cray-mpich-helper-p2p}",
+        "--actual-multinode-compiled-mpich-quorum",
+        "--compiled-mpich-helper-bin",
+        "--compiled-mpich-ipc-dir",
         "--mpi-dense-bucket-bytes",
         "--coordinator-host",
         "async_quorum_transport=$ASYNC_QUORUM_TRANSPORT",
         "async_mpi_dense_bucket_bytes=$ASYNC_MPI_DENSE_BUCKET_BYTES",
+        "async_compiled_mpich_helper_bin=$ASYNC_COMPILED_MPICH_HELPER_BIN",
+        "scripts/frontier/build_compiled_mpich_dense_helper.sh",
         "mpich_gpu_support_enabled=$MPICH_GPU_SUPPORT_ENABLED",
         "export CRAY_MPI4PY_SITE=${CRAY_MPI4PY_SITE:-/opt/cray/pe/python/3.10.10/lib/python3.10/site-packages}",
         "actual_multinode_tcp_quorum",
@@ -70,9 +74,20 @@ def test_trainpy_async_quorum_2n_smoke_forces_missing_update_recovery_path():
     assert "ASYNC_EXPECTED_MISSING_UPDATES=${ASYNC_EXPECTED_MISSING_UPDATES:-1}" in two
     assert "ASYNC_EXPECTED_RANKS=${ASYNC_EXPECTED_RANKS:-$((ASYNC_TRAINPY_RANKS + ASYNC_EXPECTED_MISSING_UPDATES))}" in two
     assert "ASYNC_GLOBAL_QUORUM=${ASYNC_GLOBAL_QUORUM:-$ASYNC_TRAINPY_RANKS}" in two
-    assert 'if [[ "$ASYNC_QUORUM_TRANSPORT" == "mpi-dense" && "$ASYNC_EXPECTED_RANKS" -gt "$ASYNC_TRAINPY_RANKS" ]]; then' in common
+    assert 'if [[ "$ASYNC_QUORUM_TRANSPORT" != "tcp" && "$ASYNC_EXPECTED_RANKS" -gt "$ASYNC_TRAINPY_RANKS" ]]; then' in common
     assert "timed_out_updates" in common
     assert "expected_at_least" in common
+
+
+def test_trainpy_async_quorum_smoke_keeps_mpi4py_path_explicit_only():
+    common = _read("scripts/frontier/trainpy_async_quorum_smoke_common.sh")
+    entrypoint = _read("scripts/frontier/e97_async_diloco_train.py")
+
+    assert "compiled-cray-mpich-helper-p2p)" in common
+    assert "mpi-dense)" in common
+    assert "--actual-multinode-mpi-dense-quorum" in entrypoint
+    assert "Explicit legacy comparison path" in entrypoint
+    assert "choose only one actual multinode quorum transport" in entrypoint
 
 
 def test_trainpy_async_quorum_report_tracks_pending_slurm_artifacts():
