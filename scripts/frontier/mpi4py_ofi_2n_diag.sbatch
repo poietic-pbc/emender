@@ -58,9 +58,13 @@ if site and site not in sys.path:
     import site as _site
     _site.addsitedir(site)
 
+import mpi4py
+mpi4py.rc.initialize = True
+mpi4py.rc.threads = True
+mpi4py.rc.thread_level = os.environ.get("MPI4PY_RC_THREAD_LEVEL", "serialized")
 from mpi4py import MPI
 
-provided = MPI.Init_thread(required=MPI.THREAD_SERIALIZED)
+provided = MPI.Query_thread()
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
@@ -88,9 +92,9 @@ if rank == 0:
         "mpich_ofi_nic_policy": os.environ.get("MPICH_OFI_NIC_POLICY"),
         "fi_cxi_rdzv_proto": os.environ.get("FI_CXI_RDZV_PROTO"),
         "fi_cxi_rx_match_mode": os.environ.get("FI_CXI_RX_MATCH_MODE"),
+        "mpi4py_rc_thread_level": os.environ.get("MPI4PY_RC_THREAD_LEVEL", "serialized"),
     }, sort_keys=True), flush=True)
 comm.Barrier()
-MPI.Finalize()
 PY
 
 base_srun=(

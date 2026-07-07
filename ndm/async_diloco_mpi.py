@@ -398,8 +398,18 @@ def run_mpi_dense_quorum(
     """
 
     if comm is None:
-        try:
+        def _import_mpi4py() -> Any:
+            import mpi4py  # type: ignore
+
+            mpi4py.rc.initialize = True
+            mpi4py.rc.threads = True
+            mpi4py.rc.thread_level = "serialized"
             from mpi4py import MPI  # type: ignore
+
+            return MPI
+
+        try:
+            MPI = _import_mpi4py()
         except Exception:
             cray_mpi4py_site = os.environ.get(
                 "CRAY_MPI4PY_SITE",
@@ -408,7 +418,7 @@ def run_mpi_dense_quorum(
             if os.path.isdir(os.path.join(cray_mpi4py_site, "mpi4py")):
                 site.addsitedir(cray_mpi4py_site)
             try:
-                from mpi4py import MPI  # type: ignore
+                MPI = _import_mpi4py()
             except Exception as exc:  # pragma: no cover - depends on Frontier env
                 raise RuntimeError(
                     "mpi4py is required for MPI dense transport; set CRAY_MPI4PY_SITE "
