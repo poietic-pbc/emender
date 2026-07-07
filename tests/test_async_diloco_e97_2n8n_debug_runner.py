@@ -154,6 +154,7 @@ def test_async_diloco_launch_wrappers_expose_required_env_knobs():
         "OUTPUT_ROOT=${OUTPUT_ROOT:-",
         "ASYNC_LOCAL_QUORUM=${ASYNC_LOCAL_QUORUM:-6}",
         "ASYNC_GLOBAL_QUORUM=${ASYNC_GLOBAL_QUORUM:-$(((2 * ASYNC_NODE_COUNT + 2) / 3))}",
+        "ASYNC_DILOCO_DEVICE=${ASYNC_DILOCO_DEVICE:-cuda}",
         "DILOCO_K=${DILOCO_K:-",
         "BATCH_SIZE=${BATCH_SIZE:-4}",
         "CHUNK_SIZE=${CHUNK_SIZE:-2048}",
@@ -193,13 +194,18 @@ def test_production_async_launcher_records_artifacts_and_real_command_branch():
     assert 'echo "tiktoken_cache_dir=$TIKTOKEN_CACHE_DIR"' in launch_text
     assert 'echo "python_bin=$PYTHON_BIN"' in launch_text
     assert 'echo "async_launch_uses_srun=$([[ "$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM" == "1" && "$ASYNC_NODE_COUNT" -gt 1 ]] && echo 1 || echo 0)"' in launch_text
+    assert 'echo "async_worker_count_arg=$ASYNC_WORKER_COUNT_ARG"' in launch_text
+    assert 'echo "async_effective_rank_count=$([[ "$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM" == "1" ]] && echo "$ASYNC_NODE_COUNT" || echo "$ASYNC_WORKER_COUNT")"' in launch_text
+    assert 'echo "async_effective_local_worker_count_per_rank=$([[ "$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM" == "1" ]] && echo "$ASYNC_WORKER_COUNT_PER_NODE" || echo "1")"' in launch_text
+    assert 'echo "async_diloco_device=$ASYNC_DILOCO_DEVICE"' in launch_text
     assert 'CMD=(\n  "$PYTHON_BIN" -u "$ASYNC_ENTRYPOINT"' in launch_text
     assert '--checkpoint "$E97_CHECKPOINT"' in launch_text
     assert '--data "$DATA"' in launch_text
-    assert '--worker-count "$ASYNC_WORKER_COUNT"' in launch_text
+    assert '--worker-count "$ASYNC_WORKER_COUNT_ARG"' in launch_text
     assert '--tokenizer "$MODEL_TOKENIZER"' in launch_text
     assert '--batch-size "$BATCH_SIZE"' in launch_text
     assert '--chunk-size "$CHUNK_SIZE"' in launch_text
+    assert '--device "$ASYNC_DILOCO_DEVICE"' in launch_text
     assert '--local-steps "$DILOCO_K"' in launch_text
     assert '--steps "$DILOCO_K"' in launch_text
     assert '--e97-chunk-size "$ASYNC_E97_CHUNK_SIZE"' in launch_text

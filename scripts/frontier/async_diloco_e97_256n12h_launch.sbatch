@@ -53,6 +53,10 @@ ASYNC_ACTUAL_MULTINODE_FILE_QUORUM=${ASYNC_ACTUAL_MULTINODE_FILE_QUORUM:-$ASYNC_
 ASYNC_NODE_COUNT=${ASYNC_NODE_COUNT:-256}
 ASYNC_WORKER_COUNT_PER_NODE=${ASYNC_WORKER_COUNT_PER_NODE:-8}
 ASYNC_WORKER_COUNT=${ASYNC_WORKER_COUNT:-$((ASYNC_NODE_COUNT * ASYNC_WORKER_COUNT_PER_NODE))}
+ASYNC_WORKER_COUNT_ARG=$ASYNC_WORKER_COUNT
+if [[ "$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM" == "1" ]]; then
+  ASYNC_WORKER_COUNT_ARG=$ASYNC_WORKER_COUNT_PER_NODE
+fi
 ASYNC_LOCAL_QUORUM=${ASYNC_LOCAL_QUORUM:-6}
 ASYNC_GLOBAL_QUORUM=${ASYNC_GLOBAL_QUORUM:-$(((2 * ASYNC_NODE_COUNT + 2) / 3))}
 ASYNC_GLOBAL_TIMEOUT_S=${ASYNC_GLOBAL_TIMEOUT_S:-240}
@@ -61,6 +65,7 @@ ASYNC_WEIGHTING=${ASYNC_WEIGHTING:-tokens}
 ASYNC_TRANSPORT_MODE=${ASYNC_TRANSPORT_MODE:-cray-mpich-gpu-aware-p2p}
 ASYNC_GROUP_AGGREGATOR_SIZE=${ASYNC_GROUP_AGGREGATOR_SIZE:-16}
 ASYNC_DENSE_UPDATE_STORAGE=${ASYNC_DENSE_UPDATE_STORAGE:-0}
+ASYNC_DILOCO_DEVICE=${ASYNC_DILOCO_DEVICE:-cuda}
 
 # E97 B4 K40 token geometry.
 BATCH_SIZE=${BATCH_SIZE:-4}
@@ -167,7 +172,7 @@ CMD=(
   --metrics-json "$METRICS_JSON"
   --data "$DATA"
   --node-count "$ASYNC_NODE_COUNT"
-  --worker-count "$ASYNC_WORKER_COUNT"
+  --worker-count "$ASYNC_WORKER_COUNT_ARG"
   --local-quorum "$ASYNC_LOCAL_QUORUM"
   --global-quorum "$ASYNC_GLOBAL_QUORUM"
   --generations "$GENERATIONS"
@@ -180,6 +185,7 @@ CMD=(
   --chunk-size "$CHUNK_SIZE"
   --lr "$LEARNING_RATE"
   --steps "$DILOCO_K"
+  --device "$ASYNC_DILOCO_DEVICE"
   --e97-chunk-size "$ASYNC_E97_CHUNK_SIZE"
   --checkpoint-interval "$ASYNC_E97_CHECKPOINT_INTERVAL"
   --projection-chunk-size "$ASYNC_E97_PROJECTION_CHUNK_SIZE"
@@ -281,8 +287,14 @@ printf '\n' >> "$COMMAND_FILE"
   echo "async_node_count=$ASYNC_NODE_COUNT"
   echo "async_worker_count_per_node=$ASYNC_WORKER_COUNT_PER_NODE"
   echo "async_worker_count=$ASYNC_WORKER_COUNT"
+  echo "async_worker_count_arg=$ASYNC_WORKER_COUNT_ARG"
   echo "async_actual_multinode_file_quorum=$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM"
   echo "async_launch_uses_srun=$([[ "$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM" == "1" && "$ASYNC_NODE_COUNT" -gt 1 ]] && echo 1 || echo 0)"
+  echo "async_effective_rank_count=$([[ "$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM" == "1" ]] && echo "$ASYNC_NODE_COUNT" || echo "$ASYNC_WORKER_COUNT")"
+  echo "async_effective_local_worker_count=$([[ "$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM" == "1" ]] && echo "$ASYNC_WORKER_COUNT_PER_NODE" || echo "1")"
+  echo "async_effective_local_worker_count_per_rank=$([[ "$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM" == "1" ]] && echo "$ASYNC_WORKER_COUNT_PER_NODE" || echo "1")"
+  echo "async_effective_total_worker_count=$([[ "$ASYNC_ACTUAL_MULTINODE_FILE_QUORUM" == "1" ]] && echo $((ASYNC_NODE_COUNT * ASYNC_WORKER_COUNT_PER_NODE)) || echo "$ASYNC_WORKER_COUNT")"
+  echo "async_diloco_device=$ASYNC_DILOCO_DEVICE"
   echo "async_local_quorum=$ASYNC_LOCAL_QUORUM"
   echo "async_global_quorum=$ASYNC_GLOBAL_QUORUM"
   echo "async_global_timeout_s=$ASYNC_GLOBAL_TIMEOUT_S"

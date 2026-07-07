@@ -172,6 +172,8 @@ def main() -> int:
             node_count=args.node_count,
             global_quorum=int(global_quorum),
             local_steps=args.local_steps,
+            local_worker_count=args.worker_count,
+            local_quorum=(1 if args.local_quorum <= 0 else args.local_quorum),
             timeout_s=args.timeout_s,
             eta_outer=args.eta_outer,
             initial_checkpoint=(Path(args.checkpoint) if args.checkpoint else None),

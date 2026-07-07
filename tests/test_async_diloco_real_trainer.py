@@ -402,17 +402,122 @@ def test_actual_multinode_file_rank_writes_progress_and_global_quorum(tmp_path, 
     payload = json.loads((tmp_path / "metrics.json").read_text(encoding="utf-8"))
     assert payload["mode"] == "actual_multinode_file_quorum_debug"
     assert payload["synthetic_token_stream"] is False
-    assert payload["latest_generation"] == 0
-    assert payload["global_generations"][0]["metrics"]["quorum_status"] == "advanced"
+    assert payload["latest_generation"] == -1
+    assert payload["metadata_quorum_reached"] is True
+    assert payload["dense_delta_exchange"] == "not_implemented_for_debug_shared_storage"
+    assert payload["no_go_for_async_diloco_claims"] is True
+    assert "dense cross-node delta exchange" in payload["no_go_reason"]
+    assert payload["global_generations"][0]["metrics"]["quorum_status"] == "metadata_quorum_no_dense_delta"
+    assert payload["global_generations"][0]["metrics"]["latest_advanced"] is False
     assert payload["global_generations"][0]["metrics"]["accepted_updates"] == 2
     assert payload["global_generations"][0]["metrics"]["tokens_per_generation"] == 16384
     assert payload["global_generations"][0]["metrics"]["tokens_per_sec"] > 0.0
     assert payload["accepted_node_ids"] == ["node-00000", "node-00001"]
-    assert (tmp_path / "run" / "latest.json").exists()
+    assert not (tmp_path / "run" / "latest.json").exists()
     assert (tmp_path / "run" / "progress" / "node-00000.heartbeat.json").exists()
     assert (tmp_path / "run" / "progress" / "node-00001.heartbeat.json").exists()
     assert (tmp_path / "run" / "node_updates" / "node-00000.json").exists()
     assert (tmp_path / "run" / "node_updates" / "node-00001.json").exists()
+
+
+def test_actual_multinode_file_rank_uses_local_worker_topology_and_gpu_devices(tmp_path, monkeypatch):
+    class OneParamModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.zeros(1))
+
+    observed = {}
+    monkeypatch.setattr("ndm.async_diloco_real.train.build_training_model", lambda _args: OneParamModel())
+
+    def fake_node_supervisor(**kwargs):
+        specs = kwargs["worker_specs"]
+        observed["worker_count"] = len(specs)
+        observed["devices"] = [spec.device for spec in specs]
+        observed["local_quorum"] = kwargs["local_quorum"]
+        generation = kwargs["generation"]
+        reports = []
+        for idx, spec in enumerate(specs):
+            update = AsyncDiLoCoUpdate(
+                worker_id=spec.worker_id,
+                base_generation=generation,
+                delta={"weight": torch.ones(1) * (idx + 1)},
+                tokens=2049,
+                local_steps=1,
+                loss_moving_average={"loss": 10.0 + idx, "loss_100": 10.0 + idx},
+            )
+            reports.append(RealAsyncWorkerReport(
+                worker_id=spec.worker_id,
+                node_id=kwargs["node_id"],
+                base_generation=generation,
+                update=update,
+                elapsed_s=0.1,
+                tokens=2049,
+                losses=(10.0 + idx,),
+            ))
+        node_update = AsyncDiLoCoUpdate(
+            worker_id=kwargs["node_id"],
+            base_generation=generation,
+            delta={"weight": torch.ones(1)},
+            tokens=4098,
+            local_steps=2,
+            loss_moving_average={"loss": 10.5, "loss_100": 10.5},
+        )
+        metrics = AsyncDiLoCoGenerationMetrics(
+            run_id=kwargs["run_id"],
+            generation=generation,
+            requested_workers=2,
+            participating_workers=2,
+            quorum_threshold=2,
+            quorum_size=2,
+            accepted_updates=2,
+            stale_updates=0,
+            timed_out_updates=0,
+            failed_updates=0,
+            invalid_updates=0,
+            generation_duration_s=0.1,
+            merge_duration_s=0.0,
+            rebase_duration_s=0.0,
+            checkpoint_duration_s=0.0,
+            tokens_per_sec=40980.0,
+            tokens_per_generation=4098,
+            update_bytes={"worker": 8, "node": 4},
+            loss_moving_average={"loss": 10.5, "loss_100": 10.5},
+        )
+        return RealAsyncNodeResult(
+            node_id=kwargs["node_id"],
+            generation=generation,
+            node_update=node_update,
+            worker_reports=tuple(reports),
+            metrics=metrics,
+        )
+
+    monkeypatch.setattr("ndm.async_diloco_real._run_real_node_supervisor", fake_node_supervisor)
+
+    run_real_async_diloco_file_rank(RealAsyncFileRankConfig(
+        run_id="file-rank-topology",
+        run_dir=tmp_path / "run",
+        metrics_json=tmp_path / "metrics.json",
+        train_args=_args(data=str(tmp_path / "real_tokens.txt")),
+        node_rank=0,
+        node_count=1,
+        global_quorum=1,
+        local_steps=1,
+        local_worker_count=2,
+        local_quorum=2,
+        timeout_s=1.0,
+        synthetic_token_stream=False,
+        device="cuda",
+    ))
+
+    assert observed == {
+        "worker_count": 2,
+        "devices": ["cuda:0", "cuda:1"],
+        "local_quorum": 2,
+    }
+    payload = json.loads((tmp_path / "run" / "node_updates" / "node-00000.json").read_text(encoding="utf-8"))
+    assert payload["metrics"]["accepted_updates"] == 2
+    assert payload["worker_reports"][0]["worker_id"] == "node-00000/worker-00000"
+    assert payload["worker_reports"][1]["worker_id"] == "node-00000/worker-00001"
 
 
 def test_real_worker_nonfinite_loss_writes_progress_and_invalid_report(tmp_path, monkeypatch):

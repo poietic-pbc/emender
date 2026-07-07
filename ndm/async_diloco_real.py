@@ -38,6 +38,12 @@ from ndm.async_diloco import (
 import train
 
 
+_FILE_QUORUM_NO_GO_REASON = (
+    "actual_multinode_file_quorum_debug records local training and metadata quorum only; "
+    "dense cross-node delta exchange and merge are not implemented"
+)
+
+
 @dataclass(frozen=True)
 class RealAsyncWorkerSpec:
     """One local trainer worker attached to a GPU island."""
@@ -187,6 +193,8 @@ class RealAsyncFileRankConfig:
     node_count: int
     global_quorum: int
     local_steps: int
+    local_worker_count: int = 1
+    local_quorum: int = 1
     timeout_s: float = 900.0
     eta_outer: float = 1.0
     weight_by: str = "tokens"
@@ -280,6 +288,10 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
         raise ValueError("node_rank must be in [0, node_count)")
     if config.global_quorum <= 0 or config.global_quorum > config.node_count:
         raise ValueError("global_quorum must be in [1, node_count]")
+    if config.local_worker_count <= 0:
+        raise ValueError("local_worker_count must be positive")
+    if config.local_quorum <= 0 or config.local_quorum > config.local_worker_count:
+        raise ValueError("local_quorum must be in [1, local_worker_count]")
     if config.synthetic_token_stream:
         raise ValueError("synthetic_token_stream is disabled for actual multinode validation")
 
@@ -298,7 +310,13 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
         node_id=node_id,
         stage="starting",
         generation=generation,
-        extra={"node_count": config.node_count, "global_quorum": config.global_quorum},
+        extra={
+            "node_count": config.node_count,
+            "global_quorum": config.global_quorum,
+            "local_worker_count": config.local_worker_count,
+            "local_quorum": config.local_quorum,
+            "device": config.device,
+        },
     )
 
     train_args = _copy_train_args(config.train_args)
@@ -319,12 +337,15 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
         extra={"base_state_bytes": state_num_bytes(base_state)},
     )
 
-    spec = RealAsyncWorkerSpec(
-        worker_id=f"{node_id}/worker-00000",
-        node_id=node_id,
-        device=config.device,
-        local_steps=config.local_steps,
-        seed_offset=config.node_rank,
+    worker_specs = tuple(
+        RealAsyncWorkerSpec(
+            worker_id=f"{node_id}/worker-{worker_idx:05d}",
+            node_id=node_id,
+            device=_rank_worker_device(config.device, worker_idx, config.local_worker_count),
+            local_steps=config.local_steps,
+            seed_offset=int(config.node_rank) * int(config.local_worker_count) + worker_idx,
+        )
+        for worker_idx in range(int(config.local_worker_count))
     )
     node_result = _run_real_node_supervisor(
         run_id=config.run_id,
@@ -332,8 +353,8 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
         generation=generation,
         base_state=base_state,
         train_args=train_args,
-        worker_specs=(spec,),
-        local_quorum=1,
+        worker_specs=worker_specs,
+        local_quorum=config.local_quorum,
         eta_outer=config.eta_outer,
         weight_by=config.weight_by,
         timeout_s=config.timeout_s,
@@ -814,6 +835,17 @@ def _build_batch_iter(
     return _iter()
 
 
+def _rank_worker_device(base_device: str, worker_idx: int, local_worker_count: int) -> str:
+    """Map local file-rank workers onto per-node devices when a GPU base is used."""
+
+    device = str(base_device)
+    if local_worker_count <= 1:
+        return device
+    if device in {"cuda", "hip"}:
+        return f"cuda:{int(worker_idx)}"
+    return device
+
+
 def _synthetic_batches(
     args: Namespace,
     *,
@@ -1210,23 +1242,8 @@ def _coordinate_file_rank_quorum(
 
     checkpoint_paths: tuple[str, ...] = ()
     checkpoint_sizes: dict[str, int] = {}
+    metadata_quorum_reached = len(accepted) >= config.global_quorum
     latest_advanced = False
-    if len(accepted) >= config.global_quorum:
-        manager = AsyncDiLoCoCheckpointManager(
-            config.run_dir,
-            run_id=config.run_id,
-            role=GLOBAL_MERGER_ROLE,
-            cadence=config.checkpoint_cadence,
-        )
-        publish = manager.publish_global_generation(
-            metrics,
-            walltime_remaining_s=config.walltime_remaining_s,
-            estimated_finalization_duration_s=config.estimated_finalization_duration_s,
-        )
-        metrics = publish.metrics
-        checkpoint_paths = tuple(metrics.checkpoint_paths)
-        checkpoint_sizes = dict(metrics.checkpoint_sizes)
-        latest_advanced = True
 
     final_payload = _file_quorum_payload(
         config=config,
@@ -1238,6 +1255,7 @@ def _coordinate_file_rank_quorum(
         checkpoint_paths=checkpoint_paths,
         checkpoint_sizes=checkpoint_sizes,
         metrics=metrics,
+        metadata_quorum_reached=metadata_quorum_reached,
     )
     _atomic_write_json(metrics_path, final_payload)
     _write_rank_heartbeat(
@@ -1251,6 +1269,8 @@ def _coordinate_file_rank_quorum(
             "seen_nodes": len(all_payloads),
             "global_quorum": config.global_quorum,
             "latest_advanced": latest_advanced,
+            "metadata_quorum_reached": metadata_quorum_reached,
+            "no_go_reason": _FILE_QUORUM_NO_GO_REASON,
         },
     )
     return final_payload
@@ -1284,7 +1304,7 @@ def _file_quorum_metrics(
         for payload in accepted
         if payload.get("loss") is not None and math.isfinite(float(payload["loss"]))
     ]
-    advanced = len(accepted) >= int(config.global_quorum)
+    metadata_quorum_reached = len(accepted) >= int(config.global_quorum)
     return AsyncDiLoCoGenerationMetrics(
         run_id=config.run_id,
         generation=int(generation),
@@ -1307,7 +1327,7 @@ def _file_quorum_metrics(
         loss_moving_average={"loss": _mean(losses), "loss_100": _mean(losses)} if losses else {},
         update_norms={},
         latest_advanced=False,
-        quorum_status=("advanced" if advanced else "deferred"),
+        quorum_status=("metadata_quorum_no_dense_delta" if metadata_quorum_reached else "deferred"),
     )
 
 
@@ -1322,6 +1342,7 @@ def _file_quorum_payload(
     checkpoint_paths: Sequence[str],
     checkpoint_sizes: Mapping[str, int],
     metrics: AsyncDiLoCoGenerationMetrics | None = None,
+    metadata_quorum_reached: bool | None = None,
 ) -> dict[str, Any]:
     timed_out = max(0, int(config.node_count) - len(all_payloads))
     failed = sum(1 for payload in all_payloads if payload.get("node_update_submitted") is not True)
@@ -1337,6 +1358,8 @@ def _file_quorum_payload(
             failed=failed,
             invalid=invalid,
         )
+    if metadata_quorum_reached is None:
+        metadata_quorum_reached = len(accepted) >= int(config.global_quorum)
     metrics_dict = metrics.to_dict()
     if checkpoint_paths:
         metrics_dict["checkpoint_paths"] = list(checkpoint_paths)
@@ -1349,7 +1372,13 @@ def _file_quorum_payload(
         "bounded_debug_alternative": {
             "dense_delta_exchange": "not_implemented_for_debug_shared_storage",
             "proof": "one Slurm-launched process per node runs real local token training and rank 0 merges node metadata quorum",
+            "no_go_for_async_diloco_claims": True,
+            "no_go_reason": _FILE_QUORUM_NO_GO_REASON,
         },
+        "dense_delta_exchange": "not_implemented_for_debug_shared_storage",
+        "metadata_quorum_reached": bool(metadata_quorum_reached),
+        "no_go_for_async_diloco_claims": True,
+        "no_go_reason": _FILE_QUORUM_NO_GO_REASON,
         "synthetic_token_stream": False,
         "node_count": int(config.node_count),
         "global_quorum": int(config.global_quorum),
