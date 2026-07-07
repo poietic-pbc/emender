@@ -36,6 +36,11 @@ from ndm.async_diloco import (
     stable_json_dumps,
     state_num_bytes,
 )
+from ndm.async_diloco_compiled_mpich import (
+    COMPILED_MPICH_TRANSPORT,
+    CompiledMpichHelperConfig,
+    run_compiled_mpich_dense_quorum,
+)
 from ndm.async_diloco_mpi import run_mpi_dense_quorum
 
 import train
@@ -209,6 +214,8 @@ class RealAsyncFileRankConfig:
     connect_retry_interval_s: float = 0.2
     transport: str = "tcp"
     mpi_bucket_bytes: int = 64 * 1024 * 1024
+    compiled_mpich_helper_bin: str | Path | None = None
+    compiled_mpich_ipc_dir: str | Path | None = None
     walltime_remaining_s: float | None = None
     estimated_finalization_duration_s: float | None = None
     checkpoint_cadence: AsyncDiLoCoCheckpointCadence = field(default_factory=AsyncDiLoCoCheckpointCadence)
@@ -304,8 +311,11 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
 
     run_dir = Path(config.run_dir)
     transport = str(config.transport).strip().lower()
-    if transport not in {"tcp", "mpi-dense"}:
-        raise ValueError("transport must be 'tcp' or 'mpi-dense'")
+    if transport not in {"tcp", "mpi-dense", COMPILED_MPICH_TRANSPORT}:
+        raise ValueError(
+            "transport must be 'tcp', 'mpi-dense', or "
+            f"'{COMPILED_MPICH_TRANSPORT}'"
+        )
 
     progress_dir = run_dir / "progress"
     nodes_dir = run_dir / "node_update_artifacts"
@@ -383,7 +393,17 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
     )
 
     root_payload: dict[str, Any] | None = None
-    if transport == "mpi-dense":
+    if transport == COMPILED_MPICH_TRANSPORT:
+        root_payload = _coordinate_compiled_mpich_dense_rank(
+            config=config,
+            start_s=start_s,
+            base_state=base_state,
+            node_result=node_result,
+            artifact_dir=nodes_dir,
+            progress_dir=progress_dir,
+            generation=generation,
+        )
+    elif transport == "mpi-dense":
         root_payload = _coordinate_mpi_dense_rank(
             config=config,
             start_s=start_s,
@@ -1352,6 +1372,150 @@ def _coordinate_mpi_dense_rank(
         generation=generation,
         extra={
             "transport": "mpi-dense",
+            "accepted_nodes": int(metrics.accepted_updates),
+            "global_quorum": int(config.global_quorum),
+            "latest_advanced": latest_advanced,
+            "metrics_json": str(metrics_path),
+        },
+    )
+    return final_payload
+
+
+def _coordinate_compiled_mpich_dense_rank(
+    *,
+    config: RealAsyncFileRankConfig,
+    start_s: float,
+    base_state: Mapping[str, torch.Tensor],
+    node_result: RealAsyncNodeResult,
+    artifact_dir: Path,
+    progress_dir: Path,
+    generation: int,
+) -> dict[str, Any] | None:
+    metrics_path = Path(config.metrics_json) if config.metrics_json is not None else Path(config.run_dir) / "real_async_metrics.json"
+    node_id = f"node-{int(config.node_rank):05d}"
+    if config.compiled_mpich_helper_bin is None:
+        raise ValueError("compiled_mpich_helper_bin is required for compiled MPICH transport")
+    ipc_dir = Path(config.compiled_mpich_ipc_dir) if config.compiled_mpich_ipc_dir is not None else Path(config.run_dir) / "ipc"
+    if node_result.node_update is None:
+        local_update = _status_update(node_id, generation, base_state, failed=True)
+    else:
+        local_update = node_result.node_update
+    _write_rank_heartbeat(
+        progress_dir,
+        node_rank=config.node_rank,
+        node_id=node_id,
+        stage="compiled_mpich_helper_send_starting",
+        generation=generation,
+        extra={
+            "transport": COMPILED_MPICH_TRANSPORT,
+            "global_quorum": int(config.global_quorum),
+            "bucket_bytes": int(config.mpi_bucket_bytes),
+            "helper_bin": str(config.compiled_mpich_helper_bin),
+            "ipc_dir": str(ipc_dir),
+        },
+    )
+    payload = run_compiled_mpich_dense_quorum(
+        base_state=base_state,
+        local_update=local_update,
+        run_id=config.run_id,
+        generation=generation,
+        requested_ranks=config.node_count,
+        quorum=config.global_quorum,
+        rank=int(config.node_rank),
+        helper=CompiledMpichHelperConfig(
+            helper_bin=config.compiled_mpich_helper_bin,
+            ipc_dir=ipc_dir,
+            bucket_bytes=int(config.mpi_bucket_bytes),
+            timeout_s=float(config.timeout_s),
+        ),
+        base_checkpoint=(None if config.initial_checkpoint is None else str(config.initial_checkpoint)),
+    )
+    _atomic_write_json(artifact_dir / f"{node_id}.json", {
+        "schema_version": 1,
+        "run_id": config.run_id,
+        "node_rank": int(config.node_rank),
+        "node_id": node_id,
+        "generation": int(generation),
+        "node_update_submitted": node_result.node_update is not None,
+        "transport": COMPILED_MPICH_TRANSPORT,
+        "dense_delta_bytes": state_num_bytes(local_update.delta),
+        "helper_bin": str(config.compiled_mpich_helper_bin),
+        "ipc_dir": str(ipc_dir),
+        "metrics": node_result.metrics.to_dict(),
+    })
+    if int(config.node_rank) != 0:
+        _write_rank_heartbeat(
+            progress_dir,
+            node_rank=config.node_rank,
+            node_id=node_id,
+            stage="compiled_mpich_helper_result_received",
+            generation=generation,
+            extra={"transport": COMPILED_MPICH_TRANSPORT},
+        )
+        return None
+
+    if payload is None:
+        raise RuntimeError("compiled MPICH helper root did not produce a quorum payload")
+    global_metrics_payload = ((payload.get("global_generations") or [{}])[0].get("metrics") or {})
+    metrics = AsyncDiLoCoGenerationMetrics.from_dict(global_metrics_payload)
+    latest_advanced = False
+    checkpoint_paths: tuple[str, ...] = ()
+    if metrics.quorum_status == "advanced":
+        manager = AsyncDiLoCoCheckpointManager(
+            config.run_dir,
+            run_id=config.run_id,
+            role=GLOBAL_MERGER_ROLE,
+            cadence=config.checkpoint_cadence,
+        )
+        publish = manager.publish_global_generation(
+            metrics,
+            walltime_remaining_s=config.walltime_remaining_s,
+            estimated_finalization_duration_s=config.estimated_finalization_duration_s,
+        )
+        metrics = publish.metrics
+        checkpoint_paths = tuple(metrics.checkpoint_paths)
+        latest_advanced = True
+    final_payload = {
+        **payload,
+        "mode": "actual_multinode_compiled_mpich_quorum",
+        "transport": {
+            **dict(payload.get("transport") or {}),
+            "name": COMPILED_MPICH_TRANSPORT,
+            "filesystem_live_quorum": False,
+            "tcp_dense_data_plane": False,
+            "mpi4py": False,
+        },
+        "node_count": int(config.node_count),
+        "global_quorum": int(config.global_quorum),
+        "generation": int(generation),
+        "latest_generation": (int(generation) if latest_advanced else -1),
+        "latest_path": str(Path(config.run_dir) / "latest.json"),
+        "partial": not latest_advanced,
+        "global_generations": [{
+            "generation": int(generation),
+            "metrics": metrics.to_dict(),
+            "publish_paths": list(checkpoint_paths),
+        }],
+        "metrics_summary": build_metrics_summary(
+            run_id=config.run_id,
+            requested_workers=int(config.node_count),
+            participating_workers=int(metrics.participating_workers),
+            generations=(metrics,),
+        ).to_dict(),
+    }
+    _atomic_write_json(metrics_path, final_payload)
+    _write_rank_heartbeat(
+        progress_dir,
+        node_rank=config.node_rank,
+        node_id=node_id,
+        stage=(
+            "compiled_mpich_helper_coordinator_finalized"
+            if latest_advanced else
+            "compiled_mpich_helper_coordinator_deferred"
+        ),
+        generation=generation,
+        extra={
+            "transport": COMPILED_MPICH_TRANSPORT,
             "accepted_nodes": int(metrics.accepted_updates),
             "global_quorum": int(config.global_quorum),
             "latest_advanced": latest_advanced,

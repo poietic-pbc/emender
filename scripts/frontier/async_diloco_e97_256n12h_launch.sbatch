@@ -49,7 +49,8 @@ ASYNC_ENTRYPOINT=${ASYNC_ENTRYPOINT:-scripts/frontier/e97_async_diloco_train.py}
 ASYNC_DILOCO_NON_PRODUCTION_DEBUG=${ASYNC_DILOCO_NON_PRODUCTION_DEBUG:-0}
 ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM=${ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM:-0}
 ASYNC_ACTUAL_MULTINODE_TCP_QUORUM=${ASYNC_ACTUAL_MULTINODE_TCP_QUORUM:-0}
-ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM=${ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM:-1}
+ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM=${ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM:-0}
+ASYNC_ACTUAL_MULTINODE_COMPILED_MPICH_QUORUM=${ASYNC_ACTUAL_MULTINODE_COMPILED_MPICH_QUORUM:-1}
 ASYNC_REQUIRE_CORRECTED_B4_LADDER=${ASYNC_REQUIRE_CORRECTED_B4_LADDER:-1}
 SLURM_INTENDED_NTASKS_PER_NODE=${SLURM_INTENDED_NTASKS_PER_NODE:-8}
 SLURM_INTENDED_GPUS_PER_TASK=${SLURM_INTENDED_GPUS_PER_TASK:-1}
@@ -65,12 +66,15 @@ ASYNC_GLOBAL_QUORUM=${ASYNC_GLOBAL_QUORUM:-$(((2 * ASYNC_NODE_COUNT + 2) / 3))}
 ASYNC_GLOBAL_TIMEOUT_S=${ASYNC_GLOBAL_TIMEOUT_S:-240}
 ASYNC_STALENESS_POLICY=${ASYNC_STALENESS_POLICY:-reject_stale}
 ASYNC_WEIGHTING=${ASYNC_WEIGHTING:-tokens}
-ASYNC_TRANSPORT_MODE=${ASYNC_TRANSPORT_MODE:-cray-mpich-gpu-aware-p2p}
+ASYNC_TRANSPORT_MODE=${ASYNC_TRANSPORT_MODE:-compiled-cray-mpich-helper-p2p}
 ASYNC_MPI_DENSE_BUCKET_BYTES=${ASYNC_MPI_DENSE_BUCKET_BYTES:-67108864}
+ASYNC_COMPILED_MPICH_HELPER_BIN=${ASYNC_COMPILED_MPICH_HELPER_BIN:-${ARTIFACT_DIR}/compiled_mpich_dense_helper}
+ASYNC_COMPILED_MPICH_IPC_DIR=${ASYNC_COMPILED_MPICH_IPC_DIR:-${RUN_DIR}/ipc}
 ASYNC_GROUP_AGGREGATOR_SIZE=${ASYNC_GROUP_AGGREGATOR_SIZE:-16}
 ASYNC_DENSE_DATA_PLANE=${ASYNC_DENSE_DATA_PLANE:-mpi-p2p}
 ASYNC_DENSE_UPDATE_STORAGE=${ASYNC_DENSE_UPDATE_STORAGE:-1}
 ASYNC_DENSE_TRANSPORT_64N_GATE_JSON=${ASYNC_DENSE_TRANSPORT_64N_GATE_JSON:-}
+ASYNC_COMPILED_MPICH_64N_GATE_JSON=${ASYNC_COMPILED_MPICH_64N_GATE_JSON:-}
 
 # E97 B4 K40 token geometry.
 BATCH_SIZE=${BATCH_SIZE:-4}
@@ -136,7 +140,7 @@ frontier_load_default_modules
 frontier_activate_emender_conda_env
 export TIKTOKEN_CACHE_DIR
 export MPICH_GPU_SUPPORT_ENABLED=${MPICH_GPU_SUPPORT_ENABLED:-0}
-export ASYNC_MPI_DENSE_BUCKET_BYTES
+export ASYNC_MPI_DENSE_BUCKET_BYTES ASYNC_COMPILED_MPICH_HELPER_BIN ASYNC_COMPILED_MPICH_IPC_DIR
 export CRAY_MPI4PY_SITE=${CRAY_MPI4PY_SITE:-/opt/cray/pe/python/3.10.10/lib/python3.10/site-packages}
 PYTHON_BIN=$(command -v python)
 [[ -n "$PYTHON_BIN" ]] || { echo "Activated runtime did not provide python" >&2; exit 66; }
@@ -170,6 +174,10 @@ esac
 if [[ "$ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM" == "1" && "$ASYNC_DILOCO_NON_PRODUCTION_DEBUG" != "1" ]]; then
   echo "Synthetic token streams are only allowed with ASYNC_DILOCO_NON_PRODUCTION_DEBUG=1." >&2
   exit 69
+fi
+if [[ "$ASYNC_ACTUAL_MULTINODE_COMPILED_MPICH_QUORUM" == "1" && ! -x "$ASYNC_COMPILED_MPICH_HELPER_BIN" ]]; then
+  ARTIFACT_DIR="$ARTIFACT_DIR" OUT="$ASYNC_COMPILED_MPICH_HELPER_BIN" scripts/frontier/build_compiled_mpich_dense_helper.sh \
+    2>&1 | tee "${LOG_DIR}/compiled_mpich_helper_build.log"
 fi
 
 CMD=(
@@ -260,9 +268,17 @@ fi
 if [[ "$ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM" == "1" ]]; then
   CMD+=(--actual-multinode-mpi-dense-quorum --mpi-dense-bucket-bytes "$ASYNC_MPI_DENSE_BUCKET_BYTES")
 fi
+if [[ "$ASYNC_ACTUAL_MULTINODE_COMPILED_MPICH_QUORUM" == "1" ]]; then
+  CMD+=(
+    --actual-multinode-compiled-mpich-quorum
+    --mpi-dense-bucket-bytes "$ASYNC_MPI_DENSE_BUCKET_BYTES"
+    --compiled-mpich-helper-bin "$ASYNC_COMPILED_MPICH_HELPER_BIN"
+    --compiled-mpich-ipc-dir "$ASYNC_COMPILED_MPICH_IPC_DIR"
+  )
+fi
 
 LAUNCH_CMD=("${CMD[@]}")
-if [[ "$ASYNC_NODE_COUNT" -gt 1 && ( "$ASYNC_ACTUAL_MULTINODE_TCP_QUORUM" == "1" || "$ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM" == "1" ) ]]; then
+if [[ "$ASYNC_NODE_COUNT" -gt 1 && ( "$ASYNC_ACTUAL_MULTINODE_TCP_QUORUM" == "1" || "$ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM" == "1" || "$ASYNC_ACTUAL_MULTINODE_COMPILED_MPICH_QUORUM" == "1" ) ]]; then
   LAUNCH_CMD=(
     srun
     -N "$ASYNC_NODE_COUNT"
@@ -290,16 +306,22 @@ fi
 if [[ "$ASYNC_ACTUAL_MULTINODE_TCP_QUORUM" == "1" ]]; then
   PRESUBMIT_FAILURES+=("actual_multinode_tcp_quorum is metadata-only TCP control transport; dense async DiLoCo MPI P2P delta exchange is not implemented")
 fi
-if [[ "$ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM" != "1" ]]; then
-  PRESUBMIT_FAILURES+=("actual_multinode_mpi_dense_quorum is not enabled")
+if [[ "$ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM" == "1" ]]; then
+  PRESUBMIT_FAILURES+=("actual_multinode_mpi_dense_quorum is the legacy mpi4py comparison path and is not accepted for Track B production")
 fi
-if [[ "$ASYNC_DENSE_DATA_PLANE" != "mpi-p2p" ]]; then
-  PRESUBMIT_FAILURES+=("ASYNC_DENSE_DATA_PLANE=$ASYNC_DENSE_DATA_PLANE, not mpi-p2p")
+if [[ "$ASYNC_ACTUAL_MULTINODE_COMPILED_MPICH_QUORUM" != "1" ]]; then
+  PRESUBMIT_FAILURES+=("actual_multinode_compiled_mpich_quorum is not enabled")
+fi
+if [[ "$ASYNC_TRANSPORT_MODE" != "compiled-cray-mpich-helper-p2p" ]]; then
+  PRESUBMIT_FAILURES+=("ASYNC_TRANSPORT_MODE=$ASYNC_TRANSPORT_MODE, not compiled-cray-mpich-helper-p2p")
+fi
+if [[ "$ASYNC_DENSE_DATA_PLANE" != "compiled-mpich-p2p" && "$ASYNC_DENSE_DATA_PLANE" != "mpi-p2p" ]]; then
+  PRESUBMIT_FAILURES+=("ASYNC_DENSE_DATA_PLANE=$ASYNC_DENSE_DATA_PLANE, not compiled-mpich-p2p")
 fi
 if [[ "$ASYNC_NODE_COUNT" -ge 256 && "$ASYNC_DILOCO_NON_PRODUCTION_DEBUG" != "1" ]]; then
-  if [[ -z "$ASYNC_DENSE_TRANSPORT_64N_GATE_JSON" || ! -r "$ASYNC_DENSE_TRANSPORT_64N_GATE_JSON" ]]; then
-    PRESUBMIT_FAILURES+=("256n production remains fail-closed until ASYNC_DENSE_TRANSPORT_64N_GATE_JSON points at a readable passing 64n dense-transport metrics/manifest")
-  elif ! python - "$ASYNC_DENSE_TRANSPORT_64N_GATE_JSON" <<'PY'
+  if [[ -z "${ASYNC_COMPILED_MPICH_64N_GATE_JSON:-}" || ! -r "$ASYNC_COMPILED_MPICH_64N_GATE_JSON" ]]; then
+    PRESUBMIT_FAILURES+=("256n production remains fail-closed until ASYNC_COMPILED_MPICH_64N_GATE_JSON points at a readable passing 64n compiled-helper gate artifact")
+  elif ! python - "$ASYNC_COMPILED_MPICH_64N_GATE_JSON" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -311,11 +333,11 @@ ok = (
     or payload.get("conclusion") in {"go", "pass", "dense-transport-64n-pass"}
     or '"validation_status": "pass"' in text
 )
-transport_ok = "mpi" in text and "dense" in text
+transport_ok = "compiled-cray-mpich-helper-p2p" in text
 raise SystemExit(0 if ok and transport_ok else 1)
 PY
   then
-    PRESUBMIT_FAILURES+=("64n dense-transport gate artifact did not record a passing MPI dense transport smoke")
+    PRESUBMIT_FAILURES+=("64n gate artifact did not record a passing compiled-cray-mpich-helper-p2p smoke")
   fi
 fi
 if [[ "$SLURM_INTENDED_NTASKS_PER_NODE" != "8" ]]; then
@@ -352,7 +374,7 @@ fi
 printf '%q ' "${LAUNCH_CMD[@]}" > "$COMMAND_FILE"
 printf '\n' >> "$COMMAND_FILE"
 
-if [[ "$ASYNC_NODE_COUNT" -gt 1 && ( "$ASYNC_ACTUAL_MULTINODE_TCP_QUORUM" == "1" || "$ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM" == "1" ) ]]; then
+if [[ "$ASYNC_NODE_COUNT" -gt 1 && ( "$ASYNC_ACTUAL_MULTINODE_TCP_QUORUM" == "1" || "$ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM" == "1" || "$ASYNC_ACTUAL_MULTINODE_COMPILED_MPICH_QUORUM" == "1" ) ]]; then
   ASYNC_LAUNCH_USES_SRUN=1
 else
   ASYNC_LAUNCH_USES_SRUN=0
@@ -409,6 +431,7 @@ fi
   echo "async_worker_count=$ASYNC_WORKER_COUNT"
   echo "async_actual_multinode_tcp_quorum=$ASYNC_ACTUAL_MULTINODE_TCP_QUORUM"
   echo "async_actual_multinode_mpi_dense_quorum=$ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM"
+  echo "async_actual_multinode_compiled_mpich_quorum=$ASYNC_ACTUAL_MULTINODE_COMPILED_MPICH_QUORUM"
   echo "async_launch_uses_srun=$ASYNC_LAUNCH_USES_SRUN"
   echo "async_local_quorum=$ASYNC_LOCAL_QUORUM"
   echo "async_global_quorum=$ASYNC_GLOBAL_QUORUM"
@@ -417,10 +440,13 @@ fi
   echo "async_weighting=$ASYNC_WEIGHTING"
   echo "async_transport_mode=$ASYNC_TRANSPORT_MODE"
   echo "async_mpi_dense_bucket_bytes=$ASYNC_MPI_DENSE_BUCKET_BYTES"
+  echo "async_compiled_mpich_helper_bin=$ASYNC_COMPILED_MPICH_HELPER_BIN"
+  echo "async_compiled_mpich_ipc_dir=$ASYNC_COMPILED_MPICH_IPC_DIR"
   echo "async_group_aggregator_size=$ASYNC_GROUP_AGGREGATOR_SIZE"
   echo "async_dense_data_plane=$ASYNC_DENSE_DATA_PLANE"
   echo "async_dense_update_storage=$ASYNC_DENSE_UPDATE_STORAGE"
   echo "async_dense_transport_64n_gate_json=$ASYNC_DENSE_TRANSPORT_64N_GATE_JSON"
+  echo "async_compiled_mpich_64n_gate_json=${ASYNC_COMPILED_MPICH_64N_GATE_JSON:-}"
   echo "mpich_gpu_support_enabled=$MPICH_GPU_SUPPORT_ENABLED"
   echo "cray_mpi4py_site=$CRAY_MPI4PY_SITE"
   echo "batch_size=$BATCH_SIZE"
