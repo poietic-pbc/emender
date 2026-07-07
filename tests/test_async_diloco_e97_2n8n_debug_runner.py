@@ -116,11 +116,14 @@ def test_async_diloco_multinode_entrypoint_and_wrappers_are_main_relative():
     assert f"ASYNC_ENTRYPOINT=${{ASYNC_ENTRYPOINT:-{expected_production_entrypoint}}}" in launch_text
     assert 'python -u "$ASYNC_ENTRYPOINT"' in debug_text
     assert "frontier_activate_emender_conda_env" in launch_text
-    assert "export TIKTOKEN_CACHE_DIR\nPYTHON_BIN=$(command -v python)" in launch_text
+    assert "export TIKTOKEN_CACHE_DIR" in launch_text
+    assert "PYTHON_BIN=$(command -v python)" in launch_text
     assert '"$PYTHON_BIN" -u "$ASYNC_ENTRYPOINT"' in launch_text
-    assert "ASYNC_ACTUAL_MULTINODE_TCP_QUORUM=${ASYNC_ACTUAL_MULTINODE_TCP_QUORUM:-$ASYNC_DILOCO_NON_PRODUCTION_DEBUG}" in launch_text
-    assert "LAUNCH_CMD=(\n    srun\n    -N \"$ASYNC_NODE_COUNT\"\n    -n \"$ASYNC_NODE_COUNT\"\n    --ntasks-per-node=1" in launch_text
+    assert "ASYNC_ACTUAL_MULTINODE_TCP_QUORUM=${ASYNC_ACTUAL_MULTINODE_TCP_QUORUM:-0}" in launch_text
+    assert "ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM=${ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM:-1}" in launch_text
+    assert "LAUNCH_CMD=(\n    srun\n    -N \"$ASYNC_NODE_COUNT\"\n    -n \"$ASYNC_WORKER_COUNT\"\n    --ntasks-per-node=\"$ASYNC_WORKER_COUNT_PER_NODE\"" in launch_text
     assert "CMD+=(--actual-multinode-tcp-quorum)" in launch_text
+    assert "CMD+=(--actual-multinode-mpi-dense-quorum --mpi-dense-bucket-bytes \"$ASYNC_MPI_DENSE_BUCKET_BYTES\")" in launch_text
     assert "Production validation rejects ASYNC_DILOCO_RUNTIME_PROBE_ONLY=1" in launch_text
     assert "ASYNC_REQUIRE_CORRECTED_B4_LADDER=${ASYNC_REQUIRE_CORRECTED_B4_LADDER:-1}" in launch_text
     assert "Corrected E97 B4 smoke ladder pre-submit gate failed" in launch_text
@@ -178,9 +181,11 @@ def test_async_diloco_launch_wrappers_expose_required_env_knobs():
         "REQUESTED_WALLTIME=${REQUESTED_WALLTIME:-",
         "PRODUCTION_LATEST_GUARD=${PRODUCTION_LATEST_GUARD:-",
         "PRODUCTION_LATEST_POLICY=${PRODUCTION_LATEST_POLICY:-run-local-latest-json-with-external-chain-latest-guard}",
-        "SLURM_INTENDED_NTASKS_PER_NODE=${SLURM_INTENDED_NTASKS_PER_NODE:-1}",
-        "SLURM_INTENDED_GPUS_PER_TASK=${SLURM_INTENDED_GPUS_PER_TASK:-0}",
-        "SLURM_INTENDED_GPU_BIND=${SLURM_INTENDED_GPU_BIND:-unset}",
+        "SLURM_INTENDED_NTASKS_PER_NODE=${SLURM_INTENDED_NTASKS_PER_NODE:-8}",
+        "SLURM_INTENDED_GPUS_PER_TASK=${SLURM_INTENDED_GPUS_PER_TASK:-1}",
+        "SLURM_INTENDED_GPU_BIND=${SLURM_INTENDED_GPU_BIND:-closest}",
+        "ASYNC_DENSE_TRANSPORT_64N_GATE_JSON=${ASYNC_DENSE_TRANSPORT_64N_GATE_JSON:-}",
+        "export CRAY_MPI4PY_SITE=${CRAY_MPI4PY_SITE:-/opt/cray/pe/python/3.10.10/lib/python3.10/site-packages}",
     ):
         assert token in launch_text
 
@@ -197,7 +202,9 @@ def test_production_async_launcher_records_artifacts_and_real_command_branch():
     assert 'echo "async_entrypoint=$ASYNC_ENTRYPOINT"' in launch_text
     assert 'echo "tiktoken_cache_dir=$TIKTOKEN_CACHE_DIR"' in launch_text
     assert 'echo "python_bin=$PYTHON_BIN"' in launch_text
-    assert 'echo "async_launch_uses_srun=$([[ "$ASYNC_ACTUAL_MULTINODE_TCP_QUORUM" == "1" && "$ASYNC_NODE_COUNT" -gt 1 ]] && echo 1 || echo 0)"' in launch_text
+    assert 'echo "async_actual_multinode_mpi_dense_quorum=$ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM"' in launch_text
+    assert 'ASYNC_LAUNCH_USES_SRUN=1' in launch_text
+    assert 'echo "async_launch_uses_srun=$ASYNC_LAUNCH_USES_SRUN"' in launch_text
     assert 'echo "presubmit_status=$PRESUBMIT_STATUS"' in launch_text
     assert 'echo "presubmit_failure_count=${#PRESUBMIT_FAILURES[@]}"' in launch_text
     assert 'echo "presubmit_failure_${idx}=${PRESUBMIT_FAILURES[$idx]}"' in launch_text
@@ -218,6 +225,7 @@ def test_production_async_launcher_records_artifacts_and_real_command_branch():
     assert '--checkpoint-interval "$ASYNC_E97_CHECKPOINT_INTERVAL"' in launch_text
     assert '--projection-chunk-size "$ASYNC_E97_PROJECTION_CHUNK_SIZE"' in launch_text
     assert '--loss-chunk-size "$ASYNC_E97_LOSS_CHUNK_SIZE"' in launch_text
+    assert '--mpi-dense-bucket-bytes "$ASYNC_MPI_DENSE_BUCKET_BYTES"' in launch_text
     assert '--recovery-every-generations "$RECOVERY_EVERY_GENERATIONS"' in launch_text
     assert '--finalization-reserve-seconds "$FINALIZATION_BUFFER_SECONDS"' in launch_text
     assert 'CMD+=(--dim "$MODEL_DIM")' in launch_text
@@ -237,11 +245,13 @@ def test_production_async_launcher_records_artifacts_and_real_command_branch():
 def test_production_async_launcher_debug_multinode_uses_srun_not_bare_python():
     launch_text = (ROOT / "scripts/frontier/async_diloco_e97_256n12h_launch.sbatch").read_text(encoding="utf-8")
 
-    assert "--actual-multinode-tcp-quorum" in launch_text
+    assert "--actual-multinode-mpi-dense-quorum" in launch_text
     assert "LAUNCH_CMD=(\n    srun" in launch_text
     assert '-N "$ASYNC_NODE_COUNT"' in launch_text
-    assert '-n "$ASYNC_NODE_COUNT"' in launch_text
-    assert "--ntasks-per-node=1" in launch_text
+    assert '-n "$ASYNC_WORKER_COUNT"' in launch_text
+    assert '--ntasks-per-node="$ASYNC_WORKER_COUNT_PER_NODE"' in launch_text
+    assert "--gpus-per-task=1" in launch_text
+    assert "--gpu-bind=closest" in launch_text
     assert "printf '%q ' \"${LAUNCH_CMD[@]}\" > \"$COMMAND_FILE\"" in launch_text
     assert 'exec "${LAUNCH_CMD[@]}"' in launch_text
     assert 'exec "${CMD[@]}"' not in launch_text
@@ -254,6 +264,8 @@ def test_production_async_launcher_refuses_non_comparable_corrected_ladder_by_de
         'if [[ "$ASYNC_REQUIRE_CORRECTED_B4_LADDER" == "1" && "$PRESUBMIT_STATUS" != "pass" ]]; then',
         'exit 70',
         "actual_multinode_tcp_quorum is metadata-only TCP control transport",
+        "actual_multinode_mpi_dense_quorum is not enabled",
+        "256n production remains fail-closed until ASYNC_DENSE_TRANSPORT_64N_GATE_JSON",
         "Slurm topology uses $SLURM_INTENDED_NTASKS_PER_NODE task(s) per node",
         "Slurm GPU request uses --gpus-per-task=$SLURM_INTENDED_GPUS_PER_TASK",
         "Slurm GPU binding is $SLURM_INTENDED_GPU_BIND",

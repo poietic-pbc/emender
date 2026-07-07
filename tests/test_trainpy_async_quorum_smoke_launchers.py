@@ -41,10 +41,15 @@ def test_trainpy_async_quorum_smokes_record_metrics_checkpoint_and_no_ddp_valida
         'MANIFEST_FILE="${ARTIFACT_DIR}/manifest.json"',
         'COMMAND_FILE="${ARTIFACT_DIR}/command.txt"',
         'RANK_START_LOG="${ARTIFACT_DIR}/rank-start.tsv"',
-        "--actual-multinode-tcp-quorum",
+        "ASYNC_QUORUM_TRANSPORT=${ASYNC_QUORUM_TRANSPORT:-mpi-dense}",
+        "--actual-multinode-mpi-dense-quorum",
+        "--mpi-dense-bucket-bytes",
         "--coordinator-host",
-        "async_quorum_transport=tcp",
-        "bounded_debug_transport=actual_multinode_tcp_quorum",
+        "async_quorum_transport=$ASYNC_QUORUM_TRANSPORT",
+        "async_mpi_dense_bucket_bytes=$ASYNC_MPI_DENSE_BUCKET_BYTES",
+        "mpich_gpu_support_enabled=$MPICH_GPU_SUPPORT_ENABLED",
+        "export CRAY_MPI4PY_SITE=${CRAY_MPI4PY_SITE:-/opt/cray/pe/python/3.10.10/lib/python3.10/site-packages}",
+        "actual_multinode_tcp_quorum",
         "--recovery-every-generations",
         "--export-every-generations",
         "checkpoint_paths_missing",
@@ -65,6 +70,7 @@ def test_trainpy_async_quorum_2n_smoke_forces_missing_update_recovery_path():
     assert "ASYNC_EXPECTED_MISSING_UPDATES=${ASYNC_EXPECTED_MISSING_UPDATES:-1}" in two
     assert "ASYNC_EXPECTED_RANKS=${ASYNC_EXPECTED_RANKS:-$((ASYNC_TRAINPY_RANKS + ASYNC_EXPECTED_MISSING_UPDATES))}" in two
     assert "ASYNC_GLOBAL_QUORUM=${ASYNC_GLOBAL_QUORUM:-$ASYNC_TRAINPY_RANKS}" in two
+    assert 'if [[ "$ASYNC_QUORUM_TRANSPORT" == "mpi-dense" && "$ASYNC_EXPECTED_RANKS" -gt "$ASYNC_TRAINPY_RANKS" ]]; then' in common
     assert "timed_out_updates" in common
     assert "expected_at_least" in common
 

@@ -11,8 +11,10 @@
 #SBATCH -p batch
 #SBATCH -N 256
 #SBATCH -t 12:00:00
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=56
+#SBATCH --ntasks-per-node=8
+#SBATCH --cpus-per-task=7
+#SBATCH --gpus-per-task=1
+#SBATCH --gpu-bind=closest
 #SBATCH -o logs/frontier/async_diloco_e97/%x-%j.out
 #SBATCH -e logs/frontier/async_diloco_e97/%x-%j.err
 
@@ -46,11 +48,12 @@ ENV_FILE="${ARTIFACT_DIR}/env.txt"
 ASYNC_ENTRYPOINT=${ASYNC_ENTRYPOINT:-scripts/frontier/e97_async_diloco_train.py}
 ASYNC_DILOCO_NON_PRODUCTION_DEBUG=${ASYNC_DILOCO_NON_PRODUCTION_DEBUG:-0}
 ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM=${ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM:-0}
-ASYNC_ACTUAL_MULTINODE_TCP_QUORUM=${ASYNC_ACTUAL_MULTINODE_TCP_QUORUM:-$ASYNC_DILOCO_NON_PRODUCTION_DEBUG}
+ASYNC_ACTUAL_MULTINODE_TCP_QUORUM=${ASYNC_ACTUAL_MULTINODE_TCP_QUORUM:-0}
+ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM=${ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM:-1}
 ASYNC_REQUIRE_CORRECTED_B4_LADDER=${ASYNC_REQUIRE_CORRECTED_B4_LADDER:-1}
-SLURM_INTENDED_NTASKS_PER_NODE=${SLURM_INTENDED_NTASKS_PER_NODE:-1}
-SLURM_INTENDED_GPUS_PER_TASK=${SLURM_INTENDED_GPUS_PER_TASK:-0}
-SLURM_INTENDED_GPU_BIND=${SLURM_INTENDED_GPU_BIND:-unset}
+SLURM_INTENDED_NTASKS_PER_NODE=${SLURM_INTENDED_NTASKS_PER_NODE:-8}
+SLURM_INTENDED_GPUS_PER_TASK=${SLURM_INTENDED_GPUS_PER_TASK:-1}
+SLURM_INTENDED_GPU_BIND=${SLURM_INTENDED_GPU_BIND:-closest}
 
 # Async quorum recipe. Local quorum is six of eight workers per node; global
 # quorum defaults to ceil(2/3 * nodes), including scaled debug node counts.
@@ -63,8 +66,11 @@ ASYNC_GLOBAL_TIMEOUT_S=${ASYNC_GLOBAL_TIMEOUT_S:-240}
 ASYNC_STALENESS_POLICY=${ASYNC_STALENESS_POLICY:-reject_stale}
 ASYNC_WEIGHTING=${ASYNC_WEIGHTING:-tokens}
 ASYNC_TRANSPORT_MODE=${ASYNC_TRANSPORT_MODE:-cray-mpich-gpu-aware-p2p}
+ASYNC_MPI_DENSE_BUCKET_BYTES=${ASYNC_MPI_DENSE_BUCKET_BYTES:-67108864}
 ASYNC_GROUP_AGGREGATOR_SIZE=${ASYNC_GROUP_AGGREGATOR_SIZE:-16}
-ASYNC_DENSE_UPDATE_STORAGE=${ASYNC_DENSE_UPDATE_STORAGE:-0}
+ASYNC_DENSE_DATA_PLANE=${ASYNC_DENSE_DATA_PLANE:-mpi-p2p}
+ASYNC_DENSE_UPDATE_STORAGE=${ASYNC_DENSE_UPDATE_STORAGE:-1}
+ASYNC_DENSE_TRANSPORT_64N_GATE_JSON=${ASYNC_DENSE_TRANSPORT_64N_GATE_JSON:-}
 
 # E97 B4 K40 token geometry.
 BATCH_SIZE=${BATCH_SIZE:-4}
@@ -129,6 +135,9 @@ source "${REPO}/scripts/frontier/frontier_runtime_env.sh"
 frontier_load_default_modules
 frontier_activate_emender_conda_env
 export TIKTOKEN_CACHE_DIR
+export MPICH_GPU_SUPPORT_ENABLED=${MPICH_GPU_SUPPORT_ENABLED:-0}
+export ASYNC_MPI_DENSE_BUCKET_BYTES
+export CRAY_MPI4PY_SITE=${CRAY_MPI4PY_SITE:-/opt/cray/pe/python/3.10.10/lib/python3.10/site-packages}
 PYTHON_BIN=$(command -v python)
 [[ -n "$PYTHON_BIN" ]] || { echo "Activated runtime did not provide python" >&2; exit 66; }
 
@@ -248,14 +257,20 @@ fi
 if [[ "$ASYNC_ACTUAL_MULTINODE_TCP_QUORUM" == "1" ]]; then
   CMD+=(--actual-multinode-tcp-quorum)
 fi
+if [[ "$ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM" == "1" ]]; then
+  CMD+=(--actual-multinode-mpi-dense-quorum --mpi-dense-bucket-bytes "$ASYNC_MPI_DENSE_BUCKET_BYTES")
+fi
 
 LAUNCH_CMD=("${CMD[@]}")
-if [[ "$ASYNC_ACTUAL_MULTINODE_TCP_QUORUM" == "1" && "$ASYNC_NODE_COUNT" -gt 1 ]]; then
+if [[ "$ASYNC_NODE_COUNT" -gt 1 && ( "$ASYNC_ACTUAL_MULTINODE_TCP_QUORUM" == "1" || "$ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM" == "1" ) ]]; then
   LAUNCH_CMD=(
     srun
     -N "$ASYNC_NODE_COUNT"
-    -n "$ASYNC_NODE_COUNT"
-    --ntasks-per-node=1
+    -n "$ASYNC_WORKER_COUNT"
+    --ntasks-per-node="$ASYNC_WORKER_COUNT_PER_NODE"
+    -c 7
+    --gpus-per-task=1
+    --gpu-bind=closest
     "${CMD[@]}"
   )
 fi
@@ -274,6 +289,34 @@ if [[ "$ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM" == "1" ]]; then
 fi
 if [[ "$ASYNC_ACTUAL_MULTINODE_TCP_QUORUM" == "1" ]]; then
   PRESUBMIT_FAILURES+=("actual_multinode_tcp_quorum is metadata-only TCP control transport; dense async DiLoCo MPI P2P delta exchange is not implemented")
+fi
+if [[ "$ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM" != "1" ]]; then
+  PRESUBMIT_FAILURES+=("actual_multinode_mpi_dense_quorum is not enabled")
+fi
+if [[ "$ASYNC_DENSE_DATA_PLANE" != "mpi-p2p" ]]; then
+  PRESUBMIT_FAILURES+=("ASYNC_DENSE_DATA_PLANE=$ASYNC_DENSE_DATA_PLANE, not mpi-p2p")
+fi
+if [[ "$ASYNC_NODE_COUNT" -ge 256 && "$ASYNC_DILOCO_NON_PRODUCTION_DEBUG" != "1" ]]; then
+  if [[ -z "$ASYNC_DENSE_TRANSPORT_64N_GATE_JSON" || ! -r "$ASYNC_DENSE_TRANSPORT_64N_GATE_JSON" ]]; then
+    PRESUBMIT_FAILURES+=("256n production remains fail-closed until ASYNC_DENSE_TRANSPORT_64N_GATE_JSON points at a readable passing 64n dense-transport metrics/manifest")
+  elif ! python - "$ASYNC_DENSE_TRANSPORT_64N_GATE_JSON" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+text = json.dumps(payload, sort_keys=True)
+ok = (
+    payload.get("validation_status") == "pass"
+    or payload.get("conclusion") in {"go", "pass", "dense-transport-64n-pass"}
+    or '"validation_status": "pass"' in text
+)
+transport_ok = "mpi" in text and "dense" in text
+raise SystemExit(0 if ok and transport_ok else 1)
+PY
+  then
+    PRESUBMIT_FAILURES+=("64n dense-transport gate artifact did not record a passing MPI dense transport smoke")
+  fi
 fi
 if [[ "$SLURM_INTENDED_NTASKS_PER_NODE" != "8" ]]; then
   PRESUBMIT_FAILURES+=("Slurm topology uses $SLURM_INTENDED_NTASKS_PER_NODE task(s) per node, not stable B4 8 GPU tasks per node")
@@ -308,6 +351,12 @@ fi
 
 printf '%q ' "${LAUNCH_CMD[@]}" > "$COMMAND_FILE"
 printf '\n' >> "$COMMAND_FILE"
+
+if [[ "$ASYNC_NODE_COUNT" -gt 1 && ( "$ASYNC_ACTUAL_MULTINODE_TCP_QUORUM" == "1" || "$ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM" == "1" ) ]]; then
+  ASYNC_LAUNCH_USES_SRUN=1
+else
+  ASYNC_LAUNCH_USES_SRUN=0
+fi
 
 {
   echo "task_id=$TASK_ID"
@@ -359,15 +408,21 @@ printf '\n' >> "$COMMAND_FILE"
   echo "async_worker_count_per_node=$ASYNC_WORKER_COUNT_PER_NODE"
   echo "async_worker_count=$ASYNC_WORKER_COUNT"
   echo "async_actual_multinode_tcp_quorum=$ASYNC_ACTUAL_MULTINODE_TCP_QUORUM"
-  echo "async_launch_uses_srun=$([[ "$ASYNC_ACTUAL_MULTINODE_TCP_QUORUM" == "1" && "$ASYNC_NODE_COUNT" -gt 1 ]] && echo 1 || echo 0)"
+  echo "async_actual_multinode_mpi_dense_quorum=$ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM"
+  echo "async_launch_uses_srun=$ASYNC_LAUNCH_USES_SRUN"
   echo "async_local_quorum=$ASYNC_LOCAL_QUORUM"
   echo "async_global_quorum=$ASYNC_GLOBAL_QUORUM"
   echo "async_global_timeout_s=$ASYNC_GLOBAL_TIMEOUT_S"
   echo "async_staleness_policy=$ASYNC_STALENESS_POLICY"
   echo "async_weighting=$ASYNC_WEIGHTING"
   echo "async_transport_mode=$ASYNC_TRANSPORT_MODE"
+  echo "async_mpi_dense_bucket_bytes=$ASYNC_MPI_DENSE_BUCKET_BYTES"
   echo "async_group_aggregator_size=$ASYNC_GROUP_AGGREGATOR_SIZE"
+  echo "async_dense_data_plane=$ASYNC_DENSE_DATA_PLANE"
   echo "async_dense_update_storage=$ASYNC_DENSE_UPDATE_STORAGE"
+  echo "async_dense_transport_64n_gate_json=$ASYNC_DENSE_TRANSPORT_64N_GATE_JSON"
+  echo "mpich_gpu_support_enabled=$MPICH_GPU_SUPPORT_ENABLED"
+  echo "cray_mpi4py_site=$CRAY_MPI4PY_SITE"
   echo "batch_size=$BATCH_SIZE"
   echo "chunk_size=$CHUNK_SIZE"
   echo "diloco_k=$DILOCO_K"

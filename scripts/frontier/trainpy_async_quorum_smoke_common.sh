@@ -2,11 +2,11 @@
 # Shared runner for train.py-backed async quorum DiLoCo debug smokes.
 #
 # This intentionally uses one Slurm task per GPU and calls the train.py-backed
-# async entrypoint once per task. The live quorum transport is TCP: each GPU rank
-# runs real train.py local token training, submits metadata to rank 0 over a
-# socket, and rank 0 publishes the authoritative run-local latest/checkpoint
-# metadata when quorum is reached. Shared storage is used only for metrics,
-# checkpoints, manifests, logs, and post-run artifacts.
+# async entrypoint once per task. The production dense data plane is MPI
+# point-to-point: each GPU rank runs real train.py local token training and sends
+# checksummed tensor-delta buckets to rank 0, which publishes the authoritative
+# run-local latest/checkpoint metadata when quorum is reached. TCP remains
+# selectable only as a bounded metadata/control-plane debug backend.
 
 set -euo pipefail
 
@@ -51,9 +51,16 @@ ASYNC_LOCAL_STEPS=${ASYNC_LOCAL_STEPS:-${DILOCO_K:-1}}
 ASYNC_GENERATIONS=${ASYNC_GENERATIONS:-1}
 ASYNC_COORDINATOR_PORT=${ASYNC_COORDINATOR_PORT:-29497}
 ASYNC_COORDINATOR_BIND_HOST=${ASYNC_COORDINATOR_BIND_HOST:-0.0.0.0}
+ASYNC_QUORUM_TRANSPORT=${ASYNC_QUORUM_TRANSPORT:-mpi-dense}
+ASYNC_MPI_DENSE_BUCKET_BYTES=${ASYNC_MPI_DENSE_BUCKET_BYTES:-67108864}
 ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM=${ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM:-0}
 ALLOW_SYNTHETIC_TOKEN_FALLBACK=${ALLOW_SYNTHETIC_TOKEN_FALLBACK:-0}
 TRAINING_DATA_MODE=real-token
+
+if [[ "$ASYNC_QUORUM_TRANSPORT" == "mpi-dense" && "$ASYNC_EXPECTED_RANKS" -gt "$ASYNC_TRAINPY_RANKS" ]]; then
+  ASYNC_EXPECTED_RANKS=$ASYNC_TRAINPY_RANKS
+  ASYNC_EXPECTED_MISSING_UPDATES=0
+fi
 
 BATCH_SIZE=${BATCH_SIZE:-1}
 CHUNK_SIZE=${CHUNK_SIZE:-128}
@@ -116,6 +123,9 @@ frontier_load_default_modules
 frontier_activate_emender_conda_env
 PYTHON_BIN=$(command -v python)
 export REPO TIKTOKEN_CACHE_DIR PYTHON_BIN RANK_START_LOG ASYNC_ENTRYPOINT
+export MPICH_GPU_SUPPORT_ENABLED=${MPICH_GPU_SUPPORT_ENABLED:-0}
+export ASYNC_MPI_DENSE_BUCKET_BYTES
+export CRAY_MPI4PY_SITE=${CRAY_MPI4PY_SITE:-/opt/cray/pe/python/3.10.10/lib/python3.10/site-packages}
 
 [[ -f "$ASYNC_ENTRYPOINT" ]] || { echo "ASYNC_ENTRYPOINT is missing: $ASYNC_ENTRYPOINT" >&2; exit 65; }
 if [[ ! -r "$DATA" ]]; then
@@ -191,11 +201,23 @@ CMD=(
   --finalization-reserve-seconds "$FINALIZATION_BUFFER_SECONDS"
   --walltime-remaining-s "$FINALIZATION_BUFFER_SECONDS"
   --estimated-finalization-duration-s "$ESTIMATED_FINALIZATION_DURATION_SECONDS"
-  --actual-multinode-tcp-quorum
   --coordinator-host "$ASYNC_COORDINATOR_HOST"
   --coordinator-bind-host "$ASYNC_COORDINATOR_BIND_HOST"
   --coordinator-port "$ASYNC_COORDINATOR_PORT"
+  --mpi-dense-bucket-bytes "$ASYNC_MPI_DENSE_BUCKET_BYTES"
 )
+case "$ASYNC_QUORUM_TRANSPORT" in
+  mpi-dense)
+    CMD+=(--actual-multinode-mpi-dense-quorum)
+    ;;
+  tcp)
+    CMD+=(--actual-multinode-tcp-quorum)
+    ;;
+  *)
+    echo "ASYNC_QUORUM_TRANSPORT must be mpi-dense or tcp, got: $ASYNC_QUORUM_TRANSPORT" >&2
+    exit 64
+    ;;
+esac
 if [[ -r "$E97_CHECKPOINT" ]]; then
   CMD+=(--checkpoint "$E97_CHECKPOINT")
 fi
@@ -229,6 +251,12 @@ LAUNCH_CMD=(
 printf '%q ' "${LAUNCH_CMD[@]}" > "$COMMAND_FILE"
 printf '\n' >> "$COMMAND_FILE"
 
+if [[ "$ASYNC_QUORUM_TRANSPORT" == "tcp" ]]; then
+  BOUNDED_DEBUG_TRANSPORT=actual_multinode_tcp_quorum
+else
+  BOUNDED_DEBUG_TRANSPORT=actual_multinode_mpi_dense_quorum
+fi
+
 {
   echo "task_id=$TASK_ID"
   echo "smoke_name=$SMOKE_NAME"
@@ -259,7 +287,10 @@ printf '\n' >> "$COMMAND_FILE"
   echo "async_expected_missing_updates=$ASYNC_EXPECTED_MISSING_UPDATES"
   echo "async_timeout_s=$ASYNC_TIMEOUT_S"
   echo "async_local_steps=$ASYNC_LOCAL_STEPS"
-  echo "async_quorum_transport=tcp"
+  echo "async_quorum_transport=$ASYNC_QUORUM_TRANSPORT"
+  echo "async_mpi_dense_bucket_bytes=$ASYNC_MPI_DENSE_BUCKET_BYTES"
+  echo "mpich_gpu_support_enabled=$MPICH_GPU_SUPPORT_ENABLED"
+  echo "cray_mpi4py_site=$CRAY_MPI4PY_SITE"
   echo "async_coordinator_host=$ASYNC_COORDINATOR_HOST"
   echo "async_coordinator_port=$ASYNC_COORDINATOR_PORT"
   echo "requested_walltime=$REQUESTED_WALLTIME"
@@ -267,7 +298,7 @@ printf '\n' >> "$COMMAND_FILE"
   echo "human_approval_record=$HUMAN_APPROVAL_RECORD"
   echo "ddp_wrapper_expected=0"
   echo "per_step_all_reduce_expected=0"
-  echo "bounded_debug_transport=actual_multinode_tcp_quorum"
+  echo "bounded_debug_transport=$BOUNDED_DEBUG_TRANSPORT"
   echo "git_commit=$(git rev-parse HEAD)"
   echo
   echo "=== modules ==="
