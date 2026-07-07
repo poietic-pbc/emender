@@ -637,6 +637,10 @@ class AsyncDiLoCoCheckpointManager:
     def latest_path(self) -> Path:
         return self.root / "latest.json"
 
+    @property
+    def latest_pt_path(self) -> Path:
+        return self.root / "latest.pt"
+
     def emit_cached_manifest(
         self,
         *,
@@ -674,6 +678,7 @@ class AsyncDiLoCoCheckpointManager:
         self,
         metrics: AsyncDiLoCoGenerationMetrics,
         *,
+        checkpoint_path: str | Path | None = None,
         walltime_remaining_s: float | None = None,
         estimated_finalization_duration_s: float | None = None,
     ) -> AsyncDiLoCoPublishResult:
@@ -683,9 +688,14 @@ class AsyncDiLoCoCheckpointManager:
             raise PermissionError("only the global merger may advance async DiLoCo latest")
         if metrics.run_id != self.run_id:
             raise ValueError(f"metrics run_id {metrics.run_id!r} does not match {self.run_id!r}")
+        self._assert_can_advance_latest(metrics.generation)
 
         now_s = self._time_source()
-        generation_manifest = self._write_generation_manifest(metrics, now_s=now_s)
+        generation_manifest = self._write_generation_manifest(
+            metrics,
+            now_s=now_s,
+            checkpoint_path=checkpoint_path,
+        )
         recovery_checkpoint = None
         export_checkpoint = None
         finalization_checkpoint = None
@@ -725,6 +735,10 @@ class AsyncDiLoCoCheckpointManager:
 
         checkpoint_paths = [generation_manifest.path]
         checkpoint_sizes = {generation_manifest.path: generation_manifest.size_bytes}
+        if checkpoint_path is not None:
+            checkpoint_path = Path(checkpoint_path)
+            checkpoint_paths.append(str(checkpoint_path))
+            checkpoint_sizes[str(checkpoint_path)] = _path_size_bytes(checkpoint_path)
         for record in (recovery_checkpoint, export_checkpoint, finalization_checkpoint):
             if record is not None:
                 checkpoint_paths.append(record.path)
@@ -739,6 +753,9 @@ class AsyncDiLoCoCheckpointManager:
             "published_by": self.role,
             "published_at_s": now_s,
         }
+        if checkpoint_path is not None:
+            latest_payload["checkpoint_path"] = str(checkpoint_path)
+            _atomic_replace_symlink(self.latest_pt_path, checkpoint_path)
         _atomic_write_json(self.latest_path, latest_payload)
 
         updated_metrics = _replace_generation_checkpoint_metrics(
@@ -788,8 +805,10 @@ class AsyncDiLoCoCheckpointManager:
             candidates,
             key=lambda item: int(item[0]["generation"]),
         )
-        latest_path = str(self.latest_path) if self.latest_path.exists() else None
+        latest_path = None
         checkpoint_paths = tuple(str(p) for p in newest_payload.get("checkpoint_paths", ()))
+        if newest_payload.get("checkpoint_path"):
+            checkpoint_paths = (str(newest_payload["checkpoint_path"]), *checkpoint_paths)
         if self.latest_path.exists():
             try:
                 latest_payload = json.loads(self.latest_path.read_text(encoding="utf-8"))
@@ -798,8 +817,12 @@ class AsyncDiLoCoCheckpointManager:
             if (
                 latest_payload.get("run_id") == self.run_id
                 and int(latest_payload.get("generation", -1)) == int(newest_payload["generation"])
+                and latest_payload.get("published_by") == GLOBAL_MERGER_ROLE
             ):
+                latest_path = str(self.latest_path)
                 checkpoint_paths = tuple(str(p) for p in latest_payload.get("checkpoint_paths", ()))
+                if latest_payload.get("checkpoint_path"):
+                    checkpoint_paths = (str(latest_payload["checkpoint_path"]), *checkpoint_paths)
         return AsyncDiLoCoResumeSource(
             run_id=str(newest_payload["run_id"]),
             generation=int(newest_payload["generation"]),
@@ -813,14 +836,20 @@ class AsyncDiLoCoCheckpointManager:
         metrics: AsyncDiLoCoGenerationMetrics,
         *,
         now_s: float,
+        checkpoint_path: str | Path | None = None,
     ) -> AsyncDiLoCoCheckpointRecord:
         path = self._generation_manifest_path(metrics.generation)
+        checkpoint_paths = [str(path)]
+        if checkpoint_path is not None:
+            checkpoint_paths.append(str(checkpoint_path))
         payload = {
             "metrics": metrics.to_dict(),
-            "checkpoint_paths": [str(path)],
+            "checkpoint_paths": checkpoint_paths,
             "authoritative": True,
             "published_at_s": now_s,
         }
+        if checkpoint_path is not None:
+            payload["checkpoint_path"] = str(checkpoint_path)
         return self._write_manifest_record(
             path=path,
             generation=metrics.generation,
@@ -973,6 +1002,38 @@ class AsyncDiLoCoCheckpointManager:
             if payload.get("finalized") is not True:
                 continue
             yield payload, path
+
+    def _assert_can_advance_latest(self, generation: int) -> None:
+        current_generation = self._current_authoritative_generation()
+        if current_generation is None:
+            return
+        if int(generation) <= current_generation:
+            raise ValueError(
+                f"generation {generation} would not advance async DiLoCo latest "
+                f"beyond current generation {current_generation}"
+            )
+
+    def _current_authoritative_generation(self) -> int | None:
+        candidates = [
+            int(payload["generation"])
+            for payload, _path in self._iter_finalized_global_manifests()
+        ]
+        if self.latest_path.exists():
+            try:
+                payload = json.loads(self.latest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                payload = {}
+            if (
+                payload.get("run_id") == self.run_id
+                and payload.get("published_by") == GLOBAL_MERGER_ROLE
+            ):
+                try:
+                    candidates.append(int(payload["generation"]))
+                except (KeyError, TypeError, ValueError):
+                    pass
+        if not candidates:
+            return None
+        return max(candidates)
 
     def _generation_manifest_path(self, generation: int) -> Path:
         return self.root / "generations" / f"gen_{generation:06d}" / "manifest.json"
@@ -1291,6 +1352,25 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(tmp, path)
+
+
+def _atomic_replace_symlink(link_path: Path, target_path: Path) -> None:
+    link_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path = Path(target_path)
+    if not target_path.exists():
+        raise FileNotFoundError(f"checkpoint target does not exist: {target_path}")
+    tmp = link_path.with_name(f".{link_path.name}.{os.getpid()}.tmp")
+    try:
+        if tmp.exists() or tmp.is_symlink():
+            tmp.unlink()
+        if target_path.parent.resolve() == link_path.parent.resolve():
+            tmp.symlink_to(target_path.name)
+        else:
+            tmp.symlink_to(str(target_path))
+        os.replace(tmp, link_path)
+    finally:
+        if tmp.exists() or tmp.is_symlink():
+            tmp.unlink()
 
 
 def _canonicalize(value: Any) -> Any:

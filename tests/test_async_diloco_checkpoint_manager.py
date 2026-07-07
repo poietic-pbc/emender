@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -127,6 +128,34 @@ def test_partial_or_inflight_generation_data_does_not_become_latest(tmp_path):
     assert resume is not None
     assert resume.generation == 1
     assert latest_payload["generation"] == 1
+
+
+def test_latest_advancement_is_monotonic_by_generation(tmp_path):
+    manager = _manager(tmp_path)
+    manager.publish_global_generation(_metric(2))
+
+    with pytest.raises(ValueError, match="would not advance"):
+        manager.publish_global_generation(_metric(1))
+
+    latest_payload = json.loads((tmp_path / "latest.json").read_text(encoding="utf-8"))
+    assert latest_payload["generation"] == 2
+    assert manager.select_resume_source().generation == 2
+
+
+def test_global_generation_can_atomically_publish_latest_pt(tmp_path):
+    checkpoint = tmp_path / "finalized_global_gen_000004.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    manager = _manager(tmp_path)
+
+    result = manager.publish_global_generation(_metric(4), checkpoint_path=checkpoint)
+
+    latest_pt = tmp_path / "latest.pt"
+    latest_payload = json.loads((tmp_path / "latest.json").read_text(encoding="utf-8"))
+    assert latest_pt.is_symlink()
+    assert latest_pt.readlink() == Path(checkpoint.name)
+    assert latest_payload["checkpoint_path"] == str(checkpoint)
+    assert str(checkpoint) in latest_payload["checkpoint_paths"]
+    assert str(checkpoint) in result.metrics.checkpoint_paths
 
 
 def test_generation_manifest_is_written_for_every_generation(tmp_path):

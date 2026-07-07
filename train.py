@@ -482,6 +482,17 @@ def parse_args():
                         help='Random seed')
     parser.add_argument('--resume', type=str, default=None,
                         help='Resume from checkpoint')
+    parser.add_argument('--async_diloco_checkpoint_dir', type=str, default=None,
+                        help='Directory containing train.py-native async quorum DiLoCo '
+                             'global checkpoint manifests. When set without --resume, '
+                             'resume selects the newest finalized global generation only.')
+    parser.add_argument('--async_diloco_run_id', type=str, default=None,
+                        help='Run id used to validate async quorum DiLoCo checkpoint '
+                             'manifests before automatic resume selection.')
+    parser.add_argument('--async_diloco_debug_resume_from_cache', type=str, default=None,
+                        help='DEBUG ONLY: explicitly resume from a worker-local async '
+                             'quorum cache/update checkpoint. This is never selected '
+                             'automatically and should not be used for production resume.')
     parser.add_argument('--tbptt', action='store_true',
                         help='Enable TBPTT (carry hidden state across chunks)')
     parser.add_argument('--orth_reg', type=float, default=0.0,
@@ -1114,6 +1125,51 @@ def load_checkpoint(path, model, optimizer=None, return_checkpoint=False):
     if return_checkpoint:
         return (*result, ckpt)
     return result
+
+
+def resolve_async_quorum_resume_checkpoint(args, output_dir=None):
+    """Select the train.py-native async quorum resume checkpoint, if enabled.
+
+    Worker-local cache/update artifacts are intentionally ignored unless the
+    debug-only cache flag names one explicitly.
+    """
+
+    explicit_resume = getattr(args, 'resume', None)
+    if explicit_resume:
+        return explicit_resume
+
+    debug_cache_resume = getattr(args, 'async_diloco_debug_resume_from_cache', None)
+    if debug_cache_resume:
+        return str(Path(debug_cache_resume))
+
+    checkpoint_dir = getattr(args, 'async_diloco_checkpoint_dir', None)
+    if checkpoint_dir is None and output_dir is not None:
+        checkpoint_dir = output_dir
+    run_id = getattr(args, 'async_diloco_run_id', None)
+    if checkpoint_dir is None or not run_id:
+        return None
+
+    from ndm.async_diloco import AsyncDiLoCoCheckpointManager, GLOBAL_MERGER_ROLE
+
+    root = Path(checkpoint_dir)
+    manager = AsyncDiLoCoCheckpointManager(
+        root,
+        run_id=str(run_id),
+        role=GLOBAL_MERGER_ROLE,
+    )
+    resume = manager.select_resume_source()
+    if resume is None:
+        return None
+
+    latest_pt = root / 'latest.pt'
+    if resume.latest_path is not None and (latest_pt.exists() or latest_pt.is_symlink()):
+        return str(latest_pt.resolve())
+
+    for candidate in resume.checkpoint_paths:
+        path = Path(candidate)
+        if path.suffix == '.pt' and path.exists():
+            return str(path)
+    return None
 
 
 @torch.no_grad()
@@ -2704,6 +2760,13 @@ def train(args):
         final_ckpt.reset_coordination_files()
     if dist_enabled and dist.is_initialized():
         dist.barrier()
+
+    async_resume = resolve_async_quorum_resume_checkpoint(args, output_dir=output_dir)
+    if async_resume and not args.resume:
+        args.resume = async_resume
+        if is_main:
+            print(f"[async-quorum-checkpoint] resume selected finalized global "
+                  f"checkpoint: {args.resume}", flush=True)
 
     heldout_curve = None
     heldout_curve_path = None
