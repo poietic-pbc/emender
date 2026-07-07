@@ -58,4 +58,9 @@ export REQUESTED_NODE_HOURS=${REQUESTED_NODE_HOURS:-0.333333}
 export HUMAN_APPROVAL_RECORD=${HUMAN_APPROVAL_RECORD:-WG run-train-py: bounded debug-QOS train.py smoke only; refreshed E97 step1065000 latest.pt; no async/quorum harness; no 64n/256n/production approval.}
 
 REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
+DEFAULT_ENV_PREFIX="${REPO}/.envs/olcf-rocm711-torch210-py312"
+if [[ ! -d "$DEFAULT_ENV_PREFIX" && -d /lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312 ]]; then
+  DEFAULT_ENV_PREFIX=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312
+fi
+export EMENDER_CONDA_ENV=${EMENDER_CONDA_ENV:-$DEFAULT_ENV_PREFIX}
 exec bash "${REPO}/scripts/frontier/e97_1p3b_pretrained_canary.sbatch"

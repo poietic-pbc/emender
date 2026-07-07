@@ -109,6 +109,9 @@ source "${REPO}/scripts/frontier/frontier_runtime_env.sh"
 frontier_load_default_modules
 
 frontier_activate_emender_conda_env
+TRAIN_PYTHON_BIN=$(command -v python)
+export TRAIN_PYTHON_BIN
+frontier_assert_emender_conda_env
 
 export REPO
 export EMENDER_CONDA_ENV
@@ -278,6 +281,7 @@ MODEL_ARGS=(
   echo "frontier_train_env_preflight=$FRONTIER_TRAIN_ENV_PREFLIGHT"
   echo "emender_conda_env=${EMENDER_CONDA_ENV:-}"
   echo "conda_prefix=${CONDA_PREFIX:-}"
+  echo "train_python_bin=${TRAIN_PYTHON_BIN:-}"
   if [[ "$FRONTIER_PER_RANK_TRITON_CACHE" == "1" ]]; then
     echo "frontier_triton_cache_base=$FRONTIER_TRITON_CACHE_BASE"
   fi
@@ -287,7 +291,7 @@ MODEL_ARGS=(
   echo
   echo "=== command ==="
   printf '%q ' srun -N "$REQUESTED_NODES" -n "$((REQUESTED_NODES * 8))" -c7 --gpus-per-task=1 --gpu-bind=closest bash -lc \
-    'source "${REPO}/scripts/frontier/frontier_runtime_env.sh"; frontier_activate_emender_conda_env; printf "%s\t%s\t%s\t%s\t%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${SLURM_PROCID:-}" "${SLURM_LOCALID:-}" "${SLURMD_NODENAME:-$(hostname)}" "${SLURM_NTASKS:-}" >> "$RANK_START_LOG"; if [[ "${FRONTIER_PER_RANK_TRITON_CACHE:-0}" == "1" ]]; then export TRITON_CACHE_DIR="${FRONTIER_TRITON_CACHE_BASE%/}/rank-${SLURM_PROCID}"; mkdir -p "$TRITON_CACHE_DIR"; fi; export RANK=$SLURM_PROCID WORLD_SIZE=$SLURM_NTASKS LOCAL_RANK=0; exec python -u train.py "$@"' \
+    'source "${REPO}/scripts/frontier/frontier_runtime_env.sh"; frontier_activate_emender_conda_env; frontier_assert_emender_conda_env; : "${TRAIN_PYTHON_BIN:?TRAIN_PYTHON_BIN unset}"; printf "%s\t%s\t%s\t%s\t%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${SLURM_PROCID:-}" "${SLURM_LOCALID:-}" "${SLURMD_NODENAME:-$(hostname)}" "${SLURM_NTASKS:-}" >> "$RANK_START_LOG"; if [[ "${FRONTIER_PER_RANK_TRITON_CACHE:-0}" == "1" ]]; then export TRITON_CACHE_DIR="${FRONTIER_TRITON_CACHE_BASE%/}/rank-${SLURM_PROCID}"; mkdir -p "$TRITON_CACHE_DIR"; fi; export RANK=$SLURM_PROCID WORLD_SIZE=$SLURM_NTASKS LOCAL_RANK=0; exec "$TRAIN_PYTHON_BIN" -u train.py "$@"' \
     bash "${COMMON_ARGS[@]}" "${MODEL_ARGS[@]}"
   echo
 } | tee "$ENV_FILE"
@@ -297,14 +301,25 @@ if [[ "$FRONTIER_TRAIN_ENV_PREFLIGHT" == "1" ]]; then
     echo
     echo "=== delegated srun training env preflight ==="
     srun -N1 -n1 -c7 --gpus-per-task=1 --gpu-bind=closest \
-      bash -lc 'source "${REPO}/scripts/frontier/frontier_runtime_env.sh"; frontier_activate_emender_conda_env; frontier_capture_runtime_env' \
+      bash -lc 'source "${REPO}/scripts/frontier/frontier_runtime_env.sh"; frontier_activate_emender_conda_env; frontier_assert_emender_conda_env; : "${TRAIN_PYTHON_BIN:?TRAIN_PYTHON_BIN unset}"; "$TRAIN_PYTHON_BIN" - <<'"'"'PY'"'"'
+import platform
+import sys
+print(f"delegated_python_executable={sys.executable}")
+print(f"delegated_python_version={platform.python_version()}")
+import torch
+print(f"delegated_torch_version={torch.__version__}")
+print(f"delegated_torch_hip={getattr(torch.version, '"'"'hip'"'"', None)}")
+import triton
+print(f"delegated_triton_version={triton.__version__}")
+PY
+frontier_capture_runtime_env' \
       2>&1
   } | tee -a "$ENV_FILE"
 fi
 
 set +e
 srun -N "$REQUESTED_NODES" -n "$((REQUESTED_NODES * 8))" -c7 --gpus-per-task=1 --gpu-bind=closest \
-  bash -lc 'source "${REPO}/scripts/frontier/frontier_runtime_env.sh"; frontier_activate_emender_conda_env; printf "%s\t%s\t%s\t%s\t%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${SLURM_PROCID:-}" "${SLURM_LOCALID:-}" "${SLURMD_NODENAME:-$(hostname)}" "${SLURM_NTASKS:-}" >> "$RANK_START_LOG"; if [[ "${FRONTIER_PER_RANK_TRITON_CACHE:-0}" == "1" ]]; then export TRITON_CACHE_DIR="${FRONTIER_TRITON_CACHE_BASE%/}/rank-${SLURM_PROCID}"; mkdir -p "$TRITON_CACHE_DIR"; fi; export RANK=$SLURM_PROCID WORLD_SIZE=$SLURM_NTASKS LOCAL_RANK=0; exec python -u train.py "$@"' \
+  bash -lc 'source "${REPO}/scripts/frontier/frontier_runtime_env.sh"; frontier_activate_emender_conda_env; frontier_assert_emender_conda_env; : "${TRAIN_PYTHON_BIN:?TRAIN_PYTHON_BIN unset}"; printf "%s\t%s\t%s\t%s\t%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${SLURM_PROCID:-}" "${SLURM_LOCALID:-}" "${SLURMD_NODENAME:-$(hostname)}" "${SLURM_NTASKS:-}" >> "$RANK_START_LOG"; if [[ "${FRONTIER_PER_RANK_TRITON_CACHE:-0}" == "1" ]]; then export TRITON_CACHE_DIR="${FRONTIER_TRITON_CACHE_BASE%/}/rank-${SLURM_PROCID}"; mkdir -p "$TRITON_CACHE_DIR"; fi; export RANK=$SLURM_PROCID WORLD_SIZE=$SLURM_NTASKS LOCAL_RANK=0; exec "$TRAIN_PYTHON_BIN" -u train.py "$@"' \
   bash "${COMMON_ARGS[@]}" "${MODEL_ARGS[@]}" \
   2>&1 | tee "${LOG_DIR}/train.log"
 TRAIN_STATUS=${PIPESTATUS[0]}
