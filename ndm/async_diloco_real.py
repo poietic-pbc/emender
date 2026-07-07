@@ -192,6 +192,7 @@ class RealAsyncFileRankConfig:
     weight_by: str = "tokens"
     initial_checkpoint: str | Path | None = None
     synthetic_token_stream: bool = False
+    allow_synthetic_token_stream: bool = False
     synthetic_vocab_size: int = 256
     device: str = "cpu"
     walltime_remaining_s: float | None = None
@@ -280,7 +281,7 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
         raise ValueError("node_rank must be in [0, node_count)")
     if config.global_quorum <= 0 or config.global_quorum > config.node_count:
         raise ValueError("global_quorum must be in [1, node_count]")
-    if config.synthetic_token_stream:
+    if config.synthetic_token_stream and not config.allow_synthetic_token_stream:
         raise ValueError("synthetic_token_stream is disabled for actual multinode validation")
 
     run_dir = Path(config.run_dir)
@@ -337,7 +338,7 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
         eta_outer=config.eta_outer,
         weight_by=config.weight_by,
         timeout_s=config.timeout_s,
-        synthetic_token_stream=False,
+        synthetic_token_stream=config.synthetic_token_stream,
         synthetic_vocab_size=config.synthetic_vocab_size,
     )
     node_payload = _node_result_payload(
@@ -942,7 +943,7 @@ def _node_result_payload(
         "bounded_debug_update_kind": "metadata_quorum_no_dense_delta_storage",
         "metrics": node_result.metrics.to_dict(),
         "tokens": int(node_result.metrics.tokens_per_generation),
-        "loss": (_mean(losses) if losses else math.nan),
+        "loss": (_mean(losses) if losses else None),
         "losses": [float(loss) for loss in losses],
         "worker_reports": [
             {
@@ -1164,7 +1165,7 @@ def _file_quorum_payload(
             "dense_delta_exchange": "not_implemented_for_debug_shared_storage",
             "proof": "one Slurm-launched process per node runs real local token training and rank 0 merges node metadata quorum",
         },
-        "synthetic_token_stream": False,
+        "synthetic_token_stream": bool(config.synthetic_token_stream),
         "node_count": int(config.node_count),
         "global_quorum": int(config.global_quorum),
         "generation": int(generation),
