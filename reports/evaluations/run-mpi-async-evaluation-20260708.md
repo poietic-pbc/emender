@@ -37,8 +37,11 @@ dispatcher retried the same task again as `agent-915`. A fresh search of
 `WG_TASK_ID=run-mpi-async`, `TASK_ID=run-mpi-async`, `agent-914`, and
 `agent-915` still found no task-linked runner report, Slurm submission ID,
 output root, transport/quorum metric bundle, production latest/last audit, or
-256n gate recommendation. The score and no-go gate recommendation therefore
-remain unchanged.
+256n gate recommendation. The compiled-helper ladder artifacts visible in the
+tree are linked to other task IDs such as `run-compiled-helper`,
+`run-compiled-helper-128n`, and `evaluate-compiled-helper`, not to this task;
+those artifacts cannot satisfy `run-mpi-async`'s sequential 1n -> 8n -> 64n
+policy. The score and no-go gate recommendation therefore remain unchanged.
 
 ## Evidence Reviewed
 
@@ -56,6 +59,9 @@ remain unchanged.
   inline" and "Task marked as done".
 - Repository search: no task-linked `WG_TASK_ID=run-mpi-async` or
   `TASK_ID=run-mpi-async` Frontier job evidence was found.
+- Third-retry targeted search: no new task-linked ladder evidence appeared
+  after the second incomplete disposition; only unrelated compiled-helper
+  reports and logs were found.
 
 I did not treat unrelated existing Frontier logs under `logs/frontier/` or
 other reports under `reports/frontier/` as completion evidence for this task
