@@ -31,7 +31,7 @@ from ndm.async_diloco_real import (
 )
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Real async DiLoCo E97 trainer using train.py helper steps."
     )
@@ -44,7 +44,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tokenizer", default=None)
     parser.add_argument("--synthetic-token-stream", action="store_true",
                         help="Use deterministic local token batches for smoke tests.")
-    parser.add_argument("--worker-count", type=int, default=8)
+    parser.add_argument("--worker-count", type=int, default=None)
+    parser.add_argument("--worker-count-per-node", type=int, default=None,
+                        help="Compatibility alias for wrappers that specify per-node workers.")
     parser.add_argument("--node-count", type=int, default=1)
     parser.add_argument("--local-quorum", type=int, default=0,
                         help="Per-node quorum. Defaults to async DiLoCo local default.")
@@ -52,7 +54,11 @@ def parse_args() -> argparse.Namespace:
                         help="Global node quorum. Defaults to ceil(2/3 * node-count).")
     parser.add_argument("--generations", type=int, default=1)
     parser.add_argument("--local-steps", type=int, default=1)
+    parser.add_argument("--tokens-per-step", type=int, default=0,
+                        help=argparse.SUPPRESS)
     parser.add_argument("--timeout-s", type=float, default=900.0)
+    parser.add_argument("--delta-scale", type=float, default=0.0,
+                        help=argparse.SUPPRESS)
     parser.add_argument("--eta-outer", type=float, default=1.0)
     parser.add_argument("--level", default="E97")
     parser.add_argument("--params", default="100m")
@@ -125,7 +131,25 @@ def parse_args() -> argparse.Namespace:
                         help="Allow explicitly labeled synthetic-token fallback in the debug file-quorum path.")
     parser.add_argument("--node-rank", type=int, default=None,
                         help="Actual rank for --actual-multinode-tcp-quorum; defaults to SLURM_PROCID.")
-    return parser.parse_args()
+    parser.add_argument("--task-id", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--slurm-job-id", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--slurm-job-name", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--requested-walltime", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--requested-node-hours", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--command-file", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--stdout-path", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--stderr-path", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--training-target", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--resume-check", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--production-latest-path", default="", help=argparse.SUPPRESS)
+
+    args = parser.parse_args(argv)
+    if args.worker_count is None:
+        if args.worker_count_per_node is not None:
+            args.worker_count = int(args.worker_count_per_node) * int(args.node_count)
+        else:
+            args.worker_count = 8
+    return args
 
 
 def _optional_positive_int(value: int) -> int | None:

@@ -40,6 +40,8 @@ STDERR_PATH="logs/frontier/async_diloco_e97/${SLURM_JOB_NAME:-async-diloco-e97-2
 ASYNC_ENTRYPOINT=${ASYNC_ENTRYPOINT:-scripts/frontier/async_diloco_e97_multinode.py}
 
 E97_CHECKPOINT=${E97_CHECKPOINT:-/lustre/orion/bif148/proj-shared/emender/checkpoints/E97_1.3B_20260623_103742_step_483000/checkpoint_step_483000_loss_2.5431.pt}
+DATA=${DATA:-/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt}
+MODEL_TOKENIZER=${MODEL_TOKENIZER:-p50k_base}
 TRAINING_TARGET=${TRAINING_TARGET:-E97_1.3B_step483000_async_diloco_debug}
 ASYNC_NODE_COUNT=${ASYNC_NODE_COUNT:-${SLURM_JOB_NUM_NODES:-1}}
 ASYNC_WORKER_COUNT_PER_NODE=${ASYNC_WORKER_COUNT_PER_NODE:-8}
@@ -91,6 +93,7 @@ frontier_load_default_modules
 frontier_activate_emender_conda_env
 
 [[ -r "$E97_CHECKPOINT" ]] || { echo "E97_CHECKPOINT is not readable: $E97_CHECKPOINT" >&2; exit 4; }
+[[ -r "$DATA" ]] || { echo "DATA is not readable: $DATA" >&2; exit 4; }
 [[ -f "$ASYNC_ENTRYPOINT" ]] || { echo "ASYNC_ENTRYPOINT is missing: $ASYNC_ENTRYPOINT" >&2; exit 65; }
 
 RUN_ID="${TASK_ID}-${SLURM_JOB_ID:-manual}-${RUN_STAMP}"
@@ -98,6 +101,8 @@ CMD=(
   python -u "$ASYNC_ENTRYPOINT"
   --run-id "$RUN_ID"
   --checkpoint "$E97_CHECKPOINT"
+  --data "$DATA"
+  --tokenizer "$MODEL_TOKENIZER"
   --run-dir "$RUN_DIR"
   --metrics-json "$METRICS_JSON"
   --node-count "$ASYNC_NODE_COUNT"
@@ -155,6 +160,8 @@ printf '\n' >> "$COMMAND_FILE"
   echo "run_id=$RUN_ID"
   echo "training_target=$TRAINING_TARGET"
   echo "e97_checkpoint=$E97_CHECKPOINT"
+  echo "data=$DATA"
+  echo "model_tokenizer=$MODEL_TOKENIZER"
   echo "run_root=$RUN_ROOT"
   echo "run_dir=$RUN_DIR"
   echo "metrics_json=$METRICS_JSON"

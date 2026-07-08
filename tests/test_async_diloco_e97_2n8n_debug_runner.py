@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -7,6 +8,16 @@ import pytest
 
 torch = pytest.importorskip("torch")
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load_e97_async_entrypoint():
+    module_path = ROOT / "scripts/frontier/e97_async_diloco_train.py"
+    spec = importlib.util.spec_from_file_location("e97_async_diloco_train_for_test", module_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_async_diloco_e97_2n8n_runner_records_global_partial_quorum_and_resume(tmp_path):
@@ -137,6 +148,83 @@ def test_async_diloco_multinode_entrypoint_and_wrappers_are_main_relative():
     assert "*async_diloco_e97_multinode.py|*async_diloco_e97_2n8n_debug.py" in launch_text
     assert "  python -u \"$ASYNC_ENTRYPOINT\"" not in launch_text
     assert ".wg-worktrees" not in wrapper_text
+
+
+def test_resilient_quorum_ladder_wrapper_cli_matches_train_entrypoint(tmp_path):
+    entrypoint = _load_e97_async_entrypoint()
+    failed_job_args = [
+        "--run-id",
+        "run-resilient-quorum-1n8n64n-ladder-4956022-20260708T093551Z",
+        "--checkpoint",
+        "/seed/latest.pt",
+        "--data",
+        "/data/commapile.txt",
+        "--tokenizer",
+        "p50k_base",
+        "--run-dir",
+        str(tmp_path / "async_run"),
+        "--metrics-json",
+        str(tmp_path / "metrics.json"),
+        "--node-count",
+        "1",
+        "--worker-count-per-node",
+        "8",
+        "--local-quorum",
+        "8",
+        "--global-quorum",
+        "1",
+        "--local-steps",
+        "1",
+        "--tokens-per-step",
+        "1024",
+        "--timeout-s",
+        "900",
+        "--delta-scale",
+        "1.0e-8",
+        "--recovery-every-generations",
+        "1",
+        "--task-id",
+        "run-resilient-quorum-1n8n64n-ladder",
+        "--slurm-job-id",
+        "4956022",
+        "--slurm-job-name",
+        "resilient-quorum-e97-1n",
+        "--requested-walltime",
+        "00:20:00",
+        "--requested-node-hours",
+        "0.333333",
+        "--command-file",
+        str(tmp_path / "command.txt"),
+        "--stdout-path",
+        "logs/frontier/async_diloco_e97/resilient-quorum-e97-1n-4956022.out",
+        "--stderr-path",
+        "logs/frontier/async_diloco_e97/resilient-quorum-e97-1n-4956022.err",
+        "--training-target",
+        "E97_1.3B_step1065000_resilient_quorum_1n8n64n_ladder_20260708",
+        "--resume-check",
+        "--production-latest-path",
+        "/guard/latest.pt",
+    ]
+
+    args = entrypoint.parse_args(failed_job_args)
+
+    assert args.worker_count_per_node == 8
+    assert args.worker_count == 8
+    assert args.data == "/data/commapile.txt"
+    assert args.tokenizer == "p50k_base"
+    assert args.tokens_per_step == 1024
+    assert args.delta_scale == pytest.approx(1.0e-8)
+    assert args.task_id == "run-resilient-quorum-1n8n64n-ladder"
+    assert args.slurm_job_id == "4956022"
+    assert args.requested_node_hours == "0.333333"
+    assert args.resume_check is True
+    assert args.production_latest_path == "/guard/latest.pt"
+
+    wrapper = (ROOT / "scripts/frontier/async_diloco_e97_2n8n_debug.sbatch").read_text(encoding="utf-8")
+    assert "DATA=${DATA:-/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt}" in wrapper
+    assert "MODEL_TOKENIZER=${MODEL_TOKENIZER:-p50k_base}" in wrapper
+    assert '--data "$DATA"' in wrapper
+    assert '--tokenizer "$MODEL_TOKENIZER"' in wrapper
 
 
 def test_async_diloco_launch_wrappers_expose_required_env_knobs():
