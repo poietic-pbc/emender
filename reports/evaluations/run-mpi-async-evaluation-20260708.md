@@ -4,7 +4,8 @@ Date: 2026-07-08
 
 Task: `run-mpi-async`
 
-Evaluator: `agent-911`; retry continuation checked by `agent-912`.
+Evaluator: `agent-911`; retry continuations checked by `agent-912` and
+`agent-915`.
 
 ## Verdict
 
@@ -29,6 +30,15 @@ retry state still had no task-linked runner artifact. A focused search for
 1n/8n/64n submission report or Slurm job evidence attributable to this task.
 Related compiled-helper ladder evidence exists under other WG tasks, but it is
 not an actor deliverable for `run-mpi-async`.
+
+Final retry continuation note: after the second incomplete disposition, the
+dispatcher retried the same task again as `agent-915`. A fresh search of
+`logs/`, `reports/`, `.wg/output`, and `.wg/tasks` for `run-mpi-async`,
+`WG_TASK_ID=run-mpi-async`, `TASK_ID=run-mpi-async`, `agent-914`, and
+`agent-915` still found no task-linked runner report, Slurm submission ID,
+output root, transport/quorum metric bundle, production latest/last audit, or
+256n gate recommendation. The score and no-go gate recommendation therefore
+remain unchanged.
 
 ## Evidence Reviewed
 
