@@ -15,12 +15,18 @@ import ndm.async_diloco_compiled_mpich as compiled_mpich
 from ndm.async_diloco_compiled_mpich import (
     COMPILED_MPICH_TRANSPORT,
     CompiledMpichHelperConfig,
+    collect_compiled_mpich_aggregate_result,
+    load_aggregate_payload,
     load_received_payloads,
     resolve_compiled_mpich_helper_library,
     run_compiled_mpich_dense_quorum,
     write_compiled_mpich_request,
 )
-from ndm.async_diloco_mpi import pack_dense_update
+from ndm.async_diloco_mpi import (
+    DenseTransportQuorumConfig,
+    collect_dense_quorum_from_envelopes,
+    pack_dense_update,
+)
 
 
 def _update(value=1.0):
@@ -32,6 +38,20 @@ def _update(value=1.0):
         local_steps=1,
         loss_moving_average={"loss": 1.25, "loss_100": 1.25},
     )
+
+
+def test_compiled_mpich_cpp_uses_bucketed_collective_reduce_not_root_bucket_fanin():
+    source = (Path(__file__).resolve().parents[1] / "scripts/frontier/compiled_mpich_dense_helper.cpp").read_text(
+        encoding="utf-8"
+    )
+
+    assert "MPI_Reduce(" in source
+    assert "MPI_Allreduce(" in source
+    assert "MPI_Iprobe" not in source
+    assert "TAG_BUCKET" not in source
+    assert "root_file_gathered_peer" not in source
+    assert "MPI_Send(preamble" not in source
+    assert "MPI_Recv(&bucket_len" not in source
 
 
 def test_compiled_mpich_request_contract_uses_file_ipc_and_checksums(tmp_path):
@@ -113,28 +133,52 @@ def test_compiled_mpich_helper_invocation_uses_shared_library_not_subprocess(tmp
         payload = json.loads(request_path.read_text(encoding="utf-8"))
         result = {
             "schema_version": 1,
-            "transport": "compiled-cray-mpich-helper-p2p",
+            "transport": COMPILED_MPICH_TRANSPORT,
+            "reducer": "mpi_reduce_bucketed_weighted_sum",
+            "strict_collective_all_launched_ranks": True,
             "status": "advanced",
             "rank": payload["rank"],
             "generation": payload["generation"],
             "base_generation": payload["base_generation"],
             "accepted_ranks": [payload["rank"]],
+            "accepted_count": 1,
+            "stale_count": 0,
+            "failed_count": 0,
+            "timed_out_count": 0,
+            "invalid_count": 0,
+            "accepted_tokens": 8,
+            "accepted_local_steps": 1,
             "timed_out_ranks": [],
             "failed_ranks": [],
             "stale_ranks": [],
+            "invalid_ranks": [],
             "bytes_sent": payload["payload_bytes"],
             "bytes_received": payload["payload_bytes"],
+            "aggregate_update_bytes": payload["payload_bytes"],
             "helper_exit_code": 0,
             "mpi": {
                 "provided_thread_level": "MPI_THREAD_SERIALIZED",
                 "world_size": payload["world_size"],
                 "root_rank": 0,
+                "collective": "MPI_Reduce",
             },
-            "received_payloads": [{
+            "aggregate_payload": {
                 "rank": payload["rank"],
-                "header_path": payload["header_path"],
+                "source_header_path": payload["header_path"],
                 "bucket_paths": [d["ipc"]["path"] for d in payload["bucket_descriptors"]],
-            }],
+            },
+            "received_payloads": [],
+            "reduce_metrics": {
+                "bucket_count": len(payload["bucket_descriptors"]),
+                "aggregate_bucket_count": len(payload["bucket_descriptors"]),
+                "aggregate_update_bytes": payload["payload_bytes"],
+                "reduce_duration_s": 0.001,
+                "per_bucket": [
+                    {"index": d["index"], "bytes": d["nbytes"], "reduce_latency_s": 0.001}
+                    for d in payload["bucket_descriptors"]
+                ],
+            },
+            "aggregate_loss_window": {"loss": 1.25, "loss_100": 1.25},
         }
         request_path.with_name(f"result.gen{payload['generation']:06d}.json").write_text(
             json.dumps(result, sort_keys=True) + "\n",
@@ -164,8 +208,152 @@ def test_compiled_mpich_helper_invocation_uses_shared_library_not_subprocess(tmp
     assert payload is not None
     assert payload["transport"]["name"] == COMPILED_MPICH_TRANSPORT
     assert payload["transport"]["helper_result"]["mpi"]["provided_thread_level"] == "MPI_THREAD_SERIALIZED"
+    assert payload["transport"]["helper_result"]["received_payloads"] == []
+    assert payload["transport"]["metrics"]["quorum_size"] == 1
+    assert payload["transport"]["metrics"]["bucket_timings_s"]
     assert payload["global_generations"][0]["metrics"]["accepted_updates"] == 1
     assert payload["latest_generation"] == -1
+
+
+def test_compiled_mpich_aggregate_matches_dense_quorum_merge_with_stale_failed_metadata(tmp_path):
+    base = {"w": torch.zeros(2)}
+    accepted0 = pack_dense_update(_update(1.0), run_id="aggregate", rank=0, generation=0, bucket_bytes=64)
+    accepted1 = pack_dense_update(_update(3.0), run_id="aggregate", rank=1, generation=0, bucket_bytes=64)
+    failed = pack_dense_update(
+        AsyncDiLoCoUpdate(
+            worker_id="failed",
+            base_generation=0,
+            delta={"w": torch.tensor([99.0, 100.0])},
+            tokens=8,
+            local_steps=1,
+            loss_moving_average={"loss": 9.0, "loss_100": 9.0},
+            failed=True,
+        ),
+        run_id="aggregate",
+        rank=2,
+        generation=0,
+        bucket_bytes=64,
+    )
+    stale = pack_dense_update(
+        AsyncDiLoCoUpdate(
+            worker_id="stale",
+            base_generation=-1,
+            delta={"w": torch.tensor([42.0, 43.0])},
+            tokens=8,
+            local_steps=1,
+            loss_moving_average={"loss": 7.0, "loss_100": 7.0},
+        ),
+        run_id="aggregate",
+        rank=3,
+        generation=0,
+        bucket_bytes=64,
+    )
+    config = DenseTransportQuorumConfig(
+        run_id="aggregate",
+        generation=0,
+        base_generation=0,
+        requested_ranks=4,
+        quorum=2,
+    )
+    expected = collect_dense_quorum_from_envelopes(
+        base,
+        (accepted0, accepted1, failed, stale),
+        config=config,
+    )
+
+    request_path = write_compiled_mpich_request(
+        accepted0,
+        ipc_dir=tmp_path / "ipc",
+        run_id="aggregate",
+        rank=0,
+        world_size=4,
+        generation=0,
+        base_generation=0,
+        quorum=2,
+        timeout_s=3.0,
+        bucket_bytes_target=64,
+        base_checkpoint=None,
+    )
+    aggregate_delta = expected.state["w"] - base["w"]
+    aggregate_envelope = pack_dense_update(
+        AsyncDiLoCoUpdate(
+            worker_id="compiled_mpich_aggregate",
+            base_generation=0,
+            delta={"w": aggregate_delta},
+            tokens=16,
+            local_steps=2,
+            loss_moving_average=expected.metrics.loss_moving_average,
+        ),
+        run_id="aggregate",
+        rank=0,
+        generation=0,
+        bucket_bytes=64,
+    )
+    aggregate_paths = []
+    for bucket in aggregate_envelope.buckets:
+        rel = f"rank_00000/gen000000/aggregate.bucket{bucket.index:05d}.bin"
+        path = tmp_path / "ipc" / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(bucket.payload)
+        aggregate_paths.append(rel)
+
+    helper_result = {
+        "schema_version": 1,
+        "transport": COMPILED_MPICH_TRANSPORT,
+        "reducer": "mpi_reduce_bucketed_weighted_sum",
+        "strict_collective_all_launched_ranks": True,
+        "status": "advanced",
+        "generation": 0,
+        "base_generation": 0,
+        "accepted_ranks": [0, 1],
+        "stale_ranks": [3],
+        "failed_ranks": [2],
+        "timed_out_ranks": [],
+        "invalid_ranks": [],
+        "accepted_count": 2,
+        "stale_count": 1,
+        "failed_count": 1,
+        "timed_out_count": 0,
+        "invalid_count": 0,
+        "accepted_tokens": 16,
+        "accepted_local_steps": 2,
+        "bytes_sent": sum(e.payload_bytes for e in (accepted0, accepted1, failed, stale)),
+        "bytes_received": aggregate_envelope.payload_bytes,
+        "aggregate_update_bytes": aggregate_envelope.payload_bytes,
+        "aggregate_payload": {
+            "rank": 0,
+            "source_header_path": json.loads(request_path.read_text(encoding="utf-8"))["header_path"],
+            "bucket_paths": aggregate_paths,
+        },
+        "received_payloads": [],
+        "reduce_metrics": {
+            "bucket_count": len(aggregate_paths),
+            "aggregate_bucket_count": len(aggregate_paths),
+            "aggregate_update_bytes": aggregate_envelope.payload_bytes,
+            "reduce_duration_s": 0.25,
+            "per_bucket": [
+                {"index": idx, "bytes": len(bucket.payload), "reduce_latency_s": 0.01}
+                for idx, bucket in enumerate(aggregate_envelope.buckets)
+            ],
+        },
+        "aggregate_loss_window": expected.metrics.loss_moving_average,
+    }
+
+    loaded = load_aggregate_payload(tmp_path / "ipc", helper_result["aggregate_payload"], helper_result)
+    assert len(loaded.buckets) == 1
+    result = collect_compiled_mpich_aggregate_result(
+        base,
+        helper_result=helper_result,
+        ipc_dir=tmp_path / "ipc",
+        config=config,
+    )
+
+    assert torch.allclose(result.state["w"], expected.state["w"])
+    assert result.metrics.accepted_updates == 2
+    assert result.metrics.stale_updates == 1
+    assert result.metrics.failed_updates == 1
+    assert result.transport_metrics.bytes_received == aggregate_envelope.payload_bytes
+    assert result.transport_metrics.bytes_sent > result.transport_metrics.bytes_received
 
 
 def test_compiled_mpich_helper_invocation_errors_on_nonzero(tmp_path, monkeypatch):

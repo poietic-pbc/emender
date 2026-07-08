@@ -5,9 +5,11 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
@@ -19,12 +21,6 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr int TAG_PREAMBLE = 63100;
-constexpr int TAG_HEADER = 63101;
-constexpr int TAG_BUCKET_SIZE = 63102;
-constexpr int TAG_BUCKET_BASE = 63200;
-constexpr int TAG_RESULT_SIZE = 63300;
-constexpr int TAG_RESULT = 63301;
 constexpr int REQUIRED_THREAD_LEVEL = MPI_THREAD_SERIALIZED;
 
 struct BucketDescriptor {
@@ -47,10 +43,19 @@ struct Request {
     std::vector<BucketDescriptor> buckets;
 };
 
-struct PayloadPaths {
-    int rank = -1;
-    std::string header_path;
-    std::vector<std::string> bucket_paths;
+struct TensorEntry {
+    std::string name;
+    std::string dtype;
+    std::int64_t offset = 0;
+    std::int64_t nbytes = 0;
+    std::int64_t numel = 0;
+};
+
+struct LossValues {
+    bool has_loss = false;
+    bool has_loss_100 = false;
+    double loss = 0.0;
+    double loss_100 = 0.0;
 };
 
 std::string read_text(const fs::path& path) {
@@ -163,6 +168,15 @@ double find_double(const std::string& text, const std::string& key, bool require
     return fallback;
 }
 
+bool find_bool(const std::string& text, const std::string& key, bool fallback = false) {
+    std::regex re("\"" + key + "\"\\s*:\\s*(true|false)");
+    std::smatch m;
+    if (std::regex_search(text, m, re)) {
+        return m[1].str() == "true";
+    }
+    return fallback;
+}
+
 Request parse_request(const fs::path& request_path) {
     std::string text = read_text(request_path);
     Request req;
@@ -198,6 +212,65 @@ Request parse_request(const fs::path& request_path) {
     return req;
 }
 
+std::vector<TensorEntry> parse_tensor_entries(const std::string& header) {
+    std::vector<TensorEntry> entries;
+    std::size_t tensors_pos = header.rfind("\"tensors\"");
+    if (tensors_pos == std::string::npos) {
+        throw std::runtime_error("request header has no top-level tensor metadata");
+    }
+    std::string tensor_section = header.substr(tensors_pos);
+    std::regex tensor_re(
+        "\\{\"checksum_sha256\"\\s*:\\s*\"[^\"]*\"\\s*,\\s*"
+        "\"dtype\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*"
+        "\"name\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*"
+        "\"nbytes\"\\s*:\\s*([0-9]+)\\s*,\\s*"
+        "\"numel\"\\s*:\\s*([0-9]+)\\s*,\\s*"
+        "\"offset\"\\s*:\\s*([0-9]+)\\s*,\\s*"
+        "\"shape\"\\s*:\\s*\\[[^\\]]*\\]\\s*\\}",
+        std::regex::ECMAScript);
+    for (auto it = std::sregex_iterator(tensor_section.begin(), tensor_section.end(), tensor_re);
+         it != std::sregex_iterator(); ++it) {
+        TensorEntry entry;
+        entry.dtype = (*it)[1].str();
+        entry.name = (*it)[2].str();
+        entry.nbytes = std::stoll((*it)[3].str());
+        entry.numel = std::stoll((*it)[4].str());
+        entry.offset = std::stoll((*it)[5].str());
+        entries.push_back(entry);
+    }
+    if (entries.empty()) {
+        throw std::runtime_error("request header has no tensor metadata");
+    }
+    std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+        return a.offset < b.offset;
+    });
+    return entries;
+}
+
+LossValues parse_loss_values(const std::string& header) {
+    LossValues values;
+    std::regex loss_re("\"loss_window\"\\s*:\\s*\\{([^}]*)\\}");
+    std::smatch m;
+    if (!std::regex_search(header, m, loss_re)) {
+        return values;
+    }
+    std::string body = m[1].str();
+    std::regex item_re("\"([^\"]+)\"\\s*:\\s*(-?[0-9]+(?:\\.[0-9]+)?)");
+    for (auto it = std::sregex_iterator(body.begin(), body.end(), item_re);
+         it != std::sregex_iterator(); ++it) {
+        std::string key = (*it)[1].str();
+        double value = std::stod((*it)[2].str());
+        if (key == "loss") {
+            values.has_loss = true;
+            values.loss = value;
+        } else if (key == "loss_100") {
+            values.has_loss_100 = true;
+            values.loss_100 = value;
+        }
+    }
+    return values;
+}
+
 std::string thread_level_name(int level) {
     if (level == MPI_THREAD_SINGLE) return "MPI_THREAD_SINGLE";
     if (level == MPI_THREAD_FUNNELED) return "MPI_THREAD_FUNNELED";
@@ -206,105 +279,238 @@ std::string thread_level_name(int level) {
     return "unknown";
 }
 
-std::string rel_received_header(int generation, int rank) {
-    char buf[128];
-    std::snprintf(buf, sizeof(buf), "rank_00000/gen%06d/from_rank_%05d.header.json", generation, rank);
-    return std::string(buf);
-}
-
-std::string rel_received_bucket(int generation, int rank, int bucket) {
+std::string rel_aggregate_bucket(int generation, int bucket) {
     char buf[160];
-    std::snprintf(buf, sizeof(buf), "rank_00000/gen%06d/from_rank_%05d.bucket%05d.bin", generation, rank, bucket);
+    std::snprintf(buf, sizeof(buf), "rank_00000/gen%06d/aggregate.bucket%05d.bin", generation, bucket);
     return std::string(buf);
 }
 
-std::string build_result_json(
+std::size_t element_size_for_dtype(const std::string& dtype) {
+    if (dtype == "float32" || dtype == "float") return 4;
+    if (dtype == "float64" || dtype == "double") return 8;
+    if (dtype == "bfloat16" || dtype == "float16" || dtype == "half") return 2;
+    throw std::runtime_error("unsupported aggregate reduce dtype: " + dtype);
+}
+
+float read_float32(const char* ptr) {
+    float value = 0.0f;
+    std::memcpy(&value, ptr, sizeof(float));
+    return value;
+}
+
+double read_float64(const char* ptr) {
+    double value = 0.0;
+    std::memcpy(&value, ptr, sizeof(double));
+    return value;
+}
+
+float read_bfloat16(const char* ptr) {
+    std::uint16_t bf = 0;
+    std::memcpy(&bf, ptr, sizeof(std::uint16_t));
+    std::uint32_t bits = static_cast<std::uint32_t>(bf) << 16;
+    float value = 0.0f;
+    std::memcpy(&value, &bits, sizeof(float));
+    return value;
+}
+
+std::uint16_t float_to_bfloat16(float value) {
+    std::uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(float));
+    return static_cast<std::uint16_t>(bits >> 16);
+}
+
+void append_encoded_value(std::vector<char>& out, const std::string& dtype, double value) {
+    if (dtype == "float32" || dtype == "float") {
+        float v = static_cast<float>(value);
+        const char* p = reinterpret_cast<const char*>(&v);
+        out.insert(out.end(), p, p + sizeof(float));
+    } else if (dtype == "float64" || dtype == "double") {
+        double v = value;
+        const char* p = reinterpret_cast<const char*>(&v);
+        out.insert(out.end(), p, p + sizeof(double));
+    } else if (dtype == "bfloat16") {
+        std::uint16_t v = float_to_bfloat16(static_cast<float>(value));
+        const char* p = reinterpret_cast<const char*>(&v);
+        out.insert(out.end(), p, p + sizeof(std::uint16_t));
+    } else if (dtype == "float16" || dtype == "half") {
+        throw std::runtime_error("float16 aggregate reduce is not implemented; use float32 or bfloat16 dense deltas");
+    } else {
+        throw std::runtime_error("unsupported aggregate reduce dtype: " + dtype);
+    }
+}
+
+void append_bucket_weighted_values(
+    std::vector<double>& values,
+    const std::vector<char>& bucket,
+    std::int64_t bucket_stream_offset,
+    const std::vector<TensorEntry>& tensors,
+    double weight) {
+    for (const auto& tensor : tensors) {
+        if (tensor.offset < bucket_stream_offset || tensor.offset >= bucket_stream_offset + static_cast<std::int64_t>(bucket.size())) {
+            continue;
+        }
+        std::int64_t local_offset = tensor.offset - bucket_stream_offset;
+        if (local_offset < 0 || local_offset + tensor.nbytes > static_cast<std::int64_t>(bucket.size())) {
+            throw std::runtime_error("tensor metadata crosses aggregate bucket boundary");
+        }
+        std::size_t elem_size = element_size_for_dtype(tensor.dtype);
+        if (tensor.nbytes % static_cast<std::int64_t>(elem_size) != 0) {
+            throw std::runtime_error("tensor byte length is not divisible by dtype element size");
+        }
+        const char* base = bucket.data() + local_offset;
+        for (std::int64_t i = 0; i < tensor.nbytes; i += static_cast<std::int64_t>(elem_size)) {
+            double value = 0.0;
+            if (tensor.dtype == "float32" || tensor.dtype == "float") {
+                value = static_cast<double>(read_float32(base + i));
+            } else if (tensor.dtype == "float64" || tensor.dtype == "double") {
+                value = read_float64(base + i);
+            } else if (tensor.dtype == "bfloat16") {
+                value = static_cast<double>(read_bfloat16(base + i));
+            } else {
+                throw std::runtime_error("unsupported aggregate reduce dtype: " + tensor.dtype);
+            }
+            values.push_back(value * weight);
+        }
+    }
+}
+
+std::vector<char> encode_mean_bucket(
+    const std::vector<double>& sums,
+    std::int64_t bucket_stream_offset,
+    std::int64_t bucket_nbytes,
+    const std::vector<TensorEntry>& tensors,
+    double total_weight) {
+    double denominator = total_weight > 0.0 ? total_weight : 1.0;
+    std::vector<char> out;
+    std::size_t cursor = 0;
+    for (const auto& tensor : tensors) {
+        if (tensor.offset < bucket_stream_offset ||
+            tensor.offset >= bucket_stream_offset + bucket_nbytes) {
+            continue;
+        }
+        std::int64_t local_offset = tensor.offset - bucket_stream_offset;
+        if (local_offset < 0) {
+            continue;
+        }
+        if (static_cast<std::size_t>(local_offset) != out.size()) {
+            throw std::runtime_error("aggregate tensor metadata is not contiguous within bucket");
+        }
+        std::size_t elem_size = element_size_for_dtype(tensor.dtype);
+        std::size_t elems = static_cast<std::size_t>(tensor.nbytes) / elem_size;
+        if (cursor + elems > sums.size()) {
+            throw std::runtime_error("aggregate reduce sum buffer shorter than tensor metadata");
+        }
+        for (std::size_t i = 0; i < elems; ++i) {
+            append_encoded_value(out, tensor.dtype, sums[cursor + i] / denominator);
+        }
+        cursor += elems;
+    }
+    if (cursor != sums.size()) {
+        throw std::runtime_error("aggregate reduce sum buffer longer than tensor metadata");
+    }
+    return out;
+}
+
+std::string build_aggregate_result_json(
     const Request& req,
     int world_rank,
     int world_size,
     int provided,
-    const std::vector<PayloadPaths>& payloads,
-    const std::vector<int>& timed_out,
+    int accepted_count,
+    int stale_count,
+    int failed_count,
+    int timed_out_count,
+    int invalid_count,
+    long long accepted_tokens,
+    long long accepted_local_steps,
+    const std::vector<int>& accepted_ranks,
+    const std::vector<int>& stale_ranks,
+    const std::vector<int>& failed_ranks,
+    const std::vector<int>& timed_out_ranks,
+    const std::vector<int>& invalid_ranks,
+    const std::vector<std::string>& aggregate_bucket_paths,
+    const std::vector<long long>& per_bucket_bytes,
+    const std::vector<double>& per_bucket_reduce_s,
+    double reduce_total_s,
+    double loss_sum,
+    double loss_100_sum,
+    int loss_count,
+    int loss_100_count,
     std::int64_t bytes_sent,
-    std::int64_t bytes_received) {
+    std::int64_t aggregate_bytes) {
     std::ostringstream out;
     out << "{";
     out << "\"schema_version\":1,";
-    out << "\"transport\":\"compiled-cray-mpich-helper-p2p\",";
-    out << "\"status\":\"" << (static_cast<int>(payloads.size()) >= req.quorum ? "advanced" : "deferred") << "\",";
+    out << "\"transport\":\"compiled-cray-mpich-helper-collective-reduce\",";
+    out << "\"reducer\":\"mpi_reduce_bucketed_weighted_sum\",";
+    out << "\"strict_collective_all_launched_ranks\":true,";
+    out << "\"status\":\"" << (accepted_count >= req.quorum ? "advanced" : "deferred") << "\",";
     out << "\"rank\":" << world_rank << ",";
     out << "\"generation\":" << req.generation << ",";
     out << "\"base_generation\":" << req.base_generation << ",";
-    out << "\"accepted_ranks\":[";
-    for (std::size_t i = 0; i < payloads.size(); ++i) {
-        if (i) out << ",";
-        out << payloads[i].rank;
-    }
-    out << "],\"timed_out_ranks\":[";
-    for (std::size_t i = 0; i < timed_out.size(); ++i) {
-        if (i) out << ",";
-        out << timed_out[i];
-    }
-    out << "],\"failed_ranks\":[],\"stale_ranks\":[],";
-    out << "\"bytes_sent\":" << bytes_sent << ",";
-    out << "\"bytes_received\":" << bytes_received << ",";
+    out << "\"accepted_count\":" << accepted_count << ",";
+    out << "\"stale_count\":" << stale_count << ",";
+    out << "\"failed_count\":" << failed_count << ",";
+    out << "\"timed_out_count\":" << timed_out_count << ",";
+    out << "\"invalid_count\":" << invalid_count << ",";
+    out << "\"accepted_tokens\":" << accepted_tokens << ",";
+    out << "\"accepted_local_steps\":" << accepted_local_steps << ",";
+    auto emit_ints = [&out](const char* key, const std::vector<int>& values) {
+        out << "\"" << key << "\":[";
+        for (std::size_t i = 0; i < values.size(); ++i) {
+            if (i) out << ",";
+            out << values[i];
+        }
+        out << "]";
+    };
+    emit_ints("accepted_ranks", accepted_ranks);
+    out << ",";
+    emit_ints("stale_ranks", stale_ranks);
+    out << ",";
+    emit_ints("failed_ranks", failed_ranks);
+    out << ",";
+    emit_ints("timed_out_ranks", timed_out_ranks);
+    out << ",";
+    emit_ints("invalid_ranks", invalid_ranks);
+    out << ",\"bytes_sent\":" << bytes_sent << ",";
+    out << "\"bytes_received\":" << aggregate_bytes << ",";
+    out << "\"aggregate_update_bytes\":" << aggregate_bytes << ",";
     out << "\"helper_exit_code\":0,";
     out << "\"mpi\":{\"provided_thread_level\":\"" << thread_level_name(provided)
-        << "\",\"world_size\":" << world_size << ",\"root_rank\":0},";
-    out << "\"received_payloads\":[";
-    for (std::size_t i = 0; i < payloads.size(); ++i) {
+        << "\",\"world_size\":" << world_size << ",\"root_rank\":0"
+        << ",\"collective\":\"MPI_Reduce\"},";
+    out << "\"aggregate_payload\":{\"rank\":0,\"source_header_path\":\""
+        << json_escape(req.header_path) << "\",\"bucket_paths\":[";
+    for (std::size_t i = 0; i < aggregate_bucket_paths.size(); ++i) {
         if (i) out << ",";
-        out << "{\"rank\":" << payloads[i].rank
-            << ",\"header_path\":\"" << json_escape(payloads[i].header_path)
-            << "\",\"bucket_paths\":[";
-        for (std::size_t j = 0; j < payloads[i].bucket_paths.size(); ++j) {
-            if (j) out << ",";
-            out << "\"" << json_escape(payloads[i].bucket_paths[j]) << "\"";
-        }
-        out << "]}";
+        out << "\"" << json_escape(aggregate_bucket_paths[i]) << "\"";
     }
-    out << "]}";
+    out << "]},";
+    out << "\"received_payloads\":[],";
+    out << "\"reduce_metrics\":{\"bucket_count\":" << aggregate_bucket_paths.size()
+        << ",\"aggregate_bucket_count\":" << aggregate_bucket_paths.size()
+        << ",\"aggregate_update_bytes\":" << aggregate_bytes
+        << ",\"reduce_duration_s\":" << reduce_total_s
+        << ",\"per_bucket\":[";
+    for (std::size_t i = 0; i < aggregate_bucket_paths.size(); ++i) {
+        if (i) out << ",";
+        out << "{\"index\":" << i
+            << ",\"bytes\":" << per_bucket_bytes[i]
+            << ",\"reduce_latency_s\":" << per_bucket_reduce_s[i] << "}";
+    }
+    out << "]},";
+    out << "\"aggregate_loss_window\":{";
+    bool wrote_loss = false;
+    if (loss_count > 0 && accepted_tokens > 0) {
+        out << "\"loss\":" << (loss_sum / static_cast<double>(accepted_tokens));
+        wrote_loss = true;
+    }
+    if (loss_100_count > 0 && accepted_tokens > 0) {
+        if (wrote_loss) out << ",";
+        out << "\"loss_100\":" << (loss_100_sum / static_cast<double>(accepted_tokens));
+    }
+    out << "}}";
     return out.str();
-}
-
-PayloadPaths copy_local_payload_to_root(const fs::path& ipc_dir, const Request& req) {
-    PayloadPaths paths;
-    paths.rank = req.rank;
-    paths.header_path = rel_received_header(req.generation, req.rank);
-    write_text_atomic(ipc_dir / paths.header_path, read_text(ipc_dir / req.header_path));
-    for (const auto& bucket : req.buckets) {
-        std::string rel = rel_received_bucket(req.generation, req.rank, bucket.index);
-        write_bytes_atomic(ipc_dir / rel, read_bytes(ipc_dir / bucket.path));
-        paths.bucket_paths.push_back(rel);
-    }
-    return paths;
-}
-
-PayloadPaths payload_paths_from_request(const Request& req) {
-    PayloadPaths paths;
-    paths.rank = req.rank;
-    paths.header_path = req.header_path;
-    for (const auto& bucket : req.buckets) {
-        paths.bucket_paths.push_back(bucket.path);
-    }
-    return paths;
-}
-
-void send_result_string(int dest, const std::string& result) {
-    long long n = static_cast<long long>(result.size());
-    MPI_Send(&n, 1, MPI_LONG_LONG, dest, TAG_RESULT_SIZE, MPI_COMM_WORLD);
-    MPI_Send(result.data(), static_cast<int>(result.size()), MPI_BYTE, dest, TAG_RESULT, MPI_COMM_WORLD);
-}
-
-std::string recv_result_string(int source) {
-    long long n = 0;
-    MPI_Recv(&n, 1, MPI_LONG_LONG, source, TAG_RESULT_SIZE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    if (n < 0 || n > (1LL << 30)) {
-        throw std::runtime_error("invalid result size");
-    }
-    std::string result(static_cast<std::size_t>(n), '\0');
-    MPI_Recv(result.data(), static_cast<int>(n), MPI_BYTE, source, TAG_RESULT, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    return result;
 }
 
 void run_diagnostic(int rank, int size, int provided) {
@@ -317,7 +523,7 @@ void run_diagnostic(int rank, int size, int provided) {
                  MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     if (rank == 0) {
         std::cout << "{\"diagnostic\":\"compiled_mpich_dense_helper\","
-                  << "\"transport\":\"compiled-cray-mpich-helper-p2p\","
+                  << "\"transport\":\"compiled-cray-mpich-helper-collective-reduce\","
                   << "\"world_size\":" << size << ","
                   << "\"provided_thread_level\":\"" << thread_level_name(provided) << "\","
                   << "\"rank0_received_from\":" << recv_value << "}" << std::endl;
@@ -355,117 +561,123 @@ int run_once_impl(const fs::path& ipc_dir, const fs::path& request_path, int ran
         throw std::runtime_error("invalid quorum");
     }
 
-    std::int64_t bytes_sent = req.payload_bytes;
-    std::int64_t bytes_received = 0;
-    std::vector<PayloadPaths> payloads;
-    std::vector<int> timed_out;
     std::string result_json;
-    const char* file_gather_env = std::getenv("ASYNC_COMPILED_MPICH_FILE_GATHER");
-    bool file_gather = file_gather_env != nullptr && std::string(file_gather_env) == "1";
+    std::string header = read_text(ipc_dir / req.header_path);
+    std::vector<TensorEntry> tensors = parse_tensor_entries(header);
+    LossValues losses = parse_loss_values(header);
 
-    if (rank == 0) {
-        payloads.push_back(file_gather ? payload_paths_from_request(req) : copy_local_payload_to_root(ipc_dir, req));
-        bytes_received += req.payload_bytes;
-        trace_event(request_path, "root_local_payload_ready", rank);
-        std::vector<bool> seen(static_cast<std::size_t>(size), false);
-        seen[0] = true;
-        int seen_count = 1;
-        const auto deadline = std::chrono::steady_clock::now() +
-            std::chrono::milliseconds(static_cast<long long>(std::max(1.0, req.timeout_s) * 1000.0));
-        while (seen_count < size && std::chrono::steady_clock::now() < deadline) {
-            int ready = 0;
-            MPI_Status status;
-            MPI_Iprobe(MPI_ANY_SOURCE, TAG_PREAMBLE, MPI_COMM_WORLD, &ready, &status);
-            if (!ready) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                continue;
-            }
-            int peer = status.MPI_SOURCE;
-            long long preamble[5] = {0, 0, 0, 0, 0};
-            MPI_Recv(preamble, 5, MPI_LONG_LONG, peer, TAG_PREAMBLE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            if (peer < 0 || peer >= size || seen[static_cast<std::size_t>(peer)]) {
-                continue;
-            }
-            seen[static_cast<std::size_t>(peer)] = true;
-            ++seen_count;
-            int generation = static_cast<int>(preamble[0]);
-            int bucket_count = static_cast<int>(preamble[1]);
-            long long header_len = preamble[2];
-            long long payload_len = preamble[3];
-            int base_generation = static_cast<int>(preamble[4]);
-            if (generation != req.generation || base_generation != req.base_generation) {
-                timed_out.push_back(peer);
-                continue;
-            }
-            if (file_gather) {
-                char peer_request_name[160];
-                std::snprintf(
-                    peer_request_name,
-                    sizeof(peer_request_name),
-                    "rank_%05d/request.gen%06d.json",
-                    peer,
-                    req.generation);
-                Request peer_req = parse_request(ipc_dir / peer_request_name);
-                payloads.push_back(payload_paths_from_request(peer_req));
-                bytes_received += peer_req.payload_bytes;
-                trace_event(request_path, "root_file_gathered_peer", rank);
-                continue;
-            }
-            std::vector<char> header(static_cast<std::size_t>(header_len));
-            MPI_Recv(header.data(), static_cast<int>(header.size()), MPI_BYTE, peer, TAG_HEADER, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            PayloadPaths paths;
-            paths.rank = peer;
-            paths.header_path = rel_received_header(req.generation, peer);
-            write_bytes_atomic(ipc_dir / paths.header_path, header);
-            for (int b = 0; b < bucket_count; ++b) {
-                long long bucket_len = 0;
-                MPI_Recv(&bucket_len, 1, MPI_LONG_LONG, peer, TAG_BUCKET_SIZE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                std::vector<char> bucket(static_cast<std::size_t>(bucket_len));
-                MPI_Recv(bucket.data(), static_cast<int>(bucket.size()), MPI_BYTE, peer, TAG_BUCKET_BASE + (b % 512), MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                std::string rel = rel_received_bucket(req.generation, peer, b);
-                write_bytes_atomic(ipc_dir / rel, bucket);
-                paths.bucket_paths.push_back(rel);
-            }
-            bytes_received += payload_len;
-            payloads.push_back(paths);
+    int root_generation = req.generation;
+    int root_base_generation = req.base_generation;
+    MPI_Bcast(&root_generation, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&root_base_generation, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+    bool stale = req.generation != root_generation || req.base_generation != root_base_generation ||
+                 find_int(header, "staleness", false, 0) > 0;
+    bool failed = find_bool(header, "failed", false);
+    bool timed_out_flag = find_bool(header, "timed_out", false);
+    bool invalid = find_bool(header, "invalid", false);
+    long long tokens = find_int(header, "tokens", false, 0);
+    long long local_steps = find_int(header, "local_steps", false, 0);
+    bool accepted = !stale && !failed && !timed_out_flag && !invalid && tokens > 0;
+    double weight = accepted ? static_cast<double>(tokens) : 0.0;
+
+    int local_counts[5] = {
+        accepted ? 1 : 0,
+        stale ? 1 : 0,
+        failed ? 1 : 0,
+        timed_out_flag ? 1 : 0,
+        invalid ? 1 : 0,
+    };
+    int global_counts[5] = {0, 0, 0, 0, 0};
+    MPI_Allreduce(local_counts, global_counts, 5, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+
+    long long local_sums[3] = {
+        accepted ? tokens : 0,
+        accepted ? local_steps : 0,
+        req.payload_bytes,
+    };
+    long long global_sums[3] = {0, 0, 0};
+    MPI_Allreduce(local_sums, global_sums, 3, MPI_LONG_LONG, MPI_SUM, MPI_COMM_WORLD);
+
+    double local_loss[4] = {
+        (accepted && losses.has_loss) ? losses.loss * static_cast<double>(tokens) : 0.0,
+        (accepted && losses.has_loss_100) ? losses.loss_100 * static_cast<double>(tokens) : 0.0,
+        (accepted && losses.has_loss) ? 1.0 : 0.0,
+        (accepted && losses.has_loss_100) ? 1.0 : 0.0,
+    };
+    double global_loss[4] = {0.0, 0.0, 0.0, 0.0};
+    MPI_Allreduce(local_loss, global_loss, 4, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+
+    int rank_lists_local[5] = {
+        accepted ? rank : -1,
+        stale ? rank : -1,
+        failed ? rank : -1,
+        timed_out_flag ? rank : -1,
+        invalid ? rank : -1,
+    };
+    std::vector<int> gathered(static_cast<std::size_t>(size * 5), -1);
+    MPI_Gather(rank_lists_local, 5, MPI_INT, gathered.data(), 5, MPI_INT, 0, MPI_COMM_WORLD);
+
+    std::vector<std::string> aggregate_bucket_paths;
+    std::vector<long long> per_bucket_bytes;
+    std::vector<double> per_bucket_reduce_s;
+    std::int64_t aggregate_bytes = 0;
+    std::int64_t stream_offset = 0;
+    auto reduce_start = std::chrono::steady_clock::now();
+    for (const auto& bucket_desc : req.buckets) {
+        auto bucket_start = std::chrono::steady_clock::now();
+        std::vector<char> bucket = read_bytes(ipc_dir / bucket_desc.path);
+        if (static_cast<std::int64_t>(bucket.size()) != bucket_desc.nbytes) {
+            throw std::runtime_error("bucket length does not match request descriptor");
         }
-        for (int peer = 0; peer < size; ++peer) {
-            if (!seen[static_cast<std::size_t>(peer)]) {
-                timed_out.push_back(peer);
-            }
+        std::vector<double> local_values;
+        append_bucket_weighted_values(local_values, bucket, stream_offset, tensors, weight);
+        std::vector<double> reduced(rank == 0 ? local_values.size() : local_values.size(), 0.0);
+        MPI_Reduce(local_values.data(), reduced.data(), static_cast<int>(local_values.size()),
+                   MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+        if (rank == 0) {
+            std::vector<char> aggregate = encode_mean_bucket(
+                reduced, stream_offset, bucket_desc.nbytes, tensors, static_cast<double>(global_sums[0]));
+            std::string rel = rel_aggregate_bucket(req.generation, bucket_desc.index);
+            write_bytes_atomic(ipc_dir / rel, aggregate);
+            aggregate_bucket_paths.push_back(rel);
+            per_bucket_bytes.push_back(static_cast<long long>(aggregate.size()));
+            aggregate_bytes += static_cast<std::int64_t>(aggregate.size());
+            auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - bucket_start).count();
+            per_bucket_reduce_s.push_back(elapsed);
         }
-        result_json = build_result_json(req, rank, size, provided, payloads, timed_out, bytes_sent, bytes_received);
-        for (int peer = 1; peer < size; ++peer) {
-            if (seen[static_cast<std::size_t>(peer)]) {
-                send_result_string(peer, result_json);
-            }
-        }
-    } else {
-        std::string header = read_text(ipc_dir / req.header_path);
-        long long preamble[5] = {
-            req.generation,
-            static_cast<long long>(req.buckets.size()),
-            static_cast<long long>(header.size()),
-            req.payload_bytes,
-            req.base_generation,
-        };
-        MPI_Send(preamble, 5, MPI_LONG_LONG, 0, TAG_PREAMBLE, MPI_COMM_WORLD);
-        if (file_gather) {
-            trace_event(request_path, "file_gather_preamble_sent", rank);
-            result_json = recv_result_string(0);
-        } else {
-            MPI_Send(header.data(), static_cast<int>(header.size()), MPI_BYTE, 0, TAG_HEADER, MPI_COMM_WORLD);
-            for (const auto& bucket_desc : req.buckets) {
-                std::vector<char> bucket = read_bytes(ipc_dir / bucket_desc.path);
-                long long bucket_len = static_cast<long long>(bucket.size());
-                MPI_Send(&bucket_len, 1, MPI_LONG_LONG, 0, TAG_BUCKET_SIZE, MPI_COMM_WORLD);
-                MPI_Send(bucket.data(), static_cast<int>(bucket.size()), MPI_BYTE, 0,
-                         TAG_BUCKET_BASE + (bucket_desc.index % 512), MPI_COMM_WORLD);
-            }
-            trace_event(request_path, "payload_sent", rank);
-            result_json = recv_result_string(0);
-        }
+        stream_offset += bucket_desc.nbytes;
     }
+    double reduce_total_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - reduce_start).count();
+    if (rank == 0) {
+        auto collect_ranks = [&gathered, size](int column) {
+            std::vector<int> ranks;
+            for (int i = 0; i < size; ++i) {
+                int value = gathered[static_cast<std::size_t>(i * 5 + column)];
+                if (value >= 0) ranks.push_back(value);
+            }
+            return ranks;
+        };
+        result_json = build_aggregate_result_json(
+            req, rank, size, provided,
+            global_counts[0], global_counts[1], global_counts[2], global_counts[3], global_counts[4],
+            global_sums[0], global_sums[1],
+            collect_ranks(0), collect_ranks(1), collect_ranks(2), collect_ranks(3), collect_ranks(4),
+            aggregate_bucket_paths, per_bucket_bytes, per_bucket_reduce_s, reduce_total_s,
+            global_loss[0], global_loss[1], static_cast<int>(global_loss[2]), static_cast<int>(global_loss[3]),
+            global_sums[2], aggregate_bytes);
+    }
+
+    long long result_len = rank == 0 ? static_cast<long long>(result_json.size()) : 0;
+    MPI_Bcast(&result_len, 1, MPI_LONG_LONG, 0, MPI_COMM_WORLD);
+    if (result_len < 0 || result_len > (1LL << 30)) {
+        throw std::runtime_error("invalid aggregate result size");
+    }
+    if (rank != 0) {
+        result_json.assign(static_cast<std::size_t>(result_len), '\0');
+    }
+    MPI_Bcast(result_json.data(), static_cast<int>(result_len), MPI_BYTE, 0, MPI_COMM_WORLD);
+    trace_event(request_path, "collective_reduce_complete", rank);
 
     fs::path result_path = request_path.parent_path();
     char name[64];

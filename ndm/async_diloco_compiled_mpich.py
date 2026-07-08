@@ -8,7 +8,8 @@ multinode data plane does not import ``mpi4py``.
 from __future__ import annotations
 
 import ctypes
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import hashlib
 import json
 from pathlib import Path
 import time
@@ -16,17 +17,20 @@ from typing import Any, Mapping, Sequence
 
 import torch
 
-from ndm.async_diloco import AsyncDiLoCoUpdate, stable_json_dumps
+from ndm.async_diloco import AsyncDiLoCoUpdate, quorum_merge, stable_json_dumps, state_num_bytes
 from ndm.async_diloco_mpi import (
     DenseBucket,
+    DenseTransportMetrics,
     DenseTransportQuorumConfig,
+    DenseTransportQuorumResult,
     DenseUpdateEnvelope,
     collect_dense_quorum_from_envelopes,
     pack_dense_update,
+    unpack_dense_update,
 )
 
 
-COMPILED_MPICH_TRANSPORT = "compiled-cray-mpich-helper-p2p"
+COMPILED_MPICH_TRANSPORT = "compiled-cray-mpich-helper-collective-reduce"
 COMPILED_MPICH_REQUEST_SCHEMA_VERSION = 1
 
 
@@ -105,20 +109,29 @@ def run_compiled_mpich_dense_quorum(
     if int(rank) != int(helper.root_rank):
         return None
 
-    envelopes = load_received_payloads(ipc_dir, helper_result.get("received_payloads") or [])
-    quorum_result = collect_dense_quorum_from_envelopes(
-        base_state,
-        envelopes,
-        config=DenseTransportQuorumConfig(
-            run_id=run_id,
-            generation=generation,
-            base_generation=local_update.base_generation,
-            requested_ranks=requested_ranks,
-            quorum=quorum,
-            timeout_s=helper.timeout_s,
-        ),
-        timed_out_ranks=tuple(int(rank) for rank in helper_result.get("timed_out_ranks") or ()),
+    quorum_config = DenseTransportQuorumConfig(
+        run_id=run_id,
+        generation=generation,
+        base_generation=local_update.base_generation,
+        requested_ranks=requested_ranks,
+        quorum=quorum,
+        timeout_s=helper.timeout_s,
     )
+    if helper_result.get("aggregate_payload"):
+        quorum_result = collect_compiled_mpich_aggregate_result(
+            base_state,
+            helper_result=helper_result,
+            ipc_dir=ipc_dir,
+            config=quorum_config,
+        )
+    else:
+        envelopes = load_received_payloads(ipc_dir, helper_result.get("received_payloads") or [])
+        quorum_result = collect_dense_quorum_from_envelopes(
+            base_state,
+            envelopes,
+            config=quorum_config,
+            timed_out_ranks=tuple(int(rank) for rank in helper_result.get("timed_out_ranks") or ()),
+        )
     payload = quorum_result.to_payload()
     payload["transport"]["name"] = COMPILED_MPICH_TRANSPORT
     payload["transport"]["helper_result"] = helper_result
@@ -231,6 +244,201 @@ def load_received_payloads(
     return tuple(envelopes)
 
 
+def load_aggregate_payload(
+    ipc_dir: str | Path,
+    aggregate_payload: Mapping[str, Any],
+    helper_result: Mapping[str, Any],
+) -> DenseUpdateEnvelope:
+    """Load the single helper-materialized aggregate update envelope.
+
+    The C++ helper intentionally writes only reduced aggregate bucket bytes on
+    root.  It reuses the deterministic local bucket layout but does not compute
+    SHA256 checksums, so the Python side rebuilds checksum metadata before using
+    the normal dense unpacker.
+    """
+
+    root = Path(ipc_dir)
+    header = json.loads((root / str(aggregate_payload["source_header_path"])).read_text(encoding="utf-8"))
+    bucket_paths = [str(path) for path in aggregate_payload.get("bucket_paths") or ()]
+    source_buckets = list(header.get("buckets") or ())
+    if len(bucket_paths) != len(source_buckets):
+        raise ValueError("compiled MPICH aggregate bucket count mismatch")
+
+    buckets: list[DenseBucket] = []
+    rebuilt_header = {
+        **header,
+        "transport": COMPILED_MPICH_TRANSPORT,
+        "rank": int(aggregate_payload.get("rank", 0)),
+        "worker_id": "compiled_mpich_aggregate",
+        "tokens": int(helper_result.get("accepted_tokens", 0)),
+        "local_steps": int(helper_result.get("accepted_local_steps", 0)),
+        "loss_window": {
+            str(k): float(v)
+            for k, v in dict(helper_result.get("aggregate_loss_window") or {}).items()
+        },
+        "failed": False,
+        "timed_out": False,
+        "invalid": False,
+        "staleness": 0,
+    }
+    rebuilt_bucket_headers: list[dict[str, Any]] = []
+    rebuilt_tensor_headers: list[dict[str, Any]] = []
+    payload_parts: list[bytes] = []
+    for idx, rel in enumerate(bucket_paths):
+        payload = (root / rel).read_bytes()
+        source_bucket = dict(source_buckets[idx])
+        tensor_entries: list[dict[str, Any]] = []
+        for entry in source_bucket.get("tensors") or ():
+            rebuilt_entry = dict(entry)
+            local_start = int(rebuilt_entry["offset"]) - int(source_bucket["offset"])
+            local_end = local_start + int(rebuilt_entry["nbytes"])
+            raw = payload[local_start:local_end]
+            if len(raw) != int(rebuilt_entry["nbytes"]):
+                raise ValueError("compiled MPICH aggregate tensor metadata crosses bucket boundary")
+            rebuilt_entry["checksum_sha256"] = hashlib.sha256(raw).hexdigest()
+            tensor_entries.append(rebuilt_entry)
+            rebuilt_tensor_headers.append(dict(rebuilt_entry))
+        bucket_checksum = hashlib.sha256(payload).hexdigest()
+        rebuilt_bucket = {
+            **source_bucket,
+            "nbytes": len(payload),
+            "checksum_sha256": bucket_checksum,
+            "tensors": tensor_entries,
+        }
+        rebuilt_bucket_headers.append(rebuilt_bucket)
+        payload_parts.append(payload)
+        buckets.append(DenseBucket(
+            index=int(rebuilt_bucket["index"]),
+            offset=int(rebuilt_bucket["offset"]),
+            payload=payload,
+            checksum_sha256=bucket_checksum,
+            tensor_entries=tuple(tensor_entries),
+        ))
+    rebuilt_header["payload_bytes"] = int(sum(len(part) for part in payload_parts))
+    rebuilt_header["bucket_count"] = len(buckets)
+    rebuilt_header["buckets"] = rebuilt_bucket_headers
+    rebuilt_header["tensors"] = rebuilt_tensor_headers
+    rebuilt_header["payload_checksum_sha256"] = hashlib.sha256(b"".join(payload_parts)).hexdigest()
+    return DenseUpdateEnvelope(header=rebuilt_header, buckets=tuple(buckets))
+
+
+def collect_compiled_mpich_aggregate_result(
+    base_state: Mapping[str, torch.Tensor],
+    *,
+    helper_result: Mapping[str, Any],
+    ipc_dir: str | Path,
+    config: DenseTransportQuorumConfig,
+) -> DenseTransportQuorumResult:
+    """Apply one reduced aggregate update while preserving quorum metrics."""
+
+    threshold = config.quorum_threshold()
+    accepted_count = int(helper_result.get("accepted_count", len(helper_result.get("accepted_ranks") or ())))
+    stale_count = int(helper_result.get("stale_count", len(helper_result.get("stale_ranks") or ())))
+    failed_count = int(helper_result.get("failed_count", len(helper_result.get("failed_ranks") or ())))
+    timed_out_count = int(helper_result.get("timed_out_count", len(helper_result.get("timed_out_ranks") or ())))
+    invalid_count = int(helper_result.get("invalid_count", len(helper_result.get("invalid_ranks") or ())))
+    aggregate_bytes = int(helper_result.get("aggregate_update_bytes", helper_result.get("bytes_received", 0)))
+    reduce_metrics = dict(helper_result.get("reduce_metrics") or {})
+    reduce_duration_s = float(reduce_metrics.get("reduce_duration_s", 0.0))
+    bucket_timings = {
+        f"bucket_{int(item.get('index', idx)):05d}": float(item.get("reduce_latency_s", 0.0))
+        for idx, item in enumerate(reduce_metrics.get("per_bucket") or ())
+    }
+    transport_metrics = DenseTransportMetrics(
+        quorum_size=accepted_count,
+        timed_out_ranks=tuple(int(rank) for rank in helper_result.get("timed_out_ranks") or ()),
+        stale_ranks=tuple(int(rank) for rank in helper_result.get("stale_ranks") or ()),
+        failed_ranks=tuple(int(rank) for rank in helper_result.get("failed_ranks") or ()),
+        bytes_sent=int(helper_result.get("bytes_sent", 0)),
+        bytes_received=aggregate_bytes,
+        bucket_timings_s=bucket_timings,
+        merge_latency_s=0.0,
+    )
+
+    aggregate_payload = helper_result.get("aggregate_payload")
+    if accepted_count < threshold or not aggregate_payload:
+        merge_result = quorum_merge(
+            base_state,
+            (),
+            run_id=config.run_id,
+            generation=config.generation,
+            requested_workers=config.requested_ranks,
+            quorum_threshold=threshold,
+            generation_duration_s=reduce_duration_s,
+        )
+        metrics = replace(
+            merge_result.metrics,
+            participating_workers=accepted_count + stale_count + failed_count + timed_out_count + invalid_count,
+            stale_updates=stale_count,
+            timed_out_updates=timed_out_count,
+            failed_updates=failed_count,
+            invalid_updates=invalid_count,
+            update_bytes={
+                **dict(merge_result.metrics.update_bytes),
+                "mpi_reduce_payload_sent": int(helper_result.get("bytes_sent", 0)),
+                "mpi_reduce_aggregate": aggregate_bytes,
+            },
+        )
+        return DenseTransportQuorumResult(
+            state=merge_result.state,
+            accepted_updates=(),
+            stale_updates=(),
+            metrics=metrics,
+            transport_metrics=transport_metrics,
+        )
+
+    aggregate_envelope = load_aggregate_payload(ipc_dir, aggregate_payload, helper_result)
+    aggregate_update = unpack_dense_update(aggregate_envelope)
+    merge_start = time.monotonic()
+    merge_result = quorum_merge(
+        base_state,
+        (aggregate_update,),
+        run_id=config.run_id,
+        generation=config.generation,
+        requested_workers=config.requested_ranks,
+        quorum_threshold=1,
+        eta_outer=config.eta_outer,
+        weight_by="tokens",
+        generation_duration_s=reduce_duration_s,
+    )
+    merge_latency_s = max(0.0, time.monotonic() - merge_start)
+    total_tokens = int(helper_result.get("accepted_tokens", aggregate_update.tokens))
+    tokens_per_sec = total_tokens / reduce_duration_s if reduce_duration_s > 0.0 else 0.0
+    metrics = replace(
+        merge_result.metrics,
+        requested_workers=config.requested_ranks,
+        participating_workers=accepted_count + stale_count + failed_count + timed_out_count + invalid_count,
+        quorum_threshold=threshold,
+        quorum_size=accepted_count,
+        accepted_updates=accepted_count,
+        stale_updates=stale_count,
+        timed_out_updates=timed_out_count,
+        failed_updates=failed_count,
+        invalid_updates=invalid_count,
+        generation_duration_s=reduce_duration_s,
+        merge_duration_s=merge_latency_s,
+        tokens_per_sec=tokens_per_sec,
+        tokens_per_generation=total_tokens,
+        update_bytes={
+            **dict(merge_result.metrics.update_bytes),
+            "accepted_dense_delta": state_num_bytes(aggregate_update.delta),
+            "mpi_reduce_payload_sent": int(helper_result.get("bytes_sent", 0)),
+            "mpi_reduce_aggregate": aggregate_bytes,
+        },
+        loss_moving_average=dict(aggregate_update.loss_moving_average),
+        latest_advanced=False,
+        quorum_status="advanced",
+    )
+    transport_metrics = replace(transport_metrics, merge_latency_s=merge_latency_s)
+    return DenseTransportQuorumResult(
+        state=merge_result.state,
+        accepted_updates=(aggregate_update,),
+        stale_updates=(),
+        metrics=metrics,
+        transport_metrics=transport_metrics,
+    )
+
+
 def _atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{time.monotonic_ns()}.tmp")
@@ -241,6 +449,8 @@ def _atomic_write_text(path: Path, text: str) -> None:
 __all__ = [
     "COMPILED_MPICH_TRANSPORT",
     "CompiledMpichHelperConfig",
+    "collect_compiled_mpich_aggregate_result",
+    "load_aggregate_payload",
     "load_received_payloads",
     "resolve_compiled_mpich_helper_library",
     "run_compiled_mpich_dense_quorum",
