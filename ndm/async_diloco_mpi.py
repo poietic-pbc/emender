@@ -23,6 +23,7 @@ import torch
 from ndm.async_diloco import (
     AsyncDiLoCoGenerationMetrics,
     AsyncDiLoCoUpdate,
+    RESILIENT_QUORUM_DILOCO_MODE,
     build_metrics_summary,
     quorum_merge,
     stable_json_dumps,
@@ -68,6 +69,7 @@ class DenseTransportQuorumConfig:
     stale_policy: str = "reject"
     weight_by: str = "tokens"
     eta_outer: float = 1.0
+    quorum_mode: str = RESILIENT_QUORUM_DILOCO_MODE
 
     def quorum_threshold(self) -> int:
         if self.requested_ranks <= 0:
@@ -380,6 +382,7 @@ def collect_dense_quorum_from_envelopes(
         eta_outer=config.eta_outer,
         weight_by=config.weight_by,
         generation_duration_s=max(0.0, time.monotonic() - start_s),
+        mode=config.quorum_mode,
         checkpoint_state_id=f"{config.run_id}:gen{int(config.generation):06d}",
         missing_worker_ids=tuple(f"rank-{rank}" for rank in sorted(missing)),
     )
