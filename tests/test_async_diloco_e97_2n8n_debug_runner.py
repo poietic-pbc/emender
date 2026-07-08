@@ -158,6 +158,10 @@ def test_async_diloco_launch_wrappers_expose_required_env_knobs():
         "E97_CHECKPOINT=${E97_CHECKPOINT:-$SEED_LATEST_PATH}",
         "TIKTOKEN_CACHE_DIR=${TIKTOKEN_CACHE_DIR:-/lustre/orion/bif148/proj-shared/tiktoken_cache}",
         "DEFAULT_E97_SEED_LATEST=/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt",
+        'DEFAULT_ENV_PREFIX="${REPO}/.envs/olcf-rocm711-torch210-py312"',
+        "DEFAULT_ENV_PREFIX=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312",
+        'export EMENDER_CONDA_ENV=${EMENDER_CONDA_ENV:-$ENV_PREFIX}',
+        "frontier_assert_emender_conda_env",
         "TRAINING_TARGET=${TRAINING_TARGET:-E97_1.3B_step1065000_async_diloco_256n12h_20260706}",
         "SCALEOUT_VARIANT=${SCALEOUT_VARIANT:-E97_1.3B_step1065000_async_quorum_b4_k40_256n12h}",
         "OUTPUT_ROOT=${OUTPUT_ROOT:-",
@@ -191,6 +195,10 @@ def test_async_diloco_launch_wrappers_expose_required_env_knobs():
         "ASYNC_DENSE_TRANSPORT_64N_GATE_JSON=${ASYNC_DENSE_TRANSPORT_64N_GATE_JSON:-}",
         "ASYNC_COMPILED_MPICH_64N_GATE_JSON=${ASYNC_COMPILED_MPICH_64N_GATE_JSON:-}",
         "ASYNC_COMPILED_MPICH_HELPER_BIN=${ASYNC_COMPILED_MPICH_HELPER_BIN:-${ARTIFACT_DIR}/compiled_mpich_dense_helper}",
+        'ASYNC_COMPILED_MPICH_IPC_BASE=${ASYNC_COMPILED_MPICH_IPC_BASE:-${TMPDIR:-/tmp}/emender-${USER:-unknown}/async_diloco_e97}',
+        'ASYNC_COMPILED_MPICH_IPC_DIR=${ASYNC_COMPILED_MPICH_IPC_DIR:-${ASYNC_COMPILED_MPICH_IPC_BASE}/${SLURM_JOB_ID:-manual}-${RUN_STAMP}/ipc}',
+        'ASYNC_COMPILED_MPICH_TRACE_DIR=${ASYNC_COMPILED_MPICH_TRACE_DIR:-${ARTIFACT_DIR}/compiled_mpich_trace}',
+        '! -r "${ASYNC_COMPILED_MPICH_HELPER_BIN}.so"',
         "export CRAY_MPI4PY_SITE=${CRAY_MPI4PY_SITE:-/opt/cray/pe/python/3.10.10/lib/python3.10/site-packages}",
     ):
         assert token in launch_text
@@ -210,6 +218,7 @@ def test_production_async_launcher_records_artifacts_and_real_command_branch():
     assert 'echo "python_bin=$PYTHON_BIN"' in launch_text
     assert 'echo "async_actual_multinode_mpi_dense_quorum=$ASYNC_ACTUAL_MULTINODE_MPI_DENSE_QUORUM"' in launch_text
     assert 'echo "async_actual_multinode_compiled_mpich_quorum=$ASYNC_ACTUAL_MULTINODE_COMPILED_MPICH_QUORUM"' in launch_text
+    assert 'echo "async_compiled_mpich_trace_dir=$ASYNC_COMPILED_MPICH_TRACE_DIR"' in launch_text
     assert 'ASYNC_LAUNCH_USES_SRUN=1' in launch_text
     assert 'echo "async_launch_uses_srun=$ASYNC_LAUNCH_USES_SRUN"' in launch_text
     assert 'echo "presubmit_status=$PRESUBMIT_STATUS"' in launch_text

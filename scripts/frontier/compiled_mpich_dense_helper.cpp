@@ -63,6 +63,28 @@ std::string read_text(const fs::path& path) {
     return ss.str();
 }
 
+void write_text_atomic(const fs::path& path, const std::string& text);
+
+void trace_event(const fs::path& request_path, const std::string& event, int rank) {
+    const char* trace_dir = std::getenv("ASYNC_COMPILED_MPICH_TRACE_DIR");
+    if (trace_dir == nullptr || std::string(trace_dir).empty()) {
+        return;
+    }
+    try {
+        fs::create_directories(trace_dir);
+        const char* procid = std::getenv("SLURM_PROCID");
+        std::ostringstream name;
+        name << "rank_" << (procid == nullptr ? std::to_string(rank) : std::string(procid))
+             << "." << event << ".txt";
+        std::ostringstream body;
+        body << "event=" << event << "\n";
+        body << "rank=" << rank << "\n";
+        body << "request_path=" << request_path.string() << "\n";
+        write_text_atomic(fs::path(trace_dir) / name.str(), body.str());
+    } catch (...) {
+    }
+}
+
 std::vector<char> read_bytes(const fs::path& path) {
     std::ifstream in(path, std::ios::binary);
     if (!in) {
@@ -155,16 +177,19 @@ Request parse_request(const fs::path& request_path) {
     req.header_path = find_string(text, "header_path");
 
     std::regex bucket_re(
-        "\"index\"\\s*:\\s*([0-9]+).*?\"nbytes\"\\s*:\\s*([0-9]+).*?"
-        "\"checksum_sha256\"\\s*:\\s*\"([^\"]*)\".*?\"path\"\\s*:\\s*\"([^\"]*)\"",
+        "\\{\"checksum_sha256\"\\s*:\\s*\"([^\"]*)\"\\s*,\\s*"
+        "\"index\"\\s*:\\s*([0-9]+)\\s*,\\s*"
+        "\"ipc\"\\s*:\\s*\\{\\s*\"kind\"\\s*:\\s*\"file\"\\s*,\\s*"
+        "\"offset\"\\s*:\\s*0\\s*,\\s*\"path\"\\s*:\\s*\"([^\"]*)\"\\s*\\}\\s*,\\s*"
+        "\"nbytes\"\\s*:\\s*([0-9]+)\\s*\\}",
         std::regex::ECMAScript);
     for (auto it = std::sregex_iterator(text.begin(), text.end(), bucket_re);
          it != std::sregex_iterator(); ++it) {
         BucketDescriptor bucket;
-        bucket.index = std::stoi((*it)[1].str());
-        bucket.nbytes = std::stoll((*it)[2].str());
-        bucket.checksum = (*it)[3].str();
-        bucket.path = (*it)[4].str();
+        bucket.checksum = (*it)[1].str();
+        bucket.index = std::stoi((*it)[2].str());
+        bucket.path = (*it)[3].str();
+        bucket.nbytes = std::stoll((*it)[4].str());
         req.buckets.push_back(bucket);
     }
     std::sort(req.buckets.begin(), req.buckets.end(), [](const auto& a, const auto& b) {
@@ -255,6 +280,16 @@ PayloadPaths copy_local_payload_to_root(const fs::path& ipc_dir, const Request& 
     return paths;
 }
 
+PayloadPaths payload_paths_from_request(const Request& req) {
+    PayloadPaths paths;
+    paths.rank = req.rank;
+    paths.header_path = req.header_path;
+    for (const auto& bucket : req.buckets) {
+        paths.bucket_paths.push_back(bucket.path);
+    }
+    return paths;
+}
+
 void send_result_string(int dest, const std::string& result) {
     long long n = static_cast<long long>(result.size());
     MPI_Send(&n, 1, MPI_LONG_LONG, dest, TAG_RESULT_SIZE, MPI_COMM_WORLD);
@@ -289,13 +324,208 @@ void run_diagnostic(int rank, int size, int provided) {
     }
 }
 
+int ensure_mpi_initialized(int argc, char** argv, int* provided, bool* initialized_here) {
+    int initialized = 0;
+    MPI_Initialized(&initialized);
+    if (initialized) {
+        *initialized_here = false;
+        int queried = -1;
+        MPI_Query_thread(&queried);
+        *provided = queried;
+        return MPI_SUCCESS;
+    }
+    *initialized_here = true;
+    return MPI_Init_thread(&argc, &argv, REQUIRED_THREAD_LEVEL, provided);
+}
+
+int run_once_impl(const fs::path& ipc_dir, const fs::path& request_path, int rank, int size, int provided) {
+    trace_event(request_path, "run_once_enter", rank);
+    if (ipc_dir.empty() || request_path.empty()) {
+        throw std::runtime_error("--ipc-dir and --request are required");
+    }
+    Request req = parse_request(request_path);
+    trace_event(request_path, "request_parsed", rank);
+    if (req.world_size != size) {
+        throw std::runtime_error("request world_size does not match MPI world size");
+    }
+    if (req.rank != rank) {
+        throw std::runtime_error("request rank does not match MPI rank");
+    }
+    if (req.quorum <= 0 || req.quorum > req.world_size) {
+        throw std::runtime_error("invalid quorum");
+    }
+
+    std::int64_t bytes_sent = req.payload_bytes;
+    std::int64_t bytes_received = 0;
+    std::vector<PayloadPaths> payloads;
+    std::vector<int> timed_out;
+    std::string result_json;
+    const char* file_gather_env = std::getenv("ASYNC_COMPILED_MPICH_FILE_GATHER");
+    bool file_gather = file_gather_env != nullptr && std::string(file_gather_env) == "1";
+
+    if (rank == 0) {
+        payloads.push_back(file_gather ? payload_paths_from_request(req) : copy_local_payload_to_root(ipc_dir, req));
+        bytes_received += req.payload_bytes;
+        trace_event(request_path, "root_local_payload_ready", rank);
+        std::vector<bool> seen(static_cast<std::size_t>(size), false);
+        seen[0] = true;
+        int seen_count = 1;
+        const auto deadline = std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(static_cast<long long>(std::max(1.0, req.timeout_s) * 1000.0));
+        while (seen_count < size && std::chrono::steady_clock::now() < deadline) {
+            int ready = 0;
+            MPI_Status status;
+            MPI_Iprobe(MPI_ANY_SOURCE, TAG_PREAMBLE, MPI_COMM_WORLD, &ready, &status);
+            if (!ready) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+            int peer = status.MPI_SOURCE;
+            long long preamble[5] = {0, 0, 0, 0, 0};
+            MPI_Recv(preamble, 5, MPI_LONG_LONG, peer, TAG_PREAMBLE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            if (peer < 0 || peer >= size || seen[static_cast<std::size_t>(peer)]) {
+                continue;
+            }
+            seen[static_cast<std::size_t>(peer)] = true;
+            ++seen_count;
+            int generation = static_cast<int>(preamble[0]);
+            int bucket_count = static_cast<int>(preamble[1]);
+            long long header_len = preamble[2];
+            long long payload_len = preamble[3];
+            int base_generation = static_cast<int>(preamble[4]);
+            if (generation != req.generation || base_generation != req.base_generation) {
+                timed_out.push_back(peer);
+                continue;
+            }
+            if (file_gather) {
+                char peer_request_name[160];
+                std::snprintf(
+                    peer_request_name,
+                    sizeof(peer_request_name),
+                    "rank_%05d/request.gen%06d.json",
+                    peer,
+                    req.generation);
+                Request peer_req = parse_request(ipc_dir / peer_request_name);
+                payloads.push_back(payload_paths_from_request(peer_req));
+                bytes_received += peer_req.payload_bytes;
+                trace_event(request_path, "root_file_gathered_peer", rank);
+                continue;
+            }
+            std::vector<char> header(static_cast<std::size_t>(header_len));
+            MPI_Recv(header.data(), static_cast<int>(header.size()), MPI_BYTE, peer, TAG_HEADER, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            PayloadPaths paths;
+            paths.rank = peer;
+            paths.header_path = rel_received_header(req.generation, peer);
+            write_bytes_atomic(ipc_dir / paths.header_path, header);
+            for (int b = 0; b < bucket_count; ++b) {
+                long long bucket_len = 0;
+                MPI_Recv(&bucket_len, 1, MPI_LONG_LONG, peer, TAG_BUCKET_SIZE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                std::vector<char> bucket(static_cast<std::size_t>(bucket_len));
+                MPI_Recv(bucket.data(), static_cast<int>(bucket.size()), MPI_BYTE, peer, TAG_BUCKET_BASE + (b % 512), MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                std::string rel = rel_received_bucket(req.generation, peer, b);
+                write_bytes_atomic(ipc_dir / rel, bucket);
+                paths.bucket_paths.push_back(rel);
+            }
+            bytes_received += payload_len;
+            payloads.push_back(paths);
+        }
+        for (int peer = 0; peer < size; ++peer) {
+            if (!seen[static_cast<std::size_t>(peer)]) {
+                timed_out.push_back(peer);
+            }
+        }
+        result_json = build_result_json(req, rank, size, provided, payloads, timed_out, bytes_sent, bytes_received);
+        for (int peer = 1; peer < size; ++peer) {
+            if (seen[static_cast<std::size_t>(peer)]) {
+                send_result_string(peer, result_json);
+            }
+        }
+    } else {
+        std::string header = read_text(ipc_dir / req.header_path);
+        long long preamble[5] = {
+            req.generation,
+            static_cast<long long>(req.buckets.size()),
+            static_cast<long long>(header.size()),
+            req.payload_bytes,
+            req.base_generation,
+        };
+        MPI_Send(preamble, 5, MPI_LONG_LONG, 0, TAG_PREAMBLE, MPI_COMM_WORLD);
+        if (file_gather) {
+            trace_event(request_path, "file_gather_preamble_sent", rank);
+            result_json = recv_result_string(0);
+        } else {
+            MPI_Send(header.data(), static_cast<int>(header.size()), MPI_BYTE, 0, TAG_HEADER, MPI_COMM_WORLD);
+            for (const auto& bucket_desc : req.buckets) {
+                std::vector<char> bucket = read_bytes(ipc_dir / bucket_desc.path);
+                long long bucket_len = static_cast<long long>(bucket.size());
+                MPI_Send(&bucket_len, 1, MPI_LONG_LONG, 0, TAG_BUCKET_SIZE, MPI_COMM_WORLD);
+                MPI_Send(bucket.data(), static_cast<int>(bucket.size()), MPI_BYTE, 0,
+                         TAG_BUCKET_BASE + (bucket_desc.index % 512), MPI_COMM_WORLD);
+            }
+            trace_event(request_path, "payload_sent", rank);
+            result_json = recv_result_string(0);
+        }
+    }
+
+    fs::path result_path = request_path.parent_path();
+    char name[64];
+    std::snprintf(name, sizeof(name), "result.gen%06d.json", req.generation);
+    result_path /= name;
+    write_text_atomic(result_path, result_json + "\n");
+    trace_event(request_path, "result_written", rank);
+    return 0;
+}
+
 }  // namespace
+
+extern "C" int compiled_mpich_dense_helper_run_once(const char* ipc_dir_c, const char* request_path_c) {
+    fs::path request_path = request_path_c == nullptr ? fs::path() : fs::path(request_path_c);
+    trace_event(request_path, "bridge_enter", -1);
+    int provided = -1;
+    bool initialized_here = false;
+    char program[] = "compiled_mpich_dense_helper_bridge";
+    char* argv[] = {program, nullptr};
+    int argc = 1;
+    int rc = ensure_mpi_initialized(argc, argv, &provided, &initialized_here);
+    if (rc != MPI_SUCCESS) {
+        std::cerr << "MPI_Init_thread failed rc=" << rc << std::endl;
+        return 10;
+    }
+
+    int rank = -1;
+    int size = -1;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    trace_event(request_path, "mpi_initialized", rank);
+
+    try {
+        if (provided < REQUIRED_THREAD_LEVEL) {
+            throw std::runtime_error("MPI thread level below MPI_THREAD_SERIALIZED");
+        }
+        if (ipc_dir_c == nullptr || request_path_c == nullptr) {
+            throw std::runtime_error("ipc_dir and request_path are required");
+        }
+        return run_once_impl(fs::path(ipc_dir_c), request_path, rank, size, provided);
+    } catch (const std::exception& exc) {
+        std::cerr << "compiled_mpich_dense_helper error rank=" << rank << ": " << exc.what() << std::endl;
+        if (!request_path.empty()) {
+            try {
+                fs::path error_path = request_path.parent_path() / "error.json";
+                write_text_atomic(error_path, std::string("{\"schema_version\":1,\"status\":\"error\",\"error\":\"") +
+                                              json_escape(exc.what()) + "\"}\n");
+            } catch (...) {
+            }
+        }
+        return 20;
+    }
+}
 
 int main(int argc, char** argv) {
     fs::path ipc_dir;
     fs::path request_path;
     bool run_once = false;
     bool diagnostic = false;
+    bool validate_request = false;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--ipc-dir" && i + 1 < argc) {
@@ -306,14 +536,36 @@ int main(int argc, char** argv) {
             run_once = true;
         } else if (arg == "--diagnostic") {
             diagnostic = true;
+        } else if (arg == "--validate-request") {
+            validate_request = true;
         } else if (arg == "--help") {
-            std::cout << "usage: compiled_mpich_dense_helper --diagnostic | --ipc-dir DIR --request PATH --run-once\n";
+            std::cout << "usage: compiled_mpich_dense_helper --diagnostic | --request PATH --validate-request | --ipc-dir DIR --request PATH --run-once\n";
             return 0;
         }
     }
 
+    if (validate_request) {
+        try {
+            if (request_path.empty()) {
+                throw std::runtime_error("--request is required");
+            }
+            Request req = parse_request(request_path);
+            std::cout << "{\"schema_version\":1,\"bucket_count\":" << req.buckets.size() << ",\"bucket_paths\":[";
+            for (std::size_t i = 0; i < req.buckets.size(); ++i) {
+                if (i) std::cout << ",";
+                std::cout << "\"" << json_escape(req.buckets[i].path) << "\"";
+            }
+            std::cout << "]}" << std::endl;
+            return 0;
+        } catch (const std::exception& exc) {
+            std::cerr << "compiled_mpich_dense_helper validate-request error: " << exc.what() << std::endl;
+            return 20;
+        }
+    }
+
     int provided = -1;
-    int rc = MPI_Init_thread(&argc, &argv, REQUIRED_THREAD_LEVEL, &provided);
+    bool initialized_here = false;
+    int rc = ensure_mpi_initialized(argc, argv, &provided, &initialized_here);
     if (rc != MPI_SUCCESS) {
         std::cerr << "MPI_Init_thread failed rc=" << rc << std::endl;
         return 10;
@@ -332,97 +584,7 @@ int main(int argc, char** argv) {
         if (diagnostic) {
             run_diagnostic(rank, size, provided);
         } else if (run_once) {
-            if (ipc_dir.empty() || request_path.empty()) {
-                throw std::runtime_error("--ipc-dir and --request are required");
-            }
-            Request req = parse_request(request_path);
-            if (req.world_size != size) {
-                throw std::runtime_error("request world_size does not match MPI world size");
-            }
-            if (req.rank != rank) {
-                throw std::runtime_error("request rank does not match MPI rank");
-            }
-            if (req.quorum <= 0 || req.quorum > req.world_size) {
-                throw std::runtime_error("invalid quorum");
-            }
-
-            std::int64_t bytes_sent = req.payload_bytes;
-            std::int64_t bytes_received = 0;
-            std::vector<PayloadPaths> payloads;
-            std::vector<int> timed_out;
-            std::string result_json;
-
-            if (rank == 0) {
-                payloads.push_back(copy_local_payload_to_root(ipc_dir, req));
-                bytes_received += req.payload_bytes;
-                for (int peer = 1; peer < size; ++peer) {
-                    long long preamble[5] = {0, 0, 0, 0, 0};
-                    MPI_Recv(preamble, 5, MPI_LONG_LONG, peer, TAG_PREAMBLE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                    int generation = static_cast<int>(preamble[0]);
-                    int bucket_count = static_cast<int>(preamble[1]);
-                    long long header_len = preamble[2];
-                    long long payload_len = preamble[3];
-                    int base_generation = static_cast<int>(preamble[4]);
-                    if (generation != req.generation || base_generation != req.base_generation) {
-                        timed_out.push_back(peer);
-                        continue;
-                    }
-                    std::vector<char> header(static_cast<std::size_t>(header_len));
-                    MPI_Recv(header.data(), static_cast<int>(header.size()), MPI_BYTE, peer, TAG_HEADER, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                    PayloadPaths paths;
-                    paths.rank = peer;
-                    paths.header_path = rel_received_header(req.generation, peer);
-                    write_bytes_atomic(ipc_dir / paths.header_path, header);
-                    for (int b = 0; b < bucket_count; ++b) {
-                        long long bucket_len = 0;
-                        MPI_Recv(&bucket_len, 1, MPI_LONG_LONG, peer, TAG_BUCKET_SIZE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                        std::vector<char> bucket(static_cast<std::size_t>(bucket_len));
-                        MPI_Recv(bucket.data(), static_cast<int>(bucket.size()), MPI_BYTE, peer, TAG_BUCKET_BASE + (b % 512), MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                        std::string rel = rel_received_bucket(req.generation, peer, b);
-                        write_bytes_atomic(ipc_dir / rel, bucket);
-                        paths.bucket_paths.push_back(rel);
-                    }
-                    bytes_received += payload_len;
-                    payloads.push_back(paths);
-                }
-                for (int peer = 0; peer < size; ++peer) {
-                    bool seen = std::any_of(payloads.begin(), payloads.end(), [peer](const PayloadPaths& p) {
-                        return p.rank == peer;
-                    });
-                    if (!seen) {
-                        timed_out.push_back(peer);
-                    }
-                }
-                result_json = build_result_json(req, rank, size, provided, payloads, timed_out, bytes_sent, bytes_received);
-                for (int peer = 1; peer < size; ++peer) {
-                    send_result_string(peer, result_json);
-                }
-            } else {
-                std::string header = read_text(ipc_dir / req.header_path);
-                long long preamble[5] = {
-                    req.generation,
-                    static_cast<long long>(req.buckets.size()),
-                    static_cast<long long>(header.size()),
-                    req.payload_bytes,
-                    req.base_generation,
-                };
-                MPI_Send(preamble, 5, MPI_LONG_LONG, 0, TAG_PREAMBLE, MPI_COMM_WORLD);
-                MPI_Send(header.data(), static_cast<int>(header.size()), MPI_BYTE, 0, TAG_HEADER, MPI_COMM_WORLD);
-                for (const auto& bucket_desc : req.buckets) {
-                    std::vector<char> bucket = read_bytes(ipc_dir / bucket_desc.path);
-                    long long bucket_len = static_cast<long long>(bucket.size());
-                    MPI_Send(&bucket_len, 1, MPI_LONG_LONG, 0, TAG_BUCKET_SIZE, MPI_COMM_WORLD);
-                    MPI_Send(bucket.data(), static_cast<int>(bucket.size()), MPI_BYTE, 0,
-                             TAG_BUCKET_BASE + (bucket_desc.index % 512), MPI_COMM_WORLD);
-                }
-                result_json = recv_result_string(0);
-            }
-
-            fs::path result_path = request_path.parent_path();
-            char name[64];
-            std::snprintf(name, sizeof(name), "result.gen%06d.json", req.generation);
-            result_path /= name;
-            write_text_atomic(result_path, result_json + "\n");
+            run_once_impl(ipc_dir, request_path, rank, size, provided);
         } else {
             throw std::runtime_error("no command selected");
         }
@@ -439,6 +601,8 @@ int main(int argc, char** argv) {
         exit_code = 20;
     }
 
-    MPI_Finalize();
+    if (initialized_here) {
+        MPI_Finalize();
+    }
     return exit_code;
 }

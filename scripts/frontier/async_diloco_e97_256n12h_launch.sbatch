@@ -69,7 +69,9 @@ ASYNC_WEIGHTING=${ASYNC_WEIGHTING:-tokens}
 ASYNC_TRANSPORT_MODE=${ASYNC_TRANSPORT_MODE:-compiled-cray-mpich-helper-p2p}
 ASYNC_MPI_DENSE_BUCKET_BYTES=${ASYNC_MPI_DENSE_BUCKET_BYTES:-67108864}
 ASYNC_COMPILED_MPICH_HELPER_BIN=${ASYNC_COMPILED_MPICH_HELPER_BIN:-${ARTIFACT_DIR}/compiled_mpich_dense_helper}
-ASYNC_COMPILED_MPICH_IPC_DIR=${ASYNC_COMPILED_MPICH_IPC_DIR:-${RUN_DIR}/ipc}
+ASYNC_COMPILED_MPICH_IPC_BASE=${ASYNC_COMPILED_MPICH_IPC_BASE:-${TMPDIR:-/tmp}/emender-${USER:-unknown}/async_diloco_e97}
+ASYNC_COMPILED_MPICH_IPC_DIR=${ASYNC_COMPILED_MPICH_IPC_DIR:-${ASYNC_COMPILED_MPICH_IPC_BASE}/${SLURM_JOB_ID:-manual}-${RUN_STAMP}/ipc}
+ASYNC_COMPILED_MPICH_TRACE_DIR=${ASYNC_COMPILED_MPICH_TRACE_DIR:-${ARTIFACT_DIR}/compiled_mpich_trace}
 ASYNC_GROUP_AGGREGATOR_SIZE=${ASYNC_GROUP_AGGREGATOR_SIZE:-16}
 ASYNC_DENSE_DATA_PLANE=${ASYNC_DENSE_DATA_PLANE:-mpi-p2p}
 ASYNC_DENSE_UPDATE_STORAGE=${ASYNC_DENSE_UPDATE_STORAGE:-1}
@@ -138,9 +140,10 @@ fi
 source "${REPO}/scripts/frontier/frontier_runtime_env.sh"
 frontier_load_default_modules
 frontier_activate_emender_conda_env
+frontier_assert_emender_conda_env
 export TIKTOKEN_CACHE_DIR
 export MPICH_GPU_SUPPORT_ENABLED=${MPICH_GPU_SUPPORT_ENABLED:-0}
-export ASYNC_MPI_DENSE_BUCKET_BYTES ASYNC_COMPILED_MPICH_HELPER_BIN ASYNC_COMPILED_MPICH_IPC_DIR
+export ASYNC_MPI_DENSE_BUCKET_BYTES ASYNC_COMPILED_MPICH_HELPER_BIN ASYNC_COMPILED_MPICH_IPC_DIR ASYNC_COMPILED_MPICH_TRACE_DIR
 export CRAY_MPI4PY_SITE=${CRAY_MPI4PY_SITE:-/opt/cray/pe/python/3.10.10/lib/python3.10/site-packages}
 PYTHON_BIN=$(command -v python)
 [[ -n "$PYTHON_BIN" ]] || { echo "Activated runtime did not provide python" >&2; exit 66; }
@@ -175,7 +178,7 @@ if [[ "$ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM" == "1" && "$ASYNC_DILOCO_NON_PRODUC
   echo "Synthetic token streams are only allowed with ASYNC_DILOCO_NON_PRODUCTION_DEBUG=1." >&2
   exit 69
 fi
-if [[ "$ASYNC_ACTUAL_MULTINODE_COMPILED_MPICH_QUORUM" == "1" && ! -x "$ASYNC_COMPILED_MPICH_HELPER_BIN" ]]; then
+if [[ "$ASYNC_ACTUAL_MULTINODE_COMPILED_MPICH_QUORUM" == "1" && ( ! -x "$ASYNC_COMPILED_MPICH_HELPER_BIN" || ! -r "${ASYNC_COMPILED_MPICH_HELPER_BIN}.so" ) ]]; then
   ARTIFACT_DIR="$ARTIFACT_DIR" OUT="$ASYNC_COMPILED_MPICH_HELPER_BIN" scripts/frontier/build_compiled_mpich_dense_helper.sh \
     2>&1 | tee "${LOG_DIR}/compiled_mpich_helper_build.log"
 fi
@@ -442,6 +445,7 @@ fi
   echo "async_mpi_dense_bucket_bytes=$ASYNC_MPI_DENSE_BUCKET_BYTES"
   echo "async_compiled_mpich_helper_bin=$ASYNC_COMPILED_MPICH_HELPER_BIN"
   echo "async_compiled_mpich_ipc_dir=$ASYNC_COMPILED_MPICH_IPC_DIR"
+  echo "async_compiled_mpich_trace_dir=$ASYNC_COMPILED_MPICH_TRACE_DIR"
   echo "async_group_aggregator_size=$ASYNC_GROUP_AGGREGATOR_SIZE"
   echo "async_dense_data_plane=$ASYNC_DENSE_DATA_PLANE"
   echo "async_dense_update_storage=$ASYNC_DENSE_UPDATE_STORAGE"

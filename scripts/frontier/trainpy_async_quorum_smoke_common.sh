@@ -37,6 +37,12 @@ DEFAULT_E97_SEED_LATEST=${DEFAULT_E97_SEED_LATEST:-/lustre/orion/bif148/proj-sha
 E97_CHECKPOINT=${E97_CHECKPOINT:-$DEFAULT_E97_SEED_LATEST}
 DATA=${DATA:-/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt}
 TIKTOKEN_CACHE_DIR=${TIKTOKEN_CACHE_DIR:-/lustre/orion/bif148/proj-shared/tiktoken_cache}
+DEFAULT_ENV_PREFIX="${REPO}/.envs/olcf-rocm711-torch210-py312"
+if [[ ! -d "$DEFAULT_ENV_PREFIX" && -d /lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312 ]]; then
+  DEFAULT_ENV_PREFIX=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312
+fi
+ENV_PREFIX=${ENV_PREFIX:-$DEFAULT_ENV_PREFIX}
+export EMENDER_CONDA_ENV=${EMENDER_CONDA_ENV:-$ENV_PREFIX}
 
 RANKS_PER_NODE=${RANKS_PER_NODE:-8}
 CPUS_PER_RANK=${CPUS_PER_RANK:-7}
@@ -53,7 +59,13 @@ ASYNC_COORDINATOR_BIND_HOST=${ASYNC_COORDINATOR_BIND_HOST:-0.0.0.0}
 ASYNC_QUORUM_TRANSPORT=${ASYNC_QUORUM_TRANSPORT:-compiled-cray-mpich-helper-p2p}
 ASYNC_MPI_DENSE_BUCKET_BYTES=${ASYNC_MPI_DENSE_BUCKET_BYTES:-67108864}
 ASYNC_COMPILED_MPICH_HELPER_BIN=${ASYNC_COMPILED_MPICH_HELPER_BIN:-${ARTIFACT_DIR}/compiled_mpich_dense_helper}
-ASYNC_COMPILED_MPICH_IPC_DIR=${ASYNC_COMPILED_MPICH_IPC_DIR:-${RUN_DIR}/ipc}
+ASYNC_COMPILED_MPICH_IPC_BASE=${ASYNC_COMPILED_MPICH_IPC_BASE:-${TMPDIR:-/tmp}/emender-${USER:-unknown}/trainpy_async_quorum}
+ASYNC_COMPILED_MPICH_IPC_DIR=${ASYNC_COMPILED_MPICH_IPC_DIR:-${ASYNC_COMPILED_MPICH_IPC_BASE}/${SLURM_JOB_ID:-manual}-${RUN_STAMP}/ipc}
+ASYNC_COMPILED_MPICH_TRACE_DIR=${ASYNC_COMPILED_MPICH_TRACE_DIR:-${ARTIFACT_DIR}/compiled_mpich_trace}
+ASYNC_COMPILED_MPICH_FILE_GATHER=${ASYNC_COMPILED_MPICH_FILE_GATHER:-0}
+if [[ "$SMOKE_NODE_COUNT" -eq 1 && "$ASYNC_QUORUM_TRANSPORT" == "compiled-cray-mpich-helper-p2p" ]]; then
+  ASYNC_COMPILED_MPICH_FILE_GATHER=1
+fi
 ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM=${ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM:-0}
 ALLOW_SYNTHETIC_TOKEN_FALLBACK=${ALLOW_SYNTHETIC_TOKEN_FALLBACK:-0}
 TRAINING_DATA_MODE=real-token
@@ -122,10 +134,11 @@ fi
 source "${REPO}/scripts/frontier/frontier_runtime_env.sh"
 frontier_load_default_modules
 frontier_activate_emender_conda_env
+frontier_assert_emender_conda_env
 PYTHON_BIN=$(command -v python)
 export REPO TIKTOKEN_CACHE_DIR PYTHON_BIN RANK_START_LOG ASYNC_ENTRYPOINT
 export MPICH_GPU_SUPPORT_ENABLED=${MPICH_GPU_SUPPORT_ENABLED:-0}
-export ASYNC_MPI_DENSE_BUCKET_BYTES ASYNC_COMPILED_MPICH_HELPER_BIN ASYNC_COMPILED_MPICH_IPC_DIR
+export ASYNC_MPI_DENSE_BUCKET_BYTES ASYNC_COMPILED_MPICH_HELPER_BIN ASYNC_COMPILED_MPICH_IPC_DIR ASYNC_COMPILED_MPICH_TRACE_DIR ASYNC_COMPILED_MPICH_FILE_GATHER
 export CRAY_MPI4PY_SITE=${CRAY_MPI4PY_SITE:-/opt/cray/pe/python/3.10.10/lib/python3.10/site-packages}
 
 [[ -f "$ASYNC_ENTRYPOINT" ]] || { echo "ASYNC_ENTRYPOINT is missing: $ASYNC_ENTRYPOINT" >&2; exit 65; }
@@ -150,7 +163,7 @@ if [[ "$ASYNC_GLOBAL_QUORUM" -gt "$ASYNC_TRAINPY_RANKS" ]]; then
   echo "ASYNC_GLOBAL_QUORUM=$ASYNC_GLOBAL_QUORUM cannot exceed launched ranks=$ASYNC_TRAINPY_RANKS" >&2
   exit 64
 fi
-if [[ "$ASYNC_QUORUM_TRANSPORT" == "compiled-cray-mpich-helper-p2p" && ! -x "$ASYNC_COMPILED_MPICH_HELPER_BIN" ]]; then
+if [[ "$ASYNC_QUORUM_TRANSPORT" == "compiled-cray-mpich-helper-p2p" && ( ! -x "$ASYNC_COMPILED_MPICH_HELPER_BIN" || ! -r "${ASYNC_COMPILED_MPICH_HELPER_BIN}.so" ) ]]; then
   ARTIFACT_DIR="$ARTIFACT_DIR" OUT="$ASYNC_COMPILED_MPICH_HELPER_BIN" scripts/frontier/build_compiled_mpich_dense_helper.sh \
     2>&1 | tee "${LOG_DIR}/compiled_mpich_helper_build.log"
 fi
@@ -253,7 +266,7 @@ LAUNCH_CMD=(
   --gpus-per-task=1
   --gpu-bind="$GPU_BIND"
   bash -lc
-  'source "${REPO}/scripts/frontier/frontier_runtime_env.sh"; frontier_activate_emender_conda_env; printf "%s\t%s\t%s\t%s\t%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${SLURM_PROCID:-}" "${SLURM_LOCALID:-}" "${SLURMD_NODENAME:-$(hostname)}" "${SLURM_NTASKS:-}" >> "$RANK_START_LOG"; exec "$PYTHON_BIN" -u "$ASYNC_ENTRYPOINT" "$@" --node-rank "${SLURM_PROCID:?missing SLURM_PROCID}" --device "cuda:${ASYNC_VISIBLE_DEVICE_ORDINAL:-0}"'
+  'source "${REPO}/scripts/frontier/frontier_runtime_env.sh"; frontier_activate_emender_conda_env; frontier_assert_emender_conda_env; printf "%s\t%s\t%s\t%s\t%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${SLURM_PROCID:-}" "${SLURM_LOCALID:-}" "${SLURMD_NODENAME:-$(hostname)}" "${SLURM_NTASKS:-}" >> "$RANK_START_LOG"; exec "$PYTHON_BIN" -u "$ASYNC_ENTRYPOINT" "$@" --node-rank "${SLURM_PROCID:?missing SLURM_PROCID}" --device "cuda:${ASYNC_VISIBLE_DEVICE_ORDINAL:-0}"'
   bash
   "${CMD[@]:3}"
 )
@@ -288,6 +301,8 @@ fi
   echo "data=$DATA"
   echo "e97_checkpoint=$E97_CHECKPOINT"
   echo "async_entrypoint=$ASYNC_ENTRYPOINT"
+  echo "emender_conda_env=$EMENDER_CONDA_ENV"
+  echo "python_bin=$PYTHON_BIN"
   echo "one_trainpy_rank_per_gpu=1"
   echo "slurm_nodes=$SMOKE_NODE_COUNT"
   echo "slurm_ntasks_per_node=$RANKS_PER_NODE"
@@ -303,6 +318,8 @@ fi
   echo "async_mpi_dense_bucket_bytes=$ASYNC_MPI_DENSE_BUCKET_BYTES"
   echo "async_compiled_mpich_helper_bin=$ASYNC_COMPILED_MPICH_HELPER_BIN"
   echo "async_compiled_mpich_ipc_dir=$ASYNC_COMPILED_MPICH_IPC_DIR"
+  echo "async_compiled_mpich_trace_dir=$ASYNC_COMPILED_MPICH_TRACE_DIR"
+  echo "async_compiled_mpich_file_gather=$ASYNC_COMPILED_MPICH_FILE_GATHER"
   echo "mpich_gpu_support_enabled=$MPICH_GPU_SUPPORT_ENABLED"
   echo "cray_mpi4py_site=$CRAY_MPI4PY_SITE"
   echo "async_coordinator_host=$ASYNC_COORDINATOR_HOST"

@@ -7,10 +7,10 @@ multinode data plane does not import ``mpi4py``.
 
 from __future__ import annotations
 
+import ctypes
 from dataclasses import dataclass
 import json
 from pathlib import Path
-import subprocess
 import time
 from typing import Any, Mapping, Sequence
 
@@ -34,6 +34,7 @@ COMPILED_MPICH_REQUEST_SCHEMA_VERSION = 1
 class CompiledMpichHelperConfig:
     helper_bin: str | Path
     ipc_dir: str | Path
+    helper_lib: str | Path | None = None
     bucket_bytes: int = 64 * 1024 * 1024
     timeout_s: float = 900.0
     root_rank: int = 0
@@ -60,6 +61,12 @@ def run_compiled_mpich_dense_quorum(
     helper_bin = Path(helper.helper_bin)
     if not helper_bin.is_file():
         raise FileNotFoundError(f"compiled MPICH helper is not readable: {helper_bin}")
+    helper_lib = resolve_compiled_mpich_helper_library(helper)
+    if not helper_lib.is_file():
+        raise FileNotFoundError(
+            "compiled MPICH helper shared library is not readable: "
+            f"{helper_lib}; rebuild with scripts/frontier/build_compiled_mpich_dense_helper.sh"
+        )
     ipc_dir = Path(helper.ipc_dir)
     envelope = pack_dense_update(
         local_update,
@@ -86,26 +93,9 @@ def run_compiled_mpich_dense_quorum(
         bucket_bytes_target=helper.bucket_bytes,
         base_checkpoint=base_checkpoint,
     )
-    cmd = [
-        str(helper_bin),
-        "--ipc-dir",
-        str(ipc_dir),
-        "--request",
-        str(request_path),
-        "--run-once",
-    ]
-    completed = subprocess.run(
-        cmd,
-        text=True,
-        capture_output=True,
-        timeout=max(1.0, float(helper.timeout_s) + 30.0),
-        check=False,
-    )
-    if completed.returncode != 0:
-        raise RuntimeError(
-            "compiled MPICH helper failed "
-            f"rc={completed.returncode} stdout={completed.stdout!r} stderr={completed.stderr!r}"
-        )
+    rc = _call_compiled_mpich_shared_library(helper_lib, ipc_dir, request_path)
+    if rc != 0:
+        raise RuntimeError(f"compiled MPICH helper shared library failed rc={rc}")
     result_path = request_path.with_name(f"result.gen{int(generation):06d}.json")
     if not result_path.is_file():
         raise FileNotFoundError(f"compiled MPICH helper did not write result: {result_path}")
@@ -134,6 +124,27 @@ def run_compiled_mpich_dense_quorum(
     payload["transport"]["helper_result"] = helper_result
     payload["latest_generation"] = generation if quorum_result.metrics.latest_advanced else -1
     return payload
+
+
+def resolve_compiled_mpich_helper_library(helper: CompiledMpichHelperConfig) -> Path:
+    """Resolve the shared-library bridge path for a helper binary config."""
+
+    if helper.helper_lib is not None:
+        return Path(helper.helper_lib)
+    helper_bin = Path(helper.helper_bin)
+    if helper_bin.suffix == ".so":
+        return helper_bin
+    return helper_bin.with_name(f"{helper_bin.name}.so")
+
+
+def _call_compiled_mpich_shared_library(helper_lib: Path, ipc_dir: Path, request_path: Path) -> int:
+    """Call the in-process MPICH bridge inside the current Slurm rank world."""
+
+    library = ctypes.CDLL(str(helper_lib))
+    run_once = library.compiled_mpich_dense_helper_run_once
+    run_once.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+    run_once.restype = ctypes.c_int
+    return int(run_once(str(ipc_dir).encode("utf-8"), str(request_path).encode("utf-8")))
 
 
 def write_compiled_mpich_request(
@@ -231,6 +242,7 @@ __all__ = [
     "COMPILED_MPICH_TRANSPORT",
     "CompiledMpichHelperConfig",
     "load_received_payloads",
+    "resolve_compiled_mpich_helper_library",
     "run_compiled_mpich_dense_quorum",
     "write_compiled_mpich_request",
 ]
