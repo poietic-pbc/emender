@@ -217,6 +217,10 @@ class RealAsyncFileRankConfig:
     coordinator_port: int = 29497
     connect_retry_interval_s: float = 0.2
     transport: str = "tcp"
+    transport_selector: str = ""
+    transport_approval_class: str = ""
+    production_approval_eligible: bool = False
+    allow_tcp_scale_debug: bool = False
     mpi_bucket_bytes: int = 64 * 1024 * 1024
     compiled_mpich_helper_bin: str | Path | None = None
     compiled_mpich_ipc_dir: str | Path | None = None
@@ -325,6 +329,12 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
         raise ValueError("quorum_mode must be 'resilient_quorum' or 'strict_collective'")
     if quorum_mode == STRICT_COLLECTIVE_DILOCO_MODE and transport != COMPILED_MPICH_TRANSPORT:
         raise ValueError("strict_collective quorum_mode requires compiled MPICH transport")
+    if transport == "tcp" and int(config.node_count) > 8:
+        if not config.allow_tcp_scale_debug:
+            raise ValueError(
+                "TCP async quorum transport is local/debug-only; pass the explicit "
+                "small-debug override for nonlocal TCP runs"
+            )
 
     progress_dir = run_dir / "progress"
     nodes_dir = run_dir / "node_update_artifacts"
@@ -457,6 +467,12 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
         "node_update_submitted": node_result.node_update is not None,
         "coordinator": int(config.node_rank) == 0,
         "transport": transport,
+        "transport_selector": config.transport_selector or transport,
+        "transport_approval_class": (
+            config.transport_approval_class
+            or ("frontier-production-candidate" if transport == COMPILED_MPICH_TRANSPORT else "tcp-debug-only")
+        ),
+        "production_approval_eligible": bool(config.production_approval_eligible),
         "global_result": root_payload,
     }
 
@@ -1372,6 +1388,15 @@ def _coordinate_mpi_dense_rank(
     final_payload = {
         **payload,
         "mode": "actual_multinode_mpi_dense_quorum",
+        "transport": {
+            **dict(payload.get("transport") or {}),
+            "name": "mpi-dense",
+            "selector": config.transport_selector or "mpi-dense",
+            "actual": "mpi-dense",
+            "approval_class": config.transport_approval_class or "legacy-comparison-only",
+            "production_approval_eligible": False,
+        },
+        "production_approval_eligible": False,
         "node_count": int(config.node_count),
         "global_quorum": int(config.global_quorum),
         "generation": int(generation),
@@ -1456,6 +1481,7 @@ def _coordinate_compiled_mpich_dense_rank(
             timeout_s=float(config.timeout_s),
         ),
         base_checkpoint=(None if config.initial_checkpoint is None else str(config.initial_checkpoint)),
+        quorum_mode=str(config.quorum_mode),
     )
     _atomic_write_json(artifact_dir / f"{node_id}.json", {
         "schema_version": 1,
@@ -1508,10 +1534,15 @@ def _coordinate_compiled_mpich_dense_rank(
         "transport": {
             **dict(payload.get("transport") or {}),
             "name": COMPILED_MPICH_TRANSPORT,
+            "selector": config.transport_selector or "compiled-cray-mpich-helper-p2p",
+            "actual": COMPILED_MPICH_TRANSPORT,
+            "approval_class": config.transport_approval_class or "frontier-production-candidate",
+            "production_approval_eligible": bool(config.production_approval_eligible),
             "filesystem_live_quorum": False,
             "tcp_dense_data_plane": False,
             "mpi4py": False,
         },
+        "production_approval_eligible": bool(config.production_approval_eligible),
         "node_count": int(config.node_count),
         "global_quorum": int(config.global_quorum),
         "generation": int(generation),
@@ -1696,6 +1727,10 @@ def _network_quorum_payload(
         "mode": "actual_multinode_tcp_quorum_debug",
         "transport": {
             "name": "tcp",
+            "selector": config.transport_selector or "tcp",
+            "actual": "tcp",
+            "approval_class": config.transport_approval_class or "tcp-debug-only",
+            "production_approval_eligible": False,
             "coordinator_host": str(config.coordinator_host),
             "coordinator_bind_host": str(config.coordinator_bind_host),
             "coordinator_port": int(config.coordinator_port),
@@ -1709,6 +1744,7 @@ def _network_quorum_payload(
             "dense_delta_exchange": "mpi_p2p_target_not_python_debug_payload",
             "proof": "one Slurm-launched process per GPU runs real local token training and rank 0 merges TCP-submitted rank metadata quorum",
         },
+        "production_approval_eligible": False,
         "synthetic_token_stream": bool(config.synthetic_token_stream),
         "node_count": int(config.node_count),
         "global_quorum": int(config.global_quorum),
