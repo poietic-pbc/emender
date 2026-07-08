@@ -64,6 +64,8 @@ import torch
 
 ASYNC_DILOCO_METRICS_SCHEMA_VERSION = 1
 ASYNC_DILOCO_CHECKPOINT_SCHEMA_VERSION = 1
+STRICT_COLLECTIVE_DILOCO_MODE = "strict_collective"
+RESILIENT_QUORUM_DILOCO_MODE = "resilient_quorum"
 
 GLOBAL_MERGER_ROLE = "global_merger"
 GENERATION_MANIFEST_KIND = "generation"
@@ -303,6 +305,10 @@ class AsyncDiLoCoUpdate:
     failed: bool = False
     timed_out: bool = False
     invalid: bool = False
+    update_id: str | None = None
+    global_generation: int | None = None
+    checkpoint_state_id: str | None = None
+    submitted_at_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -334,20 +340,40 @@ class AsyncDiLoCoGenerationMetrics:
     latest_advanced: bool = False
     resume_source_generation: int | None = None
     quorum_status: str = "advanced"
+    mode: str = RESILIENT_QUORUM_DILOCO_MODE
+    global_generation: int | None = None
+    base_generation: int | None = None
+    late_updates: int = 0
+    rejected_updates: int = 0
+    missing_updates: int = 0
+    staleness_distribution: Mapping[str, int] = field(default_factory=dict)
+    catchup_events: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
+    outcome_rank_ids: Mapping[str, Sequence[str]] = field(default_factory=dict)
+    checkpoint_state_id: str | None = None
     schema_version: int = ASYNC_DILOCO_METRICS_SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
         return _canonicalize({
             "schema_version": self.schema_version,
+            "mode": self.mode,
             "run_id": self.run_id,
             "generation": self.generation,
+            "global_generation": (
+                self.generation if self.global_generation is None else self.global_generation
+            ),
+            "base_generation": (
+                self.generation if self.base_generation is None else self.base_generation
+            ),
             "requested_workers": self.requested_workers,
             "participating_workers": self.participating_workers,
             "quorum_threshold": self.quorum_threshold,
             "quorum_size": self.quorum_size,
             "accepted_updates": self.accepted_updates,
             "stale_updates": self.stale_updates,
+            "late_updates": self.late_updates,
+            "rejected_updates": self.rejected_updates,
             "timed_out_updates": self.timed_out_updates,
+            "missing_updates": self.missing_updates,
             "failed_updates": self.failed_updates,
             "invalid_updates": self.invalid_updates,
             "generation_duration_s": self.generation_duration_s,
@@ -364,6 +390,13 @@ class AsyncDiLoCoGenerationMetrics:
             "latest_advanced": self.latest_advanced,
             "resume_source_generation": self.resume_source_generation,
             "quorum_status": self.quorum_status,
+            "staleness_distribution": dict(self.staleness_distribution),
+            "catchup_events": [dict(event) for event in self.catchup_events],
+            "outcome_rank_ids": {
+                str(key): [str(value) for value in values]
+                for key, values in dict(self.outcome_rank_ids).items()
+            },
+            "checkpoint_state_id": self.checkpoint_state_id,
         })
 
     @classmethod
@@ -371,15 +404,21 @@ class AsyncDiLoCoGenerationMetrics:
         _require_fields(payload, GENERATION_REQUIRED_FIELDS, "generation metrics")
         return cls(
             schema_version=int(payload["schema_version"]),
+            mode=str(payload.get("mode", RESILIENT_QUORUM_DILOCO_MODE)),
             run_id=str(payload["run_id"]),
             generation=int(payload["generation"]),
+            global_generation=int(payload.get("global_generation", payload["generation"])),
+            base_generation=int(payload.get("base_generation", payload["generation"])),
             requested_workers=int(payload["requested_workers"]),
             participating_workers=int(payload["participating_workers"]),
             quorum_threshold=int(payload["quorum_threshold"]),
             quorum_size=int(payload["quorum_size"]),
             accepted_updates=int(payload["accepted_updates"]),
             stale_updates=int(payload["stale_updates"]),
+            late_updates=int(payload.get("late_updates", 0)),
+            rejected_updates=int(payload.get("rejected_updates", payload.get("invalid_updates", 0))),
             timed_out_updates=int(payload["timed_out_updates"]),
+            missing_updates=int(payload.get("missing_updates", payload["timed_out_updates"])),
             failed_updates=int(payload["failed_updates"]),
             invalid_updates=int(payload["invalid_updates"]),
             generation_duration_s=float(payload["generation_duration_s"]),
@@ -405,6 +444,21 @@ class AsyncDiLoCoGenerationMetrics:
                     "quorum_status",
                     "advanced" if bool(payload["latest_advanced"]) else "deferred",
                 )
+            ),
+            staleness_distribution={
+                str(k): int(v)
+                for k, v in dict(payload.get("staleness_distribution") or {}).items()
+            },
+            catchup_events=tuple(
+                dict(event) for event in payload.get("catchup_events") or ()
+            ),
+            outcome_rank_ids={
+                str(k): tuple(str(item) for item in values)
+                for k, values in dict(payload.get("outcome_rank_ids") or {}).items()
+            },
+            checkpoint_state_id=(
+                None if payload.get("checkpoint_state_id") is None
+                else str(payload.get("checkpoint_state_id"))
             ),
         )
 
@@ -441,12 +495,18 @@ class AsyncDiLoCoMetricsSummary:
             "totals": {
                 "accepted_updates": sum(m.accepted_updates for m in self.generations),
                 "stale_updates": sum(m.stale_updates for m in self.generations),
+                "late_updates": sum(m.late_updates for m in self.generations),
+                "rejected_updates": sum(m.rejected_updates for m in self.generations),
                 "timed_out_updates": sum(m.timed_out_updates for m in self.generations),
+                "missing_updates": sum(m.missing_updates for m in self.generations),
                 "failed_updates": sum(m.failed_updates for m in self.generations),
                 "invalid_updates": sum(m.invalid_updates for m in self.generations),
+                "catchup_events": sum(len(m.catchup_events) for m in self.generations),
                 "tokens_per_generation": sum(m.tokens_per_generation for m in self.generations),
                 "update_bytes": _sum_mapping(m.update_bytes for m in self.generations),
             },
+            "staleness_distribution": _sum_mapping(
+                m.staleness_distribution for m in self.generations),
             "latest_advancement": {
                 "advanced": latest_generation is not None,
                 "generation": latest_generation,
@@ -491,6 +551,82 @@ class AsyncDiLoCoMergeResult:
     @property
     def advanced(self) -> bool:
         return self.metrics.quorum_status == "advanced"
+
+
+@dataclass(frozen=True)
+class AsyncDiLoCoCatchupInstruction:
+    """Instruction for a stale/missing rank to reset onto the latest state."""
+
+    worker_id: str
+    from_generation: int | None
+    to_generation: int
+    checkpoint_state_id: str | None
+    reason: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "worker_id": self.worker_id,
+            "from_generation": self.from_generation,
+            "to_generation": int(self.to_generation),
+            "checkpoint_state_id": self.checkpoint_state_id,
+            "reason": self.reason,
+        }
+
+
+def build_catchup_instructions(
+    *,
+    global_generation: int,
+    checkpoint_state_id: str | None,
+    stale_updates: Sequence[AsyncDiLoCoUpdate] = (),
+    missing_worker_ids: Sequence[str] = (),
+) -> tuple[AsyncDiLoCoCatchupInstruction, ...]:
+    """Build deterministic catchup records for stale or missing participants."""
+
+    instructions: list[AsyncDiLoCoCatchupInstruction] = []
+    seen: set[str] = set()
+    for update in stale_updates:
+        worker_id = str(update.worker_id)
+        instructions.append(AsyncDiLoCoCatchupInstruction(
+            worker_id=worker_id,
+            from_generation=int(update.base_generation),
+            to_generation=int(global_generation),
+            checkpoint_state_id=checkpoint_state_id,
+            reason="stale_generation",
+        ))
+        seen.add(worker_id)
+    for worker_id in missing_worker_ids:
+        worker_id = str(worker_id)
+        if worker_id in seen:
+            continue
+        instructions.append(AsyncDiLoCoCatchupInstruction(
+            worker_id=worker_id,
+            from_generation=None,
+            to_generation=int(global_generation),
+            checkpoint_state_id=checkpoint_state_id,
+            reason="missing_or_timed_out",
+        ))
+    return tuple(instructions)
+
+
+def _update_identifier(update: AsyncDiLoCoUpdate) -> str:
+    if update.update_id:
+        return str(update.update_id)
+    if update.global_generation is not None:
+        return f"{update.worker_id}@g{int(update.global_generation):06d}"
+    return f"{update.worker_id}@base{int(update.base_generation):06d}"
+
+
+def _staleness_distribution(
+    updates: Sequence[AsyncDiLoCoUpdate],
+    *,
+    generation: int,
+) -> dict[str, int]:
+    buckets: dict[str, int] = {}
+    for update in updates:
+        distance = max(0, int(generation) - int(update.base_generation))
+        key = str(distance)
+        buckets[key] = buckets.get(key, 0) + 1
+    return buckets
 
 
 @dataclass(frozen=True)
@@ -1004,6 +1140,9 @@ def quorum_merge(
     checkpoint_sizes: Mapping[str, int] | None = None,
     latest_advanced: bool = False,
     resume_source_generation: int | None = None,
+    mode: str = RESILIENT_QUORUM_DILOCO_MODE,
+    checkpoint_state_id: str | None = None,
+    missing_worker_ids: Sequence[str] = (),
 ) -> AsyncDiLoCoMergeResult:
     """Apply one reject-stale quorum merge over synthetic tensor states."""
 
@@ -1015,6 +1154,7 @@ def quorum_merge(
 
     accepted: list[AsyncDiLoCoUpdate] = []
     stale: list[AsyncDiLoCoUpdate] = []
+    late: list[AsyncDiLoCoUpdate] = []
     timed_out: list[AsyncDiLoCoUpdate] = []
     failed: list[AsyncDiLoCoUpdate] = []
     invalid: list[AsyncDiLoCoUpdate] = []
@@ -1026,6 +1166,8 @@ def quorum_merge(
             timed_out.append(update)
         elif update.invalid:
             invalid.append(update)
+        elif update.base_generation > generation:
+            late.append(update)
         elif update.base_generation != generation:
             stale.append(update)
         else:
@@ -1033,16 +1175,37 @@ def quorum_merge(
             accepted.append(update)
 
     checkpoint_sizes_dict = {} if checkpoint_sizes is None else dict(checkpoint_sizes)
+    catchup = build_catchup_instructions(
+        global_generation=int(generation),
+        checkpoint_state_id=checkpoint_state_id,
+        stale_updates=tuple(stale),
+        missing_worker_ids=tuple(missing_worker_ids),
+    )
+    outcome_rank_ids = {
+        "accepted": tuple(_update_identifier(update) for update in accepted),
+        "stale": tuple(_update_identifier(update) for update in stale),
+        "late": tuple(_update_identifier(update) for update in late),
+        "timed_out": tuple(_update_identifier(update) for update in timed_out),
+        "failed": tuple(_update_identifier(update) for update in failed),
+        "invalid": tuple(_update_identifier(update) for update in invalid),
+        "missing": tuple(str(worker_id) for worker_id in missing_worker_ids),
+    }
     metrics_kwargs = {
+        "mode": str(mode),
         "run_id": run_id,
         "generation": generation,
+        "global_generation": generation,
+        "base_generation": generation,
         "requested_workers": requested_workers,
         "participating_workers": len(updates),
         "quorum_threshold": quorum_threshold,
         "quorum_size": len(accepted),
         "accepted_updates": len(accepted),
         "stale_updates": len(stale),
+        "late_updates": len(late),
+        "rejected_updates": len(stale) + len(late) + len(invalid),
         "timed_out_updates": len(timed_out),
+        "missing_updates": len(missing_worker_ids),
         "failed_updates": len(failed),
         "invalid_updates": len(invalid),
         "generation_duration_s": generation_duration_s,
@@ -1052,6 +1215,10 @@ def quorum_merge(
         "checkpoint_paths": tuple(checkpoint_paths),
         "checkpoint_sizes": checkpoint_sizes_dict,
         "resume_source_generation": resume_source_generation,
+        "staleness_distribution": _staleness_distribution(tuple(stale), generation=generation),
+        "catchup_events": tuple(instruction.to_dict() for instruction in catchup),
+        "outcome_rank_ids": outcome_rank_ids,
+        "checkpoint_state_id": checkpoint_state_id,
     }
 
     if len(accepted) < quorum_threshold:
@@ -1073,7 +1240,7 @@ def quorum_merge(
             stale_updates=tuple(stale),
             timed_out_updates=tuple(timed_out),
             failed_updates=tuple(failed),
-            invalid_updates=tuple(invalid),
+            invalid_updates=tuple(invalid) + tuple(late),
             metrics=metrics,
         )
 
@@ -1103,7 +1270,7 @@ def quorum_merge(
         stale_updates=tuple(stale),
         timed_out_updates=tuple(timed_out),
         failed_updates=tuple(failed),
-        invalid_updates=tuple(invalid),
+        invalid_updates=tuple(invalid) + tuple(late),
         metrics=metrics,
     )
 
@@ -1959,7 +2126,10 @@ __all__ = [
     "GENERATION_MANIFEST_KIND",
     "GLOBAL_MERGER_ROLE",
     "RECOVERY_CHECKPOINT_KIND",
+    "RESILIENT_QUORUM_DILOCO_MODE",
+    "STRICT_COLLECTIVE_DILOCO_MODE",
     "SUMMARY_REQUIRED_FIELDS",
+    "AsyncDiLoCoCatchupInstruction",
     "AsyncDiLoCoCheckpointCadence",
     "AsyncDiLoCoCheckpointManager",
     "AsyncDiLoCoCheckpointRecord",
@@ -1976,6 +2146,7 @@ __all__ = [
     "AsyncDiLoCoWorkerReport",
     "AsyncDiLoCoWorkerSpec",
     "apply_dense_delta",
+    "build_catchup_instructions",
     "build_metrics_summary",
     "compute_dense_delta",
     "default_global_quorum",

@@ -16,8 +16,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from ndm.async_diloco import stable_json_dumps
 from ndm.async_diloco import AsyncDiLoCoCheckpointCadence
+from ndm.async_diloco import RESILIENT_QUORUM_DILOCO_MODE
+from ndm.async_diloco import STRICT_COLLECTIVE_DILOCO_MODE
+from ndm.async_diloco import stable_json_dumps
 from ndm.async_diloco_compiled_mpich import COMPILED_MPICH_TRANSPORT
 from ndm.async_diloco_real import (
     RealAsyncDiLoCoConfig,
@@ -99,6 +101,10 @@ def parse_args() -> argparse.Namespace:
                         help="Explicit legacy comparison path: use mpi4py MPI point-to-point for dense tensor deltas.")
     parser.add_argument("--actual-multinode-compiled-mpich-quorum", action="store_true",
                         help="Run one Slurm-launched rank and use the compiled Cray MPICH dense helper.")
+    parser.add_argument("--diloco-quorum-mode",
+                        choices=[RESILIENT_QUORUM_DILOCO_MODE, STRICT_COLLECTIVE_DILOCO_MODE],
+                        default="",
+                        help="Generation selection mode. Defaults to strict_collective for compiled MPICH and resilient_quorum otherwise.")
     parser.add_argument("--mpi-dense-bucket-bytes", type=int,
                         default=int(os.environ.get("ASYNC_MPI_DENSE_BUCKET_BYTES", str(64 * 1024 * 1024))),
                         help="Target dense delta bucket size for MPI point-to-point payloads.")
@@ -160,6 +166,13 @@ def main() -> int:
         raise ValueError("choose only one actual multinode quorum transport")
     if args.actual_multinode_compiled_mpich_quorum and not args.compiled_mpich_helper_bin:
         raise ValueError("--compiled-mpich-helper-bin is required for compiled MPICH transport")
+    quorum_mode = args.diloco_quorum_mode or (
+        STRICT_COLLECTIVE_DILOCO_MODE
+        if args.actual_multinode_compiled_mpich_quorum
+        else RESILIENT_QUORUM_DILOCO_MODE
+    )
+    if quorum_mode == STRICT_COLLECTIVE_DILOCO_MODE and not args.actual_multinode_compiled_mpich_quorum:
+        raise ValueError("--diloco-quorum-mode strict_collective requires --actual-multinode-compiled-mpich-quorum")
 
     train_overrides = {
         key: value
@@ -220,6 +233,7 @@ def main() -> int:
             global_quorum=int(global_quorum),
             local_steps=args.local_steps,
             timeout_s=args.timeout_s,
+            quorum_mode=quorum_mode,
             eta_outer=args.eta_outer,
             initial_checkpoint=(Path(args.checkpoint) if args.checkpoint else None),
             synthetic_token_stream=bool(args.synthetic_token_stream),
@@ -273,6 +287,7 @@ def main() -> int:
         global_quorum=(None if args.global_quorum <= 0 else args.global_quorum),
         global_node_count=args.node_count,
         eta_outer=args.eta_outer,
+        quorum_mode=quorum_mode,
         timeout_s=args.timeout_s,
         synthetic_token_stream=args.synthetic_token_stream,
         initial_checkpoint=(Path(args.checkpoint) if args.checkpoint else None),

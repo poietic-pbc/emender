@@ -295,3 +295,13 @@ def test_production_async_launcher_refuses_non_comparable_corrected_ladder_by_de
         "Set ASYNC_REQUIRE_CORRECTED_B4_LADDER=0 only for explicitly labeled diagnostic/non-comparable runs.",
     ):
         assert token in launch_text
+
+
+def test_e97_async_entrypoint_exposes_distinct_quorum_mode_selector():
+    entrypoint = ROOT / "scripts/frontier/e97_async_diloco_train.py"
+    text = entrypoint.read_text(encoding="utf-8")
+
+    assert "--diloco-quorum-mode" in text
+    assert "strict_collective requires --actual-multinode-compiled-mpich-quorum" in text
+    assert "STRICT_COLLECTIVE_DILOCO_MODE" in text
+    assert "RESILIENT_QUORUM_DILOCO_MODE" in text

@@ -91,6 +91,11 @@ class DenseTransportMetrics:
     failed_ranks: tuple[int, ...]
     bytes_sent: int
     bytes_received: int
+    accepted_ranks: tuple[int, ...] = ()
+    missing_ranks: tuple[int, ...] = ()
+    late_ranks: tuple[int, ...] = ()
+    invalid_ranks: tuple[int, ...] = ()
+    rejected_ranks: tuple[int, ...] = ()
     bucket_timings_s: Mapping[str, float] = field(default_factory=dict)
     merge_latency_s: float = 0.0
     rebase_latency_s: float = 0.0
@@ -101,7 +106,12 @@ class DenseTransportMetrics:
             "quorum_size": int(self.quorum_size),
             "timed_out_ranks": list(self.timed_out_ranks),
             "stale_ranks": list(self.stale_ranks),
+            "late_ranks": list(self.late_ranks),
             "failed_ranks": list(self.failed_ranks),
+            "invalid_ranks": list(self.invalid_ranks),
+            "missing_ranks": list(self.missing_ranks),
+            "accepted_ranks": list(self.accepted_ranks),
+            "rejected_ranks": list(self.rejected_ranks),
             "bytes_sent": int(self.bytes_sent),
             "bytes_received": int(self.bytes_received),
             "bucket_timings_s": dict(self.bucket_timings_s),
@@ -196,8 +206,17 @@ def pack_dense_update(
         "rank": int(rank),
         "worker_id": update.worker_id,
         "generation": int(generation),
+        "global_generation": int(
+            generation if update.global_generation is None else update.global_generation
+        ),
         "base_generation": int(update.base_generation),
         "base_checkpoint": base_checkpoint,
+        "update_id": (
+            update.update_id
+            or f"{update.worker_id}:g{int(generation):06d}:base{int(update.base_generation):06d}"
+        ),
+        "checkpoint_state_id": update.checkpoint_state_id,
+        "submitted_at_s": update.submitted_at_s,
         "tokens": int(update.tokens),
         "local_steps": int(update.local_steps),
         "loss_window": {str(k): float(v) for k, v in update.loss_moving_average.items()},
@@ -270,6 +289,16 @@ def unpack_dense_update(envelope: DenseUpdateEnvelope) -> AsyncDiLoCoUpdate:
         failed=bool(header.get("failed", False)),
         timed_out=bool(header.get("timed_out", False)),
         invalid=bool(header.get("invalid", False)),
+        update_id=(None if header.get("update_id") is None else str(header.get("update_id"))),
+        global_generation=int(header.get("global_generation", header.get("generation", 0))),
+        checkpoint_state_id=(
+            None if header.get("checkpoint_state_id") is None
+            else str(header.get("checkpoint_state_id"))
+        ),
+        submitted_at_s=(
+            None if header.get("submitted_at_s") is None
+            else float(header.get("submitted_at_s"))
+        ),
     )
 
 
@@ -287,7 +316,11 @@ def collect_dense_quorum_from_envelopes(
     threshold = config.quorum_threshold()
     accepted: list[AsyncDiLoCoUpdate] = []
     stale: list[AsyncDiLoCoUpdate] = []
+    accepted_ranks: list[int] = []
+    stale_ranks: list[int] = []
+    late_ranks: list[int] = []
     failed_ranks: list[int] = []
+    invalid_ranks: list[int] = []
     bytes_received = 0
     bucket_timings: dict[str, float] = {}
 
@@ -298,17 +331,33 @@ def collect_dense_quorum_from_envelopes(
             rank = int(envelope.header.get("rank", -1))
             bytes_received += int(envelope.header.get("payload_bytes", envelope.payload_bytes))
             bucket_timings[f"rank_{rank:05d}"] = max(0.0, time.monotonic() - bucket_start)
-            if (
-                int(envelope.header.get("generation", -1)) != int(config.generation)
+            header_generation = int(envelope.header.get("generation", -1))
+            header_base_generation = int(envelope.header.get("base_generation", -1))
+            is_late = (
+                header_generation > int(config.generation)
+                or update.base_generation > int(config.base_generation)
+            )
+            is_stale = (
+                header_generation != int(config.generation)
                 or update.base_generation != int(config.base_generation)
                 or int(envelope.header.get("staleness", 0)) > 0
-            ):
+            )
+            if is_late:
+                late_ranks.append(rank)
                 stale.append(update)
                 continue
-            if update.failed or update.timed_out or update.invalid:
+            if is_stale:
+                stale_ranks.append(rank)
+                stale.append(update)
+                continue
+            if update.invalid:
+                invalid_ranks.append(rank)
+                continue
+            if update.failed or update.timed_out:
                 failed_ranks.append(rank)
                 continue
             accepted.append(update)
+            accepted_ranks.append(rank)
             if len(accepted) >= threshold:
                 break
         except Exception:
@@ -323,7 +372,7 @@ def collect_dense_quorum_from_envelopes(
     merge_start = time.monotonic()
     merge_result = quorum_merge(
         base_state,
-        tuple(accepted),
+        tuple(accepted) + tuple(stale),
         run_id=config.run_id,
         generation=config.generation,
         requested_workers=config.requested_ranks,
@@ -331,21 +380,25 @@ def collect_dense_quorum_from_envelopes(
         eta_outer=config.eta_outer,
         weight_by=config.weight_by,
         generation_duration_s=max(0.0, time.monotonic() - start_s),
+        checkpoint_state_id=f"{config.run_id}:gen{int(config.generation):06d}",
+        missing_worker_ids=tuple(f"rank-{rank}" for rank in sorted(missing)),
     )
     merge_latency = max(0.0, time.monotonic() - merge_start)
     transport_metrics = DenseTransportMetrics(
         quorum_size=len(merge_result.accepted_updates),
         timed_out_ranks=tuple(sorted(missing)),
-        stale_ranks=tuple(
-            int(envelope.header.get("rank", -1))
-            for envelope in envelopes
-            if int(envelope.header.get("generation", -1)) != int(config.generation)
-            or int(envelope.header.get("base_generation", -1)) != int(config.base_generation)
-            or int(envelope.header.get("staleness", 0)) > 0
-        ),
+        stale_ranks=tuple(sorted(rank for rank in stale_ranks if rank >= 0)),
         failed_ranks=tuple(sorted(rank for rank in failed_ranks if rank >= 0)),
         bytes_sent=sum(int(envelope.header.get("payload_bytes", envelope.payload_bytes)) for envelope in envelopes),
         bytes_received=bytes_received,
+        accepted_ranks=tuple(sorted(rank for rank in accepted_ranks if rank >= 0)),
+        missing_ranks=tuple(sorted(missing)),
+        late_ranks=tuple(sorted(rank for rank in late_ranks if rank >= 0)),
+        invalid_ranks=tuple(sorted(rank for rank in invalid_ranks if rank >= 0)),
+        rejected_ranks=tuple(sorted({
+            rank for rank in (*stale_ranks, *late_ranks, *invalid_ranks)
+            if rank >= 0
+        })),
         bucket_timings_s=bucket_timings,
         merge_latency_s=merge_latency,
     )
@@ -355,6 +408,9 @@ def collect_dense_quorum_from_envelopes(
             "stale_updates": len(stale),
             "timed_out_updates": len(transport_metrics.timed_out_ranks),
             "failed_updates": len(transport_metrics.failed_ranks),
+            "late_updates": len(transport_metrics.late_ranks),
+            "rejected_updates": len(transport_metrics.rejected_ranks),
+            "missing_updates": len(transport_metrics.missing_ranks),
             "merge_duration_s": merge_latency,
             "update_bytes": {
                 **dict(merge_result.metrics.update_bytes),

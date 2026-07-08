@@ -28,6 +28,8 @@ from ndm.async_diloco import (
     AsyncDiLoCoMetricsSummary,
     AsyncDiLoCoUpdate,
     GLOBAL_MERGER_ROLE,
+    RESILIENT_QUORUM_DILOCO_MODE,
+    STRICT_COLLECTIVE_DILOCO_MODE,
     build_metrics_summary,
     compute_dense_delta,
     default_global_quorum,
@@ -75,6 +77,7 @@ class RealAsyncDiLoCoConfig:
     eta_outer: float = 1.0
     weight_by: str = "tokens"
     timeout_s: float = 900.0
+    quorum_mode: str = RESILIENT_QUORUM_DILOCO_MODE
     initial_generation: int = 0
     initial_checkpoint: str | Path | None = None
     synthetic_token_stream: bool = False
@@ -201,6 +204,7 @@ class RealAsyncFileRankConfig:
     global_quorum: int
     local_steps: int
     timeout_s: float = 900.0
+    quorum_mode: str = RESILIENT_QUORUM_DILOCO_MODE
     eta_outer: float = 1.0
     weight_by: str = "tokens"
     initial_checkpoint: str | Path | None = None
@@ -316,6 +320,11 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
             "transport must be 'tcp', 'mpi-dense', or "
             f"'{COMPILED_MPICH_TRANSPORT}'"
         )
+    quorum_mode = str(config.quorum_mode).strip().lower()
+    if quorum_mode not in {RESILIENT_QUORUM_DILOCO_MODE, STRICT_COLLECTIVE_DILOCO_MODE}:
+        raise ValueError("quorum_mode must be 'resilient_quorum' or 'strict_collective'")
+    if quorum_mode == STRICT_COLLECTIVE_DILOCO_MODE and transport != COMPILED_MPICH_TRANSPORT:
+        raise ValueError("strict_collective quorum_mode requires compiled MPICH transport")
 
     progress_dir = run_dir / "progress"
     nodes_dir = run_dir / "node_update_artifacts"
@@ -370,6 +379,7 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
         eta_outer=config.eta_outer,
         weight_by=config.weight_by,
         timeout_s=config.timeout_s,
+        quorum_mode=config.quorum_mode,
         synthetic_token_stream=config.synthetic_token_stream,
         synthetic_vocab_size=config.synthetic_vocab_size,
     )
@@ -519,6 +529,7 @@ def run_real_async_diloco(config: RealAsyncDiLoCoConfig) -> RealAsyncDiLoCoRunRe
                 eta_outer=config.eta_outer,
                 weight_by=config.weight_by,
                 timeout_s=config.timeout_s,
+                quorum_mode=config.quorum_mode,
                 synthetic_token_stream=config.synthetic_token_stream,
                 synthetic_vocab_size=config.synthetic_vocab_size,
             )
@@ -537,6 +548,7 @@ def run_real_async_diloco(config: RealAsyncDiLoCoConfig) -> RealAsyncDiLoCoRunRe
             weight_by=config.weight_by,
             generation_duration_s=max(0.0, time.monotonic() - generation_start_s),
             manager=manager,
+            quorum_mode=config.quorum_mode,
             walltime_remaining_s=config.walltime_remaining_s,
             estimated_finalization_duration_s=config.estimated_finalization_duration_s,
         )
@@ -580,6 +592,7 @@ def _run_real_node_supervisor(
     eta_outer: float,
     weight_by: str,
     timeout_s: float,
+    quorum_mode: str,
     synthetic_token_stream: bool,
     synthetic_vocab_size: int,
 ) -> RealAsyncNodeResult:
@@ -619,6 +632,11 @@ def _run_real_node_supervisor(
         eta_outer=eta_outer,
         weight_by=weight_by,
         generation_duration_s=max(0.0, time.monotonic() - start_s),
+        mode=quorum_mode,
+        checkpoint_state_id=f"{run_id}:{node_id}:gen{int(generation):06d}",
+        missing_worker_ids=tuple(
+            report.worker_id for report in reports if report.timed_out
+        ),
     )
     node_delta = compute_dense_delta(base_state, merge_result.state)
     metrics = _metrics_with_update_bytes(
@@ -639,6 +657,9 @@ def _run_real_node_supervisor(
             tokens=metrics.tokens_per_generation,
             local_steps=sum(update.local_steps for update in merge_result.accepted_updates),
             loss_moving_average=dict(metrics.loss_moving_average),
+            update_id=f"{node_id}:gen{int(generation):06d}",
+            global_generation=generation,
+            checkpoint_state_id=metrics.checkpoint_state_id,
         )
     return RealAsyncNodeResult(
         node_id=node_id,
@@ -661,6 +682,7 @@ def _run_real_global_supervisor(
     weight_by: str,
     generation_duration_s: float,
     manager: AsyncDiLoCoCheckpointManager,
+    quorum_mode: str,
     walltime_remaining_s: float | None,
     estimated_finalization_duration_s: float | None,
 ) -> RealAsyncGlobalResult:
@@ -681,6 +703,11 @@ def _run_real_global_supervisor(
         eta_outer=eta_outer,
         weight_by=weight_by,
         generation_duration_s=generation_duration_s,
+        mode=quorum_mode,
+        checkpoint_state_id=f"{run_id}:global:gen{int(generation):06d}",
+        missing_worker_ids=tuple(
+            update.worker_id for update in node_updates if update.timed_out
+        ),
     )
     metrics = _metrics_with_update_bytes(
         merge_result,

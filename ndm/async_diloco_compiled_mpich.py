@@ -17,7 +17,13 @@ from typing import Any, Mapping, Sequence
 
 import torch
 
-from ndm.async_diloco import AsyncDiLoCoUpdate, quorum_merge, stable_json_dumps, state_num_bytes
+from ndm.async_diloco import (
+    STRICT_COLLECTIVE_DILOCO_MODE,
+    AsyncDiLoCoUpdate,
+    quorum_merge,
+    stable_json_dumps,
+    state_num_bytes,
+)
 from ndm.async_diloco_mpi import (
     DenseBucket,
     DenseTransportMetrics,
@@ -365,6 +371,11 @@ def collect_compiled_mpich_aggregate_result(
             requested_workers=config.requested_ranks,
             quorum_threshold=threshold,
             generation_duration_s=reduce_duration_s,
+            mode=STRICT_COLLECTIVE_DILOCO_MODE,
+            checkpoint_state_id=f"{config.run_id}:gen{int(config.generation):06d}",
+            missing_worker_ids=tuple(
+                f"rank-{rank}" for rank in helper_result.get("timed_out_ranks") or ()
+            ),
         )
         metrics = replace(
             merge_result.metrics,
@@ -400,6 +411,8 @@ def collect_compiled_mpich_aggregate_result(
         eta_outer=config.eta_outer,
         weight_by="tokens",
         generation_duration_s=reduce_duration_s,
+        mode=STRICT_COLLECTIVE_DILOCO_MODE,
+        checkpoint_state_id=f"{config.run_id}:gen{int(config.generation):06d}",
     )
     merge_latency_s = max(0.0, time.monotonic() - merge_start)
     total_tokens = int(helper_result.get("accepted_tokens", aggregate_update.tokens))

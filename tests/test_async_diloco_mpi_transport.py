@@ -42,6 +42,8 @@ def test_dense_update_pack_unpack_preserves_wire_metadata_and_tensors():
     assert envelope.header["generation"] == 5
     assert envelope.header["base_generation"] == 0
     assert envelope.header["base_checkpoint"] == "seed/latest.pt"
+    assert envelope.header["global_generation"] == 5
+    assert envelope.header["update_id"] == "rank-1:g000005:base000000"
     assert envelope.header["tokens"] == 17
     assert envelope.header["loss_window"]["loss"] == 4.0
     assert envelope.header["bucket_count"] > 1
@@ -50,6 +52,8 @@ def test_dense_update_pack_unpack_preserves_wire_metadata_and_tensors():
     restored = unpack_dense_update(envelope)
     assert restored.worker_id == update.worker_id
     assert restored.tokens == update.tokens
+    assert restored.update_id == "rank-1:g000005:base000000"
+    assert restored.global_generation == 5
     assert restored.loss_moving_average["loss_100"] == 4.0
     assert torch.equal(restored.delta["a"], update.delta["a"])
     assert torch.equal(restored.delta["b"], update.delta["b"])
@@ -110,7 +114,10 @@ def test_dense_quorum_rejects_stale_generation_and_advances_with_fresh_quorum():
     assert result.metrics.quorum_status == "advanced"
     assert result.metrics.accepted_updates == 2
     assert result.metrics.stale_updates == 1
+    assert result.metrics.catchup_events[0]["worker_id"] == "stale"
     assert result.transport_metrics.stale_ranks == (0,)
+    assert result.transport_metrics.accepted_ranks == (1, 2)
+    assert result.transport_metrics.rejected_ranks == (0,)
     expected_a = (fresh0.header["tokens"] * torch.tensor([1.0, 2.0]) + fresh1.header["tokens"] * torch.tensor([3.0, 4.0])) / 4.0
     assert torch.allclose(result.state["a"], expected_a)
 
@@ -139,7 +146,13 @@ def test_dense_quorum_timeout_advances_without_unanimity():
     assert result.metrics.quorum_status == "advanced"
     assert result.metrics.quorum_size == 2
     assert result.metrics.timed_out_updates == 2
+    assert result.metrics.missing_updates == 2
+    assert [event["worker_id"] for event in result.metrics.catchup_events] == [
+        "rank-2",
+        "rank-3",
+    ]
     assert result.transport_metrics.timed_out_ranks == (2, 3)
+    assert result.transport_metrics.missing_ranks == (2, 3)
     assert result.transport_metrics.bytes_received > 0
 
 

@@ -4,6 +4,7 @@ torch = pytest.importorskip("torch")
 
 from ndm.async_diloco import (
     AsyncDiLoCoUpdate,
+    RESILIENT_QUORUM_DILOCO_MODE,
     default_global_quorum,
     default_local_quorum,
     quorum_merge,
@@ -134,6 +135,88 @@ def test_quorum_miss_defers_without_mutating_state_and_records_metrics():
     assert result.metrics.tokens_per_generation == 0
     torch.testing.assert_close(result.state["x"], base["x"])
     torch.testing.assert_close(result.state["z"], base["z"])
+
+
+def test_resilient_quorum_advances_without_unanimity_and_records_generation_metadata():
+    base = _state([0.0, 0.0, 1.0, 1.0])
+    updates = [
+        _update("rank-0", 4, [1.0, 0.0], [0.0, 1.0], tokens=2),
+        _update("rank-1", 4, [3.0, 0.0], [0.0, 3.0], tokens=2),
+        AsyncDiLoCoUpdate(
+            worker_id="rank-2",
+            base_generation=4,
+            delta={"x": torch.zeros(2), "z": torch.zeros(2)},
+            tokens=0,
+            local_steps=0,
+            timed_out=True,
+        ),
+    ]
+
+    result = quorum_merge(
+        base,
+        updates,
+        run_id="resilient",
+        generation=4,
+        requested_workers=3,
+        quorum_threshold=2,
+        weight_by="equal",
+        missing_worker_ids=("rank-2",),
+        checkpoint_state_id="state-gen-4",
+    )
+
+    assert result.advanced
+    assert result.metrics.mode == RESILIENT_QUORUM_DILOCO_MODE
+    assert result.metrics.global_generation == 4
+    assert result.metrics.base_generation == 4
+    assert result.metrics.quorum_size == 2
+    assert result.metrics.timed_out_updates == 1
+    assert result.metrics.missing_updates == 1
+    assert result.metrics.catchup_events == (
+        {
+            "worker_id": "rank-2",
+            "from_generation": None,
+            "to_generation": 4,
+            "checkpoint_state_id": "state-gen-4",
+            "reason": "missing_or_timed_out",
+        },
+    )
+    torch.testing.assert_close(result.state["x"], torch.tensor([2.0, 0.0]))
+
+
+def test_stale_and_late_updates_are_rejected_and_get_catchup_state_reset():
+    base = _state([0.0, 0.0, 0.0, 0.0])
+    fresh = _update("fresh", 3, [2.0, 0.0], [0.0, 2.0], tokens=1)
+    stale = _update("stale", 2, [100.0, 0.0], [0.0, 100.0], tokens=1)
+    late = _update("late", 4, [200.0, 0.0], [0.0, 200.0], tokens=1)
+
+    result = quorum_merge(
+        base,
+        (fresh, stale, late),
+        run_id="catchup",
+        generation=3,
+        requested_workers=3,
+        quorum_threshold=1,
+        checkpoint_state_id="state-gen-3",
+    )
+
+    assert result.advanced
+    assert result.metrics.accepted_updates == 1
+    assert result.metrics.stale_updates == 1
+    assert result.metrics.late_updates == 1
+    assert result.metrics.rejected_updates == 2
+    assert result.metrics.staleness_distribution == {"1": 1}
+    assert result.metrics.outcome_rank_ids["accepted"] == ("fresh@base000003",)
+    assert result.metrics.outcome_rank_ids["late"] == ("late@base000004",)
+    assert result.metrics.catchup_events == (
+        {
+            "worker_id": "stale",
+            "from_generation": 2,
+            "to_generation": 3,
+            "checkpoint_state_id": "state-gen-3",
+            "reason": "stale_generation",
+        },
+    )
+    torch.testing.assert_close(result.state["x"], torch.tensor([2.0, 0.0]))
 
 
 def test_quorum_miss_still_rejects_corrupt_accepted_delta():
