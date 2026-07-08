@@ -18,7 +18,7 @@ from typing import Any, Mapping, Sequence
 import torch
 
 from ndm.async_diloco import (
-    STRICT_COLLECTIVE_DILOCO_MODE,
+    RESILIENT_QUORUM_DILOCO_MODE,
     AsyncDiLoCoUpdate,
     quorum_merge,
     stable_json_dumps,
@@ -61,6 +61,7 @@ def run_compiled_mpich_dense_quorum(
     rank: int,
     helper: CompiledMpichHelperConfig,
     base_checkpoint: str | None = None,
+    quorum_mode: str = RESILIENT_QUORUM_DILOCO_MODE,
 ) -> dict[str, Any] | None:
     """Pack one dense update, invoke the compiled helper, and merge on root."""
 
@@ -122,6 +123,7 @@ def run_compiled_mpich_dense_quorum(
         requested_ranks=requested_ranks,
         quorum=quorum,
         timeout_s=helper.timeout_s,
+        quorum_mode=quorum_mode,
     )
     if helper_result.get("aggregate_payload"):
         quorum_result = collect_compiled_mpich_aggregate_result(
@@ -371,7 +373,7 @@ def collect_compiled_mpich_aggregate_result(
             requested_workers=config.requested_ranks,
             quorum_threshold=threshold,
             generation_duration_s=reduce_duration_s,
-            mode=STRICT_COLLECTIVE_DILOCO_MODE,
+            mode=config.quorum_mode,
             checkpoint_state_id=f"{config.run_id}:gen{int(config.generation):06d}",
             missing_worker_ids=tuple(
                 f"rank-{rank}" for rank in helper_result.get("timed_out_ranks") or ()
@@ -411,7 +413,7 @@ def collect_compiled_mpich_aggregate_result(
         eta_outer=config.eta_outer,
         weight_by="tokens",
         generation_duration_s=reduce_duration_s,
-        mode=STRICT_COLLECTIVE_DILOCO_MODE,
+        mode=config.quorum_mode,
         checkpoint_state_id=f"{config.run_id}:gen{int(config.generation):06d}",
     )
     merge_latency_s = max(0.0, time.monotonic() - merge_start)

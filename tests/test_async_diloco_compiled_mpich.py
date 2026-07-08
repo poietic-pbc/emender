@@ -10,6 +10,8 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from ndm.async_diloco import AsyncDiLoCoUpdate
+from ndm.async_diloco import RESILIENT_QUORUM_DILOCO_MODE
+from ndm.async_diloco import STRICT_COLLECTIVE_DILOCO_MODE
 from ndm.async_diloco import stable_json_dumps
 import ndm.async_diloco_compiled_mpich as compiled_mpich
 from ndm.async_diloco_compiled_mpich import (
@@ -211,6 +213,7 @@ def test_compiled_mpich_helper_invocation_uses_shared_library_not_subprocess(tmp
     assert payload["transport"]["helper_result"]["received_payloads"] == []
     assert payload["transport"]["metrics"]["quorum_size"] == 1
     assert payload["transport"]["metrics"]["bucket_timings_s"]
+    assert payload["global_generations"][0]["metrics"]["mode"] == RESILIENT_QUORUM_DILOCO_MODE
     assert payload["global_generations"][0]["metrics"]["accepted_updates"] == 1
     assert payload["latest_generation"] == -1
 
@@ -375,6 +378,7 @@ def test_compiled_mpich_helper_invocation_errors_on_nonzero(tmp_path, monkeypatc
             quorum=1,
             rank=0,
             helper=CompiledMpichHelperConfig(helper_bin=helper, ipc_dir=tmp_path / "ipc"),
+            quorum_mode=STRICT_COLLECTIVE_DILOCO_MODE,
         )
 
 

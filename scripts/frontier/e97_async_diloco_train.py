@@ -103,6 +103,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--device", default=os.environ.get("ASYNC_DILOCO_DEVICE", "cpu"))
     parser.add_argument("--actual-multinode-tcp-quorum", action="store_true",
                         help="Run one Slurm-launched rank and use rank 0 as a TCP quorum coordinator.")
+    parser.add_argument("--allow-tcp-scale-debug", action="store_true",
+                        help="Explicitly allow nonlocal TCP quorum debug runs; never production-approval eligible.")
     parser.add_argument("--actual-multinode-mpi-dense-quorum", action="store_true",
                         help="Explicit legacy comparison path: use mpi4py MPI point-to-point for dense tensor deltas.")
     parser.add_argument("--actual-multinode-compiled-mpich-quorum", action="store_true",
@@ -160,6 +162,27 @@ def _optional_positive_float(value: float) -> float | None:
     return None if float(value) < 0.0 else float(value)
 
 
+def _selected_transport_metadata(args: argparse.Namespace) -> tuple[str, str, str, bool]:
+    if args.actual_multinode_compiled_mpich_quorum:
+        return (
+            COMPILED_MPICH_TRANSPORT,
+            "compiled-cray-mpich-helper-p2p",
+            "frontier-production-candidate",
+            True,
+        )
+    if args.actual_multinode_mpi_dense_quorum:
+        return ("mpi-dense", "mpi-dense", "legacy-comparison-only", False)
+    return ("tcp", "tcp", "tcp-debug-only", False)
+
+
+def _validate_tcp_scale_debug_guard(args: argparse.Namespace) -> None:
+    if args.actual_multinode_tcp_quorum and args.node_count > 8 and not args.allow_tcp_scale_debug:
+        raise ValueError(
+            "--actual-multinode-tcp-quorum is local/debug-only above 8 ranks; "
+            "set --allow-tcp-scale-debug only for explicitly labeled tcp-debug-no-production runs"
+        )
+
+
 def main() -> int:
     args = parse_args()
     if args.worker_count <= 0:
@@ -190,6 +213,8 @@ def main() -> int:
         raise ValueError("choose only one actual multinode quorum transport")
     if args.actual_multinode_compiled_mpich_quorum and not args.compiled_mpich_helper_bin:
         raise ValueError("--compiled-mpich-helper-bin is required for compiled MPICH transport")
+    selected_transport, transport_selector, transport_approval_class, production_eligible = _selected_transport_metadata(args)
+    _validate_tcp_scale_debug_guard(args)
     quorum_mode = args.diloco_quorum_mode or (
         STRICT_COLLECTIVE_DILOCO_MODE
         if args.actual_multinode_compiled_mpich_quorum
@@ -267,10 +292,12 @@ def main() -> int:
             coordinator_bind_host=args.coordinator_bind_host,
             coordinator_port=int(args.coordinator_port),
             transport=(
-                COMPILED_MPICH_TRANSPORT
-                if args.actual_multinode_compiled_mpich_quorum else
-                ("mpi-dense" if args.actual_multinode_mpi_dense_quorum else "tcp")
+                selected_transport
             ),
+            transport_selector=transport_selector,
+            transport_approval_class=transport_approval_class,
+            production_approval_eligible=production_eligible,
+            allow_tcp_scale_debug=bool(args.allow_tcp_scale_debug),
             mpi_bucket_bytes=int(args.mpi_dense_bucket_bytes),
             compiled_mpich_helper_bin=(args.compiled_mpich_helper_bin or None),
             compiled_mpich_ipc_dir=(args.compiled_mpich_ipc_dir or None),

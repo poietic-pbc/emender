@@ -54,9 +54,11 @@ ASYNC_EXPECTED_MISSING_UPDATES=${ASYNC_EXPECTED_MISSING_UPDATES:-$((ASYNC_EXPECT
 ASYNC_TIMEOUT_S=${ASYNC_TIMEOUT_S:-120}
 ASYNC_LOCAL_STEPS=${ASYNC_LOCAL_STEPS:-${DILOCO_K:-1}}
 ASYNC_GENERATIONS=${ASYNC_GENERATIONS:-1}
+ASYNC_DILOCO_QUORUM_MODE=${ASYNC_DILOCO_QUORUM_MODE:-resilient_quorum}
 ASYNC_COORDINATOR_PORT=${ASYNC_COORDINATOR_PORT:-29497}
 ASYNC_COORDINATOR_BIND_HOST=${ASYNC_COORDINATOR_BIND_HOST:-0.0.0.0}
 ASYNC_QUORUM_TRANSPORT=${ASYNC_QUORUM_TRANSPORT:-compiled-cray-mpich-helper-p2p}
+ALLOW_FRONTIER_TCP_SCALE_DEBUG=${ALLOW_FRONTIER_TCP_SCALE_DEBUG:-0}
 ASYNC_MPI_DENSE_BUCKET_BYTES=${ASYNC_MPI_DENSE_BUCKET_BYTES:-67108864}
 ASYNC_COMPILED_MPICH_HELPER_BIN=${ASYNC_COMPILED_MPICH_HELPER_BIN:-${ARTIFACT_DIR}/compiled_mpich_dense_helper}
 ASYNC_COMPILED_MPICH_IPC_BASE=${ASYNC_COMPILED_MPICH_IPC_BASE:-${TMPDIR:-/tmp}/emender-${USER:-unknown}/trainpy_async_quorum}
@@ -69,6 +71,45 @@ fi
 ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM=${ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM:-0}
 ALLOW_SYNTHETIC_TOKEN_FALLBACK=${ALLOW_SYNTHETIC_TOKEN_FALLBACK:-0}
 TRAINING_DATA_MODE=real-token
+TCP_SCALE_DEBUG_OVERRIDE=0
+TRANSPORT_SELECTOR="$ASYNC_QUORUM_TRANSPORT"
+TRANSPORT_ACTUAL="$ASYNC_QUORUM_TRANSPORT"
+TRANSPORT_APPROVAL_CLASS=debug-comparison-only
+PRODUCTION_APPROVAL_ELIGIBLE=false
+
+if [[ "$ASYNC_QUORUM_TRANSPORT" == "tcp" && ( "$SMOKE_NODE_COUNT" -gt 1 || "$ASYNC_TRAINPY_RANKS" -gt 8 ) ]]; then
+  if [[ "$ALLOW_FRONTIER_TCP_SCALE_DEBUG" != "1" ]]; then
+    echo "ASYNC_QUORUM_TRANSPORT=tcp is local/debug-only; refusing SMOKE_NODE_COUNT=$SMOKE_NODE_COUNT ASYNC_TRAINPY_RANKS=$ASYNC_TRAINPY_RANKS without ALLOW_FRONTIER_TCP_SCALE_DEBUG=1" >&2
+    exit 64
+  fi
+  if [[ "$SMOKE_NAME $SCALEOUT_VARIANT ${SLURM_JOB_NAME:-}" != *tcp-debug-no-production* ]]; then
+    echo "TCP scale debug override requires SMOKE_NAME, SCALEOUT_VARIANT, or SLURM_JOB_NAME to contain tcp-debug-no-production" >&2
+    exit 64
+  fi
+  TCP_SCALE_DEBUG_OVERRIDE=1
+fi
+
+case "$ASYNC_QUORUM_TRANSPORT" in
+  compiled-cray-mpich-helper-p2p)
+    TRANSPORT_ACTUAL=compiled-cray-mpich-helper-collective-reduce
+    TRANSPORT_APPROVAL_CLASS=frontier-production-candidate
+    PRODUCTION_APPROVAL_ELIGIBLE=true
+    ;;
+  mpi-dense)
+    TRANSPORT_ACTUAL=mpi-dense
+    TRANSPORT_APPROVAL_CLASS=legacy-comparison-only
+    PRODUCTION_APPROVAL_ELIGIBLE=false
+    ;;
+  tcp)
+    TRANSPORT_ACTUAL=tcp
+    TRANSPORT_APPROVAL_CLASS=tcp-debug-only
+    PRODUCTION_APPROVAL_ELIGIBLE=false
+    ;;
+  *)
+    echo "ASYNC_QUORUM_TRANSPORT must be compiled-cray-mpich-helper-p2p, mpi-dense, or tcp; got: $ASYNC_QUORUM_TRANSPORT" >&2
+    exit 64
+    ;;
+esac
 
 if [[ "$ASYNC_QUORUM_TRANSPORT" != "tcp" && "$ASYNC_EXPECTED_RANKS" -gt "$ASYNC_TRAINPY_RANKS" ]]; then
   ASYNC_EXPECTED_RANKS=$ASYNC_TRAINPY_RANKS
@@ -191,6 +232,7 @@ CMD=(
   --local-steps "$ASYNC_LOCAL_STEPS"
   --steps "$ASYNC_LOCAL_STEPS"
   --timeout-s "$ASYNC_TIMEOUT_S"
+  --diloco-quorum-mode "$ASYNC_DILOCO_QUORUM_MODE"
   --level "$MODEL_LEVEL"
   --params "$MODEL_PARAMS"
   --batch-size "$BATCH_SIZE"
@@ -235,6 +277,9 @@ case "$ASYNC_QUORUM_TRANSPORT" in
     ;;
   tcp)
     CMD+=(--actual-multinode-tcp-quorum)
+    if [[ "$ALLOW_FRONTIER_TCP_SCALE_DEBUG" == "1" ]]; then
+      CMD+=(--allow-tcp-scale-debug)
+    fi
     ;;
   *)
     echo "ASYNC_QUORUM_TRANSPORT must be compiled-cray-mpich-helper-p2p, mpi-dense, or tcp; got: $ASYNC_QUORUM_TRANSPORT" >&2
@@ -314,7 +359,14 @@ fi
   echo "async_expected_missing_updates=$ASYNC_EXPECTED_MISSING_UPDATES"
   echo "async_timeout_s=$ASYNC_TIMEOUT_S"
   echo "async_local_steps=$ASYNC_LOCAL_STEPS"
+  echo "async_diloco_quorum_mode=$ASYNC_DILOCO_QUORUM_MODE"
   echo "async_quorum_transport=$ASYNC_QUORUM_TRANSPORT"
+  echo "async_quorum_transport_selector=$TRANSPORT_SELECTOR"
+  echo "async_quorum_transport_actual=$TRANSPORT_ACTUAL"
+  echo "transport_approval_class=$TRANSPORT_APPROVAL_CLASS"
+  echo "production_approval_eligible=$PRODUCTION_APPROVAL_ELIGIBLE"
+  echo "allow_frontier_tcp_scale_debug=$ALLOW_FRONTIER_TCP_SCALE_DEBUG"
+  echo "tcp_scale_debug_override=$TCP_SCALE_DEBUG_OVERRIDE"
   echo "async_mpi_dense_bucket_bytes=$ASYNC_MPI_DENSE_BUCKET_BYTES"
   echo "async_compiled_mpich_helper_bin=$ASYNC_COMPILED_MPICH_HELPER_BIN"
   echo "async_compiled_mpich_ipc_dir=$ASYNC_COMPILED_MPICH_IPC_DIR"
