@@ -17,7 +17,7 @@ RUN_DATE=$(date -u +%Y%m%d)
 RUN_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 
 OUTPUT_ROOT=${OUTPUT_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/trainpy_async_quorum_smoke}
-SCALEOUT_VARIANT=${SCALEOUT_VARIANT:-E97_1.3B_step1065000_trainpy_async_quorum_${SMOKE_NAME}}
+SCALEOUT_VARIANT=${SCALEOUT_VARIANT:-E97_1.3B_step1282500_trainpy_async_quorum_${SMOKE_NAME}}
 RUN_ROOT="${OUTPUT_ROOT}/${RUN_DATE}/${SCALEOUT_VARIANT}/${SLURM_JOB_ID:-manual}-${RUN_STAMP}"
 RUN_DIR="${RUN_ROOT}/async_run"
 LOG_DIR="${RUN_ROOT}/logs"
@@ -33,7 +33,7 @@ STDOUT_PATH="logs/frontier/trainpy_async_quorum/${SLURM_JOB_NAME:-trainpy-async-
 STDERR_PATH="logs/frontier/trainpy_async_quorum/${SLURM_JOB_NAME:-trainpy-async-quorum}-${SLURM_JOB_ID:-manual}.err"
 
 ASYNC_ENTRYPOINT=${ASYNC_ENTRYPOINT:-scripts/frontier/e97_async_diloco_train.py}
-DEFAULT_E97_SEED_LATEST=${DEFAULT_E97_SEED_LATEST:-/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt}
+DEFAULT_E97_SEED_LATEST=${DEFAULT_E97_SEED_LATEST:-/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260709_084606_step_1282500/latest.pt}
 E97_CHECKPOINT=${E97_CHECKPOINT:-$DEFAULT_E97_SEED_LATEST}
 DATA=${DATA:-/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt}
 TIKTOKEN_CACHE_DIR=${TIKTOKEN_CACHE_DIR:-/lustre/orion/bif148/proj-shared/tiktoken_cache}

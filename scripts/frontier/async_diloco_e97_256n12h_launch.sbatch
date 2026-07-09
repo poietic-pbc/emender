@@ -22,8 +22,8 @@ set -euo pipefail
 
 REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
 TASK_ID=${WG_TASK_ID:-submit-refreshed-e97-async-256n12h}
-TRAINING_TARGET=${TRAINING_TARGET:-E97_1.3B_step1065000_async_diloco_256n12h_20260706}
-DEFAULT_E97_SEED_LATEST=/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt
+TRAINING_TARGET=${TRAINING_TARGET:-E97_1.3B_step1282500_async_diloco_256n12h_20260709}
+DEFAULT_E97_SEED_LATEST=/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260709_084606_step_1282500/latest.pt
 SEED_LATEST_PATH=${SEED_LATEST_PATH:-${E97_CHECKPOINT:-$DEFAULT_E97_SEED_LATEST}}
 E97_CHECKPOINT=${E97_CHECKPOINT:-$SEED_LATEST_PATH}
 DATA=${DATA:-/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt}
@@ -35,7 +35,7 @@ if [[ ! -d "$DEFAULT_ENV_PREFIX" && -d /lustre/orion/bif148/scratch/erikgarrison
 fi
 ENV_PREFIX=${ENV_PREFIX:-$DEFAULT_ENV_PREFIX}
 export EMENDER_CONDA_ENV=${EMENDER_CONDA_ENV:-$ENV_PREFIX}
-SCALEOUT_VARIANT=${SCALEOUT_VARIANT:-E97_1.3B_step1065000_async_quorum_b4_k40_256n12h}
+SCALEOUT_VARIANT=${SCALEOUT_VARIANT:-E97_1.3B_step1282500_async_quorum_b4_k40_256n12h}
 RUN_DATE=$(date -u +%Y%m%d)
 RUN_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 RUN_ROOT="${OUTPUT_ROOT}/${SCALEOUT_VARIANT}/${RUN_DATE}/${SLURM_JOB_ID:-manual}-${RUN_STAMP}"

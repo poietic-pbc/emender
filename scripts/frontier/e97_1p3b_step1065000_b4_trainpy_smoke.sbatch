@@ -1,6 +1,6 @@
 #!/bin/bash
 # Bounded train.py-only E97 1.3B B4 smoke ladder from the refreshed
-# step-1065000 seed. Submit directly for 1 node, or override -N/exports for
+# step-1282500 seed. Submit directly for 1 node, or override -N/exports for
 # the 2-node and 8-node debug-QOS ladder arms after the smaller arm is clean.
 
 #SBATCH -A bif148
@@ -19,9 +19,9 @@
 set -euo pipefail
 
 export WG_TASK_ID=${WG_TASK_ID:-run-train-py}
-export SCALEOUT_VARIANT=${SCALEOUT_VARIANT:-E97_1.3B_step1065000_b4_k40_trainpy_smoke}
-export OUTPUT_ROOT=${OUTPUT_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/trainpy_e97_step1065000_b4_smoke}
-export RESUME_CHECKPOINT=${RESUME_CHECKPOINT:-/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt}
+export SCALEOUT_VARIANT=${SCALEOUT_VARIANT:-E97_1.3B_step1282500_b4_k40_trainpy_smoke}
+export OUTPUT_ROOT=${OUTPUT_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/trainpy_e97_step1282500_b4_smoke}
+export RESUME_CHECKPOINT=${RESUME_CHECKPOINT:-/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260709_084606_step_1282500/latest.pt}
 export DATA=${DATA:-/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt}
 export VAL_DATA=${VAL_DATA:-/lustre/orion/bif148/scratch/erikgarrison/emender/data/commapile_mainmix_val_smoke.txt}
 export TRAIN_MINUTES=${TRAIN_MINUTES:-10}
@@ -59,7 +59,7 @@ export DISTRIBUTED_HEALTH_CHECK_EVERY=${DISTRIBUTED_HEALTH_CHECK_EVERY:-10}
 export REQUESTED_SECONDS=${REQUESTED_SECONDS:-1200}
 export REQUESTED_WALLTIME=${REQUESTED_WALLTIME:-00:20:00}
 export REQUESTED_NODE_HOURS=${REQUESTED_NODE_HOURS:-0.333333}
-export HUMAN_APPROVAL_RECORD=${HUMAN_APPROVAL_RECORD:-WG run-train-py: bounded debug-QOS train.py smoke only; refreshed E97 step1065000 latest.pt; no async/quorum harness; no 64n/256n/production approval.}
+export HUMAN_APPROVAL_RECORD=${HUMAN_APPROVAL_RECORD:-WG run-train-py: bounded debug-QOS train.py smoke only; refreshed E97 step1282500 latest.pt; no async/quorum harness; no 64n/256n/production approval.}
 
 REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
 DEFAULT_ENV_PREFIX="${REPO}/.envs/olcf-rocm711-torch210-py312"
