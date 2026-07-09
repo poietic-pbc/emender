@@ -1,0 +1,28 @@
+{
+  "validation_status": "pass",
+  "conclusion": "pass",
+  "gate": "compiled-helper-64n-production-candidate",
+  "transport": "compiled-cray-mpich-helper-p2p",
+  "actual_transport": "compiled-cray-mpich-helper-collective-reduce",
+  "tcp_dense_data_plane": false,
+  "nodes": 64,
+  "world_size": 512,
+  "accepted_updates": 512,
+  "stale_updates": 0,
+  "failed_updates": 0,
+  "invalid_updates": 0,
+  "timed_out_updates": 0,
+  "source_report": "reports/frontier/run-compiled-helper-20260708.md",
+  "crosscheck_reports": [
+    "reports/frontier/async-quorum-b4k40-debug-ladder-20260709.md",
+    "reports/frontier/async-latest-chaining-readiness-20260709.md"
+  ],
+  "manifest_json": "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/trainpy_async_quorum_smoke/20260708/E97_1.3B_step1065000_trainpy_compiled_helper_64n/4954317-20260708T013528Z/artifacts/manifest.json",
+  "metrics_json": "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/trainpy_async_quorum_smoke/20260708/E97_1.3B_step1065000_trainpy_compiled_helper_64n/4954317-20260708T013528Z/artifacts/metrics.json",
+  "slurm_job_id": "4954317",
+  "slurm_partition": "batch",
+  "slurm_qos": "debug",
+  "slurm_state": "COMPLETED",
+  "slurm_exit_code": "0:0",
+  "notes": "Report-owned machine-readable gate summary for scripts/frontier/async_diloco_e97_256n12h_launch.sbatch. It is derived from the validated 64n compiled-helper report and points to the original manifest and metrics artifacts."
+}
