@@ -24,6 +24,18 @@ JOBID|NAME|PARTITION|QOS|STATE|NODES|TIME_LIMIT|START_TIME|NODELIST(REASON)
            4963853     batch async-di erikgarr PD                 N/A    256 (null)               (Priority)
 ```
 
+Follow-up scheduler check after commit/push produced a concrete estimate:
+
+```text
+JOBID|NAME|PARTITION|QOS|STATE|NODES|TIME_LIMIT|START_TIME|NODELIST(REASON)
+4963853|async-diloco-e97-256n12h|batch|normal|PENDING|256|12:00:00|2026-07-10T01:32:00|(Priority)
+```
+
+```text
+             JOBID PARTITION     NAME     USER ST          START_TIME  NODES SCHEDNODES           NODELIST(REASON)
+           4963853     batch async-di erikgarr PD 2026-07-10T01:32:00    256 frontier[00062-00065 (Priority)
+```
+
 ## Git And Seed Gate
 
 - `HEAD`, `main`, and `origin/main`: `005d869389a6380c0185cd17b326491a99ec2d00`.
@@ -152,10 +164,13 @@ TresPerTask=cpu=7,gres/gpu=1
 Pending monitoring:
 
 - Check `squeue --start -j 4963853` about every 2 hours while the start time is
-  `N/A`.
+  `N/A` or while the estimate remains more than 2 hours away.
 - If Slurm provides an estimated start time, check at about half the remaining
   estimated time or every 2 hours, whichever is sooner.
 - Record each scheduler check in WG logs and append material state changes here.
+
+Next pending check target after the 2026-07-09T18:13Z follow-up is about
+2026-07-09T20:13Z, unless the scheduler state changes sooner.
 
 Running monitoring:
 
