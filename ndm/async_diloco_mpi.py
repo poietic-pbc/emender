@@ -131,8 +131,8 @@ class DenseTransportQuorumResult:
     metrics: AsyncDiLoCoGenerationMetrics
     transport_metrics: DenseTransportMetrics
 
-    def to_payload(self) -> dict[str, Any]:
-        return {
+    def to_payload(self, *, include_private_state: bool = False) -> dict[str, Any]:
+        payload = {
             "schema_version": 1,
             "transport": {
                 "name": "cray-mpich-gpu-aware-p2p",
@@ -152,6 +152,12 @@ class DenseTransportQuorumResult:
                 "metrics": self.metrics.to_dict(),
             }],
         }
+        if include_private_state:
+            payload["_private_global_state"] = {
+                name: tensor.detach().cpu()
+                for name, tensor in self.state.items()
+            }
+        return payload
 
 
 def pack_dense_update(
@@ -611,11 +617,13 @@ def run_mpi_dense_quorum(
         ),
         timed_out_ranks=timed_out,
     )
-    payload = result.to_payload()
+    payload = result.to_payload(include_private_state=True)
     payload["latest_generation"] = generation if result.metrics.latest_advanced else -1
+    peer_payload = dict(payload)
+    peer_payload.pop("_private_global_state", None)
     for peer in range(world):
         if peer != root_rank and peer < requested_ranks:
-            comm.isend(payload, dest=peer, tag=MPI_DENSE_RESULT_TAG)
+            comm.isend(peer_payload, dest=peer, tag=MPI_DENSE_RESULT_TAG)
     return payload
 
 

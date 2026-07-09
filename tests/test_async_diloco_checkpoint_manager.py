@@ -129,6 +129,22 @@ def test_partial_or_inflight_generation_data_does_not_become_latest(tmp_path):
     assert latest_payload["generation"] == 1
 
 
+def test_extra_checkpoint_verification_failure_leaves_previous_latest_intact(tmp_path):
+    manager = _manager(tmp_path)
+    manager.publish_global_generation(_metric(1))
+    before = json.loads((tmp_path / "latest.json").read_text(encoding="utf-8"))
+
+    with pytest.raises(FileNotFoundError):
+        manager.publish_global_generation(
+            _metric(2),
+            extra_checkpoint_paths=(tmp_path / "missing.pt",),
+        )
+
+    after = json.loads((tmp_path / "latest.json").read_text(encoding="utf-8"))
+    assert after == before
+    assert after["generation"] == 1
+
+
 def test_generation_manifest_is_written_for_every_generation(tmp_path):
     manager = _manager(tmp_path)
 

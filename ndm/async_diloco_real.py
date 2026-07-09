@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, replace
 import copy
 import json
 import math
+import os
 from pathlib import Path
 import socket
 import struct
@@ -358,12 +359,15 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
     torch.manual_seed(int(getattr(train_args, "seed", 42)))
     global_model = train.build_training_model(train_args)
     optimizer_state_dict: Mapping[str, Any] | None = None
+    initial_checkpoint_payload: Mapping[str, Any] | None = None
     if config.initial_checkpoint is not None:
         _, _, ckpt = train.load_checkpoint(
             str(config.initial_checkpoint),
             global_model,
             return_checkpoint=True,
         )
+        ckpt["checkpoint_path"] = str(config.initial_checkpoint)
+        initial_checkpoint_payload = ckpt
         optimizer_state_dict = ckpt.get("optimizer_state_dict")
     base_state = _floating_state_dict(global_model)
     del global_model
@@ -432,6 +436,9 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
             artifact_dir=nodes_dir,
             progress_dir=progress_dir,
             generation=generation,
+            train_args=train_args,
+            optimizer_state_dict=optimizer_state_dict,
+            initial_checkpoint_payload=initial_checkpoint_payload,
         )
     elif transport == "mpi-dense":
         root_payload = _coordinate_mpi_dense_rank(
@@ -442,6 +449,9 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
             artifact_dir=nodes_dir,
             progress_dir=progress_dir,
             generation=generation,
+            train_args=train_args,
+            optimizer_state_dict=optimizer_state_dict,
+            initial_checkpoint_payload=initial_checkpoint_payload,
         )
     elif int(config.node_rank) == 0:
         root_payload = _coordinate_network_rank_quorum(
@@ -525,12 +535,15 @@ def run_real_async_diloco(config: RealAsyncDiLoCoConfig) -> RealAsyncDiLoCoRunRe
     torch.manual_seed(int(getattr(train_args, "seed", 42)))
     global_model = train.build_training_model(train_args)
     optimizer_state_dict: Mapping[str, Any] | None = None
+    initial_checkpoint_payload: Mapping[str, Any] | None = None
     if config.initial_checkpoint is not None:
         _, _, ckpt = train.load_checkpoint(
             str(config.initial_checkpoint),
             global_model,
             return_checkpoint=True,
         )
+        ckpt["checkpoint_path"] = str(config.initial_checkpoint)
+        initial_checkpoint_payload = ckpt
         optimizer_state_dict = ckpt.get("optimizer_state_dict")
     base_state = _floating_state_dict(global_model)
     latest_generation = int(config.initial_generation)
@@ -584,6 +597,9 @@ def run_real_async_diloco(config: RealAsyncDiLoCoConfig) -> RealAsyncDiLoCoRunRe
             quorum_mode=config.quorum_mode,
             walltime_remaining_s=config.walltime_remaining_s,
             estimated_finalization_duration_s=config.estimated_finalization_duration_s,
+            train_args=train_args,
+            optimizer_state_dict=optimizer_state_dict,
+            initial_checkpoint_payload=initial_checkpoint_payload,
         )
         global_results.append(global_result)
         summary_metrics.append(global_result.metrics)
@@ -720,6 +736,9 @@ def _run_real_global_supervisor(
     quorum_mode: str,
     walltime_remaining_s: float | None,
     estimated_finalization_duration_s: float | None,
+    train_args: Namespace | None = None,
+    optimizer_state_dict: Mapping[str, Any] | None = None,
+    initial_checkpoint_payload: Mapping[str, Any] | None = None,
 ) -> RealAsyncGlobalResult:
     node_updates = [
         result.node_update for result in node_results
@@ -755,10 +774,21 @@ def _run_real_global_supervisor(
     )
     publish_paths: tuple[str, ...] = ()
     if merge_result.advanced:
+        chain_checkpoint_path = _write_verified_chain_checkpoint(
+            run_dir=manager.root,
+            run_id=run_id,
+            generation=generation,
+            state=merge_result.state,
+            metrics=metrics,
+            train_args=train_args,
+            optimizer_state_dict=optimizer_state_dict,
+            initial_checkpoint_payload=initial_checkpoint_payload,
+        )
         publish_result = manager.publish_global_generation(
             metrics,
             walltime_remaining_s=walltime_remaining_s,
             estimated_finalization_duration_s=estimated_finalization_duration_s,
+            extra_checkpoint_paths=(chain_checkpoint_path,),
         )
         metrics = publish_result.metrics
         publish_paths = tuple(metrics.checkpoint_paths)
@@ -768,6 +798,110 @@ def _run_real_global_supervisor(
         metrics=metrics,
         publish_paths=publish_paths,
     )
+
+
+def _write_verified_chain_checkpoint(
+    *,
+    run_dir: str | Path,
+    run_id: str,
+    generation: int,
+    state: Mapping[str, torch.Tensor],
+    metrics: AsyncDiLoCoGenerationMetrics,
+    train_args: Namespace | None,
+    optimizer_state_dict: Mapping[str, Any] | None,
+    initial_checkpoint_payload: Mapping[str, Any] | None,
+) -> Path:
+    if train_args is None:
+        raise ValueError("train_args are required to write a chain checkpoint")
+    args = _copy_train_args(train_args)
+    train.normalize_training_args(args)
+    model = train.build_training_model(args)
+    model.load_state_dict(dict(state), strict=False)
+    optimizer = train.build_training_optimizer(model, args)
+    if optimizer_state_dict is not None:
+        optimizer.load_state_dict(optimizer_state_dict)
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = args.lr
+    if str(getattr(args, "optimizer", "")) == "schedulefree":
+        _align_schedulefree_optimizer_state_to_model(model, optimizer)
+
+    source_step = 0
+    if initial_checkpoint_payload is not None:
+        source_step = int(initial_checkpoint_payload.get("step", 0) or 0)
+    step = source_step + (int(generation) + 1) * max(1, int(getattr(args, "steps", 1)))
+    loss = float(metrics.loss_moving_average.get("loss") or metrics.loss_moving_average.get("loss_100") or 0.0)
+    output_dir = Path(run_dir) / "checkpoints" / _chain_checkpoint_label(args)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_path = output_dir / f"checkpoint_step_{step:06d}_loss_{loss:.4f}.pt"
+    metadata = {
+        "kind": "async_diloco_chain",
+        "run_id": run_id,
+        "generation": int(generation),
+        "source_checkpoint": (
+            None if initial_checkpoint_payload is None else initial_checkpoint_payload.get("checkpoint_path")
+        ),
+        "source_checkpoint_step": source_step,
+        "model": getattr(args, "_model_metadata", None),
+        "tokenizer": getattr(args, "tokenizer", None),
+        "optimizer": getattr(args, "optimizer", None),
+        "local_steps": int(getattr(args, "steps", 1)),
+        "tokens_per_generation": int(metrics.tokens_per_generation),
+        "accepted_updates": int(metrics.accepted_updates),
+        "stale_updates": int(metrics.stale_updates),
+        "failed_updates": int(metrics.failed_updates),
+        "invalid_updates": int(metrics.invalid_updates),
+        "timed_out_updates": int(metrics.timed_out_updates),
+    }
+    payload = {
+        "step": step,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "loss": loss,
+        "checkpoint_metadata": metadata,
+    }
+    tmp_path = output_dir / f".{ckpt_path.name}.{os.getpid()}.{time.monotonic_ns()}.tmp"
+    try:
+        torch.save(payload, tmp_path)
+        loaded = torch.load(tmp_path, map_location="cpu")
+        if "model_state_dict" not in loaded or "optimizer_state_dict" not in loaded:
+            raise ValueError("chain checkpoint verification failed: missing model or optimizer state")
+        if int(loaded.get("step", -1)) != step:
+            raise ValueError("chain checkpoint verification failed: step mismatch")
+        os.replace(tmp_path, ckpt_path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+    latest_path = Path(run_dir) / "latest.pt"
+    tmp_latest = latest_path.with_name(f".latest.pt.{os.getpid()}.{time.monotonic_ns()}.tmp")
+    try:
+        if tmp_latest.exists() or tmp_latest.is_symlink():
+            tmp_latest.unlink()
+        tmp_latest.symlink_to(ckpt_path.relative_to(latest_path.parent))
+        os.replace(tmp_latest, latest_path)
+    finally:
+        if tmp_latest.exists() or tmp_latest.is_symlink():
+            tmp_latest.unlink()
+    return ckpt_path
+
+
+def _align_schedulefree_optimizer_state_to_model(
+    model: torch.nn.Module,
+    optimizer: Any,
+) -> None:
+    for group in optimizer.param_groups:
+        for param in group["params"]:
+            state = optimizer.state.setdefault(param, {})
+            state["z"] = param.detach().clone()
+            state.setdefault("exp_avg_sq", torch.zeros_like(param, memory_format=torch.preserve_format))
+        group["train_mode"] = False
+
+
+def _chain_checkpoint_label(args: Namespace) -> str:
+    level = str(getattr(args, "level", "model"))
+    params = str(getattr(args, "params", "unknown"))
+    date = time.strftime("%Y%m%d", time.gmtime())
+    return f"emender_{level}_{params}_{date}"
 
 
 def _run_real_worker(
@@ -1336,6 +1470,9 @@ def _coordinate_mpi_dense_rank(
     artifact_dir: Path,
     progress_dir: Path,
     generation: int,
+    train_args: Namespace,
+    optimizer_state_dict: Mapping[str, Any] | None,
+    initial_checkpoint_payload: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
     metrics_path = Path(config.metrics_json) if config.metrics_json is not None else Path(config.run_dir) / "real_async_metrics.json"
     node_id = f"node-{int(config.node_rank):05d}"
@@ -1392,9 +1529,22 @@ def _coordinate_mpi_dense_rank(
         raise RuntimeError("MPI dense root did not produce a quorum payload")
     global_metrics_payload = ((payload.get("global_generations") or [{}])[0].get("metrics") or {})
     metrics = AsyncDiLoCoGenerationMetrics.from_dict(global_metrics_payload)
+    private_global_state = payload.pop("_private_global_state", None)
     latest_advanced = False
     checkpoint_paths: tuple[str, ...] = ()
     if metrics.quorum_status == "advanced":
+        if private_global_state is None:
+            raise RuntimeError("MPI dense root did not return a merged state for checkpoint chaining")
+        chain_checkpoint_path = _write_verified_chain_checkpoint(
+            run_dir=config.run_dir,
+            run_id=config.run_id,
+            generation=generation,
+            state=private_global_state,
+            metrics=metrics,
+            train_args=train_args,
+            optimizer_state_dict=optimizer_state_dict,
+            initial_checkpoint_payload=initial_checkpoint_payload,
+        )
         manager = AsyncDiLoCoCheckpointManager(
             config.run_dir,
             run_id=config.run_id,
@@ -1405,6 +1555,7 @@ def _coordinate_mpi_dense_rank(
             metrics,
             walltime_remaining_s=config.walltime_remaining_s,
             estimated_finalization_duration_s=config.estimated_finalization_duration_s,
+            extra_checkpoint_paths=(chain_checkpoint_path,),
         )
         metrics = publish.metrics
         checkpoint_paths = tuple(metrics.checkpoint_paths)
@@ -1466,6 +1617,9 @@ def _coordinate_compiled_mpich_dense_rank(
     artifact_dir: Path,
     progress_dir: Path,
     generation: int,
+    train_args: Namespace,
+    optimizer_state_dict: Mapping[str, Any] | None,
+    initial_checkpoint_payload: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
     metrics_path = Path(config.metrics_json) if config.metrics_json is not None else Path(config.run_dir) / "real_async_metrics.json"
     node_id = f"node-{int(config.node_rank):05d}"
@@ -1535,9 +1689,22 @@ def _coordinate_compiled_mpich_dense_rank(
         raise RuntimeError("compiled MPICH helper root did not produce a quorum payload")
     global_metrics_payload = ((payload.get("global_generations") or [{}])[0].get("metrics") or {})
     metrics = AsyncDiLoCoGenerationMetrics.from_dict(global_metrics_payload)
+    private_global_state = payload.pop("_private_global_state", None)
     latest_advanced = False
     checkpoint_paths: tuple[str, ...] = ()
     if metrics.quorum_status == "advanced":
+        if private_global_state is None:
+            raise RuntimeError("compiled MPICH root did not return a merged state for checkpoint chaining")
+        chain_checkpoint_path = _write_verified_chain_checkpoint(
+            run_dir=config.run_dir,
+            run_id=config.run_id,
+            generation=generation,
+            state=private_global_state,
+            metrics=metrics,
+            train_args=train_args,
+            optimizer_state_dict=optimizer_state_dict,
+            initial_checkpoint_payload=initial_checkpoint_payload,
+        )
         manager = AsyncDiLoCoCheckpointManager(
             config.run_dir,
             run_id=config.run_id,
@@ -1548,6 +1715,7 @@ def _coordinate_compiled_mpich_dense_rank(
             metrics,
             walltime_remaining_s=config.walltime_remaining_s,
             estimated_finalization_duration_s=config.estimated_finalization_duration_s,
+            extra_checkpoint_paths=(chain_checkpoint_path,),
         )
         metrics = publish.metrics
         checkpoint_paths = tuple(metrics.checkpoint_paths)

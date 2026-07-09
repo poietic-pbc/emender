@@ -83,7 +83,13 @@ BATCH_SIZE=${BATCH_SIZE:-4}
 CHUNK_SIZE=${CHUNK_SIZE:-2048}
 DILOCO_K=${DILOCO_K:-40}
 GENERATIONS=${GENERATIONS:-1}
-LEARNING_RATE=${LEARNING_RATE:-1e-3}
+LEARNING_RATE=${LEARNING_RATE:-0.001007}
+OPTIMIZER=${OPTIMIZER:-schedulefree}
+WEIGHT_DECAY=${WEIGHT_DECAY:-0.01}
+WARMUP_STEPS=${WARMUP_STEPS:-0}
+MIN_LR_FRAC=${MIN_LR_FRAC:-0.1}
+GRAD_ACCUM=${GRAD_ACCUM:-1}
+GRAD_CLIP=${GRAD_CLIP:-1.0}
 MODEL_LEVEL=${MODEL_LEVEL:-E97}
 MODEL_PARAMS=${MODEL_PARAMS:-1.3b}
 MODEL_TOKENIZER=${MODEL_TOKENIZER:-p50k_base}
@@ -203,6 +209,12 @@ CMD=(
   --batch-size "$BATCH_SIZE"
   --chunk-size "$CHUNK_SIZE"
   --lr "$LEARNING_RATE"
+  --optimizer "$OPTIMIZER"
+  --weight-decay "$WEIGHT_DECAY"
+  --warmup-steps "$WARMUP_STEPS"
+  --min-lr-frac "$MIN_LR_FRAC"
+  --grad-accum "$GRAD_ACCUM"
+  --grad-clip "$GRAD_CLIP"
   --steps "$DILOCO_K"
   --e97-chunk-size "$ASYNC_E97_CHUNK_SIZE"
   --checkpoint-interval "$ASYNC_E97_CHECKPOINT_INTERVAL"
@@ -458,6 +470,12 @@ fi
   echo "diloco_k=$DILOCO_K"
   echo "generations=$GENERATIONS"
   echo "learning_rate=$LEARNING_RATE"
+  echo "optimizer=$OPTIMIZER"
+  echo "weight_decay=$WEIGHT_DECAY"
+  echo "warmup_steps=$WARMUP_STEPS"
+  echo "min_lr_frac=$MIN_LR_FRAC"
+  echo "grad_accum=$GRAD_ACCUM"
+  echo "grad_clip=$GRAD_CLIP"
   echo "model_level=$MODEL_LEVEL"
   echo "model_params=$MODEL_PARAMS"
   echo "model_tokenizer=$MODEL_TOKENIZER"

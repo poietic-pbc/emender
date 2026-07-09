@@ -140,7 +140,7 @@ def run_compiled_mpich_dense_quorum(
             config=quorum_config,
             timed_out_ranks=tuple(int(rank) for rank in helper_result.get("timed_out_ranks") or ()),
         )
-    payload = quorum_result.to_payload()
+    payload = quorum_result.to_payload(include_private_state=True)
     payload["transport"]["name"] = COMPILED_MPICH_TRANSPORT
     payload["transport"]["helper_result"] = helper_result
     payload["latest_generation"] = generation if quorum_result.metrics.latest_advanced else -1

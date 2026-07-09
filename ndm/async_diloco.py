@@ -812,6 +812,7 @@ class AsyncDiLoCoCheckpointManager:
         *,
         walltime_remaining_s: float | None = None,
         estimated_finalization_duration_s: float | None = None,
+        extra_checkpoint_paths: Sequence[str | Path] = (),
     ) -> AsyncDiLoCoPublishResult:
         """Publish a finalized global generation and atomically advance latest."""
 
@@ -865,6 +866,12 @@ class AsyncDiLoCoCheckpointManager:
             if record is not None:
                 checkpoint_paths.append(record.path)
                 checkpoint_sizes[record.path] = record.size_bytes
+        for extra_path in extra_checkpoint_paths:
+            path = Path(extra_path)
+            if not path.is_file():
+                raise FileNotFoundError(f"extra checkpoint path is missing: {path}")
+            checkpoint_paths.append(str(path))
+            checkpoint_sizes[str(path)] = _path_size_bytes(path)
 
         latest_payload = {
             "schema_version": ASYNC_DILOCO_CHECKPOINT_SCHEMA_VERSION,
@@ -872,6 +879,9 @@ class AsyncDiLoCoCheckpointManager:
             "generation": metrics.generation,
             "manifest_path": generation_manifest.path,
             "checkpoint_paths": checkpoint_paths,
+            "model_checkpoint_path": (
+                checkpoint_paths[-1] if extra_checkpoint_paths else None
+            ),
             "published_by": self.role,
             "published_at_s": now_s,
         }

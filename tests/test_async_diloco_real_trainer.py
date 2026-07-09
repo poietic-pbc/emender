@@ -240,6 +240,87 @@ def test_real_async_trainer_accepts_initial_checkpoint(tmp_path):
     assert Path(result.metrics_json).exists()
 
 
+def test_real_async_two_hop_chain_uses_run_local_latest_pt_with_optimizer_state(tmp_path):
+    train_mod = __import__("train")
+    seed_args = _args(seed=999, steps=1, optimizer="schedulefree", weight_decay=0.01, warmup_steps=0)
+    train_mod.normalize_training_args(seed_args)
+    model = train_mod.build_training_model(seed_args)
+    optimizer = train_mod.build_training_optimizer(model, seed_args)
+    seed_checkpoint = tmp_path / "seed" / "checkpoint_step_001000_loss_2.5000.pt"
+    seed_checkpoint.parent.mkdir()
+    torch.save(
+        {
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "step": 1000,
+            "loss": 2.5,
+            "checkpoint_metadata": {
+                "tokenizer": "p50k_base",
+                "model": getattr(seed_args, "_model_metadata", None),
+            },
+        },
+        seed_checkpoint,
+    )
+
+    hop_a = run_real_async_diloco(RealAsyncDiLoCoConfig(
+        run_id="chain-hop-a",
+        run_dir=tmp_path / "hop-a",
+        train_args=seed_args,
+        initial_checkpoint=seed_checkpoint,
+        worker_specs=(RealAsyncWorkerSpec(worker_id="worker-a", local_steps=1),),
+        local_quorum=1,
+        global_quorum=1,
+        global_node_count=1,
+        synthetic_token_stream=True,
+    ))
+    hop_a_latest_pt = tmp_path / "hop-a" / "latest.pt"
+    assert hop_a.latest_generation == 0
+    assert hop_a_latest_pt.is_symlink()
+    hop_a_checkpoint = hop_a_latest_pt.resolve()
+    hop_a_payload = torch.load(hop_a_checkpoint, map_location="cpu")
+    assert hop_a_payload["step"] == 1001
+    assert "optimizer_state_dict" in hop_a_payload
+    assert hop_a_payload["checkpoint_metadata"]["source_checkpoint"] == str(seed_checkpoint)
+    reload_model = train_mod.build_training_model(seed_args)
+    reload_optimizer = train_mod.build_training_optimizer(reload_model, seed_args)
+    train_mod.load_checkpoint(hop_a_latest_pt, reload_model, reload_optimizer)
+    before_train = {
+        name: tensor.detach().clone()
+        for name, tensor in reload_model.state_dict().items()
+        if torch.is_tensor(tensor) and torch.is_floating_point(tensor)
+    }
+    reload_optimizer.train()
+    after_train = {
+        name: tensor.detach()
+        for name, tensor in reload_model.state_dict().items()
+        if torch.is_tensor(tensor) and torch.is_floating_point(tensor)
+    }
+    assert all(torch.equal(before_train[name], after_train[name]) for name in before_train)
+
+    hop_b = run_real_async_diloco(RealAsyncDiLoCoConfig(
+        run_id="chain-hop-b",
+        run_dir=tmp_path / "hop-b",
+        train_args=seed_args,
+        initial_checkpoint=hop_a_latest_pt,
+        worker_specs=(RealAsyncWorkerSpec(worker_id="worker-b", local_steps=1),),
+        local_quorum=1,
+        global_quorum=1,
+        global_node_count=1,
+        synthetic_token_stream=True,
+    ))
+    hop_b_latest_pt = tmp_path / "hop-b" / "latest.pt"
+    hop_b_payload = torch.load(hop_b_latest_pt.resolve(), map_location="cpu")
+
+    assert hop_b.latest_generation == 0
+    assert hop_b_payload["step"] == 1002
+    assert "optimizer_state_dict" in hop_b_payload
+    assert hop_b_payload["checkpoint_metadata"]["source_checkpoint"] == str(hop_a_latest_pt)
+    assert hop_b_payload["checkpoint_metadata"]["source_checkpoint"] != str(seed_checkpoint)
+    assert json.loads((tmp_path / "hop-b" / "latest.json").read_text(encoding="utf-8"))[
+        "model_checkpoint_path"
+    ] == str(hop_b_latest_pt.resolve())
+
+
 def test_real_async_worker_converts_model_to_bf16_before_training(monkeypatch):
     observed = {}
 

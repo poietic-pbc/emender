@@ -256,6 +256,12 @@ def test_async_diloco_launch_wrappers_expose_required_env_knobs():
         "ASYNC_LOCAL_QUORUM=${ASYNC_LOCAL_QUORUM:-6}",
         "ASYNC_GLOBAL_QUORUM=${ASYNC_GLOBAL_QUORUM:-$(((2 * ASYNC_NODE_COUNT + 2) / 3))}",
         "DILOCO_K=${DILOCO_K:-",
+        "LEARNING_RATE=${LEARNING_RATE:-0.001007}",
+        "OPTIMIZER=${OPTIMIZER:-schedulefree}",
+        "WEIGHT_DECAY=${WEIGHT_DECAY:-0.01}",
+        "WARMUP_STEPS=${WARMUP_STEPS:-0}",
+        "GRAD_ACCUM=${GRAD_ACCUM:-1}",
+        "GRAD_CLIP=${GRAD_CLIP:-1.0}",
         "BATCH_SIZE=${BATCH_SIZE:-4}",
         "CHUNK_SIZE=${CHUNK_SIZE:-2048}",
         "MODEL_TOKENIZER=${MODEL_TOKENIZER:-p50k_base}",
@@ -323,6 +329,11 @@ def test_production_async_launcher_records_artifacts_and_real_command_branch():
     assert '--tokenizer "$MODEL_TOKENIZER"' in launch_text
     assert '--batch-size "$BATCH_SIZE"' in launch_text
     assert '--chunk-size "$CHUNK_SIZE"' in launch_text
+    assert '--optimizer "$OPTIMIZER"' in launch_text
+    assert '--weight-decay "$WEIGHT_DECAY"' in launch_text
+    assert '--warmup-steps "$WARMUP_STEPS"' in launch_text
+    assert '--grad-accum "$GRAD_ACCUM"' in launch_text
+    assert '--grad-clip "$GRAD_CLIP"' in launch_text
     assert '--local-steps "$DILOCO_K"' in launch_text
     assert '--steps "$DILOCO_K"' in launch_text
     assert '--e97-chunk-size "$ASYNC_E97_CHUNK_SIZE"' in launch_text
