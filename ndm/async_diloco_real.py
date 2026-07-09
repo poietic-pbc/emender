@@ -357,8 +357,14 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
     train.normalize_training_args(train_args)
     torch.manual_seed(int(getattr(train_args, "seed", 42)))
     global_model = train.build_training_model(train_args)
+    optimizer_state_dict: Mapping[str, Any] | None = None
     if config.initial_checkpoint is not None:
-        train.load_checkpoint(str(config.initial_checkpoint), global_model)
+        _, _, ckpt = train.load_checkpoint(
+            str(config.initial_checkpoint),
+            global_model,
+            return_checkpoint=True,
+        )
+        optimizer_state_dict = ckpt.get("optimizer_state_dict")
     base_state = _floating_state_dict(global_model)
     del global_model
 
@@ -368,7 +374,10 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
         node_id=node_id,
         stage="checkpoint_loaded",
         generation=generation,
-        extra={"base_state_bytes": state_num_bytes(base_state)},
+        extra={
+            "base_state_bytes": state_num_bytes(base_state),
+            "optimizer_state_loaded": optimizer_state_dict is not None,
+        },
     )
 
     spec = RealAsyncWorkerSpec(
@@ -392,6 +401,7 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
         quorum_mode=config.quorum_mode,
         synthetic_token_stream=config.synthetic_token_stream,
         synthetic_vocab_size=config.synthetic_vocab_size,
+        optimizer_state_dict=optimizer_state_dict,
     )
     node_payload = _node_result_payload(
         config,
@@ -514,8 +524,14 @@ def run_real_async_diloco(config: RealAsyncDiLoCoConfig) -> RealAsyncDiLoCoRunRe
 
     torch.manual_seed(int(getattr(train_args, "seed", 42)))
     global_model = train.build_training_model(train_args)
+    optimizer_state_dict: Mapping[str, Any] | None = None
     if config.initial_checkpoint is not None:
-        train.load_checkpoint(str(config.initial_checkpoint), global_model)
+        _, _, ckpt = train.load_checkpoint(
+            str(config.initial_checkpoint),
+            global_model,
+            return_checkpoint=True,
+        )
+        optimizer_state_dict = ckpt.get("optimizer_state_dict")
     base_state = _floating_state_dict(global_model)
     latest_generation = int(config.initial_generation)
     manager = AsyncDiLoCoCheckpointManager(
@@ -548,6 +564,7 @@ def run_real_async_diloco(config: RealAsyncDiLoCoConfig) -> RealAsyncDiLoCoRunRe
                 quorum_mode=config.quorum_mode,
                 synthetic_token_stream=config.synthetic_token_stream,
                 synthetic_vocab_size=config.synthetic_vocab_size,
+                optimizer_state_dict=optimizer_state_dict,
             )
             per_node_results.append(node_result)
             node_results.append(node_result)
@@ -611,6 +628,7 @@ def _run_real_node_supervisor(
     quorum_mode: str,
     synthetic_token_stream: bool,
     synthetic_vocab_size: int,
+    optimizer_state_dict: Mapping[str, Any] | None = None,
 ) -> RealAsyncNodeResult:
     start_s = time.monotonic()
     deadline_s = start_s + float(timeout_s)
@@ -628,6 +646,7 @@ def _run_real_node_supervisor(
             spec=spec,
             synthetic_token_stream=synthetic_token_stream,
             synthetic_vocab_size=synthetic_vocab_size,
+            optimizer_state_dict=optimizer_state_dict,
         ))
 
     reported = {report.worker_id for report in reports}
@@ -760,6 +779,7 @@ def _run_real_worker(
     spec: RealAsyncWorkerSpec,
     synthetic_token_stream: bool,
     synthetic_vocab_size: int,
+    optimizer_state_dict: Mapping[str, Any] | None = None,
 ) -> RealAsyncWorkerReport:
     del run_id
     start_s = time.monotonic()
@@ -777,6 +797,10 @@ def _run_real_worker(
         if bool(getattr(args, "bf16", False)):
             model = model.bfloat16()
         optimizer = train.build_training_optimizer(model, args)
+        if optimizer_state_dict is not None:
+            optimizer.load_state_dict(optimizer_state_dict)
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = args.lr
         batch_iter = _build_batch_iter(
             args,
             rank=spec.seed_offset,
