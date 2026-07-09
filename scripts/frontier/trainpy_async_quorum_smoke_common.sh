@@ -52,6 +52,7 @@ ASYNC_EXPECTED_RANKS=${ASYNC_EXPECTED_RANKS:-$ASYNC_TRAINPY_RANKS}
 ASYNC_GLOBAL_QUORUM=${ASYNC_GLOBAL_QUORUM:-$ASYNC_TRAINPY_RANKS}
 ASYNC_EXPECTED_MISSING_UPDATES=${ASYNC_EXPECTED_MISSING_UPDATES:-$((ASYNC_EXPECTED_RANKS - ASYNC_TRAINPY_RANKS))}
 ASYNC_TIMEOUT_S=${ASYNC_TIMEOUT_S:-120}
+DILOCO_K=${DILOCO_K:-40}
 ASYNC_LOCAL_STEPS=${ASYNC_LOCAL_STEPS:-${DILOCO_K:-1}}
 ASYNC_GENERATIONS=${ASYNC_GENERATIONS:-1}
 ASYNC_DILOCO_QUORUM_MODE=${ASYNC_DILOCO_QUORUM_MODE:-resilient_quorum}
@@ -116,9 +117,15 @@ if [[ "$ASYNC_QUORUM_TRANSPORT" != "tcp" && "$ASYNC_EXPECTED_RANKS" -gt "$ASYNC_
   ASYNC_EXPECTED_MISSING_UPDATES=0
 fi
 
-BATCH_SIZE=${BATCH_SIZE:-1}
-CHUNK_SIZE=${CHUNK_SIZE:-128}
-LEARNING_RATE=${LEARNING_RATE:-0.0001}
+BATCH_SIZE=${BATCH_SIZE:-4}
+CHUNK_SIZE=${CHUNK_SIZE:-2048}
+LEARNING_RATE=${LEARNING_RATE:-0.001007}
+OPTIMIZER=${OPTIMIZER:-schedulefree}
+WEIGHT_DECAY=${WEIGHT_DECAY:-0.01}
+WARMUP_STEPS=${WARMUP_STEPS:-0}
+MIN_LR_FRAC=${MIN_LR_FRAC:-0.1}
+GRAD_ACCUM=${GRAD_ACCUM:-1}
+GRAD_CLIP=${GRAD_CLIP:-1.0}
 MODEL_TOKENIZER=${MODEL_TOKENIZER:-p50k_base}
 MODEL_LEVEL=${MODEL_LEVEL:-E97}
 MODEL_PARAMS=${MODEL_PARAMS:-100m}
@@ -238,6 +245,12 @@ CMD=(
   --batch-size "$BATCH_SIZE"
   --chunk-size "$CHUNK_SIZE"
   --lr "$LEARNING_RATE"
+  --optimizer "$OPTIMIZER"
+  --weight-decay "$WEIGHT_DECAY"
+  --warmup-steps "$WARMUP_STEPS"
+  --min-lr-frac "$MIN_LR_FRAC"
+  --grad-accum "$GRAD_ACCUM"
+  --grad-clip "$GRAD_CLIP"
   --dim "$MODEL_DIM"
   --depth "$MODEL_DEPTH"
   --n-heads "$MODEL_N_HEADS"
@@ -358,6 +371,7 @@ fi
   echo "async_global_quorum=$ASYNC_GLOBAL_QUORUM"
   echo "async_expected_missing_updates=$ASYNC_EXPECTED_MISSING_UPDATES"
   echo "async_timeout_s=$ASYNC_TIMEOUT_S"
+  echo "diloco_k=$DILOCO_K"
   echo "async_local_steps=$ASYNC_LOCAL_STEPS"
   echo "async_diloco_quorum_mode=$ASYNC_DILOCO_QUORUM_MODE"
   echo "async_quorum_transport=$ASYNC_QUORUM_TRANSPORT"
@@ -378,6 +392,16 @@ fi
   echo "async_coordinator_port=$ASYNC_COORDINATOR_PORT"
   echo "requested_walltime=$REQUESTED_WALLTIME"
   echo "requested_node_hours=$REQUESTED_NODE_HOURS"
+  echo "batch_size=$BATCH_SIZE"
+  echo "chunk_size=$CHUNK_SIZE"
+  echo "learning_rate=$LEARNING_RATE"
+  echo "optimizer=$OPTIMIZER"
+  echo "weight_decay=$WEIGHT_DECAY"
+  echo "warmup_steps=$WARMUP_STEPS"
+  echo "min_lr_frac=$MIN_LR_FRAC"
+  echo "grad_accum=$GRAD_ACCUM"
+  echo "grad_clip=$GRAD_CLIP"
+  echo "tokenizer=$MODEL_TOKENIZER"
   echo "human_approval_record=$HUMAN_APPROVAL_RECORD"
   echo "ddp_wrapper_expected=0"
   echo "per_step_all_reduce_expected=0"

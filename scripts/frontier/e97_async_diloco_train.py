@@ -77,6 +77,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--chunk-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--optimizer", choices=["adamw", "schedulefree"], default="adamw")
+    parser.add_argument("--weight-decay", type=float, default=0.0)
+    parser.add_argument("--warmup-steps", type=int, default=0)
+    parser.add_argument("--min-lr-frac", type=float, default=0.1)
+    parser.add_argument("--grad-accum", type=int, default=1)
+    parser.add_argument("--grad-clip", type=float, default=1.0)
     parser.add_argument("--steps", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--bf16", action="store_true",
@@ -250,6 +256,12 @@ def main() -> int:
         batch_size=args.batch_size,
         chunk_size=args.chunk_size,
         lr=args.lr,
+        optimizer=args.optimizer,
+        weight_decay=args.weight_decay,
+        warmup_steps=args.warmup_steps,
+        min_lr_frac=args.min_lr_frac,
+        grad_accum=args.grad_accum,
+        grad_clip=args.grad_clip,
         steps=args.steps,
         seed=args.seed,
         bf16=args.bf16,
