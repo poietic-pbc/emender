@@ -1,4 +1,8 @@
 #!/bin/bash
+# SUPERSEDED: this historical divergent wrapper is not submission authority.
+# Use scripts/frontier/submit_e97_async_256.sh.  Refuse before any old recipe.
+echo "Refusing superseded E97 wrapper; render and promote the canonical bundle" >&2
+exit 78
 # Prepared 256-node 12-hour async quorum DiLoCo E97 launch wrapper.
 #
 # This production wrapper records the exact command and environment artifacts
