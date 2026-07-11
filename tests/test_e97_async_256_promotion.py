@@ -77,3 +77,41 @@ def test_dirty_tracked_worktree_is_rejected(monkeypatch):
 def test_submission_stops_before_sbatch_without_atomic_promotion(tmp_path):
     s,p=bundles(tmp_path); marker=tmp_path/"sbatch-called"; fake=tmp_path/"sbatch"; fake.write_text("#!/bin/sh\ntouch '%s'\n"%marker); fake.chmod(0o755)
     r=check(s,p,"--submit","--approval",str(tmp_path/"missing.json")); assert r.returncode!=0; assert not marker.exists()
+
+def test_slurm_spooled_bash_source_does_not_select_bundle(tmp_path):
+    smoke,_=bundles(tmp_path)
+    script=smoke/"rendered.sbatch"
+    spool=tmp_path/"var/spool/slurmd/job4972201"
+    spool.mkdir(parents=True)
+    spooled=spool/"slurm_script"
+    spooled.write_text(script.read_text())
+    assignment=next(line for line in spooled.read_text().splitlines() if line.startswith("BUNDLE_DIR="))
+    result=subprocess.run(
+        ["bash","-c",assignment+'\nprintf "%s\\n" "$BUNDLE_DIR"'],
+        cwd=spool, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    assert result.returncode==0,result.stderr
+    assert Path(result.stdout.strip())==smoke.resolve()
+    assert str(spool) not in result.stdout
+    assert "BASH_SOURCE" not in assignment
+
+def test_rendered_on_node_preflight_is_before_srun_and_restores_compiler(tmp_path):
+    smoke,_=bundles(tmp_path)
+    text=(smoke/"rendered.sbatch").read_text()
+    before_helper=text.index("--phase before-helper")
+    build=text.index("build_compiled_mpich_dense_helper.sh",before_helper)
+    before_srun=text.index("--phase before-srun",build)
+    launch=text.index("exec srun",before_srun)
+    assert before_helper < build < before_srun < launch
+    assert "source /etc/profile" in text
+    assert "module load PrgEnv-gnu" in text
+    assert "module load cray-mpich" in text
+    assert "module load rocm/6.3.1" in text
+    assert "command -v CC" in text
+    assert "bundle-files.sha256" in text
+    assert "export RUN_ID RUN_DIR METRICS HELPER IPC COORDINATOR_HOST COORDINATOR_PORT" in text
+
+def test_preflight_verifies_all_immutable_launch_surfaces():
+    text=(ROOT/"scripts/frontier/e97_async_256_preflight.py").read_text()
+    for kind in ("fingerprint", "code_commit", "code_tree", "entrypoint", "input_hash", "environment", "modules", "helper", "launcher", "trainer_argv", "srun_argv", "topology"):
+        assert kind in text
