@@ -1,7 +1,9 @@
 # E97 async 256-node smoke/production parity audit and hard-gate plan
 
-Date: 2026-07-11  
-Task: `audit-e97-async-256`  
+Date: 2026-07-11
+
+Task: `audit-e97-async-256`
+
 Decision: **NO-GO for any further 256n12h submission until an exact-bundle
 256-node smoke is promoted through the gate defined below.**
 
