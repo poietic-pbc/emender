@@ -6,7 +6,7 @@
   "topology": {"launched_ranks": 2048, "participant_ranks": 2048, "worker_ranks": 2048, "global_quorum": 2048, "rank_ids": {"start": 0, "stop": 2047}},
   "environment": {"ALLOW_SYNTHETIC_TOKEN_FALLBACK": "0", "ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM": "0", "MPICH_GPU_SUPPORT_ENABLED": "0", "TIKTOKEN_CACHE_DIR": "/lustre/orion/bif148/proj-shared/tiktoken_cache"},
   "modules": ["PrgEnv-gnu", "cray-mpich", "rocm/6.3.1"],
-  "runtime_files": ["scripts/frontier/frontier_runtime_env.sh"],
+  "runtime_files": ["scripts/frontier/frontier_runtime_env.sh", "scripts/frontier/e97_async_256_preflight.py"],
   "helper_files": ["scripts/frontier/build_compiled_mpich_dense_helper.sh", "scripts/frontier/compiled_mpich_dense_helper.cpp"],
   "inputs": {
     "seed": {"path": "/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt", "hash_kind": "sha256", "sha256": "c68ea2d95f2721f1f52664f71c1453e4f30a5520b33eb1cf54974185e5a100a4"},
