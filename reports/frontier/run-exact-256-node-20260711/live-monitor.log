@@ -1,0 +1,8 @@
+2026-07-11T18:02:51Z
+4972201|FAILED|127:0|00:00:06|256
+--- stdout tail
+CC -O2 -std=c++17 -Wall -Wextra /lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-949/scripts/frontier/compiled_mpich_dense_helper.cpp -o /lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-949/e97-256-runs/4972201/compiled_mpich_dense_helper 
+--- stderr tail
+sha256sum: /var/spool/slurmd/job4972201/fingerprint.sha256: No such file or directory
+cat: /var/spool/slurmd/job4972201/fingerprint-file.sha256: No such file or directory
+scripts/frontier/build_compiled_mpich_dense_helper.sh: line 38: CC: command not found
