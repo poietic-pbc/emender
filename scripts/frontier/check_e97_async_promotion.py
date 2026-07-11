@@ -29,14 +29,16 @@ def normalized(bundle,policy):
     script=re.sub(r"e97-async-256-(smoke|production)","e97-async-256-@PROFILE@",script)
     vals={n:json.loads((bundle/n).read_text()) for n in ARTIFACTS}
     r=vals["runtime.json"]; duration=r["trainer_duration_seconds"]
+    script=re.sub(r"(?m)^BUNDLE_DIR=.*$","BUNDLE_DIR=@BUNDLE_DIR@",script)
     script=re.sub(r"BUNDLE_FINGERPRINT='[0-9a-f]{64}'","BUNDLE_FINGERPRINT='@FINGERPRINT@'",script)
+    script=re.sub(r"BUNDLE_MANIFEST_SHA256='[0-9a-f]{64}'","BUNDLE_MANIFEST_SHA256='@BUNDLE_MANIFEST@'",script)
     script=script.replace("--walltime-remaining-s "+str(duration),"--walltime-remaining-s @DURATION@")
     r["profile"]="@PROFILE@"; r["trainer_duration_seconds"]="@DURATION@"
     av=r["trainer_argv"]
     try: av[av.index("--walltime-remaining-s")+1]="@DURATION@"
     except (ValueError,IndexError): fail("duration","missing deterministic stop budget")
     if unresolved(vals): fail("unresolved_variable","manifest contains ${...}")
-    allowed_vars={"BASH_SOURCE[0]","SLURM_SUBMIT_DIR:?","SLURM_SUBMIT_DIR","SLURM_JOB_ID:?","SLURM_JOB_ID","TMPDIR:-/tmp","SLURM_NODELIST","RUN_ID","RUN_DIR","METRICS","HELPER","IPC","SLURM_PROCID:?missing SLURM_PROCID","COORDINATOR_HOST","COORDINATOR_PORT"}
+    allowed_vars={"BASH_SOURCE[0]","SLURM_SUBMIT_DIR:?","SLURM_SUBMIT_DIR","SLURM_JOB_ID:?","SLURM_JOB_ID","TMPDIR:-/tmp","SLURM_NODELIST","SLURM_NODELIST:?","RUN_ID","RUN_DIR","METRICS","HELPER","IPC","SLURM_PROCID:?missing SLURM_PROCID","COORDINATOR_HOST","COORDINATOR_PORT"}
     unknown=set(re.findall(r"\$\{([^}]+)\}",script))-allowed_vars
     if unknown: fail("unresolved_variable",sorted(unknown))
     return {"script":script,"artifacts":vals}, d
