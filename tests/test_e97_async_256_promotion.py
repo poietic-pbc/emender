@@ -34,6 +34,7 @@ def test_job_4962400_launcher_is_byte_exact_and_only_queue_time_differ(tmp_path)
 
 MUTATIONS=[
  ("source_commit","0"*40),("launcher_sha256","0"*64),("resolved.account","other"),("resolved.reservation","x"),
+ ("sbatch_argv",["sbatch","changed-launcher.sbatch"]),
  ("resolved.nodes",255),("resolved.ranks_per_node",7),("resolved.launched_ranks",256),("resolved.participant_ranks",256),
  ("resolved.worker_ranks",256),("resolved.global_quorum",171),("resolved.local_steps",41),("resolved.steps",40000),
  ("resolved.timeout_s",1),("resolved.walltime_remaining_s",43200),("resolved.checkpoint_interval",1),
@@ -77,7 +78,7 @@ def test_modified_parity_policy_fails_closed(tmp_path):
     assert json.loads(result.stderr)["kind"]=="policy"
 
 def promotion(s, **overrides):
-    commit=subprocess.check_output(["git","rev-parse","HEAD"],cwd=str(ROOT),universal_newlines=True).strip()
+    commit="57884f17138843359fcdf164e178e329f6cb6f71"
     value={"job_id":4975667,"slurm_state":"COMPLETED","exit_code":"0:0",
            "origin_commit":commit,"fingerprint":(s/"fingerprint.sha256").read_text().strip(),
            "nodes":256,"ranks":2048,"seed":SEED}
@@ -89,11 +90,43 @@ def test_new_successful_smoke_job_is_accepted_for_promotion(tmp_path):
     result=captured_run(CHECK+['--smoke',str(s),'--production',str(p),'--policy',POLICY,'--require-promotion'])
     assert result.returncode==0,result.stderr
 
-def test_promotion_commit_must_equal_head_and_origin_main(tmp_path):
+def test_unknown_or_unpushed_attested_commit_fails(tmp_path):
     s,p=bundles(tmp_path); promotion(s,origin_commit="5"*40)
     result=captured_run(CHECK+['--smoke',str(s),'--production',str(p),'--policy',POLICY,'--require-promotion'])
     assert result.returncode!=0
     assert json.loads(result.stderr)["kind"]=="origin_commit"
+
+def test_evidence_commit_after_attested_launch_is_accepted(tmp_path):
+    """Regression: 3834ba7 evidence follows the 57884f1 launch identity."""
+    s,p=bundles(tmp_path)
+    promotion(s,origin_commit="57884f17138843359fcdf164e178e329f6cb6f71")
+    result=captured_run(CHECK+['--smoke',str(s),'--production',str(p),'--policy',POLICY,'--require-promotion'])
+    assert result.returncode==0,result.stderr
+    identity=json.loads(result.stdout)["launch_identity"]
+    assert identity["attested_commit"]=="57884f17138843359fcdf164e178e329f6cb6f71"
+    assert identity["origin_main"]!=identity["attested_commit"]
+
+def test_submit_executes_from_attested_tree_not_current_main(tmp_path,monkeypatch):
+    s,p=bundles(tmp_path); promotion(s)
+    checker=module(ROOT/"scripts/frontier/check_e97_async_promotion.py")
+    approval=tmp_path/"approval.json"
+    approval.write_text(json.dumps({"approved":True,"fingerprint":(s/"fingerprint.sha256").read_text().strip()}))
+    attested=tmp_path/"attested"
+    monkeypatch.setattr(checker,"validate_promotion",lambda *args:{"attested_commit":"a"*40})
+    monkeypatch.setattr(checker,"materialize_attested_tree",lambda *args:attested)
+    calls=[]
+    monkeypatch.setattr(checker.os,"chdir",lambda path:calls.append(("chdir",path)))
+    monkeypatch.setattr(checker.os,"execvp",lambda exe,argv:(_ for _ in ()).throw(RuntimeError((exe,argv))))
+    monkeypatch.setattr(sys,"argv",["check","--smoke",str(s),"--production",str(p),"--policy",POLICY,"--submit","--approval",str(approval)])
+    with pytest.raises(RuntimeError): checker.main()
+    assert calls==[("chdir",attested)]
+
+def test_attested_tree_rejects_unverifiable_training_code(tmp_path,monkeypatch):
+    checker=module(ROOT/"scripts/frontier/check_e97_async_promotion.py")
+    golden={"files":{"train.py":"0"*64}}
+    monkeypatch.setattr(checker.subprocess,"check_output",lambda *args,**kwargs:b"train.py\0")
+    # Invalid archive (and therefore any unverifiable tree) fails closed.
+    with pytest.raises(SystemExit): checker.materialize_attested_tree("a"*40,tmp_path,golden)
 
 @pytest.mark.parametrize("field,value",[
     ("job_id",0),("job_id","4975667"),("slurm_state","RUNNING"),("exit_code","1:0"),
