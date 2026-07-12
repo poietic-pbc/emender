@@ -2,7 +2,7 @@
   "schema_version": 1,
   "provenance": {"successful_job": "4962400", "successful_revision": "f693e2c811db49d40bf19c319aa604d0bf27bf8f"},
   "scheduler": {"account": "bif148", "reservation": null, "nodes": 256, "ranks_per_node": 8, "cpus_per_rank": 7, "gpus_per_rank": 1, "gpu_bind": "closest", "export": "NONE", "requeue": false, "signal": "B:USR1@1200"},
-  "launcher": {"shell": "/bin/bash", "entrypoint": "scripts/frontier/e97_async_diloco_train.py", "python": ".envs/olcf-rocm711-torch210-py312/bin/python"},
+  "launcher": {"shell": "/bin/bash", "entrypoint": "scripts/frontier/e97_async_diloco_train.py", "python": "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/bin/python"},
   "topology": {"launched_ranks": 2048, "participant_ranks": 2048, "worker_ranks": 2048, "global_quorum": 2048, "rank_ids": {"start": 0, "stop": 2047}},
   "environment": {"ALLOW_SYNTHETIC_TOKEN_FALLBACK": "0", "ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM": "0", "MPICH_GPU_SUPPORT_ENABLED": "0", "TIKTOKEN_CACHE_DIR": "/lustre/orion/bif148/proj-shared/tiktoken_cache"},
   "modules": ["PrgEnv-gnu", "cray-mpich", "rocm/6.3.1"],

@@ -153,3 +153,7 @@ def test_rendered_script_has_actionable_phases_through_srun(tmp_path):
     assert "status=error rc=%s line=%s command=%q" in text
     assert "phase=srun status=exec ranks=2048 nodes=256" in text
     assert "source /etc/profile.d/modules.sh" in text
+    launcher=RENDER.load()["launcher"]["python"]
+    assert Path(launcher).is_absolute()
+    assert Path(launcher).is_file()
+    assert f"LAUNCHER={launcher}" in text
