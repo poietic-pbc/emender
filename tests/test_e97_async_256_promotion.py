@@ -77,8 +77,9 @@ def test_modified_parity_policy_fails_closed(tmp_path):
     assert json.loads(result.stderr)["kind"]=="policy"
 
 def promotion(s, **overrides):
+    commit=subprocess.check_output(["git","rev-parse","HEAD"],cwd=str(ROOT),universal_newlines=True).strip()
     value={"job_id":4975667,"slurm_state":"COMPLETED","exit_code":"0:0",
-           "origin_commit":"5"*40,"fingerprint":(s/"fingerprint.sha256").read_text().strip(),
+           "origin_commit":commit,"fingerprint":(s/"fingerprint.sha256").read_text().strip(),
            "nodes":256,"ranks":2048,"seed":SEED}
     value.update(overrides)
     (s/"promotion.json").write_text(json.dumps(value))
@@ -87,6 +88,12 @@ def test_new_successful_smoke_job_is_accepted_for_promotion(tmp_path):
     s,p=bundles(tmp_path); promotion(s)
     result=captured_run(CHECK+['--smoke',str(s),'--production',str(p),'--policy',POLICY,'--require-promotion'])
     assert result.returncode==0,result.stderr
+
+def test_promotion_commit_must_equal_head_and_origin_main(tmp_path):
+    s,p=bundles(tmp_path); promotion(s,origin_commit="5"*40)
+    result=captured_run(CHECK+['--smoke',str(s),'--production',str(p),'--policy',POLICY,'--require-promotion'])
+    assert result.returncode!=0
+    assert json.loads(result.stderr)["kind"]=="origin_commit"
 
 @pytest.mark.parametrize("field,value",[
     ("job_id",0),("job_id","4975667"),("slurm_state","RUNNING"),("exit_code","1:0"),

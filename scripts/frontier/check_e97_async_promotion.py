@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Fail-closed parity and submission gate for the job-4962400 launcher."""
-import argparse, hashlib, json, os, sys
+import argparse, hashlib, json, os, subprocess, sys
 from pathlib import Path
 
 ALLOWED={"profile","walltime","queue"}
@@ -20,6 +20,14 @@ def normalized(value):
         argv[argv.index(flag)+1]=token
     for key in ALLOWED: value[key]="@ALLOWED@"
     return value
+def repository_commits():
+    root=Path(__file__).resolve().parents[2]
+    try:
+        head=subprocess.check_output(["git","rev-parse","HEAD"],cwd=str(root),universal_newlines=True).strip()
+        origin=subprocess.check_output(["git","rev-parse","origin/main"],cwd=str(root),universal_newlines=True).strip()
+    except (OSError,subprocess.CalledProcessError) as e:
+        fail("origin_commit",str(e))
+    return head,origin
 def validate_promotion(promotion, launch, bundle):
     fingerprint=(bundle/"fingerprint.sha256").read_text().strip()
     seed=launch["resolved"]["seed"]
@@ -33,6 +41,9 @@ def validate_promotion(promotion, launch, bundle):
         fail("promotion",promotion)
     if not isinstance(promotion.get("origin_commit"),str) or len(promotion["origin_commit"])!=40 or any(c not in "0123456789abcdef" for c in promotion["origin_commit"]):
         fail("promotion",promotion)
+    head,origin=repository_commits()
+    if promotion["origin_commit"]!=head or promotion["origin_commit"]!=origin:
+        fail("origin_commit",{"promotion":promotion["origin_commit"],"head":head,"origin_main":origin})
     if any(promotion.get(key)!=value for key,value in required.items()):
         fail("promotion",promotion)
 def main():
