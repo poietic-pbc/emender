@@ -1,0 +1,255 @@
+# train.py async quorum 256n smoke
+
+Validation: `pass`
+
+Exit status: `0`
+
+Rank starts: `2048` / `2048`
+
+Accepted updates: `2048`
+
+Timed-out updates: `0`
+
+Tokens: `671416320`
+
+Latest path: `/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260712/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4975667-20260712T171513Z/async_run/latest.json`
+
+Metrics JSON: `/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260712/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4975667-20260712T171513Z/artifacts/metrics.json`
+
+Train log: `/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260712/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4975667-20260712T171513Z/logs/trainpy_async_quorum.log`
+
+Stdout: `logs/frontier/trainpy_async_quorum/async-b4k40-ladder-256n-4975667.out`
+
+Stderr: `logs/frontier/trainpy_async_quorum/async-b4k40-ladder-256n-4975667.err`
+
+## Validation Errors
+
+None
+
+
+## Metrics Excerpt
+
+```json
+{
+  "global_metrics": {
+    "accepted_updates": 2048,
+    "base_generation": 0,
+    "catchup_events": [],
+    "checkpoint_duration_s": 0.0009365072473883629,
+    "checkpoint_paths": [
+      "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260712/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4975667-20260712T171513Z/async_run/generations/gen_000000/manifest.json",
+      "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260712/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4975667-20260712T171513Z/async_run/recovery_checkpoints/gen_000000/initial.json",
+      "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260712/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4975667-20260712T171513Z/async_run/export_checkpoints/gen_000000/initial.json",
+      "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260712/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4975667-20260712T171513Z/async_run/recovery_checkpoints/gen_000000/walltime_finalization.json",
+      "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260712/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4975667-20260712T171513Z/async_run/checkpoints/emender_E97_100m_20260712/checkpoint_step_1525040_loss_2.4854.pt"
+    ],
+    "checkpoint_sizes": {
+      "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260712/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4975667-20260712T171513Z/async_run/checkpoints/emender_E97_100m_20260712/checkpoint_step_1525040_loss_2.4854.pt": 15439252298,
+      "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260712/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4975667-20260712T171513Z/async_run/export_checkpoints/gen_000000/initial.json": 8672,
+      "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260712/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4975667-20260712T171513Z/async_run/generations/gen_000000/manifest.json": 8894,
+      "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260712/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4975667-20260712T171513Z/async_run/recovery_checkpoints/gen_000000/initial.json": 8676,
+      "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260712/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4975667-20260712T171513Z/async_run/recovery_checkpoints/gen_000000/walltime_finalization.json": 8705
+    },
+    "checkpoint_state_id": "run-async-b4k40-debug-ladder-256n-256n-4975667-20260712T171513Z:gen000000",
+    "failed_updates": 0,
+    "generation": 0,
+    "generation_duration_s": 73.7454,
+    "global_generation": 0,
+    "invalid_updates": 0,
+    "late_updates": 0,
+    "latest_advanced": true,
+    "loss_moving_average": {
+      "loss": 2.4854,
+      "loss_100": 2.4854
+    },
+    "merge_duration_s": 5.445101058110595,
+    "missing_updates": 0,
+    "mode": "resilient_quorum",
+    "outcome_rank_ids": {
+      "accepted": [
+        "node-00000:gen000000"
+      ],
+      "failed": [],
+      "invalid": [],
+      "late": [],
+      "missing": [],
+      "stale": [],
+      "timed_out": []
+    },
+    "participating_workers": 2048,
+    "quorum_size": 2048,
+    "quorum_status": "advanced",
+    "quorum_threshold": 2048,
+    "rebase_duration_s": 0.0,
+    "rejected_updates": 0,
+    "requested_workers": 2048,
+    "resume_source_generation": null,
+    "run_id": "run-async-b4k40-debug-ladder-256n-256n-4975667-20260712T171513Z",
+    "schema_version": 1,
+    "stale_updates": 0,
+    "staleness_distribution": {},
+    "timed_out_updates": 0,
+    "tokens_per_generation": 671416320,
+    "tokens_per_sec": 9104517.976714479,
+    "update_bytes": {
+      "accepted": 5506770496,
+      "accepted_dense_delta": 5506770496,
+      "mpi_reduce_aggregate": 5506770496,
+      "mpi_reduce_payload_sent": 11277865975808
+    },
+    "update_norms": {
+      "embedding.weight": 811.5263671875,
+      "layer_norms.0.weight": 3.0662145614624023,
+      "layer_norms.1.weight": 3.394857168197632,
+      "layer_norms.10.weight": 3.4131593704223633,
+      "layer_norms.2.weight": 3.3851704597473145,
+      "layer_norms.3.weight": 3.3781356811523438,
+      "layer_norms.4.weight": 3.3748087882995605,
+      "layer_norms.5.weight": 3.3764188289642334,
+      "layer_norms.6.weight": 3.3981590270996094,
+      "layer_norms.7.weight": 3.4688124656677246,
+      "layer_norms.8.weight": 3.3722758293151855,
+      "layer_norms.9.weight": 3.3483216762542725,
+      "layers.0.mixer.A_log": 2.3569512367248535,
+      "layers.0.mixer.a_proj.weight": 28.726360321044922,
+      "layers.0.mixer.dt_bias": 0.0,
+      "layers.0.mixer.erase_gate_proj.weight": 112.59862518310547,
+      "layers.0.mixer.g_proj.weight": 97.68992614746094,
+      "layers.0.mixer.o_proj.weight": 87.83702087402344,
+      "layers.0.mixer.qkv_proj.weight": 151.76052856445312,
+      "layers.0.mixer.value_write_gate_proj.weight": 111.00193786621094,
+      "layers.0.mlp.w1.weight": 63.62178421020508,
+      "layers.0.mlp.w2.weight": 64.3669204711914,
+      "layers.0.mlp.w3.weight": 62.915897369384766,
+      "layers.0.norm_2.weight": 3.213229179382324,
+      "layers.1.mixer.A_log": 2.4005048274993896,
+      "layers.1.mixer.a_proj.weight": 25.509822845458984,
+      "layers.1.mixer.dt_bias": 0.0,
+      "layers.1.mixer.erase_gate_proj.weight": 98.36524963378906,
+      "layers.1.mixer.g_proj.weight": 90.15582275390625,
+      "layers.1.mixer.o_proj.weight": 81.89464569091797,
+      "layers.1.mixer.qkv_proj.weight": 133.3204345703125,
+      "layers.1.mixer.value_write_gate_proj.weight": 99.78445434570312,
+      "layers.1.mlp.w1.weight": 64.49264526367188,
+      "layers.1.mlp.w2.weight": 65.96720123291016,
+      "layers.1.mlp.w3.weight": 62.58342361450195,
+      "layers.1.norm_2.weight": 3.05281662940979,
+      "layers.10.mixer.A_log": 2.344304084777832,
+      "layers.10.mixer.a_proj.weight": 29.984819412231445,
+      "layers.10.mixer.dt_bias": 0.0,
+      "layers.10.mixer.erase_gate_proj.weight": 132.76194763183594,
+      "layers.10.mixer.g_proj.weight": 122.74187469482422,
+      "layers.10.mixer.o_proj.weight": 113.98282623291016,
+      "layers.10.mixer.qkv_proj.weight": 174.3985595703125,
+      "layers.10.mixer.value_write_gate_proj.weight": 140.32310485839844,
+      "layers.10.mlp.w1.weight": 80.24821472167969,
+      "layers.10.mlp.w2.weight": 79.63661193847656,
+      "layers.10.mlp.w3.weight": 75.93738555908203,
+      "layers.10.norm_2.weight": 3.4129350185394287,
+      "layers.2.mixer.A_log": 2.3141634464263916,
+      "layers.2.mixer.a_proj.weight": 28.550365447998047,
+      "layers.2.mixer.dt_bias": 0.0,
+      "layers.2.mixer.erase_gate_proj.weight": 99.89517974853516,
+      "layers.2.mixer.g_proj.weight": 90.62269592285156,
+      "layers.2.mixer.o_proj.weight": 82.62374114990234,
+      "layers.2.mixer.qkv_proj.weight": 133.07147216796875,
+      "layers.2.mixer.value_write_gate_proj.weight": 100.52893829345703,
+      "layers.2.mlp.w1.weight": 62.72294998168945,
+      "layers.2.mlp.w2.weight": 64.44606018066406,
+      "layers.2.mlp.w3.weight": 61.36884689331055,
+      "layers.2.norm_2.weight": 3.0970842838287354,
+      "layers.3.mixer.A_log": 2.352571725845337,
+      "layers.3.mixer.a_proj.weight": 30.662776947021484,
+      "layers.3.mixer.dt_bias": 0.0,
+      "layers.3.mixer.erase_gate_proj.weight": 103.5892105102539,
+      "layers.3.mixer.g_proj.weight": 92.64433288574219,
+      "layers.3.mixer.o_proj.weight": 85.0415267944336,
+      "layers.3.mixer.qkv_proj.weight": 135.9583740234375,
+      "layers.3.mixer.value_write_gate_proj.weight": 104.00458526611328,
+      "layers.3.mlp.w1.weight": 62.68356704711914,
+      "layers.3.mlp.w2.weight": 63.861671447753906,
+      "layers.3.mlp.w3.weight": 61.28825759887695,
+      "layers.3.norm_2.weight": 3.1886496543884277,
+      "layers.4.mixer.A_log": 2.3331167697906494,
+      "layers.4.mixer.a_proj.weight": 33.42810821533203,
+      "layers.4.mixer.dt_bias": 0.0,
+      "layers.4.mixer.erase_gate_proj.weight": 110.3557357788086,
+      "layers.4.mixer.g_proj.weight": 94.93714904785156,
+      "layers.4.mixer.o_proj.weight": 88.36479187011719,
+      "layers.4.mixer.qkv_proj.weight": 140.64797973632812,
+      "layers.4.mixer.value_write_gate_proj.weight": 108.31709289550781,
+      "layers.4.mlp.w1.weight": 63.510292053222656,
+      "layers.4.mlp.w2.weight": 64.1777572631836,
+      "layers.4.mlp.w3.weight": 62.066226959228516,
+      "layers.4.norm_2.weight": 3.231865406036377,
+      "layers.5.mixer.A_log": 2.4296205043792725,
+      "layers.5.mixer.a_proj.weight": 37.24920654296875,
+      "layers.5.mixer.dt_bias": 0.0,
+      "layers.5.mixer.erase_gate_proj.weight": 117.65618133544922,
+      "layers.5.mixer.g_proj.weight": 98.07826232910156,
+      "layers.5.mixer.o_proj.weight": 90.5216293334961,
+      "layers.5.mixer.qkv_proj.weight": 146.08319091796875,
+      "layers.5.mixer.value_write_gate_proj.weight": 114.09933471679688,
+      "layers.5.mlp.w1.weight": 65.03662109375,
+      "layers.5.mlp.w2.weight": 65.32404327392578,
+      "layers.5.mlp.w3.weight": 63.263465881347656,
+      "layers.5.norm_2.weight": 3.1566312313079834,
+      "layers.6.mixer.A_log": 2.2963380813598633,
+      "layers.6.mixer.a_proj.weight": 34.505306243896484,
+      "layers.6.mixer.dt_bias": 0.0,
+      "layers.6.mixer.erase_gate_proj.weight": 121.74876403808594,
+      "layers.6.mixer.g_proj.weight": 104.97364044189453,
+      "layers.6.mixer.o_proj.weight": 92.35145568847656,
+      "layers.6.mixer.qkv_proj.weight": 151.15774536132812,
+      "layers.6.mixer.value_write_gate_proj.weight": 117.32720947265625,
+      "layers.6.mlp.w1.weight": 67.00647735595703,
+      "layers.6.mlp.w2.weight": 67.03528594970703,
+      "layers.6.mlp.w3.weight": 65.06389617919922,
+      "layers.6.norm_2.weight": 3.106492519378662,
+      "layers.7.mixer.A_log": 2.311307191848755,
+      "layers.7.mixer.a_proj.weight": 36.64289855957031,
+      "layers.7.mixer.dt_bias": 0.0,
+      "layers.7.mixer.erase_gate_proj.weight": 123.54686737060547,
+      "layers.7.mixer.g_proj.weight": 123.04595184326172,
+      "layers.7.mixer.o_proj.weight": 94.49986267089844,
+      "layers.7.mixer.qkv_proj.weight": 160.02215576171875,
+      "layers.7.mixer.value_write_gate_proj.weight": 123.2992935180664,
+      "layers.7.mlp.w1.weight": 68.19102478027344,
+      "layers.7.mlp.w2.weight": 67.63521575927734,
+      "layers.7.mlp.w3.weight": 65.89009094238281,
+      "layers.7.norm_2.weight": 3.1590123176574707,
+      "layers.8.mixer.A_log": 2.3084774017333984,
+      "layers.8.mixer.a_proj.weight": 36.192928314208984,
+      "layers.8.mixer.dt_bias": 0.0,
+      "layers.8.mixer.erase_gate_proj.weight": 132.27769470214844,
+      "layers.8.mixer.g_proj.weight": 131.4653778076172,
+      "layers.8.mixer.o_proj.weight": 101.08717346191406,
+      "layers.8.mixer.qkv_proj.weight": 170.1886749267578,
+      "layers.8.mixer.value_write_gate_proj.weight": 133.84225463867188,
+      "layers.8.mlp.w1.weight": 70.12164306640625,
+      "layers.8.mlp.w2.weight": 69.15007781982422,
+      "layers.8.mlp.w3.weight": 67.80630493164062,
+      "layers.8.norm_2.weight": 3.3083083629608154,
+      "layers.9.mixer.A_log": 2.326273202896118,
+      "layers.9.mixer.a_proj.weight": 33.30824661254883,
+      "layers.9.mixer.dt_bias": 0.0,
+      "layers.9.mixer.erase_gate_proj.weight": 137.3147430419922,
+      "layers.9.mixer.g_proj.weight": 125.84942626953125,
+      "layers.9.mixer.o_proj.weight": 107.57586669921875,
+      "layers.9.mixer.qkv_proj.weight": 174.7655792236328,
+      "layers.9.mixer.value_write_gate_proj.weight": 139.35784912109375,
+      "layers.9.mlp.w1.weight": 74.06968688964844,
+      "layers.9.mlp.w2.weight": 74.1451187133789,
+      "layers.9.mlp.w3.weight": 72.66746520996094,
+      "layers.9.norm_2.weight": 3.4315271377563477,
+      "lm_head.weight": 811.5263671875,
+      "norm.weight": 3.8542685508728027
+    }
+  },
+  "global_quorum": 2048,
+  "latest_generation": 0,
+  "mode": "actual_multinode_compiled_mpich_quorum",
+  "node_count": 2048,
+  "synthetic_token_stream": null
+}
+```

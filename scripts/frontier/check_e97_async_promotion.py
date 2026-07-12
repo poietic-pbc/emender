@@ -20,6 +20,21 @@ def normalized(value):
         argv[argv.index(flag)+1]=token
     for key in ALLOWED: value[key]="@ALLOWED@"
     return value
+def validate_promotion(promotion, launch, bundle):
+    fingerprint=(bundle/"fingerprint.sha256").read_text().strip()
+    seed=launch["resolved"]["seed"]
+    job_id=promotion.get("job_id")
+    required={
+        "fingerprint":fingerprint,"slurm_state":"COMPLETED","exit_code":"0:0",
+        "nodes":launch["resolved"]["nodes"],"ranks":launch["resolved"]["launched_ranks"],
+        "seed":seed,
+    }
+    if not isinstance(job_id,int) or isinstance(job_id,bool) or job_id <= 0:
+        fail("promotion",promotion)
+    if not isinstance(promotion.get("origin_commit"),str) or len(promotion["origin_commit"])!=40 or any(c not in "0123456789abcdef" for c in promotion["origin_commit"]):
+        fail("promotion",promotion)
+    if any(promotion.get(key)!=value for key,value in required.items()):
+        fail("promotion",promotion)
 def main():
     p=argparse.ArgumentParser(); p.add_argument("--smoke",type=Path,required=True); p.add_argument("--production",type=Path,required=True); p.add_argument("--policy",type=Path,required=True); p.add_argument("--submit",action="store_true"); p.add_argument("--approval",type=Path); p.add_argument("--require-promotion",action="store_true"); a=p.parse_args()
     try: policy=json.loads(a.policy.read_text())
@@ -32,7 +47,7 @@ def main():
     if (a.submit or a.require_promotion):
         try: promotion=json.loads((a.smoke/"promotion.json").read_text())
         except Exception as e: fail("promotion",str(e))
-        if promotion.get("fingerprint")!=(a.smoke/"fingerprint.sha256").read_text().strip() or promotion.get("job_id")!=4962400 or promotion.get("slurm_state")!="COMPLETED": fail("promotion",promotion)
+        validate_promotion(promotion,s,a.smoke)
     if a.submit:
         if not a.approval: fail("approval","required")
         approval=json.loads(a.approval.read_text())

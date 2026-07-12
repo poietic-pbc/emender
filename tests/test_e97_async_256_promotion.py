@@ -76,6 +76,29 @@ def test_modified_parity_policy_fails_closed(tmp_path):
     assert result.returncode!=0
     assert json.loads(result.stderr)["kind"]=="policy"
 
+def promotion(s, **overrides):
+    value={"job_id":4975667,"slurm_state":"COMPLETED","exit_code":"0:0",
+           "origin_commit":"5"*40,"fingerprint":(s/"fingerprint.sha256").read_text().strip(),
+           "nodes":256,"ranks":2048,"seed":SEED}
+    value.update(overrides)
+    (s/"promotion.json").write_text(json.dumps(value))
+
+def test_new_successful_smoke_job_is_accepted_for_promotion(tmp_path):
+    s,p=bundles(tmp_path); promotion(s)
+    result=captured_run(CHECK+['--smoke',str(s),'--production',str(p),'--policy',POLICY,'--require-promotion'])
+    assert result.returncode==0,result.stderr
+
+@pytest.mark.parametrize("field,value",[
+    ("job_id",0),("job_id","4975667"),("slurm_state","RUNNING"),("exit_code","1:0"),
+    ("origin_commit","bad"),("fingerprint","0"*64),("nodes",255),("ranks",2047),
+    ("seed",{**SEED,"step":1}),
+])
+def test_incomplete_or_mismatched_promotion_fails_closed(tmp_path,field,value):
+    s,p=bundles(tmp_path); promotion(s,**{field:value})
+    result=captured_run(CHECK+['--smoke',str(s),'--production',str(p),'--policy',POLICY,'--require-promotion'])
+    assert result.returncode!=0
+    assert json.loads(result.stderr)["kind"]=="promotion"
+
 def test_actual_complete_proven_batch_prologue_executes_cleanly(tmp_path):
     repo=tmp_path/"repo"; common=repo/"scripts/frontier/trainpy_async_quorum_smoke_common.sh"; common.parent.mkdir(parents=True)
     common.write_text("#!/bin/bash\nset -euo pipefail\nprintf '%s\\n' \"$SMOKE_NAME|$SMOKE_NODE_COUNT|$ASYNC_TRAINPY_RANKS|$ASYNC_GLOBAL_QUORUM|$SCALEOUT_VARIANT\"\n"); common.chmod(0o755)
