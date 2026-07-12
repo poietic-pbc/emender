@@ -1,23 +1,8 @@
 {
-  "schema_version": 1,
-  "provenance": {"successful_job": "4962400", "successful_revision": "f693e2c811db49d40bf19c319aa604d0bf27bf8f"},
-  "scheduler": {"account": "bif148", "reservation": null, "nodes": 256, "ranks_per_node": 8, "cpus_per_rank": 7, "gpus_per_rank": 1, "gpu_bind": "closest", "export": "NONE", "requeue": false, "signal": "B:USR1@1200"},
-  "launcher": {"shell": "/bin/bash", "entrypoint": "scripts/frontier/e97_async_diloco_train.py", "python": ".envs/olcf-rocm711-torch210-py312/bin/python"},
-  "topology": {"launched_ranks": 2048, "participant_ranks": 2048, "worker_ranks": 2048, "global_quorum": 2048, "rank_ids": {"start": 0, "stop": 2047}},
-  "environment": {"ALLOW_SYNTHETIC_TOKEN_FALLBACK": "0", "ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM": "0", "MPICH_GPU_SUPPORT_ENABLED": "0", "TIKTOKEN_CACHE_DIR": "/lustre/orion/bif148/proj-shared/tiktoken_cache"},
-  "modules": ["PrgEnv-gnu", "cray-mpich", "rocm/6.3.1"],
-  "runtime_files": ["scripts/frontier/frontier_runtime_env.sh"],
-  "helper_files": ["scripts/frontier/build_compiled_mpich_dense_helper.sh", "scripts/frontier/compiled_mpich_dense_helper.cpp"],
-  "inputs": {
-    "seed": {"path": "/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt", "hash_kind": "sha256", "sha256": "c68ea2d95f2721f1f52664f71c1453e4f30a5520b33eb1cf54974185e5a100a4"},
-    "data": {"path": "/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt", "hash_kind": "sha256-stat-v1", "sha256": "999c366ac05f799f355988e66d0fab152e9bf0cc17cd73ada900995700e5052c"},
-    "tokenizer": {"path": "/lustre/orion/bif148/proj-shared/tiktoken_cache/ec7223a39ce59f226a68acc30dc1af2788490e15", "hash_kind": "sha256", "sha256": "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069"}
-  },
-  "trainer": {"generations": 1, "local_steps": 40, "timeout_s": 1200, "quorum_mode": "resilient_quorum", "level": "E97", "params": "100m", "tokenizer": "p50k_base", "batch_size": 4, "chunk_size": 2048, "lr": 0.001007, "optimizer": "schedulefree", "weight_decay": 0.01, "warmup_steps": 0, "min_lr_frac": 0.1, "grad_accum": 1, "grad_clip": 1.0, "dim": 1792, "depth": 11, "n_heads": 216, "n_state": 32, "n_groups": 32, "n_slots": 64, "expansion": 1.0, "state_expansion": 2, "gate_activation": "silu", "linear_state": 0, "mlp_ratio": 2.2623, "mlp_multiple": 64, "bf16": true, "use_chunked_e97": false, "e97_chunk_size": 32, "checkpoint_interval": 16, "gradient_checkpointing": false, "projection_chunk_size": 0, "loss_chunk_size": 0},
-  "transport": {"selector": "compiled-cray-mpich-helper-p2p", "actual": "compiled-cray-mpich-helper-collective-reduce", "bucket_bytes": 67108864},
-  "checkpoint": {"recovery_every_generations": 1, "recovery_every_seconds": -1, "export_every_generations": 1, "export_every_seconds": -1, "finalization_reserve_seconds": 1200, "publication": "run-local-latest-json", "external_pointer_mutation": false},
+  "schema_version": 2,
+  "golden_manifest": "configs/frontier/e97_async_256_job4962400_golden.json",
   "profiles": {
-    "smoke": {"walltime": "00:20:00", "trainer_duration_seconds": 1200, "queue": {"partition": "batch", "qos": "debug"}},
-    "production": {"walltime": "12:00:00", "trainer_duration_seconds": 43200, "queue": {"partition": "batch", "qos": "normal"}}
+    "smoke": {"walltime": "00:20:00", "queue": {"partition": "batch", "qos": "debug"}},
+    "production": {"walltime": "12:00:00", "queue": {"partition": "batch", "qos": "normal"}}
   }
 }

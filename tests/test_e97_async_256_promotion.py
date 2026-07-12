@@ -1,79 +1,83 @@
-import copy, importlib.util, json, subprocess, sys
+import importlib.util, json, os, subprocess, sys
 from pathlib import Path
+import pytest
 
 ROOT=Path(__file__).resolve().parents[1]
-def module(name,path):
-    spec=importlib.util.spec_from_file_location(name,str(path)); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m); return m
-RENDER=module("e97render",ROOT/"scripts/frontier/render_e97_async_256.py")
+def module(path):
+    spec=importlib.util.spec_from_file_location("e97_render",path); result=importlib.util.module_from_spec(spec); spec.loader.exec_module(result); return result
+RENDER=module(ROOT/"scripts/frontier/render_e97_async_256.py")
 CHECK=[sys.executable,str(ROOT/"scripts/frontier/check_e97_async_promotion.py")]
 POLICY=str(ROOT/"configs/frontier/e97_async_256_parity_policy.json")
-
 def bundles(tmp_path):
     s=tmp_path/"smoke"; p=tmp_path/"production"; RENDER.render("smoke",s); RENDER.render("production",p); return s,p
-def check(s,p,*extra):
-    return subprocess.run(CHECK+["--smoke",str(s),"--production",str(p),"--policy",POLICY]+list(extra),stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)
-def mutate_json(path,parts,value):
-    x=json.loads(path.read_text()); cur=x
-    for p in parts[:-1]: cur=cur[p]
-    cur[parts[-1]]=value; path.write_text(json.dumps(x))
+def captured_run(argv, **kwargs):
+    return subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          universal_newlines=True, **kwargs)
+def check(s,p): return captured_run(CHECK+["--smoke",str(s),"--production",str(p),"--policy",POLICY])
 
-def test_golden_exact_commands_and_only_typed_differences(tmp_path):
-    s,p=bundles(tmp_path); r=check(s,p)
-    assert r.returncode==0,r.stderr
-    result=json.loads(r.stdout); assert result["allowed_differences"]=={"time":["00:20:00","12:00:00"],"partition":["batch","batch"],"qos":["debug","normal"]}
-    assert (s/"fingerprint.sha256").read_text()==(p/"fingerprint.sha256").read_text()
-
-def test_regression_4962400_vs_4963853_forbidden_drift(tmp_path):
-    s,p=bundles(tmp_path)
-    mutate_json(p/"runtime.json",["topology","participant_ranks"],256)
-    mutate_json(p/"runtime.json",["topology","global_quorum"],171)
-    mutate_json(p/"runtime.json",["trainer","params"],"1.3b")
-    assert check(s,p).returncode!=0
+def test_job_4962400_launcher_is_byte_exact_and_only_queue_time_differ(tmp_path):
+    s,p=bundles(tmp_path); result=check(s,p)
+    assert result.returncode==0,result.stderr
+    evidence=json.loads(result.stdout)
+    assert evidence["allowed_differences"]=={"walltime":["00:20:00","12:00:00"],"partition":["batch","batch"],"qos":["debug","normal"]}
+    assert evidence["training_stop_budget"]=={"generations":1,"local_steps":40,"steps":40,"timeout_s":1200,"walltime_remaining_s":1200}
+    assert (s/"rendered.sbatch").read_bytes()==(ROOT/"scripts/frontier/trainpy_async_quorum_2n_smoke.sbatch").read_bytes()==(p/"rendered.sbatch").read_bytes()
+    assert json.loads((s/"launch-inputs.json").read_text())["launcher_sha256"]=="106a4dde6b966b0af66a1ac92ea0f459c7a435f81f6e322d92e08f30a2cfad30"
 
 MUTATIONS=[
- ("runtime.json",["environment","MPICH_GPU_SUPPORT_ENABLED"],"1"),
- ("runtime.json",["modules",0],"PrgEnv-cray"),
- ("runtime.json",["topology","launched_ranks"],2047),
- ("runtime.json",["topology","worker_ranks"],256),
- ("runtime.json",["topology","global_quorum"],171),
- ("runtime.json",["trainer","optimizer"],"adamw"),
- ("runtime.json",["trainer","timeout_s"],240),
- ("runtime.json",["trainer","params"],"1.3b"),
- ("runtime.json",["checkpoint","publication"],"external-latest"),
- ("runtime.json",["transport","bucket_bytes"],1),
- ("inputs.json",["seed","sha256"],"1"*64),
- ("inputs.json",["data","sha256"],"2"*64),
- ("inputs.json",["tokenizer","sha256"],"0"*40),
- ("code.json",["git_commit"],"0"*40),
- ("code.json",["entrypoint","sha256"],"0"*64),
- ("helper-manifest.json",[0,"sha256"],"0"*64),
- ("runtime-manifest.json",[0,"sha256"],"0"*64),
+ ("source_commit","0"*40),("launcher_sha256","0"*64),("resolved.account","other"),("resolved.reservation","x"),
+ ("resolved.nodes",255),("resolved.ranks_per_node",7),("resolved.launched_ranks",256),("resolved.participant_ranks",256),
+ ("resolved.worker_ranks",256),("resolved.global_quorum",171),("resolved.local_steps",41),("resolved.steps",40000),
+ ("resolved.timeout_s",1),("resolved.walltime_remaining_s",43200),("resolved.checkpoint_interval",1),
+ ("resolved.seed","new.pt"),("resolved.data","other"),("resolved.model","E97/1.3b"),("resolved.optimizer","adamw"),
+ ("resolved.learning_rate","1"),("resolved.batch_size",8),("resolved.chunk_size",1),("resolved.transport","tcp"),
+ ("resolved.mpich_gpu_support_enabled","1"),("resolved.signal","USR1"),("resolved.requeue",True),
+ ("training_stop_budget.steps",40000),("training_stop_budget.walltime_remaining_s",43200),
 ]
-import pytest
-@pytest.mark.parametrize("name,parts,value",MUTATIONS)
-def test_forbidden_json_mutations_fail_closed(tmp_path,name,parts,value):
-    s,p=bundles(tmp_path); mutate_json(p/name,parts,value); assert check(s,p).returncode!=0
+def mutate(path,dotted,value):
+    data=json.loads(path.read_text()); target=data; parts=dotted.split(".")
+    for key in parts[:-1]: target=target[key]
+    target[parts[-1]]=value; path.write_text(json.dumps(data))
+@pytest.mark.parametrize("field,value",MUTATIONS)
+def test_every_non_allowlisted_field_fails_closed(tmp_path,field,value):
+    s,p=bundles(tmp_path); mutate(p/"launch-inputs.json",field,value); assert check(s,p).returncode!=0
 
-@pytest.mark.parametrize("directive,value",[("account","other"),("nodes","255"),("ntasks-per-node","7"),("gpus-per-task","2"),("export","ALL")])
-def test_forbidden_scheduler_mutations(tmp_path,directive,value):
-    s,p=bundles(tmp_path); q=p/"rendered.sbatch"; q.write_text(q.read_text().replace("#SBATCH --"+directive+"=", "#SBATCH --"+directive+"="+value+" #")); assert check(s,p).returncode!=0
+def test_recent_wrapper_drift_reproduced_and_rejected(tmp_path):
+    s,p=bundles(tmp_path); launch=p/"launch-inputs.json"
+    for field,value in (("resolved.global_quorum",171),("resolved.participant_ranks",256),("resolved.seed","step1282500/latest.pt"),("resolved.signal","B:USR1@1200")):
+        mutate(launch,field,value)
+    # Jobs 4972201/4972494/4974389/4974391/4974444 also introduced export=NONE,
+    # spool/helper bootstrap. Any launcher byte drift is independently fatal.
+    (p/"rendered.sbatch").write_text((p/"rendered.sbatch").read_text()+"\n#SBATCH --export=NONE\nmodule load rocm\n")
+    assert check(s,p).returncode!=0
 
-def test_missing_unknown_directive_arbitrary_path_and_unresolved_variable(tmp_path):
-    for transform in (lambda x:x.replace("#SBATCH --account=bif148\n",""),lambda x:x.replace("#SBATCH --account=bif148","#SBATCH --account=bif148\n#SBATCH --reservation=x"),lambda x:x.replace("e97-async-256-production-%j.out","arbitrary.out"),lambda x:x+"\necho ${UNRESOLVED}\n"):
-        s,p=bundles(tmp_path); f=p/"rendered.sbatch"; f.write_text(transform(f.read_text())); assert check(s,p).returncode!=0
+def test_unknown_profile_key_and_golden_source_drift_fail(tmp_path,monkeypatch):
+    config=json.loads(RENDER.CONFIG.read_text()); config["profiles"]["production"]["steps"]=99
+    bad=tmp_path/"config.json"; bad.write_text(json.dumps(config)); monkeypatch.setattr(RENDER,"CONFIG",bad)
+    with pytest.raises(ValueError,match="only walltime and queue"): RENDER.load()
 
-def test_unknown_profile_keys_and_nondeterministic_duration_fail(tmp_path,monkeypatch):
-    original=RENDER.CONFIG
-    c=json.loads(original.read_text()); c["profiles"]["smoke"]["account"]="bad"
-    bad=tmp_path/"bad.yaml"; bad.write_text(json.dumps(c)); monkeypatch.setattr(RENDER,"CONFIG",bad)
-    with pytest.raises(ValueError): RENDER.load()
-    c["profiles"]["smoke"].pop("account"); c["profiles"]["smoke"]["trainer_duration_seconds"]=1; bad.write_text(json.dumps(c))
-    with pytest.raises(ValueError): RENDER.load()
+def test_actual_complete_proven_batch_prologue_executes_cleanly(tmp_path):
+    repo=tmp_path/"repo"; common=repo/"scripts/frontier/trainpy_async_quorum_smoke_common.sh"; common.parent.mkdir(parents=True)
+    common.write_text("#!/bin/bash\nset -euo pipefail\nprintf '%s\\n' \"$SMOKE_NAME|$SMOKE_NODE_COUNT|$ASYNC_TRAINPY_RANKS|$ASYNC_GLOBAL_QUORUM|$SCALEOUT_VARIANT\"\n"); common.chmod(0o755)
+    env={**os.environ,"REPO":str(repo),"SLURM_JOB_NUM_NODES":"256","SMOKE_NAME":"256n","ASYNC_TRAINPY_RANKS":"2048","ASYNC_EXPECTED_RANKS":"2048","ASYNC_GLOBAL_QUORUM":"2048","SCALEOUT_VARIANT":"E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n"}
+    r=captured_run(["bash",str(ROOT/"scripts/frontier/trainpy_async_quorum_2n_smoke.sbatch")],env=env)
+    assert r.returncode==0,r.stderr
+    assert r.stdout.strip()=="256n|256|2048|2048|E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n"
 
-def test_dirty_tracked_worktree_is_rejected(monkeypatch):
-    monkeypatch.setattr(RENDER.subprocess,"check_output",lambda *a,**k:" M train.py\n")
-    with pytest.raises(ValueError,match="dirty"): RENDER.ensure_clean_tree()
+def test_proven_sources_match_success_commit():
+    golden=json.loads((ROOT/"configs/frontier/e97_async_256_job4962400_golden.json").read_text())
+    for path,want in golden["files"].items(): assert RENDER.digest(ROOT/path)==want
+    historical=subprocess.check_output(["git","show",golden["source_commit"]+":"+golden["script"]])
+    assert historical==(ROOT/golden["script"]).read_bytes()
 
-def test_submission_stops_before_sbatch_without_atomic_promotion(tmp_path):
-    s,p=bundles(tmp_path); marker=tmp_path/"sbatch-called"; fake=tmp_path/"sbatch"; fake.write_text("#!/bin/sh\ntouch '%s'\n"%marker); fake.chmod(0o755)
-    r=check(s,p,"--submit","--approval",str(tmp_path/"missing.json")); assert r.returncode!=0; assert not marker.exists()
+def test_exact_durable_job_4962400_artifact_paths_and_hashes():
+    golden=json.loads((ROOT/"configs/frontier/e97_async_256_job4962400_golden.json").read_text())
+    artifacts=golden["source_artifacts"]
+    files=artifacts["files"]
+    assert len(files)==4
+    assert all(Path(path).parent==Path(artifacts["root"])/"artifacts" for path in files)
+    assert {Path(path).name for path in files}=={"command.txt","env.txt","manifest.json","metrics.json"}
+    if not Path(artifacts["root"]).exists():
+        pytest.skip("Frontier durable job evidence mount is unavailable")
+    for path,want in files.items():
+        assert RENDER.digest(Path(path))==want

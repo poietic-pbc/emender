@@ -1,1 +1,9 @@
-{"schema_version":1,"allowed_profile_keys":["walltime","trainer_duration_seconds","queue"],"allowed_queue_keys":["partition","qos"],"allowed_scheduler_differences":["time","partition","qos"],"required_directives":["account","job-name","partition","qos","nodes","time","ntasks-per-node","cpus-per-task","gpus-per-task","gpu-bind","export","signal","output","error"],"promotion_schema_version":1}
+{
+  "schema_version": 2,
+  "allowed_profile_keys": ["walltime", "queue"],
+  "allowed_queue_keys": ["partition", "qos"],
+  "allowed_sbatch_argv_flags": ["-t", "-p", "-q"],
+  "forbidden_differences": "all launch inputs not explicitly allowlisted",
+  "training_stop_budget_must_match": true,
+  "launcher_must_match_job_4962400_byte_for_byte": true
+}
