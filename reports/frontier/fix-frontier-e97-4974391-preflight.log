@@ -1,0 +1,31 @@
+fix-frontier-e97 allocation-free validation transcript
+date=2026-07-12
+production_submitted=false
+allocation_submitted=false
+
+$ python scripts/frontier/render_e97_async_256.py --profile smoke --out build/e97-256/smoke
+2e5d97f211858080ceacfd060da5b850aa49c77c1ba8997a76769bb77fee5487
+
+$ python scripts/frontier/render_e97_async_256.py --profile production --out build/e97-256/production
+2e5d97f211858080ceacfd060da5b850aa49c77c1ba8997a76769bb77fee5487
+
+$ python scripts/frontier/check_e97_async_promotion.py --smoke build/e97-256/smoke --production build/e97-256/production --policy configs/frontier/e97_async_256_parity_policy.json
+{"ok": true, "fingerprint": "2e5d97f211858080ceacfd060da5b850aa49c77c1ba8997a76769bb77fee5487", "allowed_differences": {"time": ["00:20:00", "12:00:00"], "partition": ["batch", "batch"], "qos": ["debug", "normal"]}}
+
+$ env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" SHELL=/bin/bash PATH=/usr/bin:/bin HOSTNAME="$(hostname)" SLURM_JOB_ID=allocation-free-4974391-regression SLURM_SUBMIT_DIR="$PWD" SLURM_NODELIST=frontier00001 TMPDIR=/tmp E97_STOP_BEFORE_SRUN=1 bash --noprofile --norc build/e97-256/smoke/rendered.sbatch
+e97-presrun phase=bootstrap status=begin job_id=allocation-free-4974391-regression host=login04 export=NONE
+e97-presrun phase=bundle-binding status=begin fingerprint=2e5d97f211858080ceacfd060da5b850aa49c77c1ba8997a76769bb77fee5487
+e97-presrun phase=module-bootstrap status=begin fingerprint=2e5d97f211858080ceacfd060da5b850aa49c77c1ba8997a76769bb77fee5487
+e97-presrun phase=runtime-paths status=begin fingerprint=2e5d97f211858080ceacfd060da5b850aa49c77c1ba8997a76769bb77fee5487
+e97-presrun phase=preflight-before-helper status=begin fingerprint=2e5d97f211858080ceacfd060da5b850aa49c77c1ba8997a76769bb77fee5487
+{"fingerprint":"2e5d97f211858080ceacfd060da5b850aa49c77c1ba8997a76769bb77fee5487","ok":true,"phase":"before-helper"}
+e97-presrun phase=helper-build status=begin fingerprint=2e5d97f211858080ceacfd060da5b850aa49c77c1ba8997a76769bb77fee5487
+CC -O2 -std=c++17 -Wall -Wextra scripts/frontier/compiled_mpich_dense_helper.cpp -o e97-256-runs/allocation-free-4974391-regression/compiled_mpich_dense_helper
+CC -O2 -std=c++17 -Wall -Wextra -fPIC -shared scripts/frontier/compiled_mpich_dense_helper.cpp -o e97-256-runs/allocation-free-4974391-regression/compiled_mpich_dense_helper.so
+e97-presrun phase=preflight-before-srun status=begin fingerprint=2e5d97f211858080ceacfd060da5b850aa49c77c1ba8997a76769bb77fee5487
+{"fingerprint":"2e5d97f211858080ceacfd060da5b850aa49c77c1ba8997a76769bb77fee5487","ok":true,"phase":"before-srun"}
+e97-presrun phase=preflight-only status=complete ranks=2048 nodes=256
+exit=0
+
+The rendered script exited at the immediate pre-srun gate. No srun, sbatch,
+allocation, promotion record, or production submission was performed.
