@@ -38,7 +38,7 @@ def normalized(bundle,policy):
     try: av[av.index("--walltime-remaining-s")+1]="@DURATION@"
     except (ValueError,IndexError): fail("duration","missing deterministic stop budget")
     if unresolved(vals): fail("unresolved_variable","manifest contains ${...}")
-    allowed_vars={"BASH_SOURCE[0]","SLURM_SUBMIT_DIR:?","SLURM_SUBMIT_DIR","SLURM_JOB_ID:?","SLURM_JOB_ID","TMPDIR:-/tmp","SLURM_NODELIST","SLURM_NODELIST:?","RUN_ID","RUN_DIR","METRICS","HELPER","IPC","SLURM_PROCID:?missing SLURM_PROCID","COORDINATOR_HOST","COORDINATOR_PORT"}
+    allowed_vars={"BASH_SOURCE[0]","SLURM_SUBMIT_DIR:?","SLURM_SUBMIT_DIR","SLURM_JOB_ID:?","SLURM_JOB_ID","SLURM_JOB_ID:-unset","TMPDIR:-/tmp","SLURM_NODELIST","SLURM_NODELIST:?","RUN_ID","RUN_DIR","METRICS","HELPER","IPC","SLURM_PROCID:?missing SLURM_PROCID","COORDINATOR_HOST","COORDINATOR_PORT","BASH_LINENO[0]"}
     unknown=set(re.findall(r"\$\{([^}]+)\}",script))-allowed_vars
     if unknown: fail("unresolved_variable",sorted(unknown))
     return {"script":script,"artifacts":vals}, d
