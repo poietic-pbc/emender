@@ -1,0 +1,66 @@
+{
+  "export": "ALL,WG_TASK_ID=run-async-b4k40-debug-ladder-256n,TASK_ID=run-async-b4k40-debug-ladder-256n,OUTPUT_ROOT=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709,SMOKE_NAME=256n,SCALEOUT_VARIANT=E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n,ASYNC_QUORUM_TRANSPORT=compiled-cray-mpich-helper-p2p,ALLOW_FRONTIER_TCP_SCALE_DEBUG=0,ASYNC_TRAINPY_RANKS=2048,ASYNC_EXPECTED_RANKS=2048,ASYNC_GLOBAL_QUORUM=2048,ASYNC_EXPECTED_MISSING_UPDATES=0,ASYNC_TIMEOUT_S=1200,DILOCO_K=40,ASYNC_LOCAL_STEPS=40,BATCH_SIZE=4,CHUNK_SIZE=2048,LEARNING_RATE=0.001007,OPTIMIZER=schedulefree,WEIGHT_DECAY=0.01,WARMUP_STEPS=0,GRAD_ACCUM=1,GRAD_CLIP=1.0,MODEL_TOKENIZER=p50k_base,ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM=0,HUMAN_APPROVAL_RECORD=WG run-async-b4k40-debug-ladder-256n: 256-node fixed async DiLoCo B4/K40 stability ladder final rung; batch/debug 00:20:00; sequential after clean 128n job 4962329; run-local debug latest/checkpoint only; no production or extended job.",
+  "files": {
+    "scripts/frontier/build_compiled_mpich_dense_helper.sh": "cfe55e66ddb4886b70812926bcfb2b642b3bcd91891c0b52d357bc4fe955b17e",
+    "scripts/frontier/compiled_mpich_dense_helper.cpp": "fab9d0bbbe18322060ad2ee5279d252bc281e04b4cf4d347c0f1eef17952e4ac",
+    "scripts/frontier/e97_async_diloco_train.py": "5b7240fba1607680b2d89c83006609f2904c50a186ca94bb44ddb05899517115",
+    "scripts/frontier/frontier_runtime_env.sh": "2856a26388f1c1d58ad979af788731d6b216d43d8dede76a649ab37e28cfcade",
+    "scripts/frontier/trainpy_async_quorum_2n_smoke.sbatch": "106a4dde6b966b0af66a1ac92ea0f459c7a435f81f6e322d92e08f30a2cfad30",
+    "scripts/frontier/trainpy_async_quorum_smoke_common.sh": "0623817713e9e4fa8366f31734033eabf7382ce8d38795cce01e0609fe0af3ac"
+  },
+  "resolved": {
+    "account": "bif148",
+    "batch_size": 4,
+    "checkpoint_interval": 16,
+    "chunk_size": 2048,
+    "data": "/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt",
+    "global_quorum": 2048,
+    "launched_ranks": 2048,
+    "learning_rate": "0.001007",
+    "local_steps": 40,
+    "model": "E97/100m",
+    "mpich_gpu_support_enabled": "0",
+    "nodes": 256,
+    "optimizer": "schedulefree",
+    "participant_ranks": 2048,
+    "ranks_per_node": 8,
+    "requeue": null,
+    "reservation": null,
+    "seed": {
+      "loss": 2.4378,
+      "path": "/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260709_084606_step_1525000/checkpoint_step_1525000_loss_2.4378.pt",
+      "sha256": "1da27d2e09bc6c6f5ffc30e3e4476df1cebd807267431c8524de1a5b0dc5bca9",
+      "size": 7719679924,
+      "step": 1525000,
+      "tokens": "99.9424B",
+      "uri": "s3://spinozans/emender/e97-diloco/emender_E97_1.3B_20260709_084606/step_1525000/checkpoint_step_1525000_loss_2.4378.pt"
+    },
+    "signal": null,
+    "steps": 40,
+    "timeout_s": 1200,
+    "transport": "compiled-cray-mpich-helper-collective-reduce",
+    "walltime_remaining_s": 1200,
+    "worker_ranks": 2048
+  },
+  "sbatch_fixed_argv": [
+    "sbatch",
+    "--parsable",
+    "-N",
+    "256",
+    "-J",
+    "async-b4k40-ladder-256n"
+  ],
+  "schema_version": 1,
+  "script": "scripts/frontier/trainpy_async_quorum_2n_smoke.sbatch",
+  "source_artifacts": {
+    "files": {
+      "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260709/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4962400-20260709T144830Z/artifacts/command.txt": "ce9780dde149b201a0787f465ccb60c814049e5721c6c1ace9a74437b653ea55",
+      "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260709/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4962400-20260709T144830Z/artifacts/env.txt": "ff166ac68b884bf1432ba22a69665f34a6a7be1f5edb337de71307d213933b33",
+      "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260709/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4962400-20260709T144830Z/artifacts/manifest.json": "277413c29f38d4854d0912ddcc5e498cd652b8cac59e914397a8c481b471e093",
+      "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260709/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4962400-20260709T144830Z/artifacts/metrics.json": "53da67689a7cb7adafacb3080fe9b9e4bce60a743fa593749270f429a2bbb460"
+    },
+    "root": "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260709/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4962400-20260709T144830Z"
+  },
+  "source_commit": "f693e2c811db49d40bf19c319aa604d0bf27bf8f",
+  "source_job": "4962400"
+}
