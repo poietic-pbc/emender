@@ -152,8 +152,34 @@ def test_rendered_script_has_actionable_phases_through_srun(tmp_path):
     assert "trap e97_error ERR" in text
     assert "status=error rc=%s line=%s command=%q" in text
     assert "phase=srun status=exec ranks=2048 nodes=256" in text
-    assert "source /etc/profile.d/modules.sh" in text
+    assert "source /etc/profile.d/olcf-env.sh" in text
+    assert "source /opt/cray/pe/lmod/lmod/init/bash" in text
     launcher=RENDER.load()["launcher"]["python"]
     assert Path(launcher).is_absolute()
     assert Path(launcher).is_file()
     assert f"LAUNCHER={launcher}" in text
+
+def test_regression_4974391_clean_environment_uses_frontier_lmod(tmp_path):
+    # Job 4974391 had export=NONE: no inherited module function, and Frontier
+    # intentionally has no /etc/profile.d/modules.sh compatibility file.
+    assert not Path("/etc/profile.d/modules.sh").exists()
+    smoke,_=bundles(tmp_path)
+    text=(smoke/"rendered.sbatch").read_text()
+    bootstrap=next(line for line in text.splitlines() if line.startswith("if ! command -v module"))+"\n"
+    result=subprocess.run(
+        ["env","-i",f"HOME={Path.home()}",f"USER={Path.home().name}",
+         "SHELL=/bin/bash","PATH=/usr/bin:/bin","bash","--noprofile","--norc","-c",
+         "set -euo pipefail\n"+bootstrap+"command -v module\n"],
+        text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+    )
+    assert result.returncode==0,result.stderr
+    assert "module" in result.stdout
+
+def test_allocation_free_gate_stops_after_full_presrun_preflight(tmp_path):
+    smoke,_=bundles(tmp_path)
+    text=(smoke/"rendered.sbatch").read_text()
+    before=text.index("--phase before-srun --helper")
+    stop=text.index("E97_STOP_BEFORE_SRUN",before)
+    launch=text.index("exec srun",stop)
+    assert before < stop < launch
+    assert "phase=preflight-only status=complete ranks=2048 nodes=256" in text
