@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 ROOT=Path(__file__).resolve().parents[1]
+SEED={"uri":"s3://spinozans/emender/e97-diloco/emender_E97_1.3B_20260709_084606/step_1525000/checkpoint_step_1525000_loss_2.4378.pt","path":"/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260709_084606_step_1525000/checkpoint_step_1525000_loss_2.4378.pt","step":1525000,"loss":2.4378,"tokens":"99.9424B","size":7719679924,"sha256":"1da27d2e09bc6c6f5ffc30e3e4476df1cebd807267431c8524de1a5b0dc5bca9"}
 def module(path):
     spec=importlib.util.spec_from_file_location("e97_render",path); result=importlib.util.module_from_spec(spec); spec.loader.exec_module(result); return result
 RENDER=module(ROOT/"scripts/frontier/render_e97_async_256.py")
@@ -23,13 +24,20 @@ def test_job_4962400_launcher_is_byte_exact_and_only_queue_time_differ(tmp_path)
     assert evidence["training_stop_budget"]=={"generations":1,"local_steps":40,"steps":40,"timeout_s":1200,"walltime_remaining_s":1200}
     assert (s/"rendered.sbatch").read_bytes()==(ROOT/"scripts/frontier/trainpy_async_quorum_2n_smoke.sbatch").read_bytes()==(p/"rendered.sbatch").read_bytes()
     assert json.loads((s/"launch-inputs.json").read_text())["launcher_sha256"]=="106a4dde6b966b0af66a1ac92ea0f459c7a435f81f6e322d92e08f30a2cfad30"
+    for bundle in (s,p):
+        launch=json.loads((bundle/"launch-inputs.json").read_text())
+        assert launch["resolved"]["seed"]==SEED
+        assert "E97_CHECKPOINT="+SEED["path"] in launch["sbatch_argv"][launch["sbatch_argv"].index("--export")+1]
+        serialized=json.dumps(launch).lower()
+        assert "latest.pt" not in serialized
+        assert "latest_emender" not in serialized
 
 MUTATIONS=[
  ("source_commit","0"*40),("launcher_sha256","0"*64),("resolved.account","other"),("resolved.reservation","x"),
  ("resolved.nodes",255),("resolved.ranks_per_node",7),("resolved.launched_ranks",256),("resolved.participant_ranks",256),
  ("resolved.worker_ranks",256),("resolved.global_quorum",171),("resolved.local_steps",41),("resolved.steps",40000),
  ("resolved.timeout_s",1),("resolved.walltime_remaining_s",43200),("resolved.checkpoint_interval",1),
- ("resolved.seed","new.pt"),("resolved.data","other"),("resolved.model","E97/1.3b"),("resolved.optimizer","adamw"),
+ ("resolved.seed.path","new.pt"),("resolved.seed.sha256","0"*64),("resolved.seed.step",1),("resolved.seed.loss",1.0),("resolved.seed.tokens","1B"),("resolved.seed.size",1),("resolved.data","other"),("resolved.model","E97/1.3b"),("resolved.optimizer","adamw"),
  ("resolved.learning_rate","1"),("resolved.batch_size",8),("resolved.chunk_size",1),("resolved.transport","tcp"),
  ("resolved.mpich_gpu_support_enabled","1"),("resolved.signal","USR1"),("resolved.requeue",True),
  ("training_stop_budget.steps",40000),("training_stop_budget.walltime_remaining_s",43200),
@@ -44,7 +52,7 @@ def test_every_non_allowlisted_field_fails_closed(tmp_path,field,value):
 
 def test_recent_wrapper_drift_reproduced_and_rejected(tmp_path):
     s,p=bundles(tmp_path); launch=p/"launch-inputs.json"
-    for field,value in (("resolved.global_quorum",171),("resolved.participant_ranks",256),("resolved.seed","step1282500/latest.pt"),("resolved.signal","B:USR1@1200")):
+    for field,value in (("resolved.global_quorum",171),("resolved.participant_ranks",256),("resolved.seed.path","step1282500/latest.pt"),("resolved.signal","B:USR1@1200")):
         mutate(launch,field,value)
     # Jobs 4972201/4972494/4974389/4974391/4974444 also introduced export=NONE,
     # spool/helper bootstrap. Any launcher byte drift is independently fatal.
@@ -55,6 +63,18 @@ def test_unknown_profile_key_and_golden_source_drift_fail(tmp_path,monkeypatch):
     config=json.loads(RENDER.CONFIG.read_text()); config["profiles"]["production"]["steps"]=99
     bad=tmp_path/"config.json"; bad.write_text(json.dumps(config)); monkeypatch.setattr(RENDER,"CONFIG",bad)
     with pytest.raises(ValueError,match="only walltime and queue"): RENDER.load()
+
+def test_dynamic_seed_reference_is_rejected(tmp_path,monkeypatch):
+    config=json.loads(RENDER.CONFIG.read_text()); config["seed"]["path"]="/tmp/latest.pt"
+    bad=tmp_path/"config.json"; bad.write_text(json.dumps(config)); monkeypatch.setattr(RENDER,"CONFIG",bad)
+    with pytest.raises(ValueError,match="dynamic or invalid seed"): RENDER.load()
+
+def test_modified_parity_policy_fails_closed(tmp_path):
+    s,p=bundles(tmp_path); policy=tmp_path/"policy.json"
+    data=json.loads(Path(POLICY).read_text()); data["allowed_profile_keys"].append("seed"); policy.write_text(json.dumps(data))
+    result=captured_run(CHECK+["--smoke",str(s),"--production",str(p),"--policy",str(policy)])
+    assert result.returncode!=0
+    assert json.loads(result.stderr)["kind"]=="policy"
 
 def test_actual_complete_proven_batch_prologue_executes_cleanly(tmp_path):
     repo=tmp_path/"repo"; common=repo/"scripts/frontier/trainpy_async_quorum_smoke_common.sh"; common.parent.mkdir(parents=True)

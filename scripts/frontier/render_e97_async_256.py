@@ -11,8 +11,15 @@ def canonical(value): return json.dumps(value, sort_keys=True, separators=(",", 
 
 def load():
     config=json.loads(CONFIG.read_text())
-    if set(config)!={"schema_version","golden_manifest","profiles"} or config["schema_version"]!=2:
+    if set(config)!={"schema_version","golden_manifest","seed","profiles"} or config["schema_version"]!=2:
         raise ValueError("unknown or missing configuration key")
+    seed=config["seed"]
+    if set(seed)!={"uri","path","step","loss","tokens","size","sha256"}:
+        raise ValueError("unknown or missing seed key")
+    if not seed["uri"].startswith("s3://") or not Path(seed["path"]).is_absolute():
+        raise ValueError("seed URI and local path must be immutable absolute references")
+    if "latest" in canonical(seed).lower() or not re.fullmatch(r"[0-9a-f]{64}",seed["sha256"]):
+        raise ValueError("dynamic or invalid seed reference")
     if set(config["profiles"])!={"smoke","production"}: raise ValueError("profiles must be smoke and production")
     for name,p in config["profiles"].items():
         if set(p)!={"walltime","queue"} or set(p["queue"])!={"partition","qos"}: raise ValueError(f"only walltime and queue are permitted in {name}")
@@ -34,8 +41,10 @@ def render(profile,out):
     # The batch file is byte-for-byte job 4962400. Slurm CLI overrides are the
     # sole parameterization point and do not mutate its proven prologue/body.
     (out/"rendered.sbatch").write_bytes(launcher)
-    argv=golden["sbatch_fixed_argv"] + ["-t",selected["walltime"],"-p",selected["queue"]["partition"],"-q",selected["queue"]["qos"],"--export",golden["export"],golden["script"]]
-    launch={"schema_version":1,"profile":profile,"source_job":golden["source_job"],"source_commit":golden["source_commit"],"walltime":selected["walltime"],"queue":selected["queue"],"sbatch_argv":argv,"training_stop_budget":{"local_steps":40,"steps":40,"generations":1,"timeout_s":1200,"walltime_remaining_s":1200},"resolved":golden["resolved"],"launcher_sha256":digest(out/"rendered.sbatch")}
+    export=golden["export"]+",E97_CHECKPOINT="+config["seed"]["path"]
+    argv=golden["sbatch_fixed_argv"] + ["-t",selected["walltime"],"-p",selected["queue"]["partition"],"-q",selected["queue"]["qos"],"--export",export,golden["script"]]
+    resolved={**golden["resolved"],"seed":config["seed"]}
+    launch={"schema_version":1,"profile":profile,"source_job":golden["source_job"],"source_commit":golden["source_commit"],"walltime":selected["walltime"],"queue":selected["queue"],"sbatch_argv":argv,"training_stop_budget":{"local_steps":40,"steps":40,"generations":1,"timeout_s":1200,"walltime_remaining_s":1200},"resolved":resolved,"launcher_sha256":digest(out/"rendered.sbatch")}
     (out/"launch-inputs.json").write_text(json.dumps(launch,sort_keys=True,indent=2)+"\n")
     (out/"golden-manifest.json").write_text(json.dumps(golden,sort_keys=True,indent=2)+"\n")
     normalized={**launch,"profile":"@PROFILE@","walltime":"@WALLTIME@","queue":{"partition":"@PARTITION@","qos":"@QOS@"}}

@@ -4,6 +4,7 @@ import argparse, hashlib, json, os, sys
 from pathlib import Path
 
 ALLOWED={"profile","walltime","queue"}
+EXPECTED_POLICY={"schema_version":2,"allowed_profile_keys":["walltime","queue"],"allowed_queue_keys":["partition","qos"],"allowed_sbatch_argv_flags":["-t","-p","-q"],"forbidden_differences":"all launch inputs not explicitly allowlisted","training_stop_budget_must_match":True,"launcher_must_match_job_4962400_byte_for_byte":True}
 def fail(kind,detail): print(json.dumps({"ok":False,"kind":kind,"detail":detail},sort_keys=True),file=sys.stderr); raise SystemExit(1)
 def canon(x): return json.dumps(x,sort_keys=True,separators=(",",":"))
 def read(bundle):
@@ -21,6 +22,9 @@ def normalized(value):
     return value
 def main():
     p=argparse.ArgumentParser(); p.add_argument("--smoke",type=Path,required=True); p.add_argument("--production",type=Path,required=True); p.add_argument("--policy",type=Path,required=True); p.add_argument("--submit",action="store_true"); p.add_argument("--approval",type=Path); p.add_argument("--require-promotion",action="store_true"); a=p.parse_args()
+    try: policy=json.loads(a.policy.read_text())
+    except Exception as e: fail("policy",str(e))
+    if policy!=EXPECTED_POLICY: fail("policy",policy)
     s,sg=read(a.smoke); prod,pg=read(a.production)
     if canon(sg)!=canon(pg): fail("golden_manifest_drift",None)
     if normalized(s)!=normalized(prod): fail("forbidden_drift",{"smoke":s,"production":prod})
