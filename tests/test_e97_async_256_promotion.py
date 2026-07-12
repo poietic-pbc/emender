@@ -153,7 +153,7 @@ def test_rendered_script_has_actionable_phases_through_srun(tmp_path):
     assert "status=error rc=%s line=%s command=%q" in text
     assert "phase=srun status=exec ranks=2048 nodes=256" in text
     assert "source /etc/profile.d/olcf-env.sh" in text
-    assert "source /opt/cray/pe/lmod/lmod/init/bash" in text
+    assert "source /etc/bash.bashrc.local" in text
     launcher=RENDER.load()["launcher"]["python"]
     assert Path(launcher).is_absolute()
     assert Path(launcher).is_file()
@@ -161,7 +161,8 @@ def test_rendered_script_has_actionable_phases_through_srun(tmp_path):
 
 def test_regression_4974391_clean_environment_uses_frontier_lmod(tmp_path):
     # Job 4974391 had export=NONE: no inherited module function, and Frontier
-    # intentionally has no /etc/profile.d/modules.sh compatibility file.
+    # intentionally has no /etc/profile.d/modules.sh compatibility file.  The
+    # system Cray PE bootstrap establishes MODULEPATH as well as Lmod itself.
     assert not Path("/etc/profile.d/modules.sh").exists()
     smoke,_=bundles(tmp_path)
     text=(smoke/"rendered.sbatch").read_text()
