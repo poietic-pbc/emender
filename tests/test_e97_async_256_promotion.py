@@ -115,3 +115,45 @@ def test_preflight_verifies_all_immutable_launch_surfaces():
     text=(ROOT/"scripts/frontier/e97_async_256_preflight.py").read_text()
     for kind in ("fingerprint", "code_commit", "code_tree", "entrypoint", "input_hash", "environment", "modules", "helper", "launcher", "trainer_argv", "srun_argv", "topology"):
         assert kind in text
+
+def test_silent_presrun_failure_names_exact_command_and_phase(tmp_path):
+    # This is the failure mode from job 4972494: plain `set -e` preserves the
+    # nonzero status but a quiet module/helper command leaves both logs empty.
+    old=subprocess.run(
+        ["bash","-c","set -e; silent_module_load() { return 19; }; silent_module_load cray-mpich"],
+        text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+    )
+    assert old.returncode==19
+    assert old.stdout==old.stderr==""
+
+    smoke,_=bundles(tmp_path)
+    text=(smoke/"rendered.sbatch").read_text()
+    start=text.index("E97_PHASE=bootstrap")
+    end=text.index("BUNDLE_MANIFEST_SHA256=",start)
+    diagnostics=text[start:end]
+    result=subprocess.run(
+        ["bash","-c","set -Eeuo pipefail\nBUNDLE_FINGERPRINT=test-fingerprint\n"+diagnostics+"e97_phase module-bootstrap\nsilent_module_load() { return 19; }\nsilent_module_load cray-mpich\n"],
+        text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+    )
+    assert result.returncode==19
+    assert "phase=module-bootstrap status=error rc=19" in result.stderr
+    assert "command=return\\ 19" in result.stderr
+
+def test_rendered_script_has_actionable_phases_through_srun(tmp_path):
+    smoke,_=bundles(tmp_path)
+    text=(smoke/"rendered.sbatch").read_text()
+    phases=[
+        "bundle-binding", "module-bootstrap", "runtime-paths",
+        "preflight-before-helper", "helper-build", "preflight-before-srun", "srun",
+    ]
+    positions=[text.index("e97_phase "+phase) for phase in phases]
+    assert positions==sorted(positions)
+    assert "set -Eeuo pipefail" in text
+    assert "trap e97_error ERR" in text
+    assert "status=error rc=%s line=%s command=%q" in text
+    assert "phase=srun status=exec ranks=2048 nodes=256" in text
+    assert "source /etc/profile.d/modules.sh" in text
+    launcher=RENDER.load()["launcher"]["python"]
+    assert Path(launcher).is_absolute()
+    assert Path(launcher).is_file()
+    assert f"LAUNCHER={launcher}" in text
