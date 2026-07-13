@@ -82,7 +82,7 @@ def test_modified_parity_policy_fails_closed(tmp_path):
     assert json.loads(result.stderr)["kind"]=="policy"
 
 def promotion(s, **overrides):
-    commit="8289544f56adca0950e6f6532249790ed777a1b3"
+    commit="d554965461428bd9ff040329812b09d413e9b723"
     value={"job_id":4975667,"slurm_state":"COMPLETED","exit_code":"0:0",
            "origin_commit":commit,"fingerprint":(s/"fingerprint.sha256").read_text().strip(),
            "nodes":2,"ranks":16,"seed":SEED}
@@ -103,11 +103,11 @@ def test_unknown_or_unpushed_attested_commit_fails(tmp_path):
 def test_evidence_commit_after_attested_launch_is_accepted(tmp_path):
     """Regression: 3834ba7 evidence follows the 57884f1 launch identity."""
     s,p=bundles(tmp_path)
-    promotion(s,origin_commit="8289544f56adca0950e6f6532249790ed777a1b3")
+    promotion(s,origin_commit="d554965461428bd9ff040329812b09d413e9b723")
     result=captured_run(CHECK+['--smoke',str(s),'--production',str(p),'--policy',POLICY,'--require-promotion'])
     assert result.returncode==0,result.stderr
     identity=json.loads(result.stdout)["launch_identity"]
-    assert identity["attested_commit"]=="8289544f56adca0950e6f6532249790ed777a1b3"
+    assert identity["attested_commit"]=="d554965461428bd9ff040329812b09d413e9b723"
     assert identity["origin_main"]!=identity["attested_commit"]
 
 def test_submit_executes_from_attested_tree_not_current_main(tmp_path,monkeypatch):

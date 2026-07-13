@@ -1033,7 +1033,7 @@ def _run_real_worker(
             elapsed_s=max(0.0, time.monotonic() - start_s),
             tokens=tokens,
             losses=tuple(losses),
-            optimizer_state_dict=optimizer.state_dict(),
+            optimizer_state_dict=(optimizer.state_dict() if hasattr(optimizer, "state_dict") else None),
         )
     except Exception as exc:
         return RealAsyncWorkerReport(
