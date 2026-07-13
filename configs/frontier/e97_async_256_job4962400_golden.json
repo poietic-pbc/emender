@@ -17,7 +17,7 @@
     "scripts/frontier/frontier_runtime_env.sh": "2856a26388f1c1d58ad979af788731d6b216d43d8dede76a649ab37e28cfcade",
     "scripts/frontier/e97_async_diloco_train.py": "0fbe85cd2f8012aaec54314cc0a3a53dd085a1458412b7d273dd208801803865",
     "scripts/frontier/build_compiled_mpich_dense_helper.sh": "cfe55e66ddb4886b70812926bcfb2b642b3bcd91891c0b52d357bc4fe955b17e",
-    "scripts/frontier/compiled_mpich_dense_helper.cpp": "de4243b457b4c5b1415e1ffe2a607e748aad2f0409b7c4cba057bdb2e49bc204"
+    "scripts/frontier/compiled_mpich_dense_helper.cpp": "18f6ffe966b31d2c5bb628822157f9fb629fe109c903cb56594611a9c32aa45b"
   },
   "sbatch_fixed_argv": ["sbatch", "--parsable", "-N", "256", "-J", "async-b4k40-ladder-256n"],
   "export": "ALL,WG_TASK_ID=run-async-b4k40-debug-ladder-256n,TASK_ID=run-async-b4k40-debug-ladder-256n,OUTPUT_ROOT=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709,SMOKE_NAME=256n,SCALEOUT_VARIANT=E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n,ASYNC_QUORUM_TRANSPORT=compiled-cray-mpich-helper-p2p,ALLOW_FRONTIER_TCP_SCALE_DEBUG=0,ASYNC_TRAINPY_RANKS=2048,ASYNC_EXPECTED_RANKS=2048,ASYNC_GLOBAL_QUORUM=2048,ASYNC_EXPECTED_MISSING_UPDATES=0,ASYNC_TIMEOUT_S=1200,DILOCO_K=40,ASYNC_LOCAL_STEPS=40,BATCH_SIZE=4,CHUNK_SIZE=2048,LEARNING_RATE=0.001007,OPTIMIZER=schedulefree,WEIGHT_DECAY=0.01,WARMUP_STEPS=0,GRAD_ACCUM=1,GRAD_CLIP=1.0,MODEL_TOKENIZER=p50k_base,ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM=0,HUMAN_APPROVAL_RECORD=WG run-async-b4k40-debug-ladder-256n: 256-node fixed async DiLoCo B4/K40 stability ladder final rung; batch/debug 00:20:00; sequential after clean 128n job 4962329; run-local debug latest/checkpoint only; no production or extended job.",

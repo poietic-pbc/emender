@@ -54,6 +54,13 @@ def test_compiled_mpich_cpp_uses_bucketed_collective_reduce_not_root_bucket_fani
     assert "root_file_gathered_peer" not in source
     assert "MPI_Send(preamble" not in source
     assert "MPI_Recv(&bucket_len" not in source
+    assert "MPI ranks have different aggregate bucket counts" in source
+    assert "MPI ranks have different aggregate bucket layouts" in source
+    reduce_pos = source.index("MPI_Reduce(local_values.data()")
+    size_bcast_pos = source.index("MPI_Bcast(&aggregate_size", reduce_pos)
+    payload_bcast_pos = source.index("MPI_Bcast(aggregate.data()", size_bcast_pos)
+    write_pos = source.index("write_bytes_atomic(ipc_dir / rel, aggregate)", payload_bcast_pos)
+    assert reduce_pos < size_bcast_pos < payload_bcast_pos < write_pos
 
 
 def test_compiled_mpich_request_contract_uses_file_ipc_and_checksums(tmp_path):
@@ -87,6 +94,44 @@ def test_compiled_mpich_request_contract_uses_file_ipc_and_checksums(tmp_path):
     assert request["bucket_descriptors"][0]["checksum_sha256"]
     assert (tmp_path / "ipc" / request["header_path"]).is_file()
     assert (tmp_path / "ipc" / request["bucket_descriptors"][0]["ipc"]["path"]).is_file()
+
+
+def test_compiled_mpich_request_replaces_rank_local_generation_workspace(tmp_path):
+    ipc_dir = tmp_path / "ipc"
+    first = write_compiled_mpich_request(
+        pack_dense_update(_update(), run_id="bounded-ipc", rank=3, generation=0, bucket_bytes=8),
+        ipc_dir=ipc_dir,
+        run_id="bounded-ipc",
+        rank=3,
+        world_size=4,
+        generation=0,
+        base_generation=0,
+        quorum=4,
+        timeout_s=3.0,
+        bucket_bytes_target=8,
+        base_checkpoint=None,
+    )
+    old_aggregate = first.parent / "gen000000" / "aggregate.bucket00000.bin"
+    old_aggregate.write_bytes(b"old aggregate")
+
+    second = write_compiled_mpich_request(
+        pack_dense_update(_update(), run_id="bounded-ipc", rank=3, generation=1, bucket_bytes=8),
+        ipc_dir=ipc_dir,
+        run_id="bounded-ipc",
+        rank=3,
+        world_size=4,
+        generation=1,
+        base_generation=0,
+        quorum=4,
+        timeout_s=3.0,
+        bucket_bytes_target=8,
+        base_checkpoint=None,
+    )
+
+    assert not first.exists()
+    assert not old_aggregate.exists()
+    assert second.is_file()
+    assert [path.name for path in second.parent.glob("gen*")] == ["gen000001"]
 
 
 def test_compiled_mpich_load_received_payloads_rejects_corrupt_checksum(tmp_path):

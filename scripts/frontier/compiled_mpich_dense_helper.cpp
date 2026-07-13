@@ -624,6 +624,18 @@ int run_once_impl(const fs::path& ipc_dir, const fs::path& request_path, int ran
     std::vector<int> gathered(static_cast<std::size_t>(size * 5), -1);
     MPI_Allgather(rank_lists_local, 5, MPI_INT, gathered.data(), 5, MPI_INT, MPI_COMM_WORLD);
 
+    // Establish a common, bucket-bounded collective schedule before entering
+    // the loop. A mismatched descriptor count must fail collectively instead
+    // of letting one rank execute fewer Reduce/Bcast calls and deadlock peers.
+    long long local_bucket_count = static_cast<long long>(req.buckets.size());
+    long long min_bucket_count = 0;
+    long long max_bucket_count = 0;
+    MPI_Allreduce(&local_bucket_count, &min_bucket_count, 1, MPI_LONG_LONG, MPI_MIN, MPI_COMM_WORLD);
+    MPI_Allreduce(&local_bucket_count, &max_bucket_count, 1, MPI_LONG_LONG, MPI_MAX, MPI_COMM_WORLD);
+    if (min_bucket_count != max_bucket_count) {
+        throw std::runtime_error("MPI ranks have different aggregate bucket counts");
+    }
+
     std::vector<std::string> aggregate_bucket_paths;
     std::vector<long long> per_bucket_bytes;
     std::vector<double> per_bucket_reduce_s;
@@ -632,6 +644,17 @@ int run_once_impl(const fs::path& ipc_dir, const fs::path& request_path, int ran
     auto reduce_start = std::chrono::steady_clock::now();
     for (const auto& bucket_desc : req.buckets) {
         auto bucket_start = std::chrono::steady_clock::now();
+        long long local_bucket_shape[2] = {
+            static_cast<long long>(bucket_desc.index),
+            static_cast<long long>(bucket_desc.nbytes),
+        };
+        long long min_bucket_shape[2] = {0, 0};
+        long long max_bucket_shape[2] = {0, 0};
+        MPI_Allreduce(local_bucket_shape, min_bucket_shape, 2, MPI_LONG_LONG, MPI_MIN, MPI_COMM_WORLD);
+        MPI_Allreduce(local_bucket_shape, max_bucket_shape, 2, MPI_LONG_LONG, MPI_MAX, MPI_COMM_WORLD);
+        if (min_bucket_shape[0] != max_bucket_shape[0] || min_bucket_shape[1] != max_bucket_shape[1]) {
+            throw std::runtime_error("MPI ranks have different aggregate bucket layouts");
+        }
         std::vector<char> bucket = read_bytes(ipc_dir / bucket_desc.path);
         if (static_cast<std::int64_t>(bucket.size()) != bucket_desc.nbytes) {
             throw std::runtime_error("bucket length does not match request descriptor");
