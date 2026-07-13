@@ -278,6 +278,8 @@ def main() -> int:
         or args.actual_multinode_mpi_dense_quorum
         or args.actual_multinode_compiled_mpich_quorum
     ):
+        if args.steps != args.generations * args.local_steps:
+            raise ValueError("steps must equal generations * local_steps")
         node_rank = args.node_rank
         if node_rank is None:
             node_rank = int(os.environ.get("SLURM_PROCID", os.environ.get("PMI_RANK", "0")))
@@ -293,6 +295,7 @@ def main() -> int:
             node_count=args.node_count,
             global_quorum=int(global_quorum),
             local_steps=args.local_steps,
+            generations=args.generations,
             timeout_s=args.timeout_s,
             quorum_mode=quorum_mode,
             eta_outer=args.eta_outer,

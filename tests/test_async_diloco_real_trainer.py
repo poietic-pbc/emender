@@ -1,4 +1,5 @@
 import json
+import inspect
 import math
 import socket
 import subprocess
@@ -12,6 +13,7 @@ torch = pytest.importorskip("torch")
 
 from ndm.async_diloco import AsyncDiLoCoCheckpointCadence
 from ndm.async_diloco import AsyncDiLoCoGenerationMetrics, AsyncDiLoCoUpdate
+from ndm.async_diloco_compiled_mpich import COMPILED_MPICH_TRANSPORT
 from ndm.async_diloco_real import (
     RealAsyncDiLoCoConfig,
     RealAsyncFileRankConfig,
@@ -214,6 +216,92 @@ def test_real_async_trainer_cli_smoke_runs_one_generation(tmp_path):
     payload = json.loads(metrics_json.read_text(encoding="utf-8"))
     assert payload["global_generations"][0]["metrics"]["latest_advanced"] is True
     assert payload["node_generations"][0]["metrics"]["loss_moving_average"]["loss"] > 1.0
+
+
+def test_compiled_mpich_file_rank_runs_two_generations_in_one_process(tmp_path, monkeypatch):
+    """The production entrypoint must perform two K40 merges without reloading its seed."""
+    load_calls = []
+    generations = []
+    merges = []
+
+    class OneParamModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.zeros(1))
+
+    monkeypatch.setattr("ndm.async_diloco_real.train.build_training_model", lambda _args: OneParamModel())
+    monkeypatch.setattr(
+        "ndm.async_diloco_real.train.load_checkpoint",
+        lambda *args, **kwargs: load_calls.append(args[0]) or (None, None, {"step": 10, "optimizer_state_dict": {}}),
+    )
+
+    def fake_supervisor(**kwargs):
+        generation = kwargs["generation"]
+        spec = kwargs["worker_specs"][0]
+        generations.append((generation, spec.local_steps, kwargs["optimizer_state_dict"]))
+        update = AsyncDiLoCoUpdate(
+            worker_id=spec.worker_id,
+            base_generation=generation,
+            delta={"weight": torch.ones(1)},
+            tokens=spec.local_steps,
+            local_steps=spec.local_steps,
+            loss_moving_average={"loss": 1.0, "loss_100": 1.0},
+        )
+        worker = RealAsyncWorkerReport(
+            worker_id=spec.worker_id,
+            node_id=kwargs["node_id"],
+            base_generation=generation,
+            update=update,
+            elapsed_s=0.1,
+            tokens=spec.local_steps,
+            optimizer_state_dict={"generation": generation},
+        )
+        metrics = AsyncDiLoCoGenerationMetrics(
+            run_id=kwargs["run_id"], generation=generation, requested_workers=1,
+            participating_workers=1, quorum_threshold=1, quorum_size=1,
+            accepted_updates=1, stale_updates=0, timed_out_updates=0,
+            failed_updates=0, invalid_updates=0, generation_duration_s=0.1,
+            merge_duration_s=0.0, rebase_duration_s=0.0, checkpoint_duration_s=0.0,
+            tokens_per_sec=400.0, tokens_per_generation=spec.local_steps,
+            loss_moving_average={"loss": 1.0, "loss_100": 1.0},
+        )
+        return RealAsyncNodeResult(kwargs["node_id"], generation, update, (worker,), metrics)
+
+    def fake_coordinate(**kwargs):
+        generation = kwargs["generation"]
+        merges.append(generation)
+        state = {"weight": kwargs["base_state"]["weight"] + 1}
+        return {
+            "latest_generation": generation,
+            "global_generations": [{"generation": generation, "metrics": {"latest_advanced": True}}],
+            "_private_global_state": state,
+        }
+
+    monkeypatch.setattr("ndm.async_diloco_real._run_real_node_supervisor", fake_supervisor)
+    monkeypatch.setattr("ndm.async_diloco_real._coordinate_compiled_mpich_dense_rank", fake_coordinate)
+    seed = tmp_path / "seed.pt"
+    seed.write_bytes(b"seed")
+    result = run_real_async_diloco_file_rank(RealAsyncFileRankConfig(
+        run_id="two-generations", run_dir=tmp_path / "run", metrics_json=tmp_path / "metrics.json",
+        train_args=_args(steps=80), node_rank=0, node_count=1, global_quorum=1,
+        local_steps=40, generations=2, initial_checkpoint=seed,
+        transport=COMPILED_MPICH_TRANSPORT, compiled_mpich_helper_bin=tmp_path / "helper",
+    ))
+
+    assert load_calls == [str(seed)]
+    assert [item[0] for item in generations] == [0, 1]
+    assert [item[1] for item in generations] == [40, 40]
+    assert generations[1][2] == {"generation": 0}
+    assert merges == [0, 1]
+    assert sum(item[1] for item in generations) == 80
+    assert result["global_result"]["latest_generation"] == 1
+
+
+def test_file_rank_generation_loop_is_lazy_and_memory_bounded():
+    source = inspect.getsource(run_real_async_diloco_file_rank)
+    assert "for generation in range(config.generations):" in source
+    assert "list(range(config.generations))" not in source
+    assert "generation_payloads" not in source
 
 
 def test_real_async_trainer_accepts_initial_checkpoint(tmp_path):
