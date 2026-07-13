@@ -37,3 +37,9 @@ Terminal monitoring is in progress. A short `COMPLETED 0:0` exit will be
 rejected; success requires scheduler-controlled runtime near 12 hours,
 multiple healthy merges beyond generation 0 and step 1,525,040, a reloadable
 final checkpoint, unchanged stable seed pointer, and healthy publication.
+
+At 2026-07-13 12:57 UTC, job `4980157` remained `PENDING (Priority)` with
+the original request intact: partition `batch`, QoS `normal`, 256 nodes,
+2,048 tasks at eight per node, and a 12-hour limit. Slurm projected a start
+at 2026-07-13 14:24 EDT and an end at 2026-07-14 02:24 EDT. Monitoring did
+not invoke the submit path; the exclusive attempt count remains one.
