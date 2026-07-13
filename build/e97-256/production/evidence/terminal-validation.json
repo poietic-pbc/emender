@@ -1,0 +1,49 @@
+{
+  "accepted_updates": 2048,
+  "checkpoint": {
+    "final_loss": 2.4854,
+    "final_size": 15439252298,
+    "final_step": 1525040,
+    "published": true,
+    "reloaded": true
+  },
+  "diloco": {
+    "failed_updates": 0,
+    "merge_duration_s": 5.2828857228159904,
+    "missing_updates": 0,
+    "quorum_status": "advanced",
+    "timed_out_updates": 0
+  },
+  "job_id": 4975950,
+  "loss": 2.4854,
+  "nodes": 256,
+  "ok": true,
+  "ranks": {
+    "count": 2048,
+    "maximum": 2047,
+    "minimum": 0,
+    "world_size": 2048
+  },
+  "scheduler": {
+    "allocation_exit_code": "0:0",
+    "allocation_state": "COMPLETED",
+    "batch_exit_code": "0:0",
+    "batch_state": "COMPLETED",
+    "partition": "batch",
+    "qos": "normal",
+    "step_exit_code": "0:0",
+    "step_state": "COMPLETED",
+    "time_limit": "12:00:00"
+  },
+  "seed": {
+    "loaded": true,
+    "loss": 2.4378,
+    "metadata_checksums_unchanged": true,
+    "object": "s3://spinozans/emender/e97-diloco/emender_E97_1.3B_20260709_084606/step_1525000/checkpoint_step_1525000_loss_2.4378.pt",
+    "sha256": "1da27d2e09bc6c6f5ffc30e3e4476df1cebd807267431c8524de1a5b0dc5bca9",
+    "size": 7719679924,
+    "stable_pointer_modified": false,
+    "step": 1525000,
+    "tokens": 99942400000
+  }
+}
