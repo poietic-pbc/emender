@@ -58,12 +58,58 @@ def validate_attested_files(commit,golden):
         except (OSError,subprocess.CalledProcessError) as e: fail("attested_tree_drift",{"path":path,"error":str(e)})
         got=hashlib.sha256(content).hexdigest()
         if got!=want: fail("attested_tree_drift",{"path":path,"got":got,"want":want})
+def duration_seconds(value):
+    try:
+        parts=[int(part) for part in value.split(":")]
+    except (AttributeError,ValueError):
+        fail("smoke_terminal_evidence",{"invalid_duration":value})
+    if len(parts)!=3 or parts[1]>=60 or parts[2]>=60:
+        fail("smoke_terminal_evidence",{"invalid_duration":value})
+    return parts[0]*3600+parts[1]*60+parts[2]
+def validate_terminal_evidence(promotion, launch, bundle):
+    relative=promotion.get("terminal_evidence")
+    if not isinstance(relative,str) or Path(relative).is_absolute() or Path(relative).parts!=(relative,):
+        fail("smoke_terminal_evidence",{"path":relative})
+    path=bundle/relative
+    try:
+        payload=path.read_bytes()
+        evidence=json.loads(payload)
+    except (OSError,ValueError) as error:
+        fail("smoke_terminal_evidence",str(error))
+    if hashlib.sha256(payload).hexdigest()!=promotion.get("terminal_evidence_sha256"):
+        fail("smoke_terminal_evidence",{"sha256":"mismatch"})
+    required={
+        "schema_version":1,"result":"pass","job_id":promotion["job_id"],
+        "submission_count":1,"nodes":launch["resolved"]["nodes"],
+        "ranks":launch["resolved"]["launched_ranks"],"ranks_per_node":8,
+        "partition":launch["queue"]["partition"],"qos":launch["queue"]["qos"],
+        "walltime":launch["walltime"],"terminal_state":"TIMEOUT",
+        "scheduler_controlled_finalization":True,"accepted_updates_per_generation":16,
+        "host_oom":False,"cross_node_path_failure":False,
+        "latest_checkpoint_reload":"pass","stable_seed_pointer_unchanged":True,
+        "production_submitted":False,"larger_smoke_submitted":False,
+    }
+    if any(evidence.get(key)!=value for key,value in required.items()):
+        fail("smoke_terminal_evidence",evidence)
+    generations=evidence.get("generations_completed")
+    if not isinstance(generations,list) or len(generations)<2 or generations[:2]!=[0,1]:
+        fail("smoke_terminal_evidence",evidence)
+    if evidence.get("merges_completed",0)<2:
+        fail("smoke_terminal_evidence",evidence)
+    seed_step=launch["resolved"]["seed"]["step"]
+    if evidence.get("latest_checkpoint_step",0)<=seed_step+launch["resolved"]["local_steps"]:
+        fail("smoke_terminal_evidence",evidence)
+    requested=duration_seconds(evidence["walltime"])
+    elapsed=duration_seconds(evidence.get("terminal_elapsed"))
+    if elapsed<requested or elapsed>requested+60:
+        fail("smoke_terminal_evidence",evidence)
+    return evidence
 def validate_promotion(promotion, launch, bundle, golden):
     fingerprint=(bundle/"fingerprint.sha256").read_text().strip()
     seed=launch["resolved"]["seed"]
     job_id=promotion.get("job_id")
     required={
-        "fingerprint":fingerprint,"slurm_state":"COMPLETED","exit_code":"0:0",
+        "fingerprint":fingerprint,"slurm_state":"TIMEOUT","exit_code":"0:0",
         "nodes":launch["resolved"]["nodes"],"ranks":launch["resolved"]["launched_ranks"],
         "seed":seed,
     }
@@ -74,8 +120,9 @@ def validate_promotion(promotion, launch, bundle, golden):
     head,origin=repository_commits(promotion["origin_commit"])
     if any(promotion.get(key)!=value for key,value in required.items()):
         fail("promotion",promotion)
+    terminal=validate_terminal_evidence(promotion,launch,bundle)
     validate_attested_files(promotion["origin_commit"],golden)
-    return {"attested_commit":promotion["origin_commit"],"submission_commit":head,"origin_main":origin}
+    return {"attested_commit":promotion["origin_commit"],"submission_commit":head,"origin_main":origin,"smoke_job_id":terminal["job_id"]}
 def materialize_attested_tree(commit, bundle, golden):
     """Create the execution tree from the immutable commit, never current HEAD."""
     root=Path(__file__).resolve().parents[2]
@@ -98,7 +145,7 @@ def materialize_attested_tree(commit, bundle, golden):
         fail("attested_tree",str(e))
     return payload
 def main():
-    p=argparse.ArgumentParser(); p.add_argument("--smoke",type=Path,required=True); p.add_argument("--production",type=Path,required=True); p.add_argument("--policy",type=Path,required=True); p.add_argument("--submit",action="store_true"); p.add_argument("--approval",type=Path); p.add_argument("--require-promotion",action="store_true"); a=p.parse_args()
+    p=argparse.ArgumentParser(); p.add_argument("--smoke",type=Path,required=True); p.add_argument("--production",type=Path,required=True); p.add_argument("--policy",type=Path,required=True); p.add_argument("--submit",action="store_true"); p.add_argument("--approval",type=Path); p.add_argument("--attempt-marker",type=Path); p.add_argument("--require-promotion",action="store_true"); a=p.parse_args()
     try: policy=json.loads(a.policy.read_text())
     except Exception as e: fail("policy",str(e))
     if policy!=EXPECTED_POLICY: fail("policy",policy)
@@ -113,8 +160,16 @@ def main():
         identity=validate_promotion(promotion,s,a.smoke,sg)
     if a.submit:
         if not a.approval: fail("approval","required")
+        if not a.attempt_marker: fail("attempt_marker","required")
         approval=json.loads(a.approval.read_text())
         if approval!={"approved":True,"fingerprint":(a.smoke/"fingerprint.sha256").read_text().strip()}: fail("approval",approval)
+        try:
+            a.attempt_marker.parent.mkdir(parents=True,exist_ok=True)
+            with a.attempt_marker.open("x") as marker:
+                json.dump({"status":"sbatch_exec_started","fingerprint":approval["fingerprint"],"attested_commit":identity["attested_commit"]},marker,sort_keys=True)
+                marker.write("\n")
+        except FileExistsError:
+            fail("duplicate_submission_attempt",str(a.attempt_marker))
         payload=materialize_attested_tree(identity["attested_commit"],a.production,pg)
         os.chdir(payload)
         os.execvp(prod["sbatch_argv"][0],prod["sbatch_argv"])

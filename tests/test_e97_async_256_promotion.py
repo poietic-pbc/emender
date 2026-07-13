@@ -1,4 +1,4 @@
-import importlib.util, json, os, subprocess, sys
+import hashlib, importlib.util, json, os, subprocess, sys
 from pathlib import Path
 import pytest
 
@@ -84,14 +84,34 @@ def test_modified_parity_policy_fails_closed(tmp_path):
 def promotion(s, **overrides):
     # Model a smoke attested to the implementation under test.  Historical
     # evidence remains fail-closed when a pinned runtime source has changed.
-    commit=subprocess.check_output(["git","rev-parse","HEAD"],cwd=ROOT,text=True).strip()
-    value={"job_id":4975667,"slurm_state":"COMPLETED","exit_code":"0:0",
+    commit=subprocess.check_output(
+        ["git","rev-parse","HEAD"],cwd=ROOT,universal_newlines=True
+    ).strip()
+    terminal={
+        "schema_version":1,"task_id":"fix-e97-per","result":"pass",
+        "job_id":4979704,"submission_count":1,"nodes":2,"ranks":16,
+        "ranks_per_node":8,"partition":"batch","qos":"debug",
+        "walltime":"00:20:00","terminal_state":"TIMEOUT",
+        "terminal_elapsed":"00:20:01","scheduler_controlled_finalization":True,
+        "generations_completed":[0,1,2],"merges_completed":3,
+        "accepted_updates_per_generation":16,"aggregate_bytes_per_generation":5506770496,
+        "aggregate_bucket_count":80,"max_rss_kib":61159724,"host_oom":False,
+        "cross_node_path_failure":False,"latest_checkpoint_step":1525120,
+        "latest_checkpoint_generation":2,"latest_checkpoint_reload":"pass",
+        "stable_seed_pointer_unchanged":True,"production_submitted":False,
+        "larger_smoke_submitted":False,"production_paused":True,
+    }
+    evidence=s/"terminal-validation.json"
+    evidence.write_text(json.dumps(terminal,sort_keys=True)+"\n")
+    value={"job_id":4979704,"slurm_state":"TIMEOUT","exit_code":"0:0",
            "origin_commit":commit,"fingerprint":(s/"fingerprint.sha256").read_text().strip(),
-           "nodes":2,"ranks":16,"seed":SEED}
+           "nodes":2,"ranks":16,"seed":SEED,
+           "terminal_evidence":"terminal-validation.json",
+           "terminal_evidence_sha256":hashlib.sha256(evidence.read_bytes()).hexdigest()}
     value.update(overrides)
     (s/"promotion.json").write_text(json.dumps(value))
 
-def test_new_successful_smoke_job_is_accepted_for_promotion(tmp_path):
+def test_scheduler_controlled_repeated_smoke_is_accepted_for_promotion(tmp_path):
     s,p=bundles(tmp_path); promotion(s)
     result=captured_run(CHECK+['--smoke',str(s),'--production',str(p),'--policy',POLICY,'--require-promotion'])
     on_main=subprocess.run(
@@ -120,6 +140,7 @@ def test_submit_executes_from_attested_tree_not_current_main(tmp_path,monkeypatc
     s,p=bundles(tmp_path); promotion(s)
     checker=module(ROOT/"scripts/frontier/check_e97_async_promotion.py")
     approval=tmp_path/"approval.json"
+    attempt=tmp_path/"submission-attempt.json"
     approval.write_text(json.dumps({"approved":True,"fingerprint":(s/"fingerprint.sha256").read_text().strip()}))
     attested=tmp_path/"attested"
     monkeypatch.setattr(checker,"validate_promotion",lambda *args:{"attested_commit":"a"*40})
@@ -127,9 +148,22 @@ def test_submit_executes_from_attested_tree_not_current_main(tmp_path,monkeypatc
     calls=[]
     monkeypatch.setattr(checker.os,"chdir",lambda path:calls.append(("chdir",path)))
     monkeypatch.setattr(checker.os,"execvp",lambda exe,argv:(_ for _ in ()).throw(RuntimeError((exe,argv))))
-    monkeypatch.setattr(sys,"argv",["check","--smoke",str(s),"--production",str(p),"--policy",POLICY,"--submit","--approval",str(approval)])
+    monkeypatch.setattr(sys,"argv",["check","--smoke",str(s),"--production",str(p),"--policy",POLICY,"--submit","--approval",str(approval),"--attempt-marker",str(attempt)])
     with pytest.raises(RuntimeError): checker.main()
     assert calls==[("chdir",attested)]
+    assert json.loads(attempt.read_text())["status"]=="sbatch_exec_started"
+
+def test_submit_attempt_marker_rejects_duplicate_before_exec(tmp_path,monkeypatch):
+    s,p=bundles(tmp_path); promotion(s)
+    checker=module(ROOT/"scripts/frontier/check_e97_async_promotion.py")
+    approval=tmp_path/"approval.json"
+    approval.write_text(json.dumps({"approved":True,"fingerprint":(s/"fingerprint.sha256").read_text().strip()}))
+    attempt=tmp_path/"submission-attempt.json"
+    attempt.write_text('{"status":"already-attempted"}\n')
+    monkeypatch.setattr(checker,"validate_promotion",lambda *args:{"attested_commit":"a"*40})
+    monkeypatch.setattr(checker,"materialize_attested_tree",lambda *args:(_ for _ in ()).throw(AssertionError("must not materialize")))
+    monkeypatch.setattr(sys,"argv",["check","--smoke",str(s),"--production",str(p),"--policy",POLICY,"--submit","--approval",str(approval),"--attempt-marker",str(attempt)])
+    with pytest.raises(SystemExit): checker.main()
 
 def test_attested_tree_rejects_unverifiable_training_code(tmp_path,monkeypatch):
     checker=module(ROOT/"scripts/frontier/check_e97_async_promotion.py")
@@ -139,7 +173,7 @@ def test_attested_tree_rejects_unverifiable_training_code(tmp_path,monkeypatch):
     with pytest.raises(SystemExit): checker.materialize_attested_tree("a"*40,tmp_path,golden)
 
 @pytest.mark.parametrize("field,value",[
-    ("job_id",0),("job_id","4975667"),("slurm_state","RUNNING"),("exit_code","1:0"),
+    ("job_id",0),("job_id","4979704"),("slurm_state","COMPLETED"),("exit_code","1:0"),
     ("origin_commit","bad"),("fingerprint","0"*64),("nodes",255),("ranks",2047),
     ("seed",{**SEED,"step":1}),
 ])
@@ -150,6 +184,25 @@ def test_incomplete_or_mismatched_promotion_fails_closed(tmp_path,field,value):
     # A review branch is rejected by ancestry before promotion fields are
     # inspected; once merged, the field-level fail-closed check applies.
     assert json.loads(result.stderr)["kind"] in {"origin_commit","promotion"}
+
+@pytest.mark.parametrize("field,value",[
+    ("terminal_state","COMPLETED"),("terminal_elapsed","00:01:00"),
+    ("scheduler_controlled_finalization",False),("generations_completed",[0]),
+    ("merges_completed",1),("latest_checkpoint_step",1525040),
+    ("latest_checkpoint_reload","fail"),("stable_seed_pointer_unchanged",False),
+    ("host_oom",True),("production_submitted",True),
+])
+def test_inadequate_terminal_smoke_evidence_fails_closed(tmp_path,field,value):
+    s,p=bundles(tmp_path); promotion(s)
+    evidence=s/"terminal-validation.json"
+    data=json.loads(evidence.read_text()); data[field]=value
+    evidence.write_text(json.dumps(data,sort_keys=True)+"\n")
+    promo=json.loads((s/"promotion.json").read_text())
+    promo["terminal_evidence_sha256"]=hashlib.sha256(evidence.read_bytes()).hexdigest()
+    (s/"promotion.json").write_text(json.dumps(promo))
+    result=captured_run(CHECK+['--smoke',str(s),'--production',str(p),'--policy',POLICY,'--require-promotion'])
+    assert result.returncode!=0
+    assert json.loads(result.stderr)["kind"] in {"origin_commit","smoke_terminal_evidence"}
 
 def test_actual_complete_proven_batch_prologue_executes_cleanly(tmp_path):
     repo=tmp_path/"repo"; common=repo/"scripts/frontier/trainpy_async_quorum_smoke_common.sh"; common.parent.mkdir(parents=True)

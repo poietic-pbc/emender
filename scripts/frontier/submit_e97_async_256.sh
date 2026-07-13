@@ -6,4 +6,5 @@ cd "$repo"
 exec python3 scripts/frontier/check_e97_async_promotion.py \
   --smoke build/e97-256/smoke --production build/e97-256/production \
   --policy configs/frontier/e97_async_256_parity_policy.json \
-  --require-promotion --submit --approval "${1:?exact-fingerprint approval JSON required}"
+  --require-promotion --submit --approval "${1:?exact-fingerprint approval JSON required}" \
+  --attempt-marker "${2:?exclusive submission-attempt marker required}"
