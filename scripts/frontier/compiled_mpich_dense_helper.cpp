@@ -291,6 +291,12 @@ std::string rel_aggregate_bucket(int rank, int generation, int bucket) {
     return std::string(buf);
 }
 
+std::string rel_rank_header(int rank, int generation) {
+    char buf[128];
+    std::snprintf(buf, sizeof(buf), "rank_%05d/gen%06d/header.json", rank, generation);
+    return std::string(buf);
+}
+
 std::size_t element_size_for_dtype(const std::string& dtype) {
     if (dtype == "float32" || dtype == "float") return 4;
     if (dtype == "float64" || dtype == "double") return 8;
@@ -443,7 +449,9 @@ std::string build_aggregate_result_json(
     int loss_count,
     int loss_100_count,
     std::int64_t bytes_sent,
-    std::int64_t aggregate_bytes) {
+    std::int64_t aggregate_bytes,
+    int aggregate_owner_rank,
+    const std::string& aggregate_source_header) {
     std::ostringstream out;
     out << "{";
     out << "\"schema_version\":1,";
@@ -485,8 +493,9 @@ std::string build_aggregate_result_json(
     out << "\"mpi\":{\"provided_thread_level\":\"" << thread_level_name(provided)
         << "\",\"world_size\":" << world_size << ",\"root_rank\":0"
         << ",\"collective\":\"MPI_Reduce\"},";
-    out << "\"aggregate_payload\":{\"rank\":" << world_rank << ",\"source_header_path\":\""
-        << json_escape(req.header_path) << "\",\"bucket_paths\":[";
+    out << "\"aggregate_payload\":{\"rank\":" << aggregate_owner_rank
+        << ",\"source_header_path\":\"" << json_escape(aggregate_source_header)
+        << "\",\"bucket_paths\":[";
     for (std::size_t i = 0; i < aggregate_bucket_paths.size(); ++i) {
         if (i) out << ",";
         out << "\"" << json_escape(aggregate_bucket_paths[i]) << "\"";
@@ -624,6 +633,20 @@ int run_once_impl(const fs::path& ipc_dir, const fs::path& request_path, int ran
     std::vector<int> gathered(static_cast<std::size_t>(size * 5), -1);
     MPI_Allgather(rank_lists_local, 5, MPI_INT, gathered.data(), 5, MPI_INT, MPI_COMM_WORLD);
 
+    // Build the established MPICH node topology once per generation.  Only
+    // local rank zero owns aggregate memory/files; those node leaders exchange
+    // the node sums.  The other seven ranks retain only their active bucket.
+    MPI_Comm node_comm = MPI_COMM_NULL;
+    MPI_Comm leader_comm = MPI_COMM_NULL;
+    MPI_Comm_split_type(
+        MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, rank, MPI_INFO_NULL, &node_comm);
+    int local_rank = -1;
+    MPI_Comm_rank(node_comm, &local_rank);
+    int node_leader_rank = rank;
+    MPI_Allreduce(&rank, &node_leader_rank, 1, MPI_INT, MPI_MIN, node_comm);
+    MPI_Comm_split(
+        MPI_COMM_WORLD, local_rank == 0 ? 0 : MPI_UNDEFINED, rank, &leader_comm);
+
     // Establish a common, bucket-bounded collective schedule before entering
     // the loop. A mismatched descriptor count must fail collectively instead
     // of letting one rank execute fewer Reduce/Bcast calls and deadlock peers.
@@ -661,28 +684,40 @@ int run_once_impl(const fs::path& ipc_dir, const fs::path& request_path, int ran
         }
         std::vector<double> local_values;
         append_bucket_weighted_values(local_values, bucket, stream_offset, tensors, weight);
-        std::vector<double> reduced(rank == 0 ? local_values.size() : local_values.size(), 0.0);
-        MPI_Reduce(local_values.data(), reduced.data(), static_cast<int>(local_values.size()),
-                   MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-        std::vector<char> aggregate;
-        if (rank == 0) {
-            aggregate = encode_mean_bucket(
-                reduced, stream_offset, bucket_desc.nbytes, tensors, static_cast<double>(global_sums[0]));
+        std::vector<double> node_sums(
+            local_rank == 0 ? local_values.size() : 0, 0.0);
+        MPI_Reduce(
+            local_values.data(),
+            local_rank == 0 ? node_sums.data() : nullptr,
+            static_cast<int>(local_values.size()), MPI_DOUBLE, MPI_SUM, 0, node_comm);
+        std::vector<double> leader_sums(
+            local_rank == 0 ? local_values.size() : 0, 0.0);
+        if (local_rank == 0) {
+            MPI_Allreduce(
+                node_sums.data(), leader_sums.data(), static_cast<int>(node_sums.size()),
+                MPI_DOUBLE, MPI_SUM, leader_comm);
         }
-        long long aggregate_size = rank == 0 ? static_cast<long long>(aggregate.size()) : 0;
-        MPI_Bcast(&aggregate_size, 1, MPI_LONG_LONG, 0, MPI_COMM_WORLD);
+        std::vector<char> aggregate;
+        if (local_rank == 0) {
+            aggregate = encode_mean_bucket(
+                leader_sums, stream_offset, bucket_desc.nbytes, tensors,
+                static_cast<double>(global_sums[0]));
+        }
+        long long aggregate_size = local_rank == 0 ? static_cast<long long>(aggregate.size()) : 0;
+        MPI_Bcast(&aggregate_size, 1, MPI_LONG_LONG, 0, node_comm);
         if (aggregate_size < 0 || aggregate_size > static_cast<long long>(INT32_MAX)) {
             throw std::runtime_error("aggregate bucket exceeds MPI byte-count limit");
         }
-        if (rank != 0) {
-            aggregate.resize(static_cast<std::size_t>(aggregate_size));
-        }
-        MPI_Bcast(aggregate.data(), static_cast<int>(aggregate_size), MPI_BYTE, 0, MPI_COMM_WORLD);
 
-        // IPC roots are node-local on Frontier.  Materialize one rank-owned
-        // copy so Python never follows a rank-0 /tmp path on another node.
-        std::string rel = rel_aggregate_bucket(rank, req.generation, bucket_desc.index);
-        write_bytes_atomic(ipc_dir / rel, aggregate);
+        // The node-local IPC root is shared by the eight ranks on this node.
+        // Materialize exactly one aggregate copy and synchronize visibility;
+        // Python consumers stream this leader-owned workspace bucket-by-bucket.
+        std::string rel = rel_aggregate_bucket(
+            node_leader_rank, req.generation, bucket_desc.index);
+        if (local_rank == 0) {
+            write_bytes_atomic(ipc_dir / rel, aggregate);
+        }
+        MPI_Barrier(node_comm);
         aggregate_bucket_paths.push_back(rel);
         per_bucket_bytes.push_back(aggregate_size);
         aggregate_bytes += aggregate_size;
@@ -690,6 +725,8 @@ int run_once_impl(const fs::path& ipc_dir, const fs::path& request_path, int ran
         per_bucket_reduce_s.push_back(elapsed);
         stream_offset += bucket_desc.nbytes;
     }
+    if (leader_comm != MPI_COMM_NULL) MPI_Comm_free(&leader_comm);
+    MPI_Comm_free(&node_comm);
     double reduce_total_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - reduce_start).count();
     auto collect_ranks = [&gathered, size](int column) {
         std::vector<int> ranks;
@@ -706,7 +743,8 @@ int run_once_impl(const fs::path& ipc_dir, const fs::path& request_path, int ran
         collect_ranks(0), collect_ranks(1), collect_ranks(2), collect_ranks(3), collect_ranks(4),
         aggregate_bucket_paths, per_bucket_bytes, per_bucket_reduce_s, reduce_total_s,
         global_loss[0], global_loss[1], static_cast<int>(global_loss[2]), static_cast<int>(global_loss[3]),
-        global_sums[2], aggregate_bytes);
+        global_sums[2], aggregate_bytes, node_leader_rank,
+        rel_rank_header(node_leader_rank, req.generation));
     trace_event(request_path, "collective_reduce_complete", rank);
 
     fs::path result_path = request_path.parent_path();

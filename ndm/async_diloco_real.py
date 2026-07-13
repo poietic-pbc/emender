@@ -370,9 +370,15 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
             global_model,
             return_checkpoint=True,
         )
-        ckpt["checkpoint_path"] = str(config.initial_checkpoint)
-        initial_checkpoint_payload = ckpt
         optimizer_state_dict = ckpt.get("optimizer_state_dict")
+        # Only step/path metadata is used when emitting chain checkpoints.
+        # Retaining ``ckpt`` also retained a second complete CPU model beside
+        # ``base_state`` for every rank throughout every generation.
+        initial_checkpoint_payload = {
+            "checkpoint_path": str(config.initial_checkpoint),
+            "step": int(ckpt.get("step", 0) or 0),
+        }
+        del ckpt
     base_state = _floating_state_dict(global_model)
     del global_model
 
@@ -595,9 +601,12 @@ def run_real_async_diloco(config: RealAsyncDiLoCoConfig) -> RealAsyncDiLoCoRunRe
             global_model,
             return_checkpoint=True,
         )
-        ckpt["checkpoint_path"] = str(config.initial_checkpoint)
-        initial_checkpoint_payload = ckpt
         optimizer_state_dict = ckpt.get("optimizer_state_dict")
+        initial_checkpoint_payload = {
+            "checkpoint_path": str(config.initial_checkpoint),
+            "step": int(ckpt.get("step", 0) or 0),
+        }
+        del ckpt
     base_state = _floating_state_dict(global_model)
     latest_generation = int(config.initial_generation)
     manager = AsyncDiLoCoCheckpointManager(
@@ -916,11 +925,14 @@ def _write_verified_chain_checkpoint(
     tmp_path = output_dir / f".{ckpt_path.name}.{os.getpid()}.{time.monotonic_ns()}.tmp"
     try:
         torch.save(payload, tmp_path)
-        loaded = torch.load(tmp_path, map_location="cpu")
+        # Verify structure through mmap so checkpoint validation does not
+        # reconstruct another complete model+optimizer beside the writer.
+        loaded = torch.load(tmp_path, map_location="cpu", mmap=True, weights_only=True)
         if "model_state_dict" not in loaded or "optimizer_state_dict" not in loaded:
             raise ValueError("chain checkpoint verification failed: missing model or optimizer state")
         if int(loaded.get("step", -1)) != step:
             raise ValueError("chain checkpoint verification failed: step mismatch")
+        del loaded
         os.replace(tmp_path, ckpt_path)
     finally:
         if tmp_path.exists():
@@ -1535,6 +1547,7 @@ def _coordinate_mpi_dense_rank(
         local_update = _status_update(node_id, generation, base_state, failed=True)
     else:
         local_update = node_result.node_update
+    local_update_bytes = state_num_bytes(local_update.delta)
     _write_rank_heartbeat(
         progress_dir,
         node_rank=config.node_rank,
@@ -1566,7 +1579,7 @@ def _coordinate_mpi_dense_rank(
         "generation": int(generation),
         "node_update_submitted": node_result.node_update is not None,
         "transport": "mpi-dense",
-        "dense_delta_bytes": state_num_bytes(local_update.delta),
+        "dense_delta_bytes": local_update_bytes,
         "metrics": node_result.metrics.to_dict(),
     })
     private_global_state = payload.pop("_private_global_state", None)
@@ -1686,6 +1699,7 @@ def _coordinate_compiled_mpich_dense_rank(
         local_update = _status_update(node_id, generation, base_state, failed=True)
     else:
         local_update = node_result.node_update
+    local_update_bytes = state_num_bytes(local_update.delta)
     _write_rank_heartbeat(
         progress_dir,
         node_rank=config.node_rank,
@@ -1728,7 +1742,7 @@ def _coordinate_compiled_mpich_dense_rank(
         "generation": int(generation),
         "node_update_submitted": node_result.node_update is not None,
         "transport": COMPILED_MPICH_TRANSPORT,
-        "dense_delta_bytes": state_num_bytes(local_update.delta),
+        "dense_delta_bytes": local_update_bytes,
         "helper_bin": str(config.compiled_mpich_helper_bin),
         "ipc_dir": str(ipc_dir),
         "metrics": node_result.metrics.to_dict(),

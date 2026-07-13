@@ -17,12 +17,14 @@ import ndm.async_diloco_compiled_mpich as compiled_mpich
 from ndm.async_diloco_compiled_mpich import (
     COMPILED_MPICH_TRANSPORT,
     CompiledMpichHelperConfig,
+    apply_aggregate_payload_in_place,
     collect_compiled_mpich_aggregate_result,
     load_aggregate_payload,
     load_received_payloads,
     resolve_compiled_mpich_helper_library,
     run_compiled_mpich_dense_quorum,
     write_compiled_mpich_request,
+    write_compiled_mpich_update_request,
 )
 from ndm.async_diloco_mpi import (
     DenseTransportQuorumConfig,
@@ -56,11 +58,15 @@ def test_compiled_mpich_cpp_uses_bucketed_collective_reduce_not_root_bucket_fani
     assert "MPI_Recv(&bucket_len" not in source
     assert "MPI ranks have different aggregate bucket counts" in source
     assert "MPI ranks have different aggregate bucket layouts" in source
-    reduce_pos = source.index("MPI_Reduce(local_values.data()")
+    assert "MPI_Comm_split_type(" in source
+    assert "MPI_COMM_TYPE_SHARED" in source
+    assert "local_rank == 0 ? 0 : MPI_UNDEFINED" in source
+    reduce_pos = source.index("MPI_Reduce(", source.index("std::vector<double> node_sums"))
     size_bcast_pos = source.index("MPI_Bcast(&aggregate_size", reduce_pos)
-    payload_bcast_pos = source.index("MPI_Bcast(aggregate.data()", size_bcast_pos)
-    write_pos = source.index("write_bytes_atomic(ipc_dir / rel, aggregate)", payload_bcast_pos)
-    assert reduce_pos < size_bcast_pos < payload_bcast_pos < write_pos
+    write_pos = source.index("write_bytes_atomic(ipc_dir / rel, aggregate)", size_bcast_pos)
+    barrier_pos = source.index("MPI_Barrier(node_comm)", write_pos)
+    assert "MPI_Bcast(aggregate.data()" not in source
+    assert reduce_pos < size_bcast_pos < write_pos < barrier_pos
 
 
 def test_compiled_mpich_request_contract_uses_file_ipc_and_checksums(tmp_path):
@@ -94,6 +100,59 @@ def test_compiled_mpich_request_contract_uses_file_ipc_and_checksums(tmp_path):
     assert request["bucket_descriptors"][0]["checksum_sha256"]
     assert (tmp_path / "ipc" / request["header_path"]).is_file()
     assert (tmp_path / "ipc" / request["bucket_descriptors"][0]["ipc"]["path"]).is_file()
+
+
+def test_compiled_mpich_streaming_request_matches_dense_wire_contract(tmp_path):
+    update = AsyncDiLoCoUpdate(
+        worker_id="stream-writer",
+        base_generation=3,
+        delta={
+            "a": torch.arange(4, dtype=torch.float32),
+            "b": torch.arange(6, dtype=torch.bfloat16).reshape(2, 3),
+        },
+        tokens=123,
+        local_steps=40,
+        loss_moving_average={"loss": 2.5},
+    )
+    request_path = write_compiled_mpich_update_request(
+        update,
+        ipc_dir=tmp_path / "ipc",
+        run_id="stream-writer",
+        rank=9,
+        world_size=16,
+        generation=4,
+        base_generation=3,
+        quorum=16,
+        timeout_s=1200.0,
+        bucket_bytes_target=16,
+        base_checkpoint="seed.pt",
+    )
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    header = json.loads((tmp_path / "ipc" / request["header_path"]).read_text(encoding="utf-8"))
+    payload = b"".join(
+        (tmp_path / "ipc" / descriptor["ipc"]["path"]).read_bytes()
+        for descriptor in request["bucket_descriptors"]
+    )
+
+    assert request["payload_bytes"] == 28
+    assert request["payload_bytes"] == header["payload_bytes"] == len(payload)
+    assert request["bucket_descriptors"] == [
+        {
+            "checksum_sha256": bucket["checksum_sha256"],
+            "index": bucket["index"],
+            "ipc": {
+                "kind": "file",
+                "offset": 0,
+                "path": f"rank_00009/gen000004/bucket{bucket['index']:05d}.bin",
+            },
+            "nbytes": bucket["nbytes"],
+        }
+        for bucket in header["buckets"]
+    ]
+    assert header["local_steps"] == 40
+    assert header["staleness"] == 1
+    assert header["transport"] == COMPILED_MPICH_TRANSPORT
+    assert update.delta
 
 
 def test_compiled_mpich_request_replaces_rank_local_generation_workspace(tmp_path):
@@ -480,9 +539,61 @@ def test_compiled_mpich_aggregate_uses_rank_local_metadata_across_distinct_node_
     source = (Path(__file__).resolve().parents[1] / "scripts/frontier/compiled_mpich_dense_helper.cpp").read_text(
         encoding="utf-8"
     )
-    assert "rel_aggregate_bucket(rank, req.generation, bucket_desc.index)" in source
-    assert "MPI_Bcast(aggregate.data()" in source
+    assert "rel_aggregate_bucket(\n            node_leader_rank" in source
+    assert "MPI_Comm_split_type(" in source
+    assert "MPI_COMM_TYPE_SHARED" in source
     assert '"aggregate_payload":{"rank":0' not in source
+
+
+def test_compiled_mpich_streams_node_leader_buckets_in_place(tmp_path):
+    base = {
+        "a": torch.tensor([10.0, 20.0]),
+        "b": torch.tensor([30.0, 40.0]),
+    }
+    original_ids = {name: id(tensor) for name, tensor in base.items()}
+    envelope = pack_dense_update(
+        AsyncDiLoCoUpdate(
+            worker_id="aggregate",
+            base_generation=0,
+            delta={"a": torch.tensor([1.0, 2.0]), "b": torch.tensor([3.0, 4.0])},
+            tokens=16,
+            local_steps=2,
+        ),
+        run_id="streamed",
+        rank=0,
+        generation=0,
+        bucket_bytes=8,
+    )
+    request = write_compiled_mpich_request(
+        envelope,
+        ipc_dir=tmp_path / "ipc",
+        run_id="streamed",
+        rank=0,
+        world_size=8,
+        generation=0,
+        base_generation=0,
+        quorum=8,
+        timeout_s=3.0,
+        bucket_bytes_target=8,
+        base_checkpoint=None,
+    )
+    request_payload = json.loads(request.read_text(encoding="utf-8"))
+    paths = [descriptor["ipc"]["path"] for descriptor in request_payload["bucket_descriptors"]]
+    applied = apply_aggregate_payload_in_place(
+        base,
+        ipc_dir=tmp_path / "ipc",
+        aggregate_payload={
+            "rank": 0,
+            "source_header_path": request_payload["header_path"],
+            "bucket_paths": paths,
+        },
+        scale=0.5,
+    )
+
+    assert applied == envelope.payload_bytes
+    assert {name: id(tensor) for name, tensor in base.items()} == original_ids
+    assert torch.equal(base["a"], torch.tensor([10.5, 21.0]))
+    assert torch.equal(base["b"], torch.tensor([31.5, 42.0]))
 
 
 def test_compiled_mpich_helper_invocation_errors_on_nonzero(tmp_path, monkeypatch):

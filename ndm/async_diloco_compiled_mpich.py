@@ -33,7 +33,6 @@ from ndm.async_diloco_mpi import (
     DenseUpdateEnvelope,
     collect_dense_quorum_from_envelopes,
     pack_dense_update,
-    unpack_dense_update,
 )
 
 
@@ -80,20 +79,8 @@ def run_compiled_mpich_dense_quorum(
             f"{helper_lib}; rebuild with scripts/frontier/build_compiled_mpich_dense_helper.sh"
         )
     ipc_dir = Path(helper.ipc_dir)
-    envelope = pack_dense_update(
+    request_path = write_compiled_mpich_update_request(
         local_update,
-        run_id=run_id,
-        rank=rank,
-        generation=generation,
-        base_checkpoint=base_checkpoint,
-        bucket_bytes=int(helper.bucket_bytes),
-    )
-    envelope = DenseUpdateEnvelope(
-        header={**envelope.header, "transport": COMPILED_MPICH_TRANSPORT},
-        buckets=envelope.buckets,
-    )
-    request_path = write_compiled_mpich_request(
-        envelope,
         ipc_dir=ipc_dir,
         run_id=run_id,
         rank=rank,
@@ -102,9 +89,13 @@ def run_compiled_mpich_dense_quorum(
         base_generation=local_update.base_generation,
         quorum=quorum,
         timeout_s=helper.timeout_s,
-        bucket_bytes_target=helper.bucket_bytes,
+        bucket_bytes_target=int(helper.bucket_bytes),
         base_checkpoint=base_checkpoint,
     )
+    # The request files are now authoritative.  Release the model-sized local
+    # CPU delta before MPICH allocates its bucket work buffers.
+    if isinstance(local_update.delta, dict):
+        local_update.delta.clear()
     rc = _call_compiled_mpich_shared_library(helper_lib, ipc_dir, request_path)
     if rc != 0:
         raise RuntimeError(f"compiled MPICH helper shared library failed rc={rc}")
@@ -222,6 +213,156 @@ def write_compiled_mpich_request(
         "bucket_bytes_target": int(bucket_bytes_target),
         "header_bytes": len(stable_json_dumps(envelope.header).encode("utf-8")),
         "payload_bytes": envelope.payload_bytes,
+        "header_path": header_rel.as_posix(),
+        "bucket_descriptors": descriptors,
+    }
+    request_path = rank_dir / f"request.gen{int(generation):06d}.json"
+    _atomic_write_text(request_path, stable_json_dumps(request) + "\n")
+    return request_path
+
+
+def write_compiled_mpich_update_request(
+    update: AsyncDiLoCoUpdate,
+    *,
+    ipc_dir: Path,
+    run_id: str,
+    rank: int,
+    world_size: int,
+    generation: int,
+    base_generation: int,
+    quorum: int,
+    timeout_s: float,
+    bucket_bytes_target: int,
+    base_checkpoint: str | None,
+) -> Path:
+    """Pack an update directly to bounded bucket files.
+
+    Unlike :func:`pack_dense_update`, this never retains the full serialized
+    payload in an envelope.  Peak serialization storage is one target bucket
+    (or one oversized tensor, matching the established no-tensor-split wire
+    contract).
+    """
+
+    if bucket_bytes_target <= 0:
+        raise ValueError("bucket_bytes_target must be positive")
+    rank_dir = ipc_dir / f"rank_{int(rank):05d}"
+    if rank_dir.exists():
+        shutil.rmtree(rank_dir)
+    gen_dir = rank_dir / f"gen{int(generation):06d}"
+    gen_dir.mkdir(parents=True, exist_ok=True)
+
+    dtype_names = {
+        torch.float16: "float16",
+        torch.bfloat16: "bfloat16",
+        torch.float32: "float32",
+        torch.float64: "float64",
+    }
+    descriptors: list[dict[str, Any]] = []
+    bucket_headers: list[dict[str, Any]] = []
+    tensor_headers: list[dict[str, Any]] = []
+    current = bytearray()
+    current_entries: list[dict[str, Any]] = []
+    stream_offset = 0
+    bucket_offset = 0
+    payload_hasher = hashlib.sha256()
+
+    def flush_bucket() -> None:
+        nonlocal current, current_entries, bucket_offset
+        index = len(descriptors)
+        payload = bytes(current)
+        checksum = hashlib.sha256(payload).hexdigest()
+        rel = Path(f"rank_{int(rank):05d}") / f"gen{int(generation):06d}" / f"bucket{index:05d}.bin"
+        _atomic_write_bytes(ipc_dir / rel, payload)
+        descriptors.append({
+            "index": index,
+            "nbytes": len(payload),
+            "checksum_sha256": checksum,
+            "ipc": {"kind": "file", "path": rel.as_posix(), "offset": 0},
+        })
+        bucket_headers.append({
+            "index": index,
+            "offset": bucket_offset,
+            "nbytes": len(payload),
+            "checksum_sha256": checksum,
+            "tensors": list(current_entries),
+        })
+        payload_hasher.update(payload)
+        bucket_offset += len(payload)
+        current = bytearray()
+        current_entries = []
+
+    for name, tensor in sorted(update.delta.items()):
+        if not torch.is_tensor(tensor) or not torch.is_floating_point(tensor):
+            raise ValueError(f"delta entry {name!r} is not a floating tensor")
+        contiguous = tensor.detach().cpu().contiguous()
+        if contiguous.dtype not in dtype_names:
+            raise ValueError(f"unsupported dense tensor dtype: {contiguous.dtype}")
+        raw = contiguous.view(torch.uint8).numpy().tobytes()
+        if current and len(current) + len(raw) > bucket_bytes_target:
+            flush_bucket()
+        entry = {
+            "name": str(name),
+            "shape": list(contiguous.shape),
+            "dtype": dtype_names[contiguous.dtype],
+            "numel": int(contiguous.numel()),
+            "offset": int(stream_offset),
+            "nbytes": len(raw),
+            "checksum_sha256": hashlib.sha256(raw).hexdigest(),
+        }
+        current.extend(raw)
+        current_entries.append(entry)
+        tensor_headers.append(dict(entry))
+        stream_offset += len(raw)
+        del raw, contiguous
+    if current or not descriptors:
+        flush_bucket()
+
+    staleness = max(0, int(generation) - int(base_generation))
+    header = {
+        "schema_version": 1,
+        "transport": COMPILED_MPICH_TRANSPORT,
+        "run_id": str(run_id),
+        "rank": int(rank),
+        "worker_id": update.worker_id,
+        "generation": int(generation),
+        "global_generation": int(generation if update.global_generation is None else update.global_generation),
+        "base_generation": int(base_generation),
+        "base_checkpoint": base_checkpoint,
+        "update_id": update.update_id or f"{update.worker_id}:g{int(generation):06d}:base{int(base_generation):06d}",
+        "checkpoint_state_id": update.checkpoint_state_id,
+        "submitted_at_s": update.submitted_at_s,
+        "tokens": int(update.tokens),
+        "local_steps": int(update.local_steps),
+        "loss_window": {str(k): float(v) for k, v in update.loss_moving_average.items()},
+        "staleness": staleness,
+        "failed": bool(update.failed),
+        "timed_out": bool(update.timed_out),
+        "invalid": bool(update.invalid),
+        "payload_bytes": int(stream_offset),
+        "bucket_bytes_target": int(bucket_bytes_target),
+        "bucket_count": len(descriptors),
+        "buckets": bucket_headers,
+        "tensors": tensor_headers,
+        "payload_checksum_sha256": payload_hasher.hexdigest(),
+    }
+    header_rel = Path(f"rank_{int(rank):05d}") / f"gen{int(generation):06d}" / "header.json"
+    header_text = stable_json_dumps(header)
+    _atomic_write_text(ipc_dir / header_rel, header_text + "\n")
+    request = {
+        "schema_version": COMPILED_MPICH_REQUEST_SCHEMA_VERSION,
+        "command": "dense_quorum_generation",
+        "transport": COMPILED_MPICH_TRANSPORT,
+        "run_id": str(run_id),
+        "rank": int(rank),
+        "world_size": int(world_size),
+        "generation": int(generation),
+        "base_generation": int(base_generation),
+        "base_checkpoint": base_checkpoint,
+        "quorum": int(quorum),
+        "timeout_s": float(timeout_s),
+        "bucket_bytes_target": int(bucket_bytes_target),
+        "header_bytes": len(header_text.encode("utf-8")),
+        "payload_bytes": int(stream_offset),
         "header_path": header_rel.as_posix(),
         "bucket_descriptors": descriptors,
     }
@@ -403,17 +544,41 @@ def collect_compiled_mpich_aggregate_result(
             transport_metrics=transport_metrics,
         )
 
-    aggregate_envelope = load_aggregate_payload(ipc_dir, aggregate_payload, helper_result)
-    aggregate_update = unpack_dense_update(aggregate_envelope)
     merge_start = time.monotonic()
-    merge_result = quorum_merge(
+    # Applying the aggregate through ``load_aggregate_payload`` used to retain
+    # every bucket as Python ``bytes``, join a second full-payload copy, unpack
+    # a complete delta, and finally allocate a complete replacement state.
+    # For E97 that is several simultaneous ~5.5 GiB objects *per rank*.  The
+    # helper's node leader owns the aggregate files, so consume those files one
+    # at a time and update the existing CPU base state in place instead.
+    aggregate_bytes_applied = apply_aggregate_payload_in_place(
         base_state,
+        ipc_dir=ipc_dir,
+        aggregate_payload=aggregate_payload,
+        scale=float(config.eta_outer),
+    )
+    aggregate_update = AsyncDiLoCoUpdate(
+        worker_id="compiled_mpich_aggregate",
+        base_generation=int(config.base_generation),
+        delta={},
+        tokens=int(helper_result.get("accepted_tokens", 0)),
+        local_steps=int(helper_result.get("accepted_local_steps", 0)),
+        loss_moving_average={
+            str(k): float(v)
+            for k, v in dict(helper_result.get("aggregate_loss_window") or {}).items()
+        },
+    )
+    # Use the normal quorum accounting on an empty state.  The real state was
+    # already advanced bucket-by-bucket above, avoiding another model-sized
+    # allocation while preserving the established metrics schema.
+    merge_result = quorum_merge(
+        {},
         (aggregate_update,),
         run_id=config.run_id,
         generation=config.generation,
         requested_workers=config.requested_ranks,
         quorum_threshold=1,
-        eta_outer=config.eta_outer,
+        eta_outer=1.0,
         weight_by="tokens",
         generation_duration_s=reduce_duration_s,
         mode=config.quorum_mode,
@@ -439,7 +604,7 @@ def collect_compiled_mpich_aggregate_result(
         tokens_per_generation=total_tokens,
         update_bytes={
             **dict(merge_result.metrics.update_bytes),
-            "accepted_dense_delta": state_num_bytes(aggregate_update.delta),
+            "accepted_dense_delta": aggregate_bytes_applied,
             "mpi_reduce_payload_sent": int(helper_result.get("bytes_sent", 0)),
             "mpi_reduce_aggregate": aggregate_bytes,
         },
@@ -449,12 +614,88 @@ def collect_compiled_mpich_aggregate_result(
     )
     transport_metrics = replace(transport_metrics, merge_latency_s=merge_latency_s)
     return DenseTransportQuorumResult(
-        state=merge_result.state,
+        state=base_state,
+        # The aggregate metadata object deliberately has no model-sized delta.
+        # Consumers use this tuple only for accounting on this transport path.
         accepted_updates=(aggregate_update,),
         stale_updates=(),
         metrics=metrics,
         transport_metrics=transport_metrics,
     )
+
+
+def apply_aggregate_payload_in_place(
+    base_state: Mapping[str, torch.Tensor],
+    *,
+    ipc_dir: str | Path,
+    aggregate_payload: Mapping[str, Any],
+    scale: float = 1.0,
+) -> int:
+    """Stream a node-leader aggregate into ``base_state`` without full copies.
+
+    Tensor packing guarantees that a tensor is wholly contained in one bucket.
+    At most one bucket byte buffer and one zero-copy tensor view are therefore
+    live while the existing CPU state is updated in place.
+    """
+
+    root = Path(ipc_dir)
+    header = json.loads(
+        (root / str(aggregate_payload["source_header_path"])).read_text(encoding="utf-8")
+    )
+    bucket_paths = [str(path) for path in aggregate_payload.get("bucket_paths") or ()]
+    source_buckets = list(header.get("buckets") or ())
+    if len(bucket_paths) != len(source_buckets):
+        raise ValueError("compiled MPICH aggregate bucket count mismatch")
+
+    dtype_by_name = {
+        "float16": torch.float16,
+        "half": torch.float16,
+        "bfloat16": torch.bfloat16,
+        "float32": torch.float32,
+        "float": torch.float32,
+        "float64": torch.float64,
+        "double": torch.float64,
+    }
+    seen: set[str] = set()
+    total_bytes = 0
+    with torch.no_grad():
+        for rel, source_bucket_raw in zip(bucket_paths, source_buckets):
+            source_bucket = dict(source_bucket_raw)
+            payload = bytearray((root / rel).read_bytes())
+            expected_nbytes = int(source_bucket["nbytes"])
+            if len(payload) != expected_nbytes:
+                raise ValueError("compiled MPICH aggregate bucket length mismatch")
+            total_bytes += len(payload)
+            bucket_offset = int(source_bucket["offset"])
+            for entry_raw in source_bucket.get("tensors") or ():
+                entry = dict(entry_raw)
+                name = str(entry["name"])
+                if name in seen:
+                    raise ValueError(f"compiled MPICH aggregate repeats tensor {name!r}")
+                if name not in base_state:
+                    raise ValueError(f"compiled MPICH aggregate has unknown tensor {name!r}")
+                dtype_name = str(entry["dtype"])
+                if dtype_name not in dtype_by_name:
+                    raise ValueError(f"unsupported aggregate tensor dtype: {dtype_name}")
+                start = int(entry["offset"]) - bucket_offset
+                end = start + int(entry["nbytes"])
+                if start < 0 or end > len(payload):
+                    raise ValueError("compiled MPICH aggregate tensor metadata crosses bucket boundary")
+                view = torch.frombuffer(
+                    memoryview(payload)[start:end],
+                    dtype=dtype_by_name[dtype_name],
+                    count=int(entry["numel"]),
+                ).reshape(tuple(int(dim) for dim in entry["shape"]))
+                target = base_state[name]
+                if tuple(target.shape) != tuple(view.shape):
+                    raise ValueError(f"compiled MPICH aggregate tensor {name!r} shape mismatch")
+                target.add_(view.to(dtype=target.dtype), alpha=float(scale))
+                seen.add(name)
+            del payload
+    missing = sorted(set(base_state) - seen)
+    if missing:
+        raise ValueError(f"compiled MPICH aggregate is missing base tensors: {missing}")
+    return total_bytes
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
@@ -464,13 +705,22 @@ def _atomic_write_text(path: Path, text: str) -> None:
     tmp.replace(path)
 
 
+def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{time.monotonic_ns()}.tmp")
+    tmp.write_bytes(payload)
+    tmp.replace(path)
+
+
 __all__ = [
     "COMPILED_MPICH_TRANSPORT",
     "CompiledMpichHelperConfig",
+    "apply_aggregate_payload_in_place",
     "collect_compiled_mpich_aggregate_result",
     "load_aggregate_payload",
     "load_received_payloads",
     "resolve_compiled_mpich_helper_library",
     "run_compiled_mpich_dense_quorum",
     "write_compiled_mpich_request",
+    "write_compiled_mpich_update_request",
 ]
