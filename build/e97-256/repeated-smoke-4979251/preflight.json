@@ -1,0 +1,60 @@
+{
+  "canonical_fingerprint": "2d2f302ae30d55fc529e1fec79925fa731a25a2825d9e5abdcff83773c98fedd",
+  "caps": {
+    "generations": 1000000,
+    "local_steps": 40,
+    "steps": 40000000,
+    "timeout_s": 1200,
+    "walltime_remaining_s": 1200
+  },
+  "launcher_sha256": "106a4dde6b966b0af66a1ac92ea0f459c7a435f81f6e322d92e08f30a2cfad30",
+  "origin_commit": "2b196d9f299b4714723ebc73b83ed08b05efa778",
+  "preflight_epoch": 1783932048.3444586,
+  "schema_version": 1,
+  "seed": {
+    "path": "/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260709_084606_step_1525000/checkpoint_step_1525000_loss_2.4378.pt",
+    "sha256": "1da27d2e09bc6c6f5ffc30e3e4476df1cebd807267431c8524de1a5b0dc5bca9",
+    "size": 7719679924
+  },
+  "stable_seed_pointer_before": {
+    "latest_emender_E97_1.3B.json": {
+      "mtime_ns": 1783875578000000000,
+      "sha256": "5a91e1817e32ea44506286b0c68b14706a046313a7d5058ed604c30fe3805358",
+      "size": 2705
+    },
+    "latest_symlink_target.txt": {
+      "mtime_ns": 1783875578000000000,
+      "sha256": "cd3c407d4fade9f19e3bdee7d42c52a554dafc0d72c4b8ac47305057b4919ec9",
+      "size": 39
+    },
+    "manifest.json": {
+      "mtime_ns": 1783875578000000000,
+      "sha256": "5a91e1817e32ea44506286b0c68b14706a046313a7d5058ed604c30fe3805358",
+      "size": 2705
+    },
+    "metadata_files.sha256": {
+      "mtime_ns": 1783875578000000000,
+      "sha256": "e582d3cdd92de8823ab5a2f27abfc4ad170d82bd4502618f33d1bf4e793356cc",
+      "size": 1088
+    }
+  },
+  "submission_argv": [
+    "sbatch",
+    "--parsable",
+    "-N",
+    "2",
+    "-J",
+    "async-b4k40-ladder-256n",
+    "-t",
+    "00:20:00",
+    "-p",
+    "batch",
+    "-q",
+    "debug",
+    "--export",
+    "ALL,WG_TASK_ID=run-async-b4k40-debug-ladder-256n,TASK_ID=run-async-b4k40-debug-ladder-256n,OUTPUT_ROOT=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709,SMOKE_NAME=256n,SCALEOUT_VARIANT=E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n,ASYNC_QUORUM_TRANSPORT=compiled-cray-mpich-helper-p2p,ALLOW_FRONTIER_TCP_SCALE_DEBUG=0,ASYNC_TRAINPY_RANKS=16,ASYNC_EXPECTED_RANKS=16,ASYNC_GLOBAL_QUORUM=16,ASYNC_EXPECTED_MISSING_UPDATES=0,ASYNC_TIMEOUT_S=1200,DILOCO_K=40,ASYNC_LOCAL_STEPS=40,BATCH_SIZE=4,CHUNK_SIZE=2048,LEARNING_RATE=0.001007,OPTIMIZER=schedulefree,WEIGHT_DECAY=0.01,WARMUP_STEPS=0,GRAD_ACCUM=1,GRAD_CLIP=1.0,MODEL_TOKENIZER=p50k_base,ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM=0,HUMAN_APPROVAL_RECORD=WG run-async-b4k40-debug-ladder-256n: 256-node fixed async DiLoCo B4/K40 stability ladder final rung; batch/debug 00:20:00; sequential after clean 128n job 4962329; run-local debug latest/checkpoint only; no production or extended job.,E97_CHECKPOINT=/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260709_084606_step_1525000/checkpoint_step_1525000_loss_2.4378.pt,ASYNC_GENERATIONS=1000000,ASYNC_STEPS=40000000",
+    "scripts/frontier/trainpy_async_quorum_2n_smoke.sbatch"
+  ],
+  "submission_attempts": 1,
+  "task_id": "run-exact-20-minute"
+}

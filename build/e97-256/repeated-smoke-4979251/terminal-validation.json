@@ -1,0 +1,83 @@
+{
+  "canonical_fingerprint": "2d2f302ae30d55fc529e1fec79925fa731a25a2825d9e5abdcff83773c98fedd",
+  "failure": {
+    "detail": "Aggregate result references rank 0 header under node-local /tmp; ranks on the second node cannot read it.",
+    "exception": "FileNotFoundError",
+    "kind": "compiled_mpich_node_local_ipc",
+    "missing_path": "/tmp/emender-erikgarrison/trainpy_async_quorum/4979251-20260713T084120Z/ipc/rank_00000/gen000000/header.json"
+  },
+  "job_id": 4979251,
+  "launcher_sha256": "106a4dde6b966b0af66a1ac92ea0f459c7a435f81f6e322d92e08f30a2cfad30",
+  "observed": {
+    "completed_generations": 0,
+    "elapsed": "00:04:10",
+    "end": "2026-07-13T04:45:26",
+    "exit_code": "90:0",
+    "latest_checkpoint": null,
+    "latest_generation": null,
+    "rank_starts": 16,
+    "scheduler_finalization": false,
+    "start": "2026-07-13T04:41:16",
+    "state": "FAILED",
+    "successful_merges": 0
+  },
+  "origin_commit": "2b196d9f299b4714723ebc73b83ed08b05efa778",
+  "requested": {
+    "generations": 1000000,
+    "local_steps": 40,
+    "nodes": 2,
+    "qos": "debug",
+    "ranks": 16,
+    "steps": 40000000,
+    "walltime": "00:20:00"
+  },
+  "schema_version": 1,
+  "stable_seed_pointer_after": {
+    "latest_emender_E97_1.3B.json": {
+      "mtime_ns": 1783875578000000000,
+      "sha256": "5a91e1817e32ea44506286b0c68b14706a046313a7d5058ed604c30fe3805358",
+      "size": 2705
+    },
+    "latest_symlink_target.txt": {
+      "mtime_ns": 1783875578000000000,
+      "sha256": "cd3c407d4fade9f19e3bdee7d42c52a554dafc0d72c4b8ac47305057b4919ec9",
+      "size": 39
+    },
+    "manifest.json": {
+      "mtime_ns": 1783875578000000000,
+      "sha256": "5a91e1817e32ea44506286b0c68b14706a046313a7d5058ed604c30fe3805358",
+      "size": 2705
+    },
+    "metadata_files.sha256": {
+      "mtime_ns": 1783875578000000000,
+      "sha256": "e582d3cdd92de8823ab5a2f27abfc4ad170d82bd4502618f33d1bf4e793356cc",
+      "size": 1088
+    }
+  },
+  "stable_seed_pointer_before": {
+    "latest_emender_E97_1.3B.json": {
+      "mtime_ns": 1783875578000000000,
+      "sha256": "5a91e1817e32ea44506286b0c68b14706a046313a7d5058ed604c30fe3805358",
+      "size": 2705
+    },
+    "latest_symlink_target.txt": {
+      "mtime_ns": 1783875578000000000,
+      "sha256": "cd3c407d4fade9f19e3bdee7d42c52a554dafc0d72c4b8ac47305057b4919ec9",
+      "size": 39
+    },
+    "manifest.json": {
+      "mtime_ns": 1783875578000000000,
+      "sha256": "5a91e1817e32ea44506286b0c68b14706a046313a7d5058ed604c30fe3805358",
+      "size": 2705
+    },
+    "metadata_files.sha256": {
+      "mtime_ns": 1783875578000000000,
+      "sha256": "e582d3cdd92de8823ab5a2f27abfc4ad170d82bd4502618f33d1bf4e793356cc",
+      "size": 1088
+    }
+  },
+  "stable_seed_pointer_unchanged": true,
+  "submission_attempts": 1,
+  "task_id": "run-exact-20-minute",
+  "validation_passed": false
+}
