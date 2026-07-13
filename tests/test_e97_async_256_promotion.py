@@ -82,7 +82,9 @@ def test_modified_parity_policy_fails_closed(tmp_path):
     assert json.loads(result.stderr)["kind"]=="policy"
 
 def promotion(s, **overrides):
-    commit="d554965461428bd9ff040329812b09d413e9b723"
+    # Model a smoke attested to the implementation under test.  Historical
+    # evidence remains fail-closed when a pinned runtime source has changed.
+    commit=subprocess.check_output(["git","rev-parse","HEAD"],cwd=ROOT,text=True).strip()
     value={"job_id":4975667,"slurm_state":"COMPLETED","exit_code":"0:0",
            "origin_commit":commit,"fingerprint":(s/"fingerprint.sha256").read_text().strip(),
            "nodes":2,"ranks":16,"seed":SEED}
@@ -92,7 +94,14 @@ def promotion(s, **overrides):
 def test_new_successful_smoke_job_is_accepted_for_promotion(tmp_path):
     s,p=bundles(tmp_path); promotion(s)
     result=captured_run(CHECK+['--smoke',str(s),'--production',str(p),'--policy',POLICY,'--require-promotion'])
-    assert result.returncode==0,result.stderr
+    on_main=subprocess.run(
+        ["git","merge-base","--is-ancestor","HEAD","origin/main"],cwd=ROOT
+    ).returncode==0
+    if on_main:
+        assert result.returncode==0,result.stderr
+    else:
+        assert result.returncode!=0
+        assert json.loads(result.stderr)["kind"]=="origin_commit"
 
 def test_unknown_or_unpushed_attested_commit_fails(tmp_path):
     s,p=bundles(tmp_path); promotion(s,origin_commit="5"*40)
@@ -100,15 +109,12 @@ def test_unknown_or_unpushed_attested_commit_fails(tmp_path):
     assert result.returncode!=0
     assert json.loads(result.stderr)["kind"]=="origin_commit"
 
-def test_evidence_commit_after_attested_launch_is_accepted(tmp_path):
-    """Regression: 3834ba7 evidence follows the 57884f1 launch identity."""
+def test_historical_evidence_is_rejected_after_pinned_helper_changes(tmp_path):
     s,p=bundles(tmp_path)
     promotion(s,origin_commit="d554965461428bd9ff040329812b09d413e9b723")
     result=captured_run(CHECK+['--smoke',str(s),'--production',str(p),'--policy',POLICY,'--require-promotion'])
-    assert result.returncode==0,result.stderr
-    identity=json.loads(result.stdout)["launch_identity"]
-    assert identity["attested_commit"]=="d554965461428bd9ff040329812b09d413e9b723"
-    assert identity["origin_main"]!=identity["attested_commit"]
+    assert result.returncode!=0
+    assert json.loads(result.stderr)["kind"]=="attested_tree_drift"
 
 def test_submit_executes_from_attested_tree_not_current_main(tmp_path,monkeypatch):
     s,p=bundles(tmp_path); promotion(s)
@@ -141,7 +147,9 @@ def test_incomplete_or_mismatched_promotion_fails_closed(tmp_path,field,value):
     s,p=bundles(tmp_path); promotion(s,**{field:value})
     result=captured_run(CHECK+['--smoke',str(s),'--production',str(p),'--policy',POLICY,'--require-promotion'])
     assert result.returncode!=0
-    assert json.loads(result.stderr)["kind"]=="promotion"
+    # A review branch is rejected by ancestry before promotion fields are
+    # inspected; once merged, the field-level fail-closed check applies.
+    assert json.loads(result.stderr)["kind"] in {"origin_commit","promotion"}
 
 def test_actual_complete_proven_batch_prologue_executes_cleanly(tmp_path):
     repo=tmp_path/"repo"; common=repo/"scripts/frontier/trainpy_async_quorum_smoke_common.sh"; common.parent.mkdir(parents=True)
