@@ -54,6 +54,13 @@ def test_compiled_mpich_cpp_uses_bucketed_collective_reduce_not_root_bucket_fani
     assert "root_file_gathered_peer" not in source
     assert "MPI_Send(preamble" not in source
     assert "MPI_Recv(&bucket_len" not in source
+    assert "MPI ranks have different aggregate bucket counts" in source
+    assert "MPI ranks have different aggregate bucket layouts" in source
+    reduce_pos = source.index("MPI_Reduce(local_values.data()")
+    size_bcast_pos = source.index("MPI_Bcast(&aggregate_size", reduce_pos)
+    payload_bcast_pos = source.index("MPI_Bcast(aggregate.data()", size_bcast_pos)
+    write_pos = source.index("write_bytes_atomic(ipc_dir / rel, aggregate)", payload_bcast_pos)
+    assert reduce_pos < size_bcast_pos < payload_bcast_pos < write_pos
 
 
 def test_compiled_mpich_request_contract_uses_file_ipc_and_checksums(tmp_path):
@@ -87,6 +94,44 @@ def test_compiled_mpich_request_contract_uses_file_ipc_and_checksums(tmp_path):
     assert request["bucket_descriptors"][0]["checksum_sha256"]
     assert (tmp_path / "ipc" / request["header_path"]).is_file()
     assert (tmp_path / "ipc" / request["bucket_descriptors"][0]["ipc"]["path"]).is_file()
+
+
+def test_compiled_mpich_request_replaces_rank_local_generation_workspace(tmp_path):
+    ipc_dir = tmp_path / "ipc"
+    first = write_compiled_mpich_request(
+        pack_dense_update(_update(), run_id="bounded-ipc", rank=3, generation=0, bucket_bytes=8),
+        ipc_dir=ipc_dir,
+        run_id="bounded-ipc",
+        rank=3,
+        world_size=4,
+        generation=0,
+        base_generation=0,
+        quorum=4,
+        timeout_s=3.0,
+        bucket_bytes_target=8,
+        base_checkpoint=None,
+    )
+    old_aggregate = first.parent / "gen000000" / "aggregate.bucket00000.bin"
+    old_aggregate.write_bytes(b"old aggregate")
+
+    second = write_compiled_mpich_request(
+        pack_dense_update(_update(), run_id="bounded-ipc", rank=3, generation=1, bucket_bytes=8),
+        ipc_dir=ipc_dir,
+        run_id="bounded-ipc",
+        rank=3,
+        world_size=4,
+        generation=1,
+        base_generation=0,
+        quorum=4,
+        timeout_s=3.0,
+        bucket_bytes_target=8,
+        base_checkpoint=None,
+    )
+
+    assert not first.exists()
+    assert not old_aggregate.exists()
+    assert second.is_file()
+    assert [path.name for path in second.parent.glob("gen*")] == ["gen000001"]
 
 
 def test_compiled_mpich_load_received_payloads_rejects_corrupt_checksum(tmp_path):
@@ -357,6 +402,87 @@ def test_compiled_mpich_aggregate_matches_dense_quorum_merge_with_stale_failed_m
     assert result.metrics.failed_updates == 1
     assert result.transport_metrics.bytes_received == aggregate_envelope.payload_bytes
     assert result.transport_metrics.bytes_sent > result.transport_metrics.bytes_received
+
+
+def test_compiled_mpich_aggregate_uses_rank_local_metadata_across_distinct_node_ipc_roots(tmp_path):
+    """A non-root node must not dereference rank 0's node-local /tmp tree."""
+
+    root_ipc = tmp_path / "node0" / "ipc"
+    nonroot_ipc = tmp_path / "node1" / "ipc"
+    root_envelope = pack_dense_update(
+        _update(1.0), run_id="node-local", rank=0, generation=0, bucket_bytes=64
+    )
+    nonroot_envelope = pack_dense_update(
+        _update(3.0), run_id="node-local", rank=8, generation=0, bucket_bytes=64
+    )
+    root_request = write_compiled_mpich_request(
+        root_envelope,
+        ipc_dir=root_ipc,
+        run_id="node-local",
+        rank=0,
+        world_size=16,
+        generation=0,
+        base_generation=0,
+        quorum=16,
+        timeout_s=3.0,
+        bucket_bytes_target=64,
+        base_checkpoint=None,
+    )
+    nonroot_request = write_compiled_mpich_request(
+        nonroot_envelope,
+        ipc_dir=nonroot_ipc,
+        run_id="node-local",
+        rank=8,
+        world_size=16,
+        generation=0,
+        base_generation=0,
+        quorum=16,
+        timeout_s=3.0,
+        bucket_bytes_target=64,
+        base_checkpoint=None,
+    )
+    root_header_path = json.loads(root_request.read_text(encoding="utf-8"))["header_path"]
+    nonroot_header_path = json.loads(nonroot_request.read_text(encoding="utf-8"))["header_path"]
+
+    # Reproduce job 4979251: rank 0's relative header does not exist under a
+    # different node's local IPC root.
+    old_payload = {
+        "rank": 0,
+        "source_header_path": root_header_path,
+        "bucket_paths": ["rank_00000/gen000000/aggregate.bucket00000.bin"],
+    }
+    with pytest.raises(FileNotFoundError, match="header.json"):
+        load_aggregate_payload(nonroot_ipc, old_payload, {})
+
+    # The helper now broadcasts reduced bytes through MPI and materializes
+    # rank-owned aggregate files beside that rank's local request metadata.
+    local_bucket_paths = []
+    for bucket in root_envelope.buckets:
+        rel = f"rank_00008/gen000000/aggregate.bucket{bucket.index:05d}.bin"
+        path = nonroot_ipc / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(bucket.payload)
+        local_bucket_paths.append(rel)
+    helper_result = {
+        "accepted_tokens": 8,
+        "accepted_local_steps": 1,
+        "aggregate_loss_window": {"loss": 1.25, "loss_100": 1.25},
+    }
+    local_payload = {
+        "rank": 8,
+        "source_header_path": nonroot_header_path,
+        "bucket_paths": local_bucket_paths,
+    }
+    loaded = load_aggregate_payload(nonroot_ipc, local_payload, helper_result)
+    assert loaded.header["rank"] == 8
+    assert loaded.buckets[0].payload == root_envelope.buckets[0].payload
+
+    source = (Path(__file__).resolve().parents[1] / "scripts/frontier/compiled_mpich_dense_helper.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert "rel_aggregate_bucket(rank, req.generation, bucket_desc.index)" in source
+    assert "MPI_Bcast(aggregate.data()" in source
+    assert '"aggregate_payload":{"rank":0' not in source
 
 
 def test_compiled_mpich_helper_invocation_errors_on_nonzero(tmp_path, monkeypatch):

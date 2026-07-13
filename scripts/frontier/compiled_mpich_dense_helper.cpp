@@ -279,9 +279,15 @@ std::string thread_level_name(int level) {
     return "unknown";
 }
 
-std::string rel_aggregate_bucket(int generation, int bucket) {
+std::string rel_aggregate_bucket(int rank, int generation, int bucket) {
     char buf[160];
-    std::snprintf(buf, sizeof(buf), "rank_00000/gen%06d/aggregate.bucket%05d.bin", generation, bucket);
+    std::snprintf(
+        buf,
+        sizeof(buf),
+        "rank_%05d/gen%06d/aggregate.bucket%05d.bin",
+        rank,
+        generation,
+        bucket);
     return std::string(buf);
 }
 
@@ -479,7 +485,7 @@ std::string build_aggregate_result_json(
     out << "\"mpi\":{\"provided_thread_level\":\"" << thread_level_name(provided)
         << "\",\"world_size\":" << world_size << ",\"root_rank\":0"
         << ",\"collective\":\"MPI_Reduce\"},";
-    out << "\"aggregate_payload\":{\"rank\":0,\"source_header_path\":\""
+    out << "\"aggregate_payload\":{\"rank\":" << world_rank << ",\"source_header_path\":\""
         << json_escape(req.header_path) << "\",\"bucket_paths\":[";
     for (std::size_t i = 0; i < aggregate_bucket_paths.size(); ++i) {
         if (i) out << ",";
@@ -616,7 +622,19 @@ int run_once_impl(const fs::path& ipc_dir, const fs::path& request_path, int ran
         invalid ? rank : -1,
     };
     std::vector<int> gathered(static_cast<std::size_t>(size * 5), -1);
-    MPI_Gather(rank_lists_local, 5, MPI_INT, gathered.data(), 5, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Allgather(rank_lists_local, 5, MPI_INT, gathered.data(), 5, MPI_INT, MPI_COMM_WORLD);
+
+    // Establish a common, bucket-bounded collective schedule before entering
+    // the loop. A mismatched descriptor count must fail collectively instead
+    // of letting one rank execute fewer Reduce/Bcast calls and deadlock peers.
+    long long local_bucket_count = static_cast<long long>(req.buckets.size());
+    long long min_bucket_count = 0;
+    long long max_bucket_count = 0;
+    MPI_Allreduce(&local_bucket_count, &min_bucket_count, 1, MPI_LONG_LONG, MPI_MIN, MPI_COMM_WORLD);
+    MPI_Allreduce(&local_bucket_count, &max_bucket_count, 1, MPI_LONG_LONG, MPI_MAX, MPI_COMM_WORLD);
+    if (min_bucket_count != max_bucket_count) {
+        throw std::runtime_error("MPI ranks have different aggregate bucket counts");
+    }
 
     std::vector<std::string> aggregate_bucket_paths;
     std::vector<long long> per_bucket_bytes;
@@ -626,6 +644,17 @@ int run_once_impl(const fs::path& ipc_dir, const fs::path& request_path, int ran
     auto reduce_start = std::chrono::steady_clock::now();
     for (const auto& bucket_desc : req.buckets) {
         auto bucket_start = std::chrono::steady_clock::now();
+        long long local_bucket_shape[2] = {
+            static_cast<long long>(bucket_desc.index),
+            static_cast<long long>(bucket_desc.nbytes),
+        };
+        long long min_bucket_shape[2] = {0, 0};
+        long long max_bucket_shape[2] = {0, 0};
+        MPI_Allreduce(local_bucket_shape, min_bucket_shape, 2, MPI_LONG_LONG, MPI_MIN, MPI_COMM_WORLD);
+        MPI_Allreduce(local_bucket_shape, max_bucket_shape, 2, MPI_LONG_LONG, MPI_MAX, MPI_COMM_WORLD);
+        if (min_bucket_shape[0] != max_bucket_shape[0] || min_bucket_shape[1] != max_bucket_shape[1]) {
+            throw std::runtime_error("MPI ranks have different aggregate bucket layouts");
+        }
         std::vector<char> bucket = read_bytes(ipc_dir / bucket_desc.path);
         if (static_cast<std::int64_t>(bucket.size()) != bucket_desc.nbytes) {
             throw std::runtime_error("bucket length does not match request descriptor");
@@ -635,48 +664,49 @@ int run_once_impl(const fs::path& ipc_dir, const fs::path& request_path, int ran
         std::vector<double> reduced(rank == 0 ? local_values.size() : local_values.size(), 0.0);
         MPI_Reduce(local_values.data(), reduced.data(), static_cast<int>(local_values.size()),
                    MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+        std::vector<char> aggregate;
         if (rank == 0) {
-            std::vector<char> aggregate = encode_mean_bucket(
+            aggregate = encode_mean_bucket(
                 reduced, stream_offset, bucket_desc.nbytes, tensors, static_cast<double>(global_sums[0]));
-            std::string rel = rel_aggregate_bucket(req.generation, bucket_desc.index);
-            write_bytes_atomic(ipc_dir / rel, aggregate);
-            aggregate_bucket_paths.push_back(rel);
-            per_bucket_bytes.push_back(static_cast<long long>(aggregate.size()));
-            aggregate_bytes += static_cast<std::int64_t>(aggregate.size());
-            auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - bucket_start).count();
-            per_bucket_reduce_s.push_back(elapsed);
         }
+        long long aggregate_size = rank == 0 ? static_cast<long long>(aggregate.size()) : 0;
+        MPI_Bcast(&aggregate_size, 1, MPI_LONG_LONG, 0, MPI_COMM_WORLD);
+        if (aggregate_size < 0 || aggregate_size > static_cast<long long>(INT32_MAX)) {
+            throw std::runtime_error("aggregate bucket exceeds MPI byte-count limit");
+        }
+        if (rank != 0) {
+            aggregate.resize(static_cast<std::size_t>(aggregate_size));
+        }
+        MPI_Bcast(aggregate.data(), static_cast<int>(aggregate_size), MPI_BYTE, 0, MPI_COMM_WORLD);
+
+        // IPC roots are node-local on Frontier.  Materialize one rank-owned
+        // copy so Python never follows a rank-0 /tmp path on another node.
+        std::string rel = rel_aggregate_bucket(rank, req.generation, bucket_desc.index);
+        write_bytes_atomic(ipc_dir / rel, aggregate);
+        aggregate_bucket_paths.push_back(rel);
+        per_bucket_bytes.push_back(aggregate_size);
+        aggregate_bytes += aggregate_size;
+        auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - bucket_start).count();
+        per_bucket_reduce_s.push_back(elapsed);
         stream_offset += bucket_desc.nbytes;
     }
     double reduce_total_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - reduce_start).count();
-    if (rank == 0) {
-        auto collect_ranks = [&gathered, size](int column) {
-            std::vector<int> ranks;
-            for (int i = 0; i < size; ++i) {
-                int value = gathered[static_cast<std::size_t>(i * 5 + column)];
-                if (value >= 0) ranks.push_back(value);
-            }
-            return ranks;
-        };
-        result_json = build_aggregate_result_json(
-            req, rank, size, provided,
-            global_counts[0], global_counts[1], global_counts[2], global_counts[3], global_counts[4],
-            global_sums[0], global_sums[1],
-            collect_ranks(0), collect_ranks(1), collect_ranks(2), collect_ranks(3), collect_ranks(4),
-            aggregate_bucket_paths, per_bucket_bytes, per_bucket_reduce_s, reduce_total_s,
-            global_loss[0], global_loss[1], static_cast<int>(global_loss[2]), static_cast<int>(global_loss[3]),
-            global_sums[2], aggregate_bytes);
-    }
-
-    long long result_len = rank == 0 ? static_cast<long long>(result_json.size()) : 0;
-    MPI_Bcast(&result_len, 1, MPI_LONG_LONG, 0, MPI_COMM_WORLD);
-    if (result_len < 0 || result_len > (1LL << 30)) {
-        throw std::runtime_error("invalid aggregate result size");
-    }
-    if (rank != 0) {
-        result_json.assign(static_cast<std::size_t>(result_len), '\0');
-    }
-    MPI_Bcast(result_json.data(), static_cast<int>(result_len), MPI_BYTE, 0, MPI_COMM_WORLD);
+    auto collect_ranks = [&gathered, size](int column) {
+        std::vector<int> ranks;
+        for (int i = 0; i < size; ++i) {
+            int value = gathered[static_cast<std::size_t>(i * 5 + column)];
+            if (value >= 0) ranks.push_back(value);
+        }
+        return ranks;
+    };
+    result_json = build_aggregate_result_json(
+        req, rank, size, provided,
+        global_counts[0], global_counts[1], global_counts[2], global_counts[3], global_counts[4],
+        global_sums[0], global_sums[1],
+        collect_ranks(0), collect_ranks(1), collect_ranks(2), collect_ranks(3), collect_ranks(4),
+        aggregate_bucket_paths, per_bucket_bytes, per_bucket_reduce_s, reduce_total_s,
+        global_loss[0], global_loss[1], static_cast<int>(global_loss[2]), static_cast<int>(global_loss[3]),
+        global_sums[2], aggregate_bytes);
     trace_event(request_path, "collective_reduce_complete", rank);
 
     fs::path result_path = request_path.parent_path();

@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import time
 from typing import Any, Mapping, Sequence
 
@@ -182,6 +183,11 @@ def write_compiled_mpich_request(
     """Write header, buckets, and helper request using atomic JSON renames."""
 
     rank_dir = ipc_dir / f"rank_{int(rank):05d}"
+    # The previous helper result has been consumed before the next generation
+    # is submitted. Replace this rank's node-local workspace so request,
+    # input, and aggregate files cannot accumulate throughout a long run.
+    if rank_dir.exists():
+        shutil.rmtree(rank_dir)
     gen_dir = rank_dir / f"gen{int(generation):06d}"
     gen_dir.mkdir(parents=True, exist_ok=True)
     header_rel = Path(f"rank_{int(rank):05d}") / f"gen{int(generation):06d}" / "header.json"
