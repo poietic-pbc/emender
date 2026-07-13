@@ -16,17 +16,21 @@ def captured_run(argv, **kwargs):
                           universal_newlines=True, **kwargs)
 def check(s,p): return captured_run(CHECK+["--smoke",str(s),"--production",str(p),"--policy",POLICY])
 
-def test_job_4962400_launcher_is_byte_exact_and_only_queue_time_differ(tmp_path):
+def test_job_4962400_launcher_is_byte_exact_and_only_scale_queue_time_differ(tmp_path):
     s,p=bundles(tmp_path); result=check(s,p)
     assert result.returncode==0,result.stderr
     evidence=json.loads(result.stdout)
-    assert evidence["allowed_differences"]=={"walltime":["00:20:00","12:00:00"],"partition":["batch","batch"],"qos":["debug","normal"]}
-    assert evidence["training_stop_budget"]=={"generations":1,"local_steps":40,"steps":40,"timeout_s":1200,"walltime_remaining_s":1200}
+    assert evidence["allowed_differences"]=={"nodes":[2,256],"ranks":[16,2048],"walltime":["00:20:00","12:00:00"],"partition":["batch","batch"],"qos":["debug","normal"]}
+    assert evidence["training_stop_budget"]=={"generations":1000000,"local_steps":40,"steps":40000000,"timeout_s":1200,"walltime_remaining_s":1200}
     assert (s/"rendered.sbatch").read_bytes()==(ROOT/"scripts/frontier/trainpy_async_quorum_2n_smoke.sbatch").read_bytes()==(p/"rendered.sbatch").read_bytes()
     assert json.loads((s/"launch-inputs.json").read_text())["launcher_sha256"]=="106a4dde6b966b0af66a1ac92ea0f459c7a435f81f6e322d92e08f30a2cfad30"
     for bundle in (s,p):
         launch=json.loads((bundle/"launch-inputs.json").read_text())
         assert launch["resolved"]["seed"]==SEED
+        assert launch["resolved"]["generations"]==1000000
+        assert launch["resolved"]["steps"]==40000000
+        assert launch["resolved"]["local_steps"]==40
+        assert launch["resolved"]["steps"]==launch["resolved"]["generations"]*launch["resolved"]["local_steps"]
         assert "E97_CHECKPOINT="+SEED["path"] in launch["sbatch_argv"][launch["sbatch_argv"].index("--export")+1]
         serialized=json.dumps(launch).lower()
         assert "latest.pt" not in serialized
@@ -63,7 +67,7 @@ def test_recent_wrapper_drift_reproduced_and_rejected(tmp_path):
 def test_unknown_profile_key_and_golden_source_drift_fail(tmp_path,monkeypatch):
     config=json.loads(RENDER.CONFIG.read_text()); config["profiles"]["production"]["steps"]=99
     bad=tmp_path/"config.json"; bad.write_text(json.dumps(config)); monkeypatch.setattr(RENDER,"CONFIG",bad)
-    with pytest.raises(ValueError,match="only walltime and queue"): RENDER.load()
+    with pytest.raises(ValueError,match="only nodes, walltime, and queue"): RENDER.load()
 
 def test_dynamic_seed_reference_is_rejected(tmp_path,monkeypatch):
     config=json.loads(RENDER.CONFIG.read_text()); config["seed"]["path"]="/tmp/latest.pt"
@@ -78,10 +82,10 @@ def test_modified_parity_policy_fails_closed(tmp_path):
     assert json.loads(result.stderr)["kind"]=="policy"
 
 def promotion(s, **overrides):
-    commit="57884f17138843359fcdf164e178e329f6cb6f71"
+    commit="d554965461428bd9ff040329812b09d413e9b723"
     value={"job_id":4975667,"slurm_state":"COMPLETED","exit_code":"0:0",
            "origin_commit":commit,"fingerprint":(s/"fingerprint.sha256").read_text().strip(),
-           "nodes":256,"ranks":2048,"seed":SEED}
+           "nodes":2,"ranks":16,"seed":SEED}
     value.update(overrides)
     (s/"promotion.json").write_text(json.dumps(value))
 
@@ -99,11 +103,11 @@ def test_unknown_or_unpushed_attested_commit_fails(tmp_path):
 def test_evidence_commit_after_attested_launch_is_accepted(tmp_path):
     """Regression: 3834ba7 evidence follows the 57884f1 launch identity."""
     s,p=bundles(tmp_path)
-    promotion(s,origin_commit="57884f17138843359fcdf164e178e329f6cb6f71")
+    promotion(s,origin_commit="d554965461428bd9ff040329812b09d413e9b723")
     result=captured_run(CHECK+['--smoke',str(s),'--production',str(p),'--policy',POLICY,'--require-promotion'])
     assert result.returncode==0,result.stderr
     identity=json.loads(result.stdout)["launch_identity"]
-    assert identity["attested_commit"]=="57884f17138843359fcdf164e178e329f6cb6f71"
+    assert identity["attested_commit"]=="d554965461428bd9ff040329812b09d413e9b723"
     assert identity["origin_main"]!=identity["attested_commit"]
 
 def test_submit_executes_from_attested_tree_not_current_main(tmp_path,monkeypatch):

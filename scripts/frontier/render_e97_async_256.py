@@ -22,7 +22,8 @@ def load():
         raise ValueError("dynamic or invalid seed reference")
     if set(config["profiles"])!={"smoke","production"}: raise ValueError("profiles must be smoke and production")
     for name,p in config["profiles"].items():
-        if set(p)!={"walltime","queue"} or set(p["queue"])!={"partition","qos"}: raise ValueError(f"only walltime and queue are permitted in {name}")
+        if set(p)!={"nodes","walltime","queue"} or set(p["queue"])!={"partition","qos"}: raise ValueError(f"only nodes, walltime, and queue are permitted in {name}")
+        if not isinstance(p["nodes"],int) or p["nodes"]<=0: raise ValueError("nodes must be positive")
         if not re.fullmatch(r"\d\d:\d\d:\d\d",p["walltime"]): raise ValueError("invalid walltime")
     golden=json.loads((ROOT/config["golden_manifest"]).read_text())
     for path,want in golden["files"].items():
@@ -41,15 +42,22 @@ def render(profile,out):
     # The batch file is byte-for-byte job 4962400. Slurm CLI overrides are the
     # sole parameterization point and do not mutate its proven prologue/body.
     (out/"rendered.sbatch").write_bytes(launcher)
-    export=golden["export"]+",E97_CHECKPOINT="+config["seed"]["path"]
-    argv=golden["sbatch_fixed_argv"] + ["-t",selected["walltime"],"-p",selected["queue"]["partition"],"-q",selected["queue"]["qos"],"--export",export,golden["script"]]
-    resolved={**golden["resolved"],"seed":config["seed"]}
-    launch={"schema_version":1,"profile":profile,"source_job":golden["source_job"],"source_commit":golden["source_commit"],"walltime":selected["walltime"],"queue":selected["queue"],"sbatch_argv":argv,"training_stop_budget":{"local_steps":40,"steps":40,"generations":1,"timeout_s":1200,"walltime_remaining_s":1200},"resolved":resolved,"launcher_sha256":digest(out/"rendered.sbatch")}
+    nodes=selected["nodes"]; ranks=nodes*8
+    export=golden["export"]+",E97_CHECKPOINT="+config["seed"]["path"]+",ASYNC_GENERATIONS=1000000,ASYNC_STEPS=40000000"
+    export=re.sub(r"ASYNC_TRAINPY_RANKS=\d+",f"ASYNC_TRAINPY_RANKS={ranks}",export)
+    export=re.sub(r"ASYNC_EXPECTED_RANKS=\d+",f"ASYNC_EXPECTED_RANKS={ranks}",export)
+    export=re.sub(r"ASYNC_GLOBAL_QUORUM=\d+",f"ASYNC_GLOBAL_QUORUM={ranks}",export)
+    argv=list(golden["sbatch_fixed_argv"]); argv[argv.index("-N")+1]=str(nodes)
+    argv += ["-t",selected["walltime"],"-p",selected["queue"]["partition"],"-q",selected["queue"]["qos"],"--export",export,golden["script"]]
+    resolved={**golden["resolved"],"nodes":nodes,"launched_ranks":ranks,"participant_ranks":ranks,"worker_ranks":ranks,"global_quorum":ranks,"local_steps":40,"steps":40000000,"generations":1000000,"seed":config["seed"]}
+    launch={"schema_version":1,"profile":profile,"source_job":golden["source_job"],"source_commit":golden["source_commit"],"nodes":nodes,"walltime":selected["walltime"],"queue":selected["queue"],"sbatch_argv":argv,"training_stop_budget":{"local_steps":40,"steps":40000000,"generations":1000000,"timeout_s":1200,"walltime_remaining_s":1200},"resolved":resolved,"launcher_sha256":digest(out/"rendered.sbatch")}
     (out/"launch-inputs.json").write_text(json.dumps(launch,sort_keys=True,indent=2)+"\n")
     (out/"golden-manifest.json").write_text(json.dumps(golden,sort_keys=True,indent=2)+"\n")
-    normalized={**launch,"profile":"@PROFILE@","walltime":"@WALLTIME@","queue":{"partition":"@PARTITION@","qos":"@QOS@"}}
+    normalized={**launch,"profile":"@PROFILE@","nodes":"@NODES@","walltime":"@WALLTIME@","queue":{"partition":"@PARTITION@","qos":"@QOS@"}}
     a=normalized["sbatch_argv"]
-    for flag,value in (("-t","@WALLTIME@"),("-p","@PARTITION@"),("-q","@QOS@")): a[a.index(flag)+1]=value
+    for flag,value in (("-N","@NODES@"),("-t","@WALLTIME@"),("-p","@PARTITION@"),("-q","@QOS@")): a[a.index(flag)+1]=value
+    a[a.index("--export")+1]=re.sub(r"(ASYNC_(?:TRAINPY|EXPECTED)_RANKS|ASYNC_GLOBAL_QUORUM)=\d+",r"\1=@DERIVED_RANKS@",a[a.index("--export")+1])
+    for key in ("nodes","launched_ranks","participant_ranks","worker_ranks","global_quorum"): normalized["resolved"][key]="@DERIVED@"
     fp=hashlib.sha256((canonical(normalized)+"\n"+digest(out/"golden-manifest.json")).encode()).hexdigest()
     (out/"fingerprint.sha256").write_text(fp+"\n")
     return fp

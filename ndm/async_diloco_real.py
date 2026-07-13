@@ -109,6 +109,7 @@ class RealAsyncWorkerReport:
     timed_out: bool = False
     invalid: bool = False
     error: str | None = None
+    optimizer_state_dict: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -204,6 +205,7 @@ class RealAsyncFileRankConfig:
     node_count: int
     global_quorum: int
     local_steps: int
+    generations: int = 1
     timeout_s: float = 900.0
     quorum_mode: str = RESILIENT_QUORUM_DILOCO_MODE
     eta_outer: float = 1.0
@@ -317,6 +319,8 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
         raise ValueError("global_quorum must be in [1, node_count]")
     if config.synthetic_token_stream and not config.allow_synthetic_token_stream:
         raise ValueError("synthetic_token_stream is disabled for actual multinode validation")
+    if config.generations <= 0:
+        raise ValueError("generations must be positive")
 
     run_dir = Path(config.run_dir)
     transport = str(config.transport).strip().lower()
@@ -343,19 +347,19 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
     nodes_dir.mkdir(parents=True, exist_ok=True)
 
     node_id = f"node-{int(config.node_rank):05d}"
-    generation = 0
     start_s = time.monotonic()
     _write_rank_heartbeat(
         progress_dir,
         node_rank=config.node_rank,
         node_id=node_id,
         stage="starting",
-        generation=generation,
+        generation=0,
         extra={"node_count": config.node_count, "global_quorum": config.global_quorum},
     )
 
     train_args = _copy_train_args(config.train_args)
     train.normalize_training_args(train_args)
+    train_args._diloco_local_steps = int(config.local_steps)
     torch.manual_seed(int(getattr(train_args, "seed", 42)))
     global_model = train.build_training_model(train_args)
     optimizer_state_dict: Mapping[str, Any] | None = None
@@ -377,13 +381,53 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
         node_rank=config.node_rank,
         node_id=node_id,
         stage="checkpoint_loaded",
-        generation=generation,
+        generation=0,
         extra={
             "base_state_bytes": state_num_bytes(base_state),
             "optimizer_state_loaded": optimizer_state_dict is not None,
         },
     )
 
+    last_result: dict[str, Any] | None = None
+    for generation in range(config.generations):
+        last_result = _run_real_async_diloco_file_rank_generation(
+            config=config,
+            generation=generation,
+            start_s=start_s,
+            train_args=train_args,
+            base_state=base_state,
+            optimizer_state_dict=optimizer_state_dict,
+            initial_checkpoint_payload=initial_checkpoint_payload,
+            progress_dir=progress_dir,
+            nodes_dir=nodes_dir,
+        )
+        next_state = last_result.pop("_private_global_state", None)
+        next_optimizer = last_result.pop("_private_optimizer_state", None)
+        if next_state is not None:
+            base_state = next_state
+        if next_optimizer is not None:
+            optimizer_state_dict = next_optimizer
+
+    assert last_result is not None
+    return last_result
+
+
+def _run_real_async_diloco_file_rank_generation(
+    *,
+    config: RealAsyncFileRankConfig,
+    generation: int,
+    start_s: float,
+    train_args: Namespace,
+    base_state: Mapping[str, torch.Tensor],
+    optimizer_state_dict: Mapping[str, Any] | None,
+    initial_checkpoint_payload: Mapping[str, Any] | None,
+    progress_dir: Path,
+    nodes_dir: Path,
+) -> dict[str, Any]:
+    """Run one merge interval using state initialized by the outer process loop."""
+
+    node_id = f"node-{int(config.node_rank):05d}"
+    transport = str(config.transport).strip().lower()
     spec = RealAsyncWorkerSpec(
         worker_id=f"{node_id}/worker-00000",
         node_id=node_id,
@@ -406,6 +450,10 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
         synthetic_token_stream=config.synthetic_token_stream,
         synthetic_vocab_size=config.synthetic_vocab_size,
         optimizer_state_dict=optimizer_state_dict,
+    )
+    generation_optimizer_state = (
+        node_result.worker_reports[0].optimizer_state_dict
+        if node_result.worker_reports else optimizer_state_dict
     )
     node_payload = _node_result_payload(
         config,
@@ -437,7 +485,7 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
             progress_dir=progress_dir,
             generation=generation,
             train_args=train_args,
-            optimizer_state_dict=optimizer_state_dict,
+            optimizer_state_dict=generation_optimizer_state,
             initial_checkpoint_payload=initial_checkpoint_payload,
         )
     elif transport == "mpi-dense":
@@ -450,7 +498,7 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
             progress_dir=progress_dir,
             generation=generation,
             train_args=train_args,
-            optimizer_state_dict=optimizer_state_dict,
+            optimizer_state_dict=generation_optimizer_state,
             initial_checkpoint_payload=initial_checkpoint_payload,
         )
     elif int(config.node_rank) == 0:
@@ -479,6 +527,9 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
             extra=submit,
         )
 
+    next_global_state = None
+    if root_payload is not None:
+        next_global_state = root_payload.pop("_private_global_state", None)
     return {
         "run_id": config.run_id,
         "node_rank": int(config.node_rank),
@@ -494,6 +545,8 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
         ),
         "production_approval_eligible": bool(config.production_approval_eligible),
         "global_result": root_payload,
+        "_private_global_state": next_global_state,
+        "_private_optimizer_state": generation_optimizer_state,
     }
 
 
@@ -828,7 +881,8 @@ def _write_verified_chain_checkpoint(
     source_step = 0
     if initial_checkpoint_payload is not None:
         source_step = int(initial_checkpoint_payload.get("step", 0) or 0)
-    step = source_step + (int(generation) + 1) * max(1, int(getattr(args, "steps", 1)))
+    local_steps = max(1, int(getattr(args, "_diloco_local_steps", getattr(args, "steps", 1))))
+    step = source_step + (int(generation) + 1) * local_steps
     loss = float(metrics.loss_moving_average.get("loss") or metrics.loss_moving_average.get("loss_100") or 0.0)
     output_dir = Path(run_dir) / "checkpoints" / _chain_checkpoint_label(args)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -844,7 +898,7 @@ def _write_verified_chain_checkpoint(
         "model": getattr(args, "_model_metadata", None),
         "tokenizer": getattr(args, "tokenizer", None),
         "optimizer": getattr(args, "optimizer", None),
-        "local_steps": int(getattr(args, "steps", 1)),
+        "local_steps": local_steps,
         "tokens_per_generation": int(metrics.tokens_per_generation),
         "accepted_updates": int(metrics.accepted_updates),
         "stale_updates": int(metrics.stale_updates),
@@ -952,7 +1006,7 @@ def _run_real_worker(
                 args,
                 batch_iter=batch_iter,
                 device=device,
-                step=step,
+                step=int(generation) * max(1, int(spec.local_steps)) + step,
                 hidden_state=hidden_state,
             )
             hidden_state = metrics.get("hidden_state")
@@ -979,6 +1033,7 @@ def _run_real_worker(
             elapsed_s=max(0.0, time.monotonic() - start_s),
             tokens=tokens,
             losses=tuple(losses),
+            optimizer_state_dict=(optimizer.state_dict() if hasattr(optimizer, "state_dict") else None),
         )
     except Exception as exc:
         return RealAsyncWorkerReport(
@@ -1514,6 +1569,7 @@ def _coordinate_mpi_dense_rank(
         "dense_delta_bytes": state_num_bytes(local_update.delta),
         "metrics": node_result.metrics.to_dict(),
     })
+    private_global_state = payload.pop("_private_global_state", None)
     if int(config.node_rank) != 0:
         _write_rank_heartbeat(
             progress_dir,
@@ -1523,13 +1579,12 @@ def _coordinate_mpi_dense_rank(
             generation=generation,
             extra={"transport": "mpi-dense"},
         )
-        return None
+        return {"_private_global_state": private_global_state}
 
     if payload is None:
         raise RuntimeError("MPI dense root did not produce a quorum payload")
     global_metrics_payload = ((payload.get("global_generations") or [{}])[0].get("metrics") or {})
     metrics = AsyncDiLoCoGenerationMetrics.from_dict(global_metrics_payload)
-    private_global_state = payload.pop("_private_global_state", None)
     latest_advanced = False
     checkpoint_paths: tuple[str, ...] = ()
     if metrics.quorum_status == "advanced":
@@ -1605,6 +1660,7 @@ def _coordinate_mpi_dense_rank(
             "metrics_json": str(metrics_path),
         },
     )
+    final_payload["_private_global_state"] = private_global_state
     return final_payload
 
 
@@ -1661,6 +1717,9 @@ def _coordinate_compiled_mpich_dense_rank(
         base_checkpoint=(None if config.initial_checkpoint is None else str(config.initial_checkpoint)),
         quorum_mode=str(config.quorum_mode),
     )
+    if payload is None:
+        raise RuntimeError("compiled MPICH helper did not produce a quorum payload")
+    private_global_state = payload.pop("_private_global_state", None)
     _atomic_write_json(artifact_dir / f"{node_id}.json", {
         "schema_version": 1,
         "run_id": config.run_id,
@@ -1683,13 +1742,10 @@ def _coordinate_compiled_mpich_dense_rank(
             generation=generation,
             extra={"transport": COMPILED_MPICH_TRANSPORT},
         )
-        return None
+        return {"_private_global_state": private_global_state}
 
-    if payload is None:
-        raise RuntimeError("compiled MPICH helper root did not produce a quorum payload")
     global_metrics_payload = ((payload.get("global_generations") or [{}])[0].get("metrics") or {})
     metrics = AsyncDiLoCoGenerationMetrics.from_dict(global_metrics_payload)
-    private_global_state = payload.pop("_private_global_state", None)
     latest_advanced = False
     checkpoint_paths: tuple[str, ...] = ()
     if metrics.quorum_status == "advanced":

@@ -113,9 +113,6 @@ def run_compiled_mpich_dense_quorum(
     helper_result = json.loads(result_path.read_text(encoding="utf-8"))
     if helper_result.get("status") == "error":
         raise RuntimeError(str(helper_result.get("error", "compiled MPICH helper error")))
-    if int(rank) != int(helper.root_rank):
-        return None
-
     quorum_config = DenseTransportQuorumConfig(
         run_id=run_id,
         generation=generation,

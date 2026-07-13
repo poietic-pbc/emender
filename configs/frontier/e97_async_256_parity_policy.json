@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
-  "allowed_profile_keys": ["walltime", "queue"],
+  "allowed_profile_keys": ["nodes", "walltime", "queue"],
   "allowed_queue_keys": ["partition", "qos"],
-  "allowed_sbatch_argv_flags": ["-t", "-p", "-q"],
+  "allowed_sbatch_argv_flags": ["-N", "-t", "-p", "-q"],
   "forbidden_differences": "all launch inputs not explicitly allowlisted",
   "training_stop_budget_must_match": true,
   "launcher_must_match_job_4962400_byte_for_byte": true

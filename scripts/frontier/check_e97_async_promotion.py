@@ -3,8 +3,8 @@
 import argparse, hashlib, io, json, os, subprocess, sys, tarfile, tempfile
 from pathlib import Path
 
-ALLOWED={"profile","walltime","queue"}
-EXPECTED_POLICY={"schema_version":2,"allowed_profile_keys":["walltime","queue"],"allowed_queue_keys":["partition","qos"],"allowed_sbatch_argv_flags":["-t","-p","-q"],"forbidden_differences":"all launch inputs not explicitly allowlisted","training_stop_budget_must_match":True,"launcher_must_match_job_4962400_byte_for_byte":True}
+ALLOWED={"profile","nodes","walltime","queue"}
+EXPECTED_POLICY={"schema_version":2,"allowed_profile_keys":["nodes","walltime","queue"],"allowed_queue_keys":["partition","qos"],"allowed_sbatch_argv_flags":["-N","-t","-p","-q"],"forbidden_differences":"all launch inputs not explicitly allowlisted","training_stop_budget_must_match":True,"launcher_must_match_job_4962400_byte_for_byte":True}
 def fail(kind,detail): print(json.dumps({"ok":False,"kind":kind,"detail":detail},sort_keys=True),file=sys.stderr); raise SystemExit(1)
 def canon(x): return json.dumps(x,sort_keys=True,separators=(",",":"))
 def read(bundle):
@@ -15,9 +15,20 @@ def read(bundle):
     return launch,golden
 def normalized(value):
     value=json.loads(json.dumps(value)); argv=value["sbatch_argv"]
-    for flag,token in (("-t","@WALLTIME@"),("-p","@PARTITION@"),("-q","@QOS@")):
+    nodes=value["nodes"]; ranks=nodes*8
+    if any(value["resolved"][key]!=want for key,want in {
+        "nodes":nodes,"launched_ranks":ranks,"participant_ranks":ranks,
+        "worker_ranks":ranks,"global_quorum":ranks}.items()): fail("derived_scale",value["resolved"])
+    if argv[argv.index("-N")+1]!=str(nodes): fail("derived_scale",argv)
+    export=argv[argv.index("--export")+1]
+    if any(f"{key}={ranks}" not in export for key in ("ASYNC_TRAINPY_RANKS","ASYNC_EXPECTED_RANKS","ASYNC_GLOBAL_QUORUM")): fail("derived_scale",export)
+    for flag,token in (("-N","@NODES@"),("-t","@WALLTIME@"),("-p","@PARTITION@"),("-q","@QOS@")):
         if argv.count(flag)!=1: fail("argv",f"missing/duplicate {flag}")
         argv[argv.index(flag)+1]=token
+    export_index=argv.index("--export")+1
+    argv[export_index]=__import__("re").sub(r"(ASYNC_(?:TRAINPY|EXPECTED)_RANKS|ASYNC_GLOBAL_QUORUM)=\d+",r"\1=@DERIVED_RANKS@",argv[export_index])
+    for key in ("nodes","launched_ranks","participant_ranks","worker_ranks","global_quorum"):
+        value["resolved"][key]="@DERIVED@"
     for key in ALLOWED: value[key]="@ALLOWED@"
     return value
 def git(root,*args):
@@ -107,5 +118,5 @@ def main():
         payload=materialize_attested_tree(identity["attested_commit"],a.production,pg)
         os.chdir(payload)
         os.execvp(prod["sbatch_argv"][0],prod["sbatch_argv"])
-    print(json.dumps({"ok":True,"fingerprint":(a.smoke/"fingerprint.sha256").read_text().strip(),"launch_identity":identity,"allowed_differences":{"walltime":[s["walltime"],prod["walltime"]],"partition":[s["queue"]["partition"],prod["queue"]["partition"]],"qos":[s["queue"]["qos"],prod["queue"]["qos"]]},"training_stop_budget":s["training_stop_budget"]},sort_keys=True))
+    print(json.dumps({"ok":True,"fingerprint":(a.smoke/"fingerprint.sha256").read_text().strip(),"launch_identity":identity,"allowed_differences":{"nodes":[s["nodes"],prod["nodes"]],"ranks":[s["resolved"]["launched_ranks"],prod["resolved"]["launched_ranks"]],"walltime":[s["walltime"],prod["walltime"]],"partition":[s["queue"]["partition"],prod["queue"]["partition"]],"qos":[s["queue"]["qos"],prod["queue"]["qos"]]},"training_stop_budget":s["training_stop_budget"]},sort_keys=True))
 if __name__=="__main__": main()
