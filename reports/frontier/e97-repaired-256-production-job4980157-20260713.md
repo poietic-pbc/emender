@@ -43,3 +43,9 @@ the original request intact: partition `batch`, QoS `normal`, 256 nodes,
 2,048 tasks at eight per node, and a 12-hour limit. Slurm projected a start
 at 2026-07-13 14:24 EDT and an end at 2026-07-14 02:24 EDT. Monitoring did
 not invoke the submit path; the exclusive attempt count remains one.
+
+At 2026-07-14 08:53 UTC, the same exclusive job remained `PENDING
+(Priority)`. Its request was unchanged, and Slurm's revised projected start
+was 2026-07-14 16:00 EDT. Accounting still reported zero elapsed allocation
+time. No submission path was invoked; monitoring continues against job
+`4980157` only.
