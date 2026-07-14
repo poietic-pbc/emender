@@ -49,3 +49,11 @@ At 2026-07-14 08:53 UTC, the same exclusive job remained `PENDING
 was 2026-07-14 16:00 EDT. Accounting still reported zero elapsed allocation
 time. No submission path was invoked; monitoring continues against job
 `4980157` only.
+
+At 2026-07-14 10:30 UTC, job `4980157` remained `PENDING (Priority)` and
+Slurm revised its projected start to 2026-07-14 16:30 EDT. The exact request
+remained 256 nodes, 2,048 tasks at eight per node, normal QoS, batch
+partition, and a 12-hour limit, with zero elapsed allocation time. Because
+the projection was six hours away, the monitor parked until approximately
+15:00 EDT (90 minutes before the projection), following the estimate-driven
+pending cadence. No submission or cancellation path was invoked.
