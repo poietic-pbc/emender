@@ -1,0 +1,85 @@
+# Initial true-resilient E97 node-quorum transport
+
+Task: `build-true-resilient-e97`  
+Date: 2026-07-14
+
+## Audit and feasibility conclusion
+
+The reusable pieces are the pure quorum/catch-up/checkpoint math in
+`ndm/async_diloco.py`, the checksummed bucket envelope in
+`ndm/async_diloco_mpi.py`, and the failure-accounting tests.  The TCP path in
+`ndm/async_diloco_real.py` is a bounded debug metadata coordinator, not a
+model-sized scalable data plane.  `run_mpi_dense_quorum` is also not resilient:
+it creates `MPI_COMM_WORLD`, sends every rank's dense update to one root, and
+waits for a root reply.  The compiled helper is a healthy-world strict
+`MPI_Reduce` control and remains unchanged.  Existing Frontier results prove
+that control's reachability/performance, not process-failure tolerance.
+
+The selected new explicit mode is `resilient-node-quorum-sharded-p2p`.  Eight
+training ranks must first aggregate locally behind one node manager; an
+incomplete local group excludes that node for the generation.  Node managers
+then stream checksummed buckets to independently replaceable shard owners.  A
+small fenced metadata coordinator freezes and durably publishes the exact
+accepted-node set.  Senders retain generation buckets until commit, allowing a
+replacement shard owner to request replay.  Model payloads do not pass through
+the metadata directory.  The initial implementation in
+`ndm/resilient_node_quorum.py` supplies the protocol/state primitives; wiring a
+Frontier network backend and node-step supervisor remains before this is a
+production trainer mode.
+
+## Guarantees demonstrated locally
+
+- generation, attempt, run, and coordinator-epoch fencing;
+- stale/late attempts cannot enter a current accepted set;
+- exact accepted set is immutable once its atomic manifest and `latest.json`
+  record are committed;
+- quorum advances with a completely absent/stuck node and computes an exact
+  token-weighted mean;
+- quorum loss fails closed without advancing latest;
+- sender-retained buckets replay to a replacement owner after owner failure;
+- coordinator failover fences the old writer;
+- a restarted/lagging manager verifies the latest-manifest checksum and catches
+  up from the committed generation;
+- checksums and hard retained-byte limits reject corrupt or unbounded payloads.
+
+These are deterministic protocol tests, not Frontier network evidence.  They
+do not claim that a killed physical node can be replaced inside an allocation.
+
+## Frontier and Slurm boundary
+
+No job was submitted by this implementation pass.  In particular, production
+job 4980157, attested tree `9fff689c9f9252b6a264773c207f8f8ca8509666`, its
+attempt marker/run root, `production/latest`, and the pinned step-1525000 seed
+pointer were not mutated.
+
+Before the required two-node test, the launcher must use independent node
+manager steps with explicit deadlines rather than a single long-lived
+world-size collective.  `--no-kill` can keep an allocation/step alive under
+some task failures, but it is not evidence that Frontier permits arbitrary
+replacement of a failed physical node or safe creation of a replacement step;
+that exact behavior must be tested in a unique debug allocation and recorded
+with `scontrol`, `sacct`, `sstat`, and the fault timeline.  Slurm cannot add a
+node outside the fixed allocation unless the site exposes a supported
+mechanism.  Across-job checkpoint/restart is therefore still required.
+
+The next implementation gate is a supervisor that owns one independently
+terminable node step, enforces local-rank and generation deadlines, advances
+only while node quorum exists, and restarts/catches up a manager only when
+Slurm permits it.  Only then is one unique 2-node/16-GPU, <=20 minute injected
+failure attempt justified.  The <=8-node rung remains gated on that result;
+64/128/256-node and production-QoS jobs are explicitly out of scope.
+
+## Validation
+
+Run:
+
+```text
+pytest -q tests/test_resilient_node_quorum.py
+pytest -q tests/test_async_diloco_mpi_transport.py tests/test_async_diloco_compiled_mpich.py
+git diff --check
+```
+
+The first suite uses real independent protocol stores and missing/stale/failover
+events.  It proves forward progress without an MPI communicator, but it does
+not yet constitute the required real OS-process termination or Frontier smoke;
+those remain explicit completion blockers rather than being overstated here.
