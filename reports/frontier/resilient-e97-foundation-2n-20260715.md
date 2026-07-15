@@ -47,3 +47,15 @@ Scheduler identity: job `5000818`, partition `batch`, QoS `debug`, two nodes,
 generation-9 handoff above and code/payload commit `43853ca`.
 
 No normal-QoS or production job was submitted, modified, or cancelled.
+
+Job 5000818 failed fast after 39 seconds, before training, because the runner
+paired eight generations and 40 local steps with its historical 40,000,000
+step default.  All ranks reported `steps must equal generations * local_steps`.
+The checkpoint chain was not touched.  The runner now derives 320 steps and
+rejects inconsistent explicit overrides; shell syntax and an 8×40 regression
+check passed.  This repair is commit `df46fc6`.
+
+Changed-payload retry job `5000851` was submitted at 2026-07-15T08:30:52Z
+with the same authorized 2-node/16-rank debug-only, exactly-two-hour shape and
+verified generation-9 input.  It was pending for priority at this report's
+latest snapshot.
