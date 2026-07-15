@@ -5,6 +5,7 @@ import threading
 import time
 
 import pytest
+import torch
 
 from ndm.resilient_node_quorum import GenerationFence
 from ndm.resilient_node_transport import (
@@ -15,6 +16,7 @@ from ndm.resilient_node_transport import (
     TransportConfig,
     decode_f64,
     encode_f64,
+    exchange_dense_delta,
 )
 
 
@@ -116,3 +118,32 @@ def test_supervisor_kills_only_stuck_step_and_healthy_step_survives():
         NodeStepSupervisor(.2).run([sys.executable, "-c", "import time; time.sleep(30)"])
     # The supervisor itself remains usable after terminating the bad child.
     assert supervisor.run([sys.executable, "-c", "pass"]).returncode == 0
+
+
+def test_e97_dense_delta_is_weighted_redistributed_and_applied(tmp_path):
+    server, thread = _server(tmp_path, quorum=2, buckets=2)
+    fence = GenerationFence("run", 0, 0, 1)
+    base = {"a": torch.tensor([10.0, 20.0]), "z": torch.tensor([30.0])}
+    results = {}
+
+    def worker(node, delta, weight):
+        client = NodeManagerClient(
+            "127.0.0.1", server.server_address[1], node,
+            DiskBucketSpool(tmp_path / node, 4096), timeout_s=4,
+        )
+        results[node] = exchange_dense_delta(
+            client, fence, base, delta, weight=weight, bucket_bytes=16, eta_outer=.5
+        )
+
+    threads = [
+        threading.Thread(target=worker, args=("n0", {"a": torch.tensor([1., 3.]), "z": torch.tensor([5.])}, 1)),
+        threading.Thread(target=worker, args=("n1", {"a": torch.tensor([5., 7.]), "z": torch.tensor([9.])}, 3)),
+    ]
+    for item in threads: item.start()
+    for item in threads: item.join(5)
+    server.shutdown(); server.server_close(); thread.join(2)
+
+    for header, state in results.values():
+        assert header["accepted_nodes"] == ["n0", "n1"]
+        assert torch.equal(state["a"], torch.tensor([12., 23.]))
+        assert torch.equal(state["z"], torch.tensor([34.]))

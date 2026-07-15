@@ -23,12 +23,19 @@ import threading
 import time
 from typing import Callable, Mapping, Sequence
 
+import torch
+
+import torch
+
+from ndm.async_diloco import AsyncDiLoCoUpdate
+
 from ndm.resilient_node_quorum import GenerationFence, MetadataCoordinator
 
 
 _U32 = struct.Struct("!I")
 _F64 = struct.Struct("!d")
 MAX_HEADER_BYTES = 64 * 1024
+RESILIENT_NODE_TRANSPORT = "resilient-node-quorum-sharded-p2p"
 
 
 def _sha(payload: bytes) -> str:
@@ -285,6 +292,80 @@ class NodeManagerClient:
                 sock.close()
 
 
+@dataclass(frozen=True)
+class DenseBucketLayout:
+    """Deterministic tensor layout for streamed node deltas.
+
+    Values are transported as network-order float64 so shard owners can compute
+    an exact weighted mean without understanding PyTorch serialization.  The
+    returned aggregate is cast back to each base tensor's dtype and applied with
+    the same ``base + eta_outer * mean_delta`` rule as async DiLoCo.
+    """
+
+    names: tuple[str, ...]
+    shapes: tuple[tuple[int, ...], ...]
+    counts: tuple[int, ...]
+    bucket_elements: int
+
+
+def pack_dense_delta(delta: Mapping[str, torch.Tensor], *, bucket_bytes: int
+                     ) -> tuple[DenseBucketLayout, tuple[bytes, ...]]:
+    if bucket_bytes < _F64.size:
+        raise ValueError("bucket_bytes must hold at least one float64 value")
+    names = tuple(sorted(delta))
+    tensors = [delta[name].detach().cpu() for name in names]
+    if any(not tensor.is_floating_point() for tensor in tensors):
+        raise ValueError("resilient dense transport accepts floating tensors only")
+    values: list[float] = []
+    for tensor in tensors:
+        values.extend(tensor.to(torch.float64).reshape(-1).tolist())
+    elements = max(1, bucket_bytes // _F64.size)
+    buckets = tuple(encode_f64(values[offset:offset + elements])
+                    for offset in range(0, len(values), elements))
+    if not buckets:
+        buckets = (b"",)
+    return DenseBucketLayout(
+        names=names,
+        shapes=tuple(tuple(tensor.shape) for tensor in tensors),
+        counts=tuple(tensor.numel() for tensor in tensors),
+        bucket_elements=elements,
+    ), buckets
+
+
+def apply_aggregate_delta(base_state: Mapping[str, torch.Tensor], layout: DenseBucketLayout,
+                          buckets: Sequence[bytes], *, eta_outer: float = 1.0
+                          ) -> dict[str, torch.Tensor]:
+    values = [value for payload in buckets for value in decode_f64(payload)]
+    if len(values) != sum(layout.counts):
+        raise ValueError("aggregate tensor element count mismatch")
+    result: dict[str, torch.Tensor] = {}
+    offset = 0
+    for name, shape, count in zip(layout.names, layout.shapes, layout.counts):
+        if name not in base_state:
+            raise ValueError(f"aggregate has unknown base tensor {name!r}")
+        base = base_state[name]
+        if tuple(base.shape) != shape:
+            raise ValueError(f"aggregate tensor {name!r} shape mismatch")
+        mean = torch.tensor(values[offset:offset + count], dtype=torch.float64).reshape(shape)
+        result[name] = base + mean.to(device=base.device, dtype=base.dtype) * float(eta_outer)
+        offset += count
+    missing = sorted(set(base_state) - set(layout.names))
+    if missing:
+        raise ValueError(f"aggregate is missing base tensors: {missing}")
+    return result
+
+
+def exchange_dense_delta(client: NodeManagerClient, fence: GenerationFence,
+                         base_state: Mapping[str, torch.Tensor],
+                         local_delta: Mapping[str, torch.Tensor], *, weight: int,
+                         bucket_bytes: int, eta_outer: float = 1.0
+                         ) -> tuple[dict[str, object], dict[str, torch.Tensor]]:
+    """Submit a real E97 node delta and return the redistributed global state."""
+    layout, buckets = pack_dense_delta(local_delta, bucket_bytes=bucket_bytes)
+    header, aggregate = client.exchange(fence, buckets, weight=weight)
+    return header, apply_aggregate_delta(base_state, layout, aggregate, eta_outer=eta_outer)
+
+
 class NodeStepSupervisor:
     """Deadline supervisor that terminates only the unhealthy local step."""
 
@@ -306,3 +387,66 @@ class NodeStepSupervisor:
                 stdout, stderr = process.communicate()
             raise TimeoutError(f"node step exceeded {self.deadline_s}s deadline")
         return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+@dataclass(frozen=True)
+class TensorBucketLayout:
+    """Deterministic model-delta layout used by the node-manager wire path."""
+
+    names: tuple[str, ...]
+    shapes: tuple[tuple[int, ...], ...]
+    counts: tuple[int, ...]
+    bucket_elements: int
+
+
+def pack_update_buckets(
+    update: AsyncDiLoCoUpdate, *, bucket_bytes: int
+) -> tuple[TensorBucketLayout, tuple[bytes, ...]]:
+    """Pack a dense update into bounded, portable float64 buckets.
+
+    Float64 is intentional: the aggregator can calculate an exact weighted
+    mean directly over the wire representation without knowing tensor dtypes.
+    The committed result is cast back to each base tensor's dtype on apply.
+    """
+
+    bucket_elements = int(bucket_bytes) // _F64.size
+    if bucket_elements <= 0:
+        raise ValueError("bucket_bytes must hold at least one float64")
+    names = tuple(sorted(update.delta))
+    shapes = tuple(tuple(update.delta[name].shape) for name in names)
+    counts = tuple(int(update.delta[name].numel()) for name in names)
+    values: list[float] = []
+    for name in names:
+        tensor = update.delta[name]
+        if not torch.is_tensor(tensor) or not torch.is_floating_point(tensor):
+            raise ValueError(f"delta entry {name!r} is not a floating tensor")
+        values.extend(tensor.detach().cpu().to(torch.float64).reshape(-1).tolist())
+    buckets = tuple(
+        encode_f64(values[offset: offset + bucket_elements])
+        for offset in range(0, len(values), bucket_elements)
+    ) or (b"",)
+    return TensorBucketLayout(names, shapes, counts, bucket_elements), buckets
+
+
+def apply_aggregate_buckets(
+    base_state: Mapping[str, torch.Tensor],
+    layout: TensorBucketLayout,
+    buckets: Sequence[bytes],
+    *,
+    eta_outer: float,
+) -> dict[str, torch.Tensor]:
+    """Apply a redistributed weighted-mean delta to the E97 base state."""
+
+    values = [value for payload in buckets for value in decode_f64(payload)]
+    if len(values) != sum(layout.counts):
+        raise ValueError("aggregate element count differs from tensor layout")
+    result = {name: tensor.detach().clone() for name, tensor in base_state.items()}
+    offset = 0
+    for name, shape, count in zip(layout.names, layout.shapes, layout.counts):
+        if name not in base_state:
+            raise ValueError(f"aggregate tensor {name!r} is absent from base state")
+        base = base_state[name]
+        delta = torch.tensor(values[offset: offset + count], dtype=torch.float64).reshape(shape)
+        result[name] = base + delta.to(dtype=base.dtype) * float(eta_outer)
+        offset += count
+    return result
