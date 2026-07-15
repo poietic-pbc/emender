@@ -1,0 +1,32 @@
+JobId=5000436 JobName=async-b4k40-ladder-256n
+   SLUID=s7TNKXJ7JY6R00
+   UserId=erikgarrison(19032) GroupId=erikgarrison(31761) MCS_label=N/A
+   Priority=43372800 Nice=0 Account=bif148 QOS=debug
+   JobState=PENDING Reason=Priority Dependency=(null)
+   Requeue=0 Restarts=0 BatchFlag=1 Reboot=0 ExitCode=0:0
+   DerivedExitCode=0:0
+   RunTime=00:00:00 TimeLimit=02:00:00 TimeMin=N/A
+   SubmitTime=2026-07-15T02:31:50 EligibleTime=2026-07-15T02:31:50
+   AccrueTime=2026-07-15T02:31:50
+   StartTime=Unknown EndTime=Unknown Deadline=N/A
+   SuspendTime=None SecsPreSuspend=0 LastSchedEval=2026-07-15T02:31:51 Scheduler=Main
+   Partition=batch AllocNode:Sid=login04:904860
+   ReqNodeList=(null) ExcNodeList=(null)
+   NodeList=
+   NumNodes=256-256 NumCPUs=14336 NumTasks=2048 CPUs/Task=7 ReqB:S:C:T=0:0:*:1
+   ReqTRES=cpu=14336,mem=125T,node=256,billing=14336
+   AllocTRES=(null)
+   Socks/Node=* NtasksPerN:B:S:C=8:0:*:* CoreSpec=*
+   MinCPUsNode=56 MinMemoryNode=0 MinTmpDiskNode=0
+   Features=(null) DelayBoot=00:00:00
+   OverSubscribe=NO Contiguous=0 Licenses=(null) LicensesAlloc=(null) Network=(null)
+   Command=/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1044/build/e97-256/exact-debug-256n-2h-20260715/durable-debug-wrapper.sbatch
+   SubmitLine=sbatch --parsable -N 256 -J async-b4k40-ladder-256n -t 02:00:00 -p batch -q debug --export ALL,WG_TASK_ID=run-async-b4k40-debug-ladder-256n,TASK_ID=run-async-b4k40-debug-ladder-256n,OUTPUT_ROOT=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709,SMOKE_NAME=256n,SCALEOUT_VARIANT=E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n,ASYNC_QUORUM_TRANSPORT=compiled-cray-mpich-helper-p2p,ALLOW_FRONTIER_TCP_SCALE_DEBUG=0,ASYNC_TRAINPY_RANKS=2048,ASYNC_EXPECTED_RANKS=2048,ASYNC_GLOBAL_QUORUM=2048,ASYNC_EXPECTED_MISSING_UPDATES=0,ASYNC_TIMEOUT_S=1200,DILOCO_K=40,ASYNC_LOCAL_STEPS=40,BATCH_SIZE=4,CHUNK_SIZE=2048,LEARNING_RATE=0.001007,OPTIMIZER=schedulefree,WEIGHT_DECAY=0.01,WARMUP_STEPS=0,GRAD_ACCUM=1,GRAD_CLIP=1.0,MODEL_TOKENIZER=p50k_base,ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM=0,HUMAN_APPROVAL_RECORD=WG run-async-b4k40-debug-ladder-256n: 256-node fixed async DiLoCo B4/K40 stability ladder final rung; batch/debug 00:20:00; sequential after clean 128n job 4962329; run-local debug latest/checkpoint only; no production or extended job.,E97_CHECKPOINT=/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260709_084606_step_1525000/checkpoint_step_1525000_loss_2.4378.pt,ASYNC_GENERATIONS=1000000,ASYNC_STEPS=40000000 /lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1044/build/e97-256/exact-debug-256n-2h-20260715/durable-debug-wrapper.sbatch
+   WorkDir=/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1023/build/e97-256/repeated-smoke-4979704/render/production/attested-tree-9fff689c9f9252b6a264773c207f8f8ca8509666-jj6etgng
+   AdminComment=GPU_SRANGE_SRC=default,GPU_POWER_CAP=560,GPU_POWER_CAP_SRC=default,GPU_COUNTERS=0,GPU_COUNTERS_SRC=default,GPU_SRANGE=500-1700
+   StdErr=/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1023/build/e97-256/repeated-smoke-4979704/render/production/attested-tree-9fff689c9f9252b6a264773c207f8f8ca8509666-jj6etgng/logs/frontier/trainpy_async_quorum/async-b4k40-ladder-256n-5000436.err
+   StdIn=/dev/null
+   StdOut=/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1023/build/e97-256/repeated-smoke-4979704/render/production/attested-tree-9fff689c9f9252b6a264773c207f8f8ca8509666-jj6etgng/logs/frontier/trainpy_async_quorum/async-b4k40-ladder-256n-5000436.out
+   TresBind=gres/gpu:closest
+   TresPerTask=cpu=7,gres/gpu=1
+
