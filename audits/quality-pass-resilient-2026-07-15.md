@@ -1,6 +1,6 @@
 # Resilient E97 autonomous ladder quality pass
 
-Task: `quality-pass-resilient`  
+Task: `quality-pass-resilient`
 Date: 2026-07-15
 
 ## Graph reviewed
