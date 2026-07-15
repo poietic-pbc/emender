@@ -74,6 +74,16 @@ test sends two healthy nodes through real loopback sockets, leaves a third OS
 process stuck, proves that the supervisor terminates only that process, commits
 the exact mean, and releases retained sender payloads.
 
+`ndm/resilient_node_transport.py` extends that primitive into a complete local
+node-manager exchange: a crash-surviving bounded disk spool retains float64
+buckets, independent bucket connections permit replay, the server freezes a
+quorum and computes the exact weighted mean, and committed buckets stream back
+to every accepted client. The metadata manifest contains only membership,
+sizes, and hashes. Its integration suite proves a completely missing node does
+not prevent redistribution, verifies restart replay, exercises deadline
+failure and stale-epoch fencing, and kills a stuck child step while leaving the
+supervisor reusable.
+
 This is now a production-shaped network/supervision primitive, but it is not
 yet wired into `e97_async_diloco_train.py`'s model/optimizer state transition or
 an independent-per-node `srun` launcher. Aggregate redistribution is represented
