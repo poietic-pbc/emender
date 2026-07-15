@@ -57,3 +57,11 @@ partition, and a 12-hour limit, with zero elapsed allocation time. Because
 the projection was six hours away, the monitor parked until approximately
 15:00 EDT (90 minutes before the projection), following the estimate-driven
 pending cadence. No submission or cancellation path was invoked.
+
+At 2026-07-15 06:05 UTC, job `4980157` remained `PENDING (Priority)` with
+zero elapsed allocation time. Slurm revised its projected start to
+2026-07-16 09:10 EDT and projected end to 21:10 EDT. The request remained
+unchanged at 256 nodes, 2,048 tasks at eight per node, normal QoS, batch
+partition, and a 12-hour limit. Because the projection was about 31 hours
+away, monitoring parked until 2026-07-16 07:40 EDT, 90 minutes before the
+projection. No submission or cancellation path was invoked.
