@@ -29,6 +29,7 @@ from ndm.async_diloco_real import (
     run_real_async_diloco,
     run_real_async_diloco_file_rank,
 )
+from ndm.resilient_node_transport import RESILIENT_NODE_TRANSPORT
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -115,6 +116,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="Explicit legacy comparison path: use mpi4py MPI point-to-point for dense tensor deltas.")
     parser.add_argument("--actual-multinode-compiled-mpich-quorum", action="store_true",
                         help="Run one Slurm-launched rank and use the compiled Cray MPICH dense helper.")
+    parser.add_argument("--actual-resilient-node-quorum", action="store_true",
+                        help="Use independent node-manager peers with dense bucket quorum/replay.")
+    parser.add_argument("--resilient-spool-dir", default=os.environ.get("ASYNC_RESILIENT_SPOOL_DIR", ""))
+    parser.add_argument("--resilient-coordinator-epoch", type=int,
+                        default=int(os.environ.get("ASYNC_RESILIENT_COORDINATOR_EPOCH", "1")))
     parser.add_argument("--diloco-quorum-mode",
                         choices=[RESILIENT_QUORUM_DILOCO_MODE, STRICT_COLLECTIVE_DILOCO_MODE],
                         default="",
@@ -169,6 +175,8 @@ def _optional_positive_float(value: float) -> float | None:
 
 
 def _selected_transport_metadata(args: argparse.Namespace) -> tuple[str, str, str, bool]:
+    if args.actual_resilient_node_quorum:
+        return (RESILIENT_NODE_TRANSPORT, RESILIENT_NODE_TRANSPORT, "frontier-resilient-debug", False)
     if args.actual_multinode_compiled_mpich_quorum:
         return (
             COMPILED_MPICH_TRANSPORT,
@@ -202,6 +210,7 @@ def main() -> int:
             args.actual_multinode_tcp_quorum
             or args.actual_multinode_mpi_dense_quorum
             or args.actual_multinode_compiled_mpich_quorum
+            or args.actual_resilient_node_quorum
         )
         and args.synthetic_token_stream
         and not args.allow_actual_multinode_synthetic_token_stream
@@ -213,6 +222,7 @@ def main() -> int:
             args.actual_multinode_tcp_quorum,
             args.actual_multinode_mpi_dense_quorum,
             args.actual_multinode_compiled_mpich_quorum,
+            args.actual_resilient_node_quorum,
         )
     )
     if selected_transports > 1:
@@ -277,6 +287,7 @@ def main() -> int:
         args.actual_multinode_tcp_quorum
         or args.actual_multinode_mpi_dense_quorum
         or args.actual_multinode_compiled_mpich_quorum
+        or args.actual_resilient_node_quorum
     ):
         if args.steps != args.generations * args.local_steps:
             raise ValueError("steps must equal generations * local_steps")
@@ -316,6 +327,8 @@ def main() -> int:
             mpi_bucket_bytes=int(args.mpi_dense_bucket_bytes),
             compiled_mpich_helper_bin=(args.compiled_mpich_helper_bin or None),
             compiled_mpich_ipc_dir=(args.compiled_mpich_ipc_dir or None),
+            resilient_spool_dir=(args.resilient_spool_dir or None),
+            resilient_coordinator_epoch=int(args.resilient_coordinator_epoch),
             walltime_remaining_s=_optional_positive_float(args.walltime_remaining_s),
             estimated_finalization_duration_s=_optional_positive_float(
                 args.estimated_finalization_duration_s
