@@ -1,0 +1,40 @@
+job_id=5000436
+terminal_state=CANCELLED by 19032
+exit_code=0:0
+elapsed=00:42:43
+start=2026-07-15T02:45:14-04:00
+end=2026-07-15T03:27:57-04:00
+allocated_nodes=256
+allocated_tasks=2048
+batch_state=FAILED
+batch_exit_code=143:0
+step_state=CANCELLED
+step_exit_code=0:15
+cancel_disposition=explicit user-authorized cancellation; no resubmission
+
+run_root=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260715/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/5000436-20260715T064518Z
+last_valid_symlink=continuation/last-valid.json -> last-valid-20260715T072807Z.json
+last_valid_generation=9
+last_valid_checkpoint=async_run/checkpoints/emender_E97_100m_20260715/checkpoint_step_1525400_loss_2.4184.pt
+last_valid_checkpoint_sha256=ee9d69d9c3efd5696042b30ad1ad57236d5035876bae5ce2e9cc2010e5017fd3
+last_valid_checkpoint_size_bytes=15439252298
+next_launch_selector=build/e97-256/exact-debug-256n-2h-20260715/select-continuation-seed.py
+selector_verification=PASS (path, size, and full SHA256)
+
+finalized_generation_range=0-9
+finalized_generations=10
+last_completed_step=1525400
+steps_beyond_approved_seed=400
+latest_json_mtime=2026-07-15T03:25:27-04:00
+handoff_publish_mtime=2026-07-15T03:28:17-04:00
+
+sacct_5000436=5000436|async-b4k40-ladder-256n|CANCELLED by 19032|0:0|00:42:43|2026-07-15T02:45:14|2026-07-15T03:27:57|256
+sacct_5000436_batch=5000436.batch|batch|FAILED|143:0|00:43:03|2026-07-15T02:45:14|2026-07-15T03:28:17|1
+sacct_5000436_step=5000436.0|bash|CANCELLED|0:15|00:42:15|2026-07-15T02:45:43|2026-07-15T03:27:58|256|2048
+
+failure_class=scheduler/user cancellation before requested walltime; not deterministic code/config, transport, OOM, node/rank loss, or non-finite training failure
+acceptance_result=INCOMPLETE: run did not reach scheduler-controlled finalization near two hours and no independent model/optimizer reload was completed before cancellation
+duplicate_submission=no
+replacement_submission_forbidden=yes
+production_job_mutation_by_this_task=no
+production_observed_state_at_terminal_audit=CANCELLED (changed externally at 2026-07-15T03:28:54-04:00; this task issued no command against production job 4980157)
