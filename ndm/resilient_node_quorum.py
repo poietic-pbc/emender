@@ -14,6 +14,10 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import socket
+import struct
+import threading
+import time
 from typing import Iterable, Mapping, Sequence
 
 
@@ -187,3 +191,130 @@ def reassign_and_replay(fence: GenerationFence, retained: Iterable[BoundedBucket
             count += 1
     return count
 
+
+def _wire_update(update: BucketUpdate) -> bytes:
+    """Encode one bucket without pickle or implicit Python object framing."""
+    value = {
+        "schema_version": SCHEMA_VERSION, "run_id": update.fence.run_id,
+        "generation": update.fence.generation, "attempt": update.fence.attempt,
+        "coordinator_epoch": update.fence.coordinator_epoch,
+        "node_id": update.node_id, "bucket": update.bucket, "weight": update.weight,
+        "checksum": update.checksum, "payload_hex": update.payload.hex(),
+    }
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _read_exact(stream: socket.socket, size: int) -> bytes:
+    chunks = bytearray()
+    while len(chunks) < size:
+        chunk = stream.recv(size - len(chunks))
+        if not chunk:
+            raise ConnectionError("truncated shard-owner frame")
+        chunks.extend(chunk)
+    return bytes(chunks)
+
+
+class ShardOwnerServer:
+    """Bounded point-to-point bucket receiver; no MPI communicator is involved.
+
+    The server accepts one structured, length-prefixed bucket per connection.
+    Payload bytes are admitted only after schema, size, checksum, and current-fence
+    checks.  This deliberately small primitive can run in an independent Slurm
+    node-manager step and be replaced without poisoning healthy peers.
+    """
+
+    def __init__(self, address: tuple[str, int], store: BoundedBucketStore,
+                 fence: GenerationFence, *, max_frame_bytes: int):
+        self.store, self.fence, self.max_frame_bytes = store, fence, max_frame_bytes
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._socket.bind(address)
+        self._socket.listen()
+        self._socket.settimeout(.1)
+        self.address = self._socket.getsockname()
+        self._closed = threading.Event()
+
+    def serve(self) -> None:
+        while not self._closed.is_set():
+            try:
+                connection, _ = self._socket.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                if self._closed.is_set():
+                    return
+                raise
+            with connection:
+                try:
+                    size = struct.unpack("!I", _read_exact(connection, 4))[0]
+                    if size <= 0 or size > self.max_frame_bytes:
+                        raise ValueError("invalid shard-owner frame size")
+                    value = json.loads(_read_exact(connection, size))
+                    if value.get("schema_version") != SCHEMA_VERSION:
+                        raise ValueError("unsupported bucket schema")
+                    fence = GenerationFence(value["run_id"], value["generation"],
+                                            value["attempt"], value["coordinator_epoch"])
+                    if fence != self.fence:
+                        raise ValueError("stale or late generation fence")
+                    payload = bytes.fromhex(value["payload_hex"])
+                    update = BucketUpdate(fence, value["node_id"], value["bucket"],
+                                          value["weight"], payload, value["checksum"])
+                    self.store.put(update)
+                    reply = {"ok": True, "checksum": update.checksum}
+                except Exception as error:
+                    reply = {"ok": False, "error": str(error)}
+                encoded = json.dumps(reply, sort_keys=True).encode()
+                connection.sendall(struct.pack("!I", len(encoded)) + encoded)
+
+    def close(self) -> None:
+        self._closed.set()
+        self._socket.close()
+
+
+def send_bucket(address: tuple[str, int], update: BucketUpdate, *, timeout: float,
+                max_frame_bytes: int) -> None:
+    """Send a retained bucket to one owner and require a checksummed receipt."""
+    encoded = _wire_update(update)
+    if len(encoded) > max_frame_bytes:
+        raise ValueError("bucket frame exceeds configured maximum")
+    with socket.create_connection(address, timeout=timeout) as stream:
+        stream.settimeout(timeout)
+        stream.sendall(struct.pack("!I", len(encoded)) + encoded)
+        size = struct.unpack("!I", _read_exact(stream, 4))[0]
+        reply = json.loads(_read_exact(stream, size))
+    if not reply.get("ok"):
+        raise RuntimeError(reply.get("error", "shard owner rejected bucket"))
+    if reply.get("checksum") != update.checksum:
+        raise ValueError("shard-owner receipt checksum mismatch")
+
+
+def supervise_until_quorum(processes: Mapping[str, object], store: BoundedBucketStore,
+                           fence: GenerationFence, *, quorum: int,
+                           expected_buckets: int, deadline: float) -> tuple[str, ...]:
+    """Wait to a monotonic deadline, terminating only incomplete node steps."""
+    while time.monotonic() < deadline:
+        complete = _complete_nodes(store.generation(fence), expected_buckets)
+        if len(complete) >= quorum:
+            accepted = tuple(sorted(complete)[:quorum])
+            for node_id, process in processes.items():
+                if node_id not in accepted and getattr(process, "is_alive")():
+                    getattr(process, "terminate")()
+                    getattr(process, "join")(5)
+            return accepted
+        time.sleep(.01)
+    complete = _complete_nodes(store.generation(fence), expected_buckets)
+    for node_id, process in processes.items():
+        if node_id not in complete and getattr(process, "is_alive")():
+            getattr(process, "terminate")()
+            getattr(process, "join")(5)
+    if len(complete) < quorum:
+        raise TimeoutError("node quorum lost at progress deadline")
+    return tuple(sorted(complete)[:quorum])
+
+
+def _complete_nodes(updates: Iterable[BucketUpdate], expected_buckets: int) -> set[str]:
+    by_node: dict[str, set[int]] = {}
+    for update in updates:
+        by_node.setdefault(update.node_id, set()).add(update.bucket)
+    wanted = set(range(expected_buckets))
+    return {node for node, buckets in by_node.items() if buckets == wanted}

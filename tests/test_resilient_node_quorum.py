@@ -1,11 +1,13 @@
 import json
 import multiprocessing
 import time
+import threading
 
 import pytest
 
 from ndm.resilient_node_quorum import (
     BoundedBucketStore, BucketUpdate, MetadataCoordinator, reassign_and_replay,
+    ShardOwnerServer, send_bucket, supervise_until_quorum,
 )
 
 
@@ -92,3 +94,50 @@ def test_bucket_store_checksum_and_memory_bound(tmp_path):
     corrupt = BucketUpdate(fence, "n1", 0, 1, b"x", "bad")
     with pytest.raises(ValueError, match="checksum"):
         store.put(corrupt)
+
+
+def _stall_forever():
+    time.sleep(60)
+
+
+def test_network_owner_and_deadline_supervisor_advance_without_unanimity(tmp_path):
+    coordinator = MetadataCoordinator(tmp_path, "network-run", 1)
+    fence = coordinator.fence(0)
+    owner_store = BoundedBucketStore(128)
+    owner = ShardOwnerServer(("127.0.0.1", 0), owner_store, fence,
+                             max_frame_bytes=4096)
+    thread = threading.Thread(target=owner.serve, daemon=True)
+    thread.start()
+    retained = BoundedBucketStore(128)
+    for node, value in (("n0", 10), ("n1", 30)):
+        update = BucketUpdate.create(fence, node, 0, 1, bytes([value]))
+        retained.put(update)
+        send_bucket(owner.address, update, timeout=1, max_frame_bytes=4096)
+    stuck = multiprocessing.Process(target=_stall_forever)
+    stuck.start()
+    accepted = supervise_until_quorum({"n2": stuck}, owner_store, fence, quorum=2,
+                                      expected_buckets=1,
+                                      deadline=time.monotonic() + .2)
+    # Once quorum is frozen, the supervisor kills only the incomplete step.
+    assert accepted == ("n0", "n1") and stuck.exitcode != 0
+    manifest = coordinator.commit(fence, owner_store.generation(fence), quorum=2,
+                                  expected_buckets=1)
+    assert bytes.fromhex(manifest["buckets"]["0"]["payload_hex"]) == b"\x14"
+    retained.release(fence)
+    assert retained.bytes_used == 0
+    owner.close()
+
+
+def test_network_owner_rejects_stale_fence_and_oversize_frame(tmp_path):
+    coordinator = MetadataCoordinator(tmp_path, "network-run", 1)
+    current = coordinator.fence(1, 1)
+    owner = ShardOwnerServer(("127.0.0.1", 0), BoundedBucketStore(16), current,
+                             max_frame_bytes=512)
+    threading.Thread(target=owner.serve, daemon=True).start()
+    stale = BucketUpdate.create(coordinator.fence(1, 0), "late", 0, 1, b"x")
+    with pytest.raises(RuntimeError, match="stale or late"):
+        send_bucket(owner.address, stale, timeout=1, max_frame_bytes=512)
+    huge = BucketUpdate.create(current, "n0", 0, 1, b"x" * 512)
+    with pytest.raises(ValueError, match="configured maximum"):
+        send_bucket(owner.address, huge, timeout=1, max_frame_bytes=512)
+    owner.close()

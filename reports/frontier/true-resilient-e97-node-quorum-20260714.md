@@ -62,12 +62,29 @@ with `scontrol`, `sacct`, `sstat`, and the fault timeline.  Slurm cannot add a
 node outside the fixed allocation unless the site exposes a supported
 mechanism.  Across-job checkpoint/restart is therefore still required.
 
-The next implementation gate is a supervisor that owns one independently
-terminable node step, enforces local-rank and generation deadlines, advances
-only while node quorum exists, and restarts/catches up a manager only when
-Slurm permits it.  Only then is one unique 2-node/16-GPU, <=20 minute injected
-failure attempt justified.  The <=8-node rung remains gated on that result;
-64/128/256-node and production-QoS jobs are explicitly out of scope.
+The follow-up implementation adds a real, structured TCP bucket data-plane
+primitive (`ShardOwnerServer`/`send_bucket`) rather than an in-memory-only
+simulation. It length-prefixes JSON envelopes, caps every frame before
+allocation, validates schema/checksum and the full generation/attempt/epoch
+fence, returns a checksummed receipt, and stores the accepted payload under a
+hard byte bound. `supervise_until_quorum` uses a monotonic progress deadline,
+freezes the deterministic accepted set, terminates only incomplete node-manager
+processes, and fails closed when too few complete nodes remain. A process fault
+test sends two healthy nodes through real loopback sockets, leaves a third OS
+process stuck, proves that the supervisor terminates only that process, commits
+the exact mean, and releases retained sender payloads.
+
+This is now a production-shaped network/supervision primitive, but it is not
+yet wired into `e97_async_diloco_train.py`'s model/optimizer state transition or
+an independent-per-node `srun` launcher. Aggregate redistribution is represented
+by verified committed bucket payloads and `catch_up`, not yet applied to E97
+tensors. Consequently the required unique 2-node/16-GPU injected-failure smoke
+is still blocked by implementation, not by Frontier: submitting the existing
+launchers would exercise TCP-debug or strict MPI and would be false evidence.
+No resilient-mode Slurm job was submitted in this pass. The remaining gate is
+the tensor codec/apply path, per-node step launcher and on-allocation restart;
+only after those exist is one <=20-minute attempt justified. The <=8-node rung
+remains gated on it; 64/128/256-node and production-QoS jobs are out of scope.
 
 ## Validation
 
@@ -79,7 +96,7 @@ pytest -q tests/test_async_diloco_mpi_transport.py tests/test_async_diloco_compi
 git diff --check
 ```
 
-The first suite uses real independent protocol stores and missing/stale/failover
-events.  It proves forward progress without an MPI communicator, but it does
-not yet constitute the required real OS-process termination or Frontier smoke;
-those remain explicit completion blockers rather than being overstated here.
+The first suite includes real loopback TCP and real OS-process termination as
+well as independent protocol stores and missing/stale/failover events. It proves
+local forward progress without an MPI communicator. It is not a Frontier smoke;
+that remains an explicit completion blocker rather than being overstated here.
