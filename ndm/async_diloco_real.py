@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import socket
 import struct
+import threading
 import time
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -45,6 +46,16 @@ from ndm.async_diloco_compiled_mpich import (
     run_compiled_mpich_dense_quorum,
 )
 from ndm.async_diloco_mpi import run_mpi_dense_quorum
+from ndm.resilient_node_quorum import GenerationFence
+from ndm.resilient_node_transport import (
+    RESILIENT_NODE_TRANSPORT,
+    DiskBucketSpool,
+    NodeManagerClient,
+    QuorumTransportServer,
+    TransportConfig,
+    apply_aggregate_buckets,
+    pack_update_buckets,
+)
 
 import train
 
@@ -227,6 +238,8 @@ class RealAsyncFileRankConfig:
     mpi_bucket_bytes: int = 64 * 1024 * 1024
     compiled_mpich_helper_bin: str | Path | None = None
     compiled_mpich_ipc_dir: str | Path | None = None
+    resilient_spool_dir: str | Path | None = None
+    resilient_coordinator_epoch: int = 1
     walltime_remaining_s: float | None = None
     estimated_finalization_duration_s: float | None = None
     checkpoint_cadence: AsyncDiLoCoCheckpointCadence = field(default_factory=AsyncDiLoCoCheckpointCadence)
@@ -324,17 +337,17 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
 
     run_dir = Path(config.run_dir)
     transport = str(config.transport).strip().lower()
-    if transport not in {"tcp", "mpi-dense", COMPILED_MPICH_TRANSPORT}:
+    if transport not in {"tcp", "mpi-dense", COMPILED_MPICH_TRANSPORT, RESILIENT_NODE_TRANSPORT}:
         raise ValueError(
             "transport must be 'tcp', 'mpi-dense', or "
-            f"'{COMPILED_MPICH_TRANSPORT}'"
+            f"'{COMPILED_MPICH_TRANSPORT}', or '{RESILIENT_NODE_TRANSPORT}'"
         )
     quorum_mode = str(config.quorum_mode).strip().lower()
     if quorum_mode not in {RESILIENT_QUORUM_DILOCO_MODE, STRICT_COLLECTIVE_DILOCO_MODE}:
         raise ValueError("quorum_mode must be 'resilient_quorum' or 'strict_collective'")
     if quorum_mode == STRICT_COLLECTIVE_DILOCO_MODE and transport != COMPILED_MPICH_TRANSPORT:
         raise ValueError("strict_collective quorum_mode requires compiled MPICH transport")
-    if transport == "tcp" and int(config.node_count) > 8:
+    if transport in {"tcp", RESILIENT_NODE_TRANSPORT} and int(config.node_count) > 8:
         if not config.allow_tcp_scale_debug:
             raise ValueError(
                 "TCP async quorum transport is local/debug-only; pass the explicit "
@@ -481,7 +494,20 @@ def _run_real_async_diloco_file_rank_generation(
     )
 
     root_payload: dict[str, Any] | None = None
-    if transport == COMPILED_MPICH_TRANSPORT:
+    if transport == RESILIENT_NODE_TRANSPORT:
+        root_payload = _coordinate_resilient_node_rank(
+            config=config,
+            start_s=start_s,
+            base_state=base_state,
+            node_result=node_result,
+            artifact_dir=nodes_dir,
+            progress_dir=progress_dir,
+            generation=generation,
+            train_args=train_args,
+            optimizer_state_dict=generation_optimizer_state,
+            initial_checkpoint_payload=initial_checkpoint_payload,
+        )
+    elif transport == COMPILED_MPICH_TRANSPORT:
         root_payload = _coordinate_compiled_mpich_dense_rank(
             config=config,
             start_s=start_s,
@@ -1526,6 +1552,155 @@ def _coordinate_network_rank_quorum(
         },
     )
     return final_payload
+
+
+def _coordinate_resilient_node_rank(
+    *,
+    config: RealAsyncFileRankConfig,
+    start_s: float,
+    base_state: Mapping[str, torch.Tensor],
+    node_result: RealAsyncNodeResult,
+    artifact_dir: Path,
+    progress_dir: Path,
+    generation: int,
+    train_args: Namespace,
+    optimizer_state_dict: Mapping[str, Any] | None,
+    initial_checkpoint_payload: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Exchange a real E97 delta through the MPI-independent node quorum."""
+
+    node_id = f"node-{int(config.node_rank):05d}"
+    if node_result.node_update is None:
+        raise RuntimeError("local node quorum failed before resilient transport submission")
+    layout, buckets = pack_update_buckets(
+        node_result.node_update, bucket_bytes=int(config.mpi_bucket_bytes)
+    )
+    server: QuorumTransportServer | None = None
+    server_thread: threading.Thread | None = None
+    if int(config.node_rank) == 0:
+        server = QuorumTransportServer(
+            (str(config.coordinator_bind_host), int(config.coordinator_port)),
+            TransportConfig(
+                run_id=config.run_id,
+                quorum=int(config.global_quorum),
+                expected_buckets=len(buckets),
+                max_bucket_bytes=int(config.mpi_bucket_bytes),
+                generation_deadline_s=float(config.timeout_s),
+            ),
+            Path(config.run_dir) / "resilient_metadata",
+            coordinator_epoch=int(config.resilient_coordinator_epoch),
+        )
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+
+    spool_root = (
+        Path(config.resilient_spool_dir)
+        if config.resilient_spool_dir is not None
+        else Path(os.environ.get("TMPDIR", "/tmp")) / "emender-resilient" / config.run_id / node_id
+    )
+    spool_limit = max(int(config.mpi_bucket_bytes), sum(len(item) for item in buckets))
+    client = NodeManagerClient(
+        str(config.coordinator_host),
+        int(config.coordinator_port),
+        node_id,
+        DiskBucketSpool(spool_root, spool_limit),
+        timeout_s=float(config.timeout_s),
+        max_bucket_bytes=int(config.mpi_bucket_bytes),
+    )
+    fence = GenerationFence(
+        config.run_id, int(generation), 0, int(config.resilient_coordinator_epoch)
+    )
+    try:
+        commit, aggregate_buckets = client.exchange(
+            fence, buckets, weight=max(1, int(node_result.node_update.tokens))
+        )
+    finally:
+        if server is not None:
+            server.shutdown()
+            server.server_close()
+        if server_thread is not None:
+            server_thread.join(timeout=2.0)
+
+    global_state = apply_aggregate_buckets(
+        base_state, layout, aggregate_buckets, eta_outer=float(config.eta_outer)
+    )
+    accepted_nodes = tuple(str(item) for item in commit["accepted_nodes"])
+    metrics = dataclass_replace_metrics(
+        node_result.metrics,
+        requested_workers=int(config.node_count),
+        participating_workers=len(accepted_nodes),
+        quorum_threshold=int(config.global_quorum),
+        quorum_size=len(accepted_nodes),
+        accepted_updates=len(accepted_nodes),
+        timed_out_updates=max(0, int(config.node_count) - len(accepted_nodes)),
+        checkpoint_state_id=f"{config.run_id}:global:gen{int(generation):06d}",
+        update_bytes={
+            "node": sum(len(item) for item in buckets),
+            "global_state": state_num_bytes(global_state),
+        },
+    )
+    checkpoint_paths: tuple[str, ...] = ()
+    if int(config.node_rank) == 0:
+        chain_path = _write_verified_chain_checkpoint(
+            run_dir=config.run_dir,
+            run_id=config.run_id,
+            generation=generation,
+            state=global_state,
+            metrics=metrics,
+            train_args=train_args,
+            optimizer_state_dict=optimizer_state_dict,
+            initial_checkpoint_payload=initial_checkpoint_payload,
+        )
+        manager = AsyncDiLoCoCheckpointManager(
+            config.run_dir,
+            run_id=config.run_id,
+            role=GLOBAL_MERGER_ROLE,
+            cadence=config.checkpoint_cadence,
+        )
+        metrics = manager.publish_global_generation(
+            metrics,
+            walltime_remaining_s=config.walltime_remaining_s,
+            estimated_finalization_duration_s=config.estimated_finalization_duration_s,
+            extra_checkpoint_paths=(chain_path,),
+        ).metrics
+        checkpoint_paths = tuple(metrics.checkpoint_paths)
+
+    payload = {
+        "schema_version": 1,
+        "mode": RESILIENT_NODE_TRANSPORT,
+        "run_id": config.run_id,
+        "latest_generation": int(generation),
+        "accepted_node_ids": list(accepted_nodes),
+        "global_generations": [{"generation": int(generation), "metrics": metrics.to_dict()}],
+        "transport": {
+            "name": RESILIENT_NODE_TRANSPORT,
+            "mpi_world_collective": False,
+            "dense_data_plane": True,
+            "bucket_count": len(buckets),
+            "bucket_bytes": int(config.mpi_bucket_bytes),
+            "spool_root": str(spool_root),
+        },
+        "publish_paths": list(checkpoint_paths),
+        "elapsed_s": max(0.0, time.monotonic() - start_s),
+        "_private_global_state": global_state,
+    }
+    _atomic_write_json(artifact_dir / f"{node_id}.json", {
+        key: value for key, value in payload.items() if not key.startswith("_private")
+    })
+    if int(config.node_rank) == 0:
+        metrics_path = Path(config.metrics_json) if config.metrics_json else Path(config.run_dir) / "real_async_metrics.json"
+        _atomic_write_json(metrics_path, {
+            key: value for key, value in payload.items() if not key.startswith("_private")
+        })
+    _write_rank_heartbeat(
+        progress_dir,
+        node_rank=config.node_rank,
+        node_id=node_id,
+        stage="resilient_node_commit_applied",
+        generation=generation,
+        extra={"accepted_nodes": list(accepted_nodes), "checkpoint_paths": list(checkpoint_paths)},
+    )
+    return payload
 
 
 def _coordinate_mpi_dense_rank(
