@@ -1,0 +1,39 @@
+job_id=5000436
+observed_utc=2026-07-15T07:12Z
+state=RUNNING
+elapsed=00:27:19
+remaining=01:32:41
+nodes=256
+tasks=2048
+gpus=2048
+rank_start_lines=2048
+unique_ranks=2048
+unique_nodes=256
+finalized_authoritative_generations=6
+generation_range=0-5
+all_rank_merges=6
+participating_workers_per_merge=2048
+failed_updates=0
+invalid_updates=0
+missing_updates=0
+timed_out_updates=0
+checkpoints=6
+latest_generation=5
+latest_step=1525240
+latest_loss=2.4313
+latest_checkpoint=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260715/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/5000436-20260715T064518Z/async_run/checkpoints/emender_E97_100m_20260715/checkpoint_step_1525240_loss_2.4313.pt
+checkpoint_size_bytes=15439252298
+fail_fast_signature_count=0
+sstat_step_max_rss_kib=71470324
+sstat_step_max_disk_read_bytes=81238269637
+sstat_step_max_disk_write_bytes=160587134732
+sstat_step_average_rss_kib=20373471442
+production_job_4980157_mutated=no
+duplicate_submission=no
+
+Generation manifests 0 through 5 were each finalized=true and
+authoritative=true.  Each records quorum_size=2048,
+quorum_threshold=2048, participating_workers=2048, quorum_status=advanced,
+and zero failed, invalid, missing, stale, late, rejected, or timed-out
+updates.  Generation durations remained 90.1-92.8 seconds and merge
+durations remained 4.75-4.86 seconds.
