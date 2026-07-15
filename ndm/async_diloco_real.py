@@ -347,7 +347,10 @@ def run_real_async_diloco_file_rank(config: RealAsyncFileRankConfig) -> dict[str
         raise ValueError("quorum_mode must be 'resilient_quorum' or 'strict_collective'")
     if quorum_mode == STRICT_COLLECTIVE_DILOCO_MODE and transport != COMPILED_MPICH_TRANSPORT:
         raise ValueError("strict_collective quorum_mode requires compiled MPICH transport")
-    if transport in {"tcp", RESILIENT_NODE_TRANSPORT} and int(config.node_count) > 8:
+    # The generic rank-coordinator TCP path is deliberately a small-debug path.
+    # The resilient node-manager transport is the scale path and has its own
+    # bounded framing, spool, fencing, and deadline controls.
+    if transport == "tcp" and int(config.node_count) > 8:
         if not config.allow_tcp_scale_debug:
             raise ValueError(
                 "TCP async quorum transport is local/debug-only; pass the explicit "

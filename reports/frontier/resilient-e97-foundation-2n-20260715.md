@@ -59,3 +59,10 @@ Changed-payload retry job `5000851` was submitted at 2026-07-15T08:30:52Z
 with the same authorized 2-node/16-rank debug-only, exactly-two-hour shape and
 verified generation-9 input.  It was pending for priority at this report's
 latest snapshot.
+
+Job 5000851 then failed fast before checkpoint load/training because a legacy
+guard incorrectly classified the explicitly selected resilient node-manager
+transport as the generic TCP debug transport.  The repair restricts that guard
+to `transport == "tcp"`; the resilient backend retains its own framing, spool,
+fencing, and deadlines.  Python compilation and all 17 focused resilient tests
+passed after the change.
