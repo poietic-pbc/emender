@@ -53,8 +53,8 @@ from ndm.resilient_node_transport import (
     NodeManagerClient,
     QuorumTransportServer,
     TransportConfig,
-    apply_aggregate_buckets,
-    pack_update_buckets,
+    apply_aggregate_delta,
+    pack_dense_delta,
 )
 
 import train
@@ -1572,8 +1572,8 @@ def _coordinate_resilient_node_rank(
     node_id = f"node-{int(config.node_rank):05d}"
     if node_result.node_update is None:
         raise RuntimeError("local node quorum failed before resilient transport submission")
-    layout, buckets = pack_update_buckets(
-        node_result.node_update, bucket_bytes=int(config.mpi_bucket_bytes)
+    layout, buckets = pack_dense_delta(
+        node_result.node_update.delta, bucket_bytes=int(config.mpi_bucket_bytes)
     )
     server: QuorumTransportServer | None = None
     server_thread: threading.Thread | None = None
@@ -1621,7 +1621,7 @@ def _coordinate_resilient_node_rank(
         if server_thread is not None:
             server_thread.join(timeout=2.0)
 
-    global_state = apply_aggregate_buckets(
+    global_state = apply_aggregate_delta(
         base_state, layout, aggregate_buckets, eta_outer=float(config.eta_outer)
     )
     accepted_nodes = tuple(str(item) for item in commit["accepted_nodes"])
