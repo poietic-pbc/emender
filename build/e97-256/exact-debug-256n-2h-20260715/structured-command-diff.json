@@ -1,0 +1,48 @@
+{
+  "allowed_differences": [
+    {
+      "debug": "02:00:00",
+      "index": 7,
+      "production": "12:00:00"
+    },
+    {
+      "debug": "debug",
+      "index": 11,
+      "production": "normal"
+    }
+  ],
+  "debug_argv": [
+    "sbatch",
+    "--parsable",
+    "-N",
+    "256",
+    "-J",
+    "async-b4k40-ladder-256n",
+    "-t",
+    "02:00:00",
+    "-p",
+    "batch",
+    "-q",
+    "debug",
+    "--export",
+    "ALL,WG_TASK_ID=run-async-b4k40-debug-ladder-256n,TASK_ID=run-async-b4k40-debug-ladder-256n,OUTPUT_ROOT=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709,SMOKE_NAME=256n,SCALEOUT_VARIANT=E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n,ASYNC_QUORUM_TRANSPORT=compiled-cray-mpich-helper-p2p,ALLOW_FRONTIER_TCP_SCALE_DEBUG=0,ASYNC_TRAINPY_RANKS=2048,ASYNC_EXPECTED_RANKS=2048,ASYNC_GLOBAL_QUORUM=2048,ASYNC_EXPECTED_MISSING_UPDATES=0,ASYNC_TIMEOUT_S=1200,DILOCO_K=40,ASYNC_LOCAL_STEPS=40,BATCH_SIZE=4,CHUNK_SIZE=2048,LEARNING_RATE=0.001007,OPTIMIZER=schedulefree,WEIGHT_DECAY=0.01,WARMUP_STEPS=0,GRAD_ACCUM=1,GRAD_CLIP=1.0,MODEL_TOKENIZER=p50k_base,ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM=0,HUMAN_APPROVAL_RECORD=WG run-async-b4k40-debug-ladder-256n: 256-node fixed async DiLoCo B4/K40 stability ladder final rung; batch/debug 00:20:00; sequential after clean 128n job 4962329; run-local debug latest/checkpoint only; no production or extended job.,E97_CHECKPOINT=/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260709_084606_step_1525000/checkpoint_step_1525000_loss_2.4378.pt,ASYNC_GENERATIONS=1000000,ASYNC_STEPS=40000000",
+    "scripts/frontier/trainpy_async_quorum_2n_smoke.sbatch"
+  ],
+  "production_argv": [
+    "sbatch",
+    "--parsable",
+    "-N",
+    "256",
+    "-J",
+    "async-b4k40-ladder-256n",
+    "-t",
+    "12:00:00",
+    "-p",
+    "batch",
+    "-q",
+    "normal",
+    "--export",
+    "ALL,WG_TASK_ID=run-async-b4k40-debug-ladder-256n,TASK_ID=run-async-b4k40-debug-ladder-256n,OUTPUT_ROOT=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709,SMOKE_NAME=256n,SCALEOUT_VARIANT=E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n,ASYNC_QUORUM_TRANSPORT=compiled-cray-mpich-helper-p2p,ALLOW_FRONTIER_TCP_SCALE_DEBUG=0,ASYNC_TRAINPY_RANKS=2048,ASYNC_EXPECTED_RANKS=2048,ASYNC_GLOBAL_QUORUM=2048,ASYNC_EXPECTED_MISSING_UPDATES=0,ASYNC_TIMEOUT_S=1200,DILOCO_K=40,ASYNC_LOCAL_STEPS=40,BATCH_SIZE=4,CHUNK_SIZE=2048,LEARNING_RATE=0.001007,OPTIMIZER=schedulefree,WEIGHT_DECAY=0.01,WARMUP_STEPS=0,GRAD_ACCUM=1,GRAD_CLIP=1.0,MODEL_TOKENIZER=p50k_base,ASYNC_DILOCO_SYNTHETIC_TOKEN_STREAM=0,HUMAN_APPROVAL_RECORD=WG run-async-b4k40-debug-ladder-256n: 256-node fixed async DiLoCo B4/K40 stability ladder final rung; batch/debug 00:20:00; sequential after clean 128n job 4962329; run-local debug latest/checkpoint only; no production or extended job.,E97_CHECKPOINT=/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260709_084606_step_1525000/checkpoint_step_1525000_loss_2.4378.pt,ASYNC_GENERATIONS=1000000,ASYNC_STEPS=40000000",
+    "scripts/frontier/trainpy_async_quorum_2n_smoke.sbatch"
+  ]
+}
