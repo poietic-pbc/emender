@@ -80,6 +80,16 @@ internal future-plan evolution could prove which individual arrivals displaced
 each earlier estimate; the public fields establish correlation and scheduling
 constraints, not a per-job causal trace.
 
+### Debug job 5000354 follow-up
+
+At `2026-07-15T02:20:41-04:00`, job `5000354` was still `PENDING` with
+reason `Priority`, requesting 256 nodes and 2,048 tasks under debug QoS for
+`02:00:00`. Its StartTime remained `2026-07-15T02:24:00-04:00`, a delta of
+exactly zero seconds from the `02:17:05` observation. Its priority had aged
+from `43,373,165` to `43,373,465`; the latter decomposed into association
+`43,200,000`, debug QoS `172,800`, and age `665`. This is reported for context
+only; neither the debug job nor production was modified.
+
 ## Monitoring cadence
 
 The projected start was more than two hours away, so the required pending
