@@ -107,8 +107,13 @@ case "$ASYNC_QUORUM_TRANSPORT" in
     TRANSPORT_APPROVAL_CLASS=tcp-debug-only
     PRODUCTION_APPROVAL_ELIGIBLE=false
     ;;
+  resilient-node-quorum-sharded-p2p)
+    TRANSPORT_ACTUAL=resilient-node-quorum-sharded-p2p
+    TRANSPORT_APPROVAL_CLASS=frontier-resilient-debug
+    PRODUCTION_APPROVAL_ELIGIBLE=false
+    ;;
   *)
-    echo "ASYNC_QUORUM_TRANSPORT must be compiled-cray-mpich-helper-p2p, mpi-dense, or tcp; got: $ASYNC_QUORUM_TRANSPORT" >&2
+    echo "unsupported ASYNC_QUORUM_TRANSPORT: $ASYNC_QUORUM_TRANSPORT" >&2
     exit 64
     ;;
 esac
@@ -295,6 +300,9 @@ case "$ASYNC_QUORUM_TRANSPORT" in
       CMD+=(--allow-tcp-scale-debug)
     fi
     ;;
+  resilient-node-quorum-sharded-p2p)
+    CMD+=(--actual-resilient-node-quorum)
+    ;;
   *)
     echo "ASYNC_QUORUM_TRANSPORT must be compiled-cray-mpich-helper-p2p, mpi-dense, or tcp; got: $ASYNC_QUORUM_TRANSPORT" >&2
     exit 64
@@ -333,7 +341,9 @@ LAUNCH_CMD=(
 printf '%q ' "${LAUNCH_CMD[@]}" > "$COMMAND_FILE"
 printf '\n' >> "$COMMAND_FILE"
 
-if [[ "$ASYNC_QUORUM_TRANSPORT" == "tcp" ]]; then
+if [[ "$ASYNC_QUORUM_TRANSPORT" == "resilient-node-quorum-sharded-p2p" ]]; then
+  BOUNDED_DEBUG_TRANSPORT=actual_resilient_node_quorum
+elif [[ "$ASYNC_QUORUM_TRANSPORT" == "tcp" ]]; then
   BOUNDED_DEBUG_TRANSPORT=actual_multinode_tcp_quorum
 elif [[ "$ASYNC_QUORUM_TRANSPORT" == "compiled-cray-mpich-helper-p2p" ]]; then
   BOUNDED_DEBUG_TRANSPORT=actual_multinode_compiled_mpich_quorum
