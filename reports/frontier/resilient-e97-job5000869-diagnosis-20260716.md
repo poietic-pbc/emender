@@ -74,6 +74,15 @@ payload `0133bff`. Initial accounting and repeated queue checks through
 yet. This is not counted as gate progress or completion. No normal-QoS or
 production job was submitted, modified, or cancelled.
 
+At 2026-07-16T08:16:11Z (04:16:11 EDT), a resumed monitor confirmed that
+`5009365` remained `PENDING (Priority)` with no allocation, stdout, stderr, or
+generation evidence. `scontrol` still recorded debug QoS, 2 nodes, 16 tasks,
+and an exact `02:00:00` time limit. The scheduler's non-binding estimate was
+2026-07-16 09:48 EDT (13:48 UTC), with candidate nodes
+`frontier[03735,03963]`. Queue residence is not counted as progress. Monitoring
+is parked until shortly before that estimate; the task remains incomplete and
+the downstream ladder remains blocked.
+
 ## Retained evidence
 
 - `logs/frontier/trainpy_async_quorum/resilient-e97-2n-20260715T083455Z-5000869.out`
