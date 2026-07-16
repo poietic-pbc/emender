@@ -1097,7 +1097,7 @@ def test_sfsgd_identical_rank_noop_at_coherent_boundary():
     print("PASS test_sfsgd_identical_rank_noop_at_coherent_boundary")
 
 
-def test_diloco_checkpoint_roundtrip_preserves_outer_and_inner_sf_state():
+def test_diloco_checkpoint_roundtrip_preserves_outer_and_inner_sf_state(monkeypatch):
     """Checkpoint both systems: inner ScheduleFree optimizer state and the
     separate outer sfsgd state must reload onto a fresh model coherently."""
     import train
@@ -1121,6 +1121,14 @@ def test_diloco_checkpoint_roundtrip_preserves_outer_and_inner_sf_state():
             model, opt, step=123, loss=4.5, output_dir=Path(d),
             keep_n=2, outer_state=outer_state)
         model2, opt2 = _build()
+        real_torch_load = torch.load
+        load_calls = []
+
+        def recording_load(*args, **kwargs):
+            load_calls.append(dict(kwargs))
+            return real_torch_load(*args, **kwargs)
+
+        monkeypatch.setattr(torch, 'load', recording_load)
         step, loss, ckpt = train.load_checkpoint(
             path, model2, opt2, return_checkpoint=True)
         restored = train.initialize_diloco_outer_state(
@@ -1138,6 +1146,11 @@ def test_diloco_checkpoint_roundtrip_preserves_outer_and_inner_sf_state():
         assert torch.equal(opt.state[p1]['z'], opt2.state[p2]['z']), "inner z did not roundtrip"
     assert opt.param_groups[0]['k'] == opt2.param_groups[0]['k']
     assert opt.param_groups[0]['weight_sum'] == opt2.param_groups[0]['weight_sum']
+    assert load_calls == [{
+        'map_location': 'cpu',
+        'mmap': True,
+        'weights_only': False,
+    }], "restart checkpoint tensors must remain file-backed to bound per-node RAM"
     print("PASS test_diloco_checkpoint_roundtrip_preserves_outer_and_inner_sf_state")
 
 

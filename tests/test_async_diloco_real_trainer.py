@@ -23,6 +23,7 @@ from ndm.async_diloco_real import (
     default_tiny_e97_train_args,
     run_real_async_diloco,
     run_real_async_diloco_file_rank,
+    _release_consumed_optimizer_state,
     _run_real_worker,
 )
 
@@ -43,6 +44,27 @@ def _free_tcp_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def test_consumed_checkpoint_optimizer_state_releases_mutable_mapping():
+    tensor = torch.ones(4)
+    checkpoint_state = {
+        "state": {0: {"exp_avg_sq": tensor}},
+        "param_groups": [{"params": [0]}],
+    }
+
+    _release_consumed_optimizer_state(checkpoint_state)
+
+    assert checkpoint_state == {}
+    assert torch.equal(tensor, torch.ones(4))
+
+
+def test_consumed_checkpoint_optimizer_state_keeps_immutable_mapping_compatible():
+    from types import MappingProxyType
+
+    checkpoint_state = MappingProxyType({"state": {}})
+    _release_consumed_optimizer_state(checkpoint_state)
+    assert checkpoint_state["state"] == {}
 
 
 def test_real_async_trainer_one_node_reduces_real_worker_updates(tmp_path):

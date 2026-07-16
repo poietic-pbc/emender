@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import socket
@@ -36,6 +37,25 @@ RESILIENT_NODE_TRANSPORT = "resilient-node-quorum-sharded-p2p"
 
 def _sha(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
+
+
+def _atomic_bytes(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def encode_f64(values: Sequence[float]) -> bytes:
@@ -122,6 +142,16 @@ class DiskBucketSpool:
         ):
             path.unlink()
 
+    def prune(self, *, keep_generations: int) -> None:
+        """Bound replay history by generation as well as by bytes."""
+        if keep_generations <= 0:
+            raise ValueError("keep_generations must be positive")
+        generations = sorted({int(path.name.split("-", 1)[0][1:])
+                              for path in self.root.glob("g*-a*-e*-b*.bucket")})
+        for generation in generations[:-keep_generations]:
+            for path in self.root.glob(f"g{generation}-a*-e*-b*.bucket"):
+                path.unlink()
+
 
 @dataclass(frozen=True)
 class TransportConfig:
@@ -130,6 +160,8 @@ class TransportConfig:
     expected_buckets: int
     max_bucket_bytes: int
     generation_deadline_s: float
+    heartbeat_timeout_s: float = 30.0
+    apply_deadline_s: float = 30.0
 
 
 class _Generation:
@@ -139,6 +171,8 @@ class _Generation:
         self.accepted: tuple[str, ...] | None = None
         self.aggregates: dict[int, bytes] = {}
         self.condition = threading.Condition()
+        self.last_heartbeat: dict[str, float] = {}
+        self.applied: set[str] = set()
 
 
 class QuorumTransportServer(socketserver.ThreadingTCPServer):
@@ -175,10 +209,21 @@ class QuorumTransportServer(socketserver.ThreadingTCPServer):
         weight = int(header["weight"])
         if weight <= 0:
             raise ValueError("weight must be positive")
+        values = decode_f64(payload)
+        if any(not math.isfinite(value) for value in values):
+            raise ValueError("nonfinite bucket rejected")
         with state.condition:
+            if time.monotonic() >= state.deadline:
+                raise TimeoutError("generation deadline expired")
             if state.accepted is not None and node not in state.accepted:
                 raise ValueError("late node rejected after accepted set was frozen")
+            prior = state.updates.get(node, {}).get(bucket)
+            if prior is not None:
+                if prior != (weight, payload):
+                    raise ValueError("conflicting duplicate bucket rejected")
+                raise ValueError("duplicate bucket rejected")
             state.updates.setdefault(node, {})[bucket] = (weight, payload)
+            state.last_heartbeat[node] = time.monotonic()
             complete = sorted(
                 n for n, buckets in state.updates.items()
                 if set(buckets) == set(range(self.config.expected_buckets))
@@ -213,7 +258,44 @@ class QuorumTransportServer(socketserver.ThreadingTCPServer):
                         for k, v in state.aggregates.items()},
         }
         target = root / f"{state.fence.generation:08d}.json"
-        target.write_text(json.dumps(payload, sort_keys=True) + "\n")
+        _atomic_bytes(target, (json.dumps(payload, sort_keys=True) + "\n").encode())
+
+    def evict_expired(self, generation: int, attempt: int) -> tuple[str, ...]:
+        """Evict incomplete members whose heartbeat deadline elapsed."""
+        state = self.generation(generation, attempt)
+        now = time.monotonic()
+        with state.condition:
+            evicted = tuple(sorted(node for node, seen in state.last_heartbeat.items()
+                                   if now - seen > self.config.heartbeat_timeout_s
+                                   and state.accepted is None))
+            for node in evicted:
+                state.updates.pop(node, None)
+                state.last_heartbeat.pop(node, None)
+            return evicted
+
+    def acknowledge_apply(self, fence: GenerationFence, node_id: str,
+                          payload_sha256: str) -> None:
+        state = self.generation(fence.generation, fence.attempt)
+        if state.fence != fence or state.accepted is None or node_id not in state.accepted:
+            raise ValueError("apply acknowledgement fence or membership mismatch")
+        expected = _sha(b"".join(state.aggregates[index]
+                                 for index in sorted(state.aggregates)))
+        if payload_sha256 != expected:
+            raise ValueError("applied payload identity mismatch")
+        with state.condition:
+            state.applied.add(node_id)
+            state.condition.notify_all()
+
+    def wait_for_apply(self, fence: GenerationFence) -> tuple[str, ...]:
+        state = self.generation(fence.generation, fence.attempt)
+        deadline = time.monotonic() + self.config.apply_deadline_s
+        with state.condition:
+            while state.accepted is not None and not set(state.accepted) <= state.applied:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("aggregate apply deadline expired")
+                state.condition.wait(remaining)
+            return tuple(sorted(state.applied))
 
 
 class _RequestHandler(socketserver.StreamRequestHandler):

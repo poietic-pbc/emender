@@ -1,4 +1,5 @@
 import json
+import hashlib
 import socket
 import sys
 import threading
@@ -108,6 +109,51 @@ def test_disk_spool_is_bounded_and_checksum_protocol_rejects_oversize(tmp_path):
     with pytest.raises(BufferError, match="retention limit"):
         spool.retain(fence, 1, b"x")
     assert spool.bytes_used == 8
+
+
+def test_replay_spool_prunes_old_generations(tmp_path):
+    spool = DiskBucketSpool(tmp_path / "spool", 1024)
+    for generation in range(4):
+        spool.retain(GenerationFence("run", generation, 0, 1), 0, b"x")
+    spool.prune(keep_generations=2)
+    assert sorted(path.name for path in spool.root.glob("*.bucket")) == [
+        "g2-a0-e1-b0.bucket", "g3-a0-e1-b0.bucket",
+    ]
+
+
+def test_nonfinite_and_conflicting_duplicate_payloads_are_rejected(tmp_path):
+    server, thread = _server(tmp_path, quorum=2, buckets=1, deadline=1)
+    base = {"op": "submit", "run_id": "run", "node_id": "n0", "generation": 0,
+            "attempt": 0, "coordinator_epoch": 1, "bucket": 0, "weight": 1}
+    with pytest.raises(ValueError, match="nonfinite"):
+        server.submit(base, encode_f64((float("nan"),)))
+    server.submit(base, encode_f64((1.0,)))
+    with pytest.raises(ValueError, match="conflicting duplicate"):
+        server.submit(base, encode_f64((2.0,)))
+    server.shutdown(); server.server_close(); thread.join(2)
+
+
+def test_heartbeat_eviction_and_fenced_apply_acknowledgement(tmp_path):
+    server = QuorumTransportServer(
+        ("127.0.0.1", 0), TransportConfig("run", 1, 1, 1024, 2, .01, .05),
+        tmp_path / "metadata",
+    )
+    incomplete = {"op": "submit", "run_id": "run", "node_id": "old",
+                  "generation": 0, "attempt": 0, "coordinator_epoch": 1,
+                  "bucket": 0, "weight": 1}
+    # Quorum one freezes immediately, so exercise heartbeat eviction on another attempt.
+    state = server.generation(1, 0)
+    state.last_heartbeat["old"] = time.monotonic() - 1
+    state.updates["old"] = {}
+    assert server.evict_expired(1, 0) == ("old",)
+    committed = server.submit(incomplete, encode_f64((3.0,)))
+    fence = GenerationFence("run", 0, 0, 1)
+    identity = hashlib.sha256(b"".join(committed.aggregates.values())).hexdigest()
+    with pytest.raises(ValueError, match="identity"):
+        server.acknowledge_apply(fence, "old", "bad")
+    server.acknowledge_apply(fence, "old", identity)
+    assert server.wait_for_apply(fence) == ("old",)
+    server.server_close()
 
 
 def test_supervisor_kills_only_stuck_step_and_healthy_step_survives():
