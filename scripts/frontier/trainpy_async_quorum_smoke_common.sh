@@ -52,6 +52,7 @@ ASYNC_EXPECTED_RANKS=${ASYNC_EXPECTED_RANKS:-$ASYNC_TRAINPY_RANKS}
 ASYNC_GLOBAL_QUORUM=${ASYNC_GLOBAL_QUORUM:-$ASYNC_TRAINPY_RANKS}
 ASYNC_EXPECTED_MISSING_UPDATES=${ASYNC_EXPECTED_MISSING_UPDATES:-$((ASYNC_EXPECTED_RANKS - ASYNC_TRAINPY_RANKS))}
 ASYNC_TIMEOUT_S=${ASYNC_TIMEOUT_S:-120}
+RESILIENT_TRAINERS_PER_NODE=${RESILIENT_TRAINERS_PER_NODE:-1}
 DILOCO_K=${DILOCO_K:-40}
 ASYNC_LOCAL_STEPS=${ASYNC_LOCAL_STEPS:-${DILOCO_K:-1}}
 ASYNC_GENERATIONS=${ASYNC_GENERATIONS:-1000000}
@@ -195,6 +196,7 @@ frontier_activate_emender_conda_env
 frontier_assert_emender_conda_env
 PYTHON_BIN=$(command -v python)
 export REPO TIKTOKEN_CACHE_DIR PYTHON_BIN RANK_START_LOG ASYNC_ENTRYPOINT
+export RUN_DIR ASYNC_QUORUM_TRANSPORT ASYNC_TIMEOUT_S
 export MPICH_GPU_SUPPORT_ENABLED=${MPICH_GPU_SUPPORT_ENABLED:-0}
 export ASYNC_MPI_DENSE_BUCKET_BYTES ASYNC_COMPILED_MPICH_HELPER_BIN ASYNC_COMPILED_MPICH_IPC_DIR ASYNC_COMPILED_MPICH_TRACE_DIR ASYNC_COMPILED_MPICH_FILE_GATHER
 export CRAY_MPI4PY_SITE=${CRAY_MPI4PY_SITE:-/opt/cray/pe/python/3.10.10/lib/python3.10/site-packages}
@@ -221,6 +223,16 @@ if [[ "$ASYNC_GLOBAL_QUORUM" -gt "$ASYNC_TRAINPY_RANKS" ]]; then
   echo "ASYNC_GLOBAL_QUORUM=$ASYNC_GLOBAL_QUORUM cannot exceed launched ranks=$ASYNC_TRAINPY_RANKS" >&2
   exit 64
 fi
+if [[ "$ASYNC_QUORUM_TRANSPORT" == "resilient-node-quorum-sharded-p2p" ]]; then
+  if [[ "$RESILIENT_TRAINERS_PER_NODE" != "1" ]]; then
+    echo "resilient E97 currently requires exactly one bounded trainer/manager lane per physical node" >&2
+    exit 64
+  fi
+  ASYNC_EXPECTED_RANKS=$SMOKE_NODE_COUNT
+  if [[ "$ASYNC_GLOBAL_QUORUM" -gt "$SMOKE_NODE_COUNT" ]]; then
+    ASYNC_GLOBAL_QUORUM=$SMOKE_NODE_COUNT
+  fi
+fi
 if [[ "$ASYNC_QUORUM_TRANSPORT" == "compiled-cray-mpich-helper-p2p" && ( ! -x "$ASYNC_COMPILED_MPICH_HELPER_BIN" || ! -r "${ASYNC_COMPILED_MPICH_HELPER_BIN}.so" ) ]]; then
   ARTIFACT_DIR="$ARTIFACT_DIR" OUT="$ASYNC_COMPILED_MPICH_HELPER_BIN" scripts/frontier/build_compiled_mpich_dense_helper.sh \
     2>&1 | tee "${LOG_DIR}/compiled_mpich_helper_build.log"
@@ -242,7 +254,7 @@ CMD=(
   --metrics-json "$METRICS_JSON"
   --data "$DATA"
   --tokenizer "$MODEL_TOKENIZER"
-  --worker-count "$ASYNC_TRAINPY_RANKS"
+  --worker-count "$([[ "$ASYNC_QUORUM_TRANSPORT" == "resilient-node-quorum-sharded-p2p" ]] && echo "$SMOKE_NODE_COUNT" || echo "$ASYNC_TRAINPY_RANKS")"
   --node-count "$ASYNC_EXPECTED_RANKS"
   --global-quorum "$ASYNC_GLOBAL_QUORUM"
   --generations "$ASYNC_GENERATIONS"
@@ -337,7 +349,7 @@ LAUNCH_CMD=(
   --gpus-per-task=1
   --gpu-bind="$GPU_BIND"
   bash -lc
-  'source "${REPO}/scripts/frontier/frontier_runtime_env.sh"; frontier_activate_emender_conda_env; frontier_assert_emender_conda_env; printf "%s\t%s\t%s\t%s\t%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${SLURM_PROCID:-}" "${SLURM_LOCALID:-}" "${SLURMD_NODENAME:-$(hostname)}" "${SLURM_NTASKS:-}" >> "$RANK_START_LOG"; exec "$PYTHON_BIN" -u "$ASYNC_ENTRYPOINT" "$@" --node-rank "${SLURM_PROCID:?missing SLURM_PROCID}" --device "cuda:${ASYNC_VISIBLE_DEVICE_ORDINAL:-0}"'
+  'source "${REPO}/scripts/frontier/frontier_runtime_env.sh"; frontier_activate_emender_conda_env; frontier_assert_emender_conda_env; printf "%s\t%s\t%s\t%s\t%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${SLURM_PROCID:-}" "${SLURM_LOCALID:-}" "${SLURMD_NODENAME:-$(hostname)}" "${SLURM_NTASKS:-}" >> "$RANK_START_LOG"; if [[ "${ASYNC_QUORUM_TRANSPORT:-}" == "resilient-node-quorum-sharded-p2p" ]]; then exec "$PYTHON_BIN" -u "${REPO}/scripts/frontier/resilient_e97_rank_lane.py" --run-dir "${RUN_DIR}" --local-rank "${SLURM_LOCALID:?}" --node-rank "${SLURM_NODEID:?}" --timeout-s "${ASYNC_TIMEOUT_S}" -- "$PYTHON_BIN" -u "$ASYNC_ENTRYPOINT" "$@" --node-rank "${SLURM_NODEID:?}" --device "cuda:0"; else exec "$PYTHON_BIN" -u "$ASYNC_ENTRYPOINT" "$@" --node-rank "${SLURM_PROCID:?missing SLURM_PROCID}" --device "cuda:${ASYNC_VISIBLE_DEVICE_ORDINAL:-0}"; fi'
   bash
   "${CMD[@]:3}"
 )
@@ -377,6 +389,8 @@ fi
   echo "emender_conda_env=$EMENDER_CONDA_ENV"
   echo "python_bin=$PYTHON_BIN"
   echo "one_trainpy_rank_per_gpu=1"
+  echo "resilient_trainers_per_physical_node=$RESILIENT_TRAINERS_PER_NODE"
+  echo "resilient_rank_lanes=$ASYNC_TRAINPY_RANKS"
   echo "slurm_nodes=$SMOKE_NODE_COUNT"
   echo "slurm_ntasks_per_node=$RANKS_PER_NODE"
   echo "slurm_gpus_per_task=1"
