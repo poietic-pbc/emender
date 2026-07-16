@@ -57,10 +57,26 @@ job-5000436 handoff:
 No partial job-5000869 artifact is eligible for restart. A changed retry is
 blocked until the host-memory behavior is regression-tested and committed.
 
+## Changed-payload retry
+
+Checkpoint restart loading was changed to use file-backed tensor storage and a
+round-trip regression test now asserts that contract while verifying model,
+ScheduleFree optimizer, and DiLoCo outer state. The change is commit `0133bff`,
+which was pushed before submission. Focused resilient quorum, transport,
+trainer, launcher, and checkpoint tests were run with the Frontier ROCm Python
+environment.
+
+At 2026-07-16T08:12:24Z, job `5009365` was submitted with the unique name
+`resilient-e97-2n-20260716T081224Z`, two nodes, 16 ranks, debug QoS, and exactly
+`02:00:00`. It uses the unchanged verified step-1525400 handoff above and
+payload `0133bff`. Initial accounting and repeated queue checks through
+08:13:51Z show `PENDING (Priority)`, with no allocation or application evidence
+yet. This is not counted as gate progress or completion. No normal-QoS or
+production job was submitted, modified, or cancelled.
+
 ## Retained evidence
 
 - `logs/frontier/trainpy_async_quorum/resilient-e97-2n-20260715T083455Z-5000869.out`
 - `logs/frontier/trainpy_async_quorum/resilient-e97-2n-20260715T083455Z-5000869.err`
 - shared run root recorded in the stdout, including `artifacts/manifest.json`,
   `artifacts/rank-start.tsv`, 16 progress heartbeats, and the train log
-
