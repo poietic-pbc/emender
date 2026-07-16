@@ -472,6 +472,7 @@ def _run_real_async_diloco_file_rank_generation(
         synthetic_token_stream=config.synthetic_token_stream,
         synthetic_vocab_size=config.synthetic_vocab_size,
         optimizer_state_dict=optimizer_state_dict,
+        consume_optimizer_state=True,
     )
     generation_optimizer_state = (
         node_result.worker_reports[0].optimizer_state_dict
@@ -736,6 +737,7 @@ def _run_real_node_supervisor(
     synthetic_token_stream: bool,
     synthetic_vocab_size: int,
     optimizer_state_dict: Mapping[str, Any] | None = None,
+    consume_optimizer_state: bool = False,
 ) -> RealAsyncNodeResult:
     start_s = time.monotonic()
     deadline_s = start_s + float(timeout_s)
@@ -754,6 +756,7 @@ def _run_real_node_supervisor(
             synthetic_token_stream=synthetic_token_stream,
             synthetic_vocab_size=synthetic_vocab_size,
             optimizer_state_dict=optimizer_state_dict,
+            consume_optimizer_state=consume_optimizer_state,
         ))
 
     reported = {report.worker_id for report in reports}
@@ -1009,6 +1012,7 @@ def _run_real_worker(
     synthetic_token_stream: bool,
     synthetic_vocab_size: int,
     optimizer_state_dict: Mapping[str, Any] | None = None,
+    consume_optimizer_state: bool = False,
 ) -> RealAsyncWorkerReport:
     del run_id
     start_s = time.monotonic()
@@ -1028,6 +1032,8 @@ def _run_real_worker(
         optimizer = train.build_training_optimizer(model, args)
         if optimizer_state_dict is not None:
             optimizer.load_state_dict(optimizer_state_dict)
+            if consume_optimizer_state:
+                _release_consumed_optimizer_state(optimizer_state_dict)
             for param_group in optimizer.param_groups:
                 param_group["lr"] = args.lr
         batch_iter = _build_batch_iter(
@@ -1087,6 +1093,19 @@ def _run_real_worker(
             failed=True,
             error=f"{type(exc).__name__}: {exc}",
         )
+
+
+def _release_consumed_optimizer_state(state: Mapping[str, Any]) -> None:
+    """Release a mutable checkpoint mapping once the optimizer owns its state.
+
+    ``Optimizer.load_state_dict`` casts/copies tensor state to the live
+    parameters. Retaining the source mapping pins another model-sized CPU state
+    throughout local training. File-rank workers receive ownership of this
+    mutable mapping and replace it with the returned live state after training.
+    """
+
+    if isinstance(state, dict):
+        state.clear()
 
 
 def _build_batch_iter(
