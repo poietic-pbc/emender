@@ -1105,8 +1105,16 @@ def save_checkpoint(model, optimizer, step, loss, output_dir, keep_n=5, outer_st
 
 
 def load_checkpoint(path, model, optimizer=None, return_checkpoint=False):
-    """Load checkpoint."""
-    ckpt = torch.load(path, map_location='cpu')
+    """Load a checkpoint without privately materializing its full CPU storage.
+
+    Frontier launches several GPU trainers per physical node.  A conventional
+    ``torch.load`` allocates one anonymous CPU copy of every model and optimizer
+    tensor in every trainer, multiplying a large restart image by the local GPU
+    count.  File-backed storages let the kernel share clean checkpoint pages
+    across those independently supervised processes; ``load_state_dict`` still
+    gives each model the normal owned parameter storage it requires.
+    """
+    ckpt = torch.load(path, map_location='cpu', mmap=True, weights_only=False)
     model.load_state_dict(ckpt['model_state_dict'])
     if optimizer is not None and 'optimizer_state_dict' in ckpt:
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
