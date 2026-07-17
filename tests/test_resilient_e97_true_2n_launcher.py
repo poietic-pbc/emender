@@ -199,7 +199,7 @@ def test_launch_modes_preserve_identical_local_role_identity_and_environment(tmp
     assert local_env["ROCR_VISIBLE_DEVICES"] == "3"
 
 
-def test_node_supervisor_requests_frontier_gpus_as_node_resources(tmp_path, monkeypatch):
+def test_node_supervisor_reuses_allocation_gpus_without_step_gres(tmp_path, monkeypatch):
     launched = []
 
     class Process:
@@ -215,8 +215,10 @@ def test_node_supervisor_requests_frontier_gpus_as_node_resources(tmp_path, monk
                                       progress_s=3, max_restarts=1)
     supervisor.start(child)
     argv = launched[0]
-    assert "--gpus-per-node=8" in argv
-    assert "--gpus-per-task=8" not in argv
+    # The batch allocation already owns all eight node GPUs.  GRES are not
+    # shareable between overlapping steps on Frontier, so requesting them a
+    # second time leaves the step pending with "Requested nodes are busy".
+    assert not any("gpu" in argument for argument in argv)
 
 
 def test_rendered_debug_production_contract_has_only_approved_deltas():

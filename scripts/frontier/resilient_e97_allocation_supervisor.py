@@ -85,12 +85,12 @@ class AllocationSupervisor:
                                 "ASYNC_LOCAL_STEPS": "40",
                                 "ROCR_VISIBLE_DEVICES": str(child.local_rank)})
         else:
-            # Frontier exposes the eight GCDs as a node-level resource.  Asking
-            # for them as one task-level GRES leaves the step permanently in
-            # "Requested nodes are busy" even inside an eight-GPU allocation.
-            # The node supervisor must see the complete node so its eight
-            # direct trainer children can bind ROCR_VISIBLE_DEVICES=0..7.
-            resources = ["-c64", "--gpus-per-node=8"]
+            # The batch allocation already owns all eight GCDs on each node.
+            # Frontier GRES cannot be allocated again to overlapping steps:
+            # doing so leaves both node-supervisor steps pending with
+            # "Requested nodes are busy".  Reuse the allocation's device
+            # cgroup; direct children bind ROCR_VISIBLE_DEVICES=0..7.
+            resources = ["-c64"]
         if self.launch_backend == "node-local-child":
             env = os.environ.copy(); env.update(role_values)
             argv = shlex.split(child.command)
