@@ -67,7 +67,14 @@ class LocalTrainerSpool:
 
     @property
     def bytes_used(self) -> int:
-        return sum(p.stat().st_size for p in self.root.rglob("*") if p.is_file())
+        total = 0
+        for path in self.root.rglob("*"):
+            try:
+                if path.is_file():
+                    total += path.stat().st_size
+            except FileNotFoundError:  # another role completed an atomic rename/removal
+                continue
+        return total
 
     def publish(self, fence: LocalFence, trainer_id: int, shards: Sequence[torch.Tensor],
                 *, weight: int, source_id: str) -> Path:
@@ -104,6 +111,64 @@ class LocalTrainerSpool:
             for path in sorted(root.rglob("*"), reverse=True):
                 path.unlink() if path.is_file() else path.rmdir()
             root.rmdir()
+
+    def release_trainer(self, fence: LocalFence, trainer_id: int) -> None:
+        directory = self.root / fence.key / f"trainer-{trainer_id}"
+        if directory.exists():
+            for path in sorted(directory.iterdir()):
+                path.unlink(missing_ok=True)
+            directory.rmdir()
+
+    def publish_aggregate(self, fence: LocalFence, members: Sequence[int],
+                          shards: Sequence[torch.Tensor], *, weight: int,
+                          source_id: str) -> Path:
+        """Atomically publish the manager result after every shard is durable."""
+        if weight <= 0 or not members or not source_id:
+            raise ValueError("aggregate membership, weight, and source are required")
+        directory = self.root / "aggregates" / fence.key
+        manifest_path = directory / "manifest.json"
+        if manifest_path.exists():
+            current = json.loads(manifest_path.read_text())
+            if current.get("fence") == fence.__dict__:
+                return manifest_path
+            raise ValueError("conflicting aggregate publication")
+        records = []
+        for index, tensor in enumerate(shards):
+            value = tensor.detach().cpu().to(torch.float64).contiguous()
+            if not torch.isfinite(value).all():
+                raise ValueError("nonfinite aggregate rejected")
+            raw = value.numpy().tobytes()
+            records.append({"index": index, "elements": value.numel(),
+                            "sha256": hashlib.sha256(raw).hexdigest()})
+            _atomic(directory / f"shard-{index:05d}.f64", raw)
+        manifest = {"schema": SCHEMA, "fence": fence.__dict__,
+                    "members": sorted(int(member) for member in members),
+                    "weight": int(weight), "source_id": source_id,
+                    "shards": records}
+        _atomic(manifest_path, (json.dumps(manifest, sort_keys=True) + "\n").encode())
+        return manifest_path
+
+    def wait_aggregate(self, fence: LocalFence, *, deadline: float,
+                       expected_source_id: str) -> tuple[dict[str, object], tuple[torch.Tensor, ...]]:
+        path = self.root / "aggregates" / fence.key / "manifest.json"
+        while time.monotonic() < deadline and not path.exists():
+            time.sleep(.02)
+        if not path.exists():
+            raise TimeoutError("aggregate apply deadline expired")
+        manifest = json.loads(path.read_text())
+        if (manifest.get("schema") != SCHEMA or manifest.get("fence") != fence.__dict__
+                or manifest.get("source_id") != expected_source_id):
+            raise ValueError("aggregate identity/fence mismatch")
+        shards = []
+        for record in manifest["shards"]:
+            raw = (path.parent / f"shard-{record['index']:05d}.f64").read_bytes()
+            if hashlib.sha256(raw).hexdigest() != record["sha256"]:
+                raise ValueError("corrupt aggregate shard")
+            value = torch.frombuffer(bytearray(raw), dtype=torch.float64).clone()
+            if value.numel() != record["elements"] or not torch.isfinite(value).all():
+                raise ValueError("invalid aggregate shard")
+            shards.append(value)
+        return manifest, tuple(shards)
 
 
 class CpuNodeManager:

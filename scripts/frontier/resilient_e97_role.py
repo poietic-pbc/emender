@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""Real manager/trainer entrypoints for the split resilient E97 launcher."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import signal
+import sys
+import threading
+import time
+
+import torch
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from ndm.resilient_e97_roles import LocalFence, LocalTrainerSpool
+from ndm.resilient_e97_runtime import (SplitManagerLoop, apply_delta, atomic_json,
+                                       finalize_checkpoint, flatten_delta, heartbeat,
+                                       outer_state_migration)
+from ndm.resilient_node_quorum import GenerationFence
+from ndm.resilient_node_transport import (DiskBucketSpool, NodeManagerClient,
+                                           QuorumTransportServer, TransportConfig,
+                                           decode_f64, encode_f64)
+
+
+def parser() -> argparse.ArgumentParser:
+    value = argparse.ArgumentParser()
+    value.add_argument("role", choices=("manager", "trainer"))
+    value.add_argument("--run-dir", required=True); value.add_argument("--run-id", required=True)
+    value.add_argument("--generations", type=int, default=1)
+    value.add_argument("--local-steps", type=int, default=40)
+    value.add_argument("--local-quorum", type=int, default=6)
+    value.add_argument("--node-count", type=int, default=1)
+    value.add_argument("--global-quorum", type=int, default=1)
+    value.add_argument("--coordinator-host", default="127.0.0.1")
+    value.add_argument("--coordinator-port", type=int, default=29571)
+    value.add_argument("--deadline-s", type=float, default=120.0)
+    value.add_argument("--source-id", required=True); value.add_argument("--payload-id", required=True)
+    value.add_argument("--code-id", default="unknown")
+    value.add_argument("--coordinator-epoch", type=int, default=1)
+    value.add_argument("--seed", default=""); value.add_argument("--train-args-json", default="")
+    value.add_argument("--data", default=""); value.add_argument("--device", default="cuda:0")
+    value.add_argument("--control", action="store_true")
+    value.add_argument("--eta-outer", type=float, default=1.0)
+    value.add_argument("--migration-policy", default="")
+    return value
+
+
+def _fence(args, generation: int) -> LocalFence:
+    return LocalFence(args.run_id, generation, 0, args.coordinator_epoch, args.payload_id)
+
+
+def manager(args) -> int:
+    run = Path(args.run_dir); node = int(os.environ.get("RESILIENT_E97_NODE_RANK", "0"))
+    identity = f"node-{node}-manager"
+    spool = LocalTrainerSpool(run / f"node-{node}" / "mailbox", 32 << 30)
+    loop = SplitManagerLoop(spool, quorum=args.local_quorum, source_id=args.source_id,
+                            aggregation_deadline_s=args.deadline_s)
+    server = thread = None
+    if args.node_count > 1 and node == 0:
+        server = QuorumTransportServer(
+            ("0.0.0.0", args.coordinator_port),
+            TransportConfig(args.run_id, args.global_quorum, 1, 32 << 30, args.deadline_s,
+                            args.deadline_s, args.deadline_s),
+            run / "manager-network", args.coordinator_epoch)
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+    try:
+        for generation in range(args.generations):
+            fence = _fence(args, generation)
+            heartbeat(run, identity, generation=generation, step=generation * args.local_steps,
+                      loss=None, stage="collecting")
+            if args.node_count == 1:
+                result = loop.generation(fence)
+            else:
+                members, local_weight, local_shards = loop.manager.collect(
+                    fence, deadline=time.monotonic() + args.deadline_s,
+                    expected_source_id=args.source_id)
+                counts = [shard.numel() for shard in local_shards]
+                flat = torch.cat([shard.reshape(-1) for shard in local_shards])
+                client = NodeManagerClient(args.coordinator_host, args.coordinator_port,
+                                           f"node-{node}", DiskBucketSpool(
+                                               run / f"node-{node}" / "network-spool", 32 << 30),
+                                           timeout_s=args.deadline_s, max_bucket_bytes=32 << 30)
+                header, aggregate = client.exchange(
+                    GenerationFence(args.run_id, generation, 0, args.coordinator_epoch),
+                    (encode_f64(flat.tolist()),), weight=local_weight)
+                global_flat = torch.tensor(decode_f64(aggregate[0]), dtype=torch.float64)
+                global_shards, offset = [], 0
+                for count in counts:
+                    global_shards.append(global_flat[offset:offset + count].clone()); offset += count
+                spool.publish_aggregate(fence, members, global_shards,
+                                        weight=local_weight,
+                                        source_id=args.source_id)
+                for trainer_id in members:
+                    spool.release_trainer(fence, trainer_id)
+                result = {"members": members, "weight": local_weight,
+                          "accepted_nodes": header["accepted_nodes"]}
+            heartbeat(run, identity, generation=generation + 1,
+                      step=(generation + 1) * args.local_steps, loss=None, stage="published")
+        if node == 0:
+            proposal = run / "handoff" / "trainer-proposal.json"
+            deadline = time.monotonic() + args.deadline_s
+            while time.monotonic() < deadline and not proposal.exists():
+                time.sleep(.02)
+            if not proposal.exists():
+                raise TimeoutError("checkpoint proposal deadline expired")
+            value = json.loads(proposal.read_text())
+            proposal_fence = LocalFence(**value["fence"])
+            finalize_checkpoint(
+                run, value["checkpoint"], run_id=args.run_id,
+                generation=int(value["generation"]), step=int(value["step"]),
+                async_chain=value["async_chain"], membership=value["membership"],
+                fence=proposal_fence, source_id=args.source_id, code_id=args.code_id,
+                outer_update_state=value["outer_update_state"], migration=value["migration"])
+            proposal.unlink()
+    finally:
+        if server is not None:
+            server.shutdown(); server.server_close()
+        if thread is not None: thread.join(2)
+    return 0
+
+
+def _load_real(args):
+    from ndm.async_diloco_real import default_tiny_e97_train_args
+    if not args.seed or not args.train_args_json:
+        raise ValueError("real E97 trainer requires --seed and --train-args-json")
+    overrides = json.loads(Path(args.train_args_json).read_text())
+    overrides.update({"data": args.data, "optimizer": "schedulefree"})
+    train_args = default_tiny_e97_train_args(**overrides)
+    payload = torch.load(args.seed, map_location="cpu", mmap=True, weights_only=True)
+    if "model_state_dict" not in payload or "optimizer_state_dict" not in payload:
+        raise ValueError("verified seed lacks model or ScheduleFree inner optimizer state")
+    state = {name: value.clone() for name, value in payload["model_state_dict"].items()
+             if value.is_floating_point()}
+    seed_meta = {"generation": int(payload.get("generation", 9)),
+                 "verified": bool(payload.get("verified", False)),
+                 "outer_update_state": payload.get("outer_update_state")}
+    migration = outer_state_migration(seed_meta, policy=args.migration_policy)
+    return train_args, state, payload["optimizer_state_dict"], int(payload.get("step", 0)), migration
+
+
+def trainer(args) -> int:
+    if args.local_steps != 40 and not args.control:
+        raise ValueError("approved E97 runtime requires local_steps=40")
+    run = Path(args.run_dir); node = int(os.environ.get("RESILIENT_E97_NODE_RANK", "0"))
+    rank = int(os.environ.get("RESILIENT_E97_LOCAL_RANK", "0")); identity = f"node-{node}-trainer-{rank}"
+    spool = LocalTrainerSpool(run / f"node-{node}" / "mailbox", 32 << 30)
+    if args.control:
+        state, optimizer_state, step, migration = {"weight": torch.tensor([0.0])}, {}, 0, {
+            "status": "control_initialized", "policy": "control"}
+        train_args = None
+    else:
+        train_args, state, optimizer_state, step, migration = _load_real(args)
+    losses = []
+    stop = {"requested": False}
+    signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__("requested", True))
+    completed = 0
+    for generation in range(args.generations):
+        if stop["requested"]:
+            break
+        before = {name: value.clone() for name, value in state.items()}
+        if args.control:
+            loss = 1.0 / (step + args.local_steps + rank + 1)
+            after = {"weight": state["weight"] + float(rank + 1)}
+            tokens = rank + 1
+        else:
+            from ndm.async_diloco_real import RealAsyncWorkerSpec, _run_real_worker
+            report = _run_real_worker(
+                run_id=args.run_id, generation=generation, base_state=state,
+                train_args=train_args,
+                spec=RealAsyncWorkerSpec(identity, f"node-{node}", args.device,
+                                         args.local_steps, rank),
+                synthetic_token_stream=False, synthetic_vocab_size=256,
+                optimizer_state_dict=optimizer_state, consume_optimizer_state=True)
+            if report.update is None:
+                raise RuntimeError(report.error or "real E97 trainer produced no update")
+            after = {name: before[name] + report.update.delta[name] for name in before}
+            optimizer_state = report.optimizer_state_dict or {}
+            tokens, loss = report.tokens, float(report.losses[-1])
+        fence = _fence(args, generation)
+        spool.publish(fence, rank, flatten_delta(before, after), weight=tokens,
+                      source_id=args.source_id)
+        heartbeat(run, identity, generation=generation, step=step, loss=loss, stage="submitted")
+        manifest, aggregate = spool.wait_aggregate(
+            fence, deadline=time.monotonic() + args.deadline_s,
+            expected_source_id=args.source_id)
+        spool.release_trainer(fence, rank)
+        state = apply_delta(before, aggregate, eta_outer=args.eta_outer)
+        step += args.local_steps; losses.append(loss)
+        completed = generation + 1
+        heartbeat(run, identity, generation=generation + 1, step=step, loss=loss, stage="applied")
+    if node == 0 and rank == 0 and completed:
+        checkpoint = run / f"node-{node}" / "trainer-checkpoints" / f"g{completed}.pt"
+        checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        temporary = checkpoint.with_suffix(".tmp")
+        torch.save({"model_state_dict": state, "optimizer_state_dict": optimizer_state,
+                    "step": step, "loss": losses[-1]}, temporary); os.replace(temporary, checkpoint)
+        fence = _fence(args, completed - 1)
+        aggregate_manifest, _ = spool.wait_aggregate(
+            fence, deadline=time.monotonic() + args.deadline_s, expected_source_id=args.source_id)
+        atomic_json(run / "handoff" / "trainer-proposal.json", {
+            "checkpoint": str(checkpoint.resolve()), "generation": completed, "step": step,
+            "async_chain": [args.seed] if args.seed else [],
+            "membership": aggregate_manifest["members"], "fence": fence.__dict__,
+            "outer_update_state": migration.get("state", {}), "migration": migration})
+    return 0
+
+
+def main() -> int:
+    args = parser().parse_args()
+    if args.generations <= 0 or args.deadline_s <= 0:
+        raise ValueError("generations and deadlines must be positive")
+    return manager(args) if args.role == "manager" else trainer(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

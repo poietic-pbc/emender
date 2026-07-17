@@ -334,13 +334,25 @@ class NodeManagerClient:
         self.spool, self.timeout_s = spool, float(timeout_s)
         self.max_bucket_bytes = int(max_bucket_bytes)
 
+    def _connect(self) -> socket.socket:
+        deadline = time.monotonic() + self.timeout_s
+        last_error: OSError | None = None
+        while time.monotonic() < deadline:
+            try:
+                return socket.create_connection((self.host, self.port),
+                                                min(1.0, self.timeout_s))
+            except OSError as error:
+                last_error = error
+                time.sleep(min(.1, max(0.0, deadline - time.monotonic())))
+        raise TimeoutError(f"manager connect deadline expired: {last_error}")
+
     def exchange(self, fence: GenerationFence, buckets: Sequence[bytes], *, weight: int
                  ) -> tuple[dict[str, object], tuple[bytes, ...]]:
         paths = [self.spool.retain(fence, i, payload) for i, payload in enumerate(buckets)]
         replies = []
         # One independent connection per bucket allows bucket sharding/replay.
         for index, path in enumerate(paths):
-            sock = socket.create_connection((self.host, self.port), self.timeout_s)
+            sock = self._connect()
             sock.settimeout(self.timeout_s)
             stream = sock.makefile("rwb", buffering=0)
             send_frame(stream, {
