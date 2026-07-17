@@ -55,6 +55,11 @@ RUN_DIR=${RUN_DIR:?set immutable run directory}
 : "${RESILIENT_E97_SEED:?set verified generation-9 seed checkpoint}"
 : "${RESILIENT_E97_TRAIN_ARGS_JSON:?set approved E97 training arguments JSON}"
 : "${RESILIENT_E97_DATA:?set approved token dataset}"
+APPROVED_TRAIN_ARGS="$REPO/configs/frontier/e97_resilient_split_role_flat.json"
+[[ $(realpath "$RESILIENT_E97_TRAIN_ARGS_JSON") == $(realpath "$APPROVED_TRAIN_ARGS") ]] || {
+  echo "training arguments must be the approved flat E97 split-role configuration: $APPROVED_TRAIN_ARGS" >&2
+  exit 64
+}
 mapfile -t ALLOCATION_NODES < <(scontrol show hostnames "$SLURM_JOB_NODELIST")
 [[ ${#ALLOCATION_NODES[@]} == 2 ]] || { echo "allocation discovery did not resolve two nodes" >&2; exit 64; }
 RESILIENT_E97_COORDINATOR_HOST=${RESILIENT_E97_COORDINATOR_HOST:-${ALLOCATION_NODES[0]}}

@@ -62,6 +62,9 @@ def test_launcher_discovers_coordinator_and_wires_exact_restart_handoff():
 def test_launcher_omits_empty_resume_argument(tmp_path):
     repo = tmp_path / "repo"
     (repo / "scripts/frontier").mkdir(parents=True)
+    (repo / "configs/frontier").mkdir(parents=True)
+    approved_args = repo / "configs/frontier/e97_resilient_split_role_flat.json"
+    approved_args.write_text((ROOT / "configs/frontier/e97_resilient_split_role_flat.json").read_text())
     supervisor = repo / "scripts/frontier/resilient_e97_allocation_supervisor.py"
     supervisor.write_text(
         "import os\nprint(os.environ['RESILIENT_E97_TRAINER_COMMAND'])\n"
@@ -89,7 +92,7 @@ def test_launcher_omits_empty_resume_argument(tmp_path):
         "RESILIENT_E97_SOURCE_ID": "source",
         "RESILIENT_E97_PAYLOAD_ID": "payload",
         "RESILIENT_E97_SEED": "/seed.pt",
-        "RESILIENT_E97_TRAIN_ARGS_JSON": "/args.json",
+        "RESILIENT_E97_TRAIN_ARGS_JSON": str(approved_args),
         "RESILIENT_E97_DATA": "/data",
     }
     result = subprocess.run(
@@ -126,6 +129,9 @@ def test_launcher_activates_approved_frontier_python_before_any_role():
 def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tmp_path):
     repo = tmp_path / "repo"
     (repo / "scripts/frontier").mkdir(parents=True)
+    (repo / "configs/frontier").mkdir(parents=True)
+    approved_args = repo / "configs/frontier/e97_resilient_split_role_flat.json"
+    approved_args.write_text((ROOT / "configs/frontier/e97_resilient_split_role_flat.json").read_text())
     (repo / "scripts/frontier/resilient_e97_allocation_supervisor.py").write_text("pass\n")
     (repo / "scripts/frontier/frontier_runtime_env.sh").write_text(
         "frontier_load_default_modules() { :; }\n"
@@ -152,7 +158,7 @@ def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tm
         "RESILIENT_E97_SOURCE_ID": "source",
         "RESILIENT_E97_PAYLOAD_ID": "payload",
         "RESILIENT_E97_SEED": "/seed.pt",
-        "RESILIENT_E97_TRAIN_ARGS_JSON": "/args.json",
+        "RESILIENT_E97_TRAIN_ARGS_JSON": str(approved_args),
         "RESILIENT_E97_DATA": "/data",
     }
     env.pop("SLURM_TIMELIMIT", None)
@@ -166,6 +172,13 @@ def test_approved_training_arguments_are_flat_overrides():
     assert value["level"] == "E97" and value["optimizer"] == "schedulefree"
     assert value["dim"] == 1792 and value["lr"] == 0.001007
     assert not ({"resolved", "export", "source_artifacts"} & value.keys())
+
+
+def test_launcher_rejects_nonapproved_training_arguments_before_roles_start():
+    script = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
+    assert 'APPROVED_TRAIN_ARGS="$REPO/configs/frontier/e97_resilient_split_role_flat.json"' in script
+    assert 'realpath "$RESILIENT_E97_TRAIN_ARGS_JSON"' in script
+    assert "training arguments must be the approved flat E97 split-role configuration" in script
 
 
 def test_launch_modes_preserve_identical_local_role_identity_and_environment(tmp_path, monkeypatch):
