@@ -81,6 +81,45 @@ Serialized FLIP row (long evaluator description omitted):
 
 This minimal run proves the route failure and the zero-run pre-claim behavior. The production run proves the `PendingEval` form because its pipeline was eagerly scaffolded before `wg done`.
 
+An additional disposable serialized fixture at
+`/tmp/wg-pending-eval-fixture.xyw90r` set `parent=pending-eval`,
+`.flip-parent=open after:[parent]`, `.evaluate-parent=open
+after:[.flip-parent]`, and `downstream=open after:[parent]`. Exact observations:
+
+```text
+$ wg ready
+Ready tasks:
+  .flip-parent - FLIP: parent
+
+$ wg why-blocked .flip-parent
+.flip-parent
+ \-- blocked by: parent (status: PendingEval) <-- ROOT CAUSE
+
+$ wg cycles
+No cycles detected in after edges.
+
+$ wg trace show parent
+Trace: parent (pending-eval)
+Operations: 0
+Agent runs: 0
+
+$ wg trace show .flip-parent
+Trace: .flip-parent (open)
+Operations: 0
+Agent runs: 0
+
+$ wg service tick
+[dispatcher] Priority dispatch order: [.flip-parent:5(d0)]
+[dispatcher] Spawning eval inline for: .flip-parent - FLIP: parent (model: gpt-5.4-mini)
+[dispatcher] Failed to spawn eval for .flip-parent: invalid invocation-scoped evaluator route "gpt-5.4-mini"
+Tick complete: 0 alive, 1 ready, 0 spawned
+```
+
+This fixture demonstrates the complete deadlocked state without touching the
+live graph: the hidden system task is dispatcher-ready despite the diagnostic,
+route validation prevents its only execution, the evaluator stays behind it,
+and the ordinary downstream remains correctly gated by `PendingEval`.
+
 ## Live affected-task state
 
 `wire-split-role` completion and recovery log:
