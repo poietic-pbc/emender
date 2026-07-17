@@ -55,6 +55,12 @@ RUN_DIR=${RUN_DIR:?set immutable run directory}
 : "${RESILIENT_E97_SEED:?set verified generation-9 seed checkpoint}"
 : "${RESILIENT_E97_TRAIN_ARGS_JSON:?set approved E97 training arguments JSON}"
 : "${RESILIENT_E97_DATA:?set approved token dataset}"
+: "${RESILIENT_E97_TIKTOKEN_CACHE_FILE:?set verified p50k tokenizer cache file}"
+RESILIENT_E97_TIKTOKEN_SHA256=${RESILIENT_E97_TIKTOKEN_SHA256:-94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069}
+[[ $(sha256sum "$RESILIENT_E97_TIKTOKEN_CACHE_FILE" | awk '{print $1}') == "$RESILIENT_E97_TIKTOKEN_SHA256" ]] || {
+  echo "p50k tokenizer cache checksum mismatch" >&2
+  exit 64
+}
 APPROVED_TRAIN_ARGS="$REPO/configs/frontier/e97_resilient_split_role_flat.json"
 [[ $(realpath "$RESILIENT_E97_TRAIN_ARGS_JSON") == $(realpath "$APPROVED_TRAIN_ARGS") ]] || {
   echo "training arguments must be the approved flat E97 split-role configuration: $APPROVED_TRAIN_ARGS" >&2
@@ -65,6 +71,14 @@ mapfile -t ALLOCATION_NODES < <(scontrol show hostnames "$SLURM_JOB_NODELIST")
 RESILIENT_E97_COORDINATOR_HOST=${RESILIENT_E97_COORDINATOR_HOST:-${ALLOCATION_NODES[0]}}
 RESILIENT_E97_INITIAL_GENERATION=${RESILIENT_E97_INITIAL_GENERATION:-0}
 RESILIENT_E97_RESUME_HANDOFF=${RESILIENT_E97_RESUME_HANDOFF:-}
+# Compute nodes cannot fetch tiktoken vocabulary blobs from the public network.
+# Stage the immutable, checksum-verified p50k input once per node before roles
+# start; all tokenizer reads after this point are node-local.
+RESILIENT_E97_NODE_TIKTOKEN_CACHE=${RESILIENT_E97_NODE_TIKTOKEN_CACHE:-/tmp/resilient-e97-tiktoken-$RESILIENT_E97_PAYLOAD_ID}
+srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task=1 --gpus-per-task=0 \
+  bash -c 'set -euo pipefail; mkdir -p "$1"; cp "$2" "$1/ec7223a39ce59f226a68acc30dc1af2788490e15"; echo "$3  $1/ec7223a39ce59f226a68acc30dc1af2788490e15" | sha256sum --check --status' \
+  bash "$RESILIENT_E97_NODE_TIKTOKEN_CACHE" "$RESILIENT_E97_TIKTOKEN_CACHE_FILE" "$RESILIENT_E97_TIKTOKEN_SHA256"
+export TIKTOKEN_CACHE_DIR=$RESILIENT_E97_NODE_TIKTOKEN_CACHE
 ROLE="$REPO/scripts/frontier/resilient_e97_role.py"
 COMMON="--run-dir $RUN_DIR --run-id $RESILIENT_E97_RUN_ID --generations ${RESILIENT_E97_GENERATIONS:-1} --initial-generation $RESILIENT_E97_INITIAL_GENERATION --local-steps 40 --node-count 2 --global-quorum ${RESILIENT_E97_GLOBAL_QUORUM:-2} --coordinator-host $RESILIENT_E97_COORDINATOR_HOST --coordinator-port ${RESILIENT_E97_COORDINATOR_PORT:-29571} --deadline-s ${RESILIENT_E97_GENERATION_DEADLINE_S:-900} --source-id $RESILIENT_E97_SOURCE_ID --payload-id $RESILIENT_E97_PAYLOAD_ID --code-id ${RESILIENT_E97_CODE_ID:-unknown} --coordinator-epoch ${RESILIENT_E97_COORDINATOR_EPOCH:-1} --bulk-root ${RESILIENT_E97_BULK_ROOT:-/tmp/resilient-e97} --max-spool-bytes ${RESILIENT_E97_MAX_SPOOL_BYTES:-34359738368} --bulk-chunk-bytes ${RESILIENT_E97_BULK_CHUNK_BYTES:-1048576}"
 export RESILIENT_E97_MANAGER_COMMAND="$TRAIN_PYTHON_BIN $ROLE manager $COMMON --local-quorum 6"

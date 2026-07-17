@@ -1,4 +1,5 @@
 from pathlib import Path
+import hashlib
 import json
 import os
 import subprocess
@@ -79,6 +80,11 @@ def test_launcher_omits_empty_resume_argument(tmp_path):
     scontrol = bindir / "scontrol"
     scontrol.write_text("#!/bin/sh\nprintf 'node0\\nnode1\\n'\n")
     scontrol.chmod(0o755)
+    srun = bindir / "srun"
+    srun.write_text("#!/bin/sh\nwhile [ \"$1\" != bash ]; do shift; done\nexec \"$@\"\n")
+    srun.chmod(0o755)
+    tokenizer_cache = tmp_path / "p50k.cache"
+    tokenizer_cache.write_text("offline-tokenizer-cache")
     env = {
         **os.environ,
         "PATH": f"{bindir}:{os.environ['PATH']}",
@@ -94,6 +100,8 @@ def test_launcher_omits_empty_resume_argument(tmp_path):
         "RESILIENT_E97_SEED": "/seed.pt",
         "RESILIENT_E97_TRAIN_ARGS_JSON": str(approved_args),
         "RESILIENT_E97_DATA": "/data",
+        "RESILIENT_E97_TIKTOKEN_CACHE_FILE": str(tokenizer_cache),
+        "RESILIENT_E97_TIKTOKEN_SHA256": hashlib.sha256(tokenizer_cache.read_bytes()).hexdigest(),
     }
     result = subprocess.run(
         ["bash", str(ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch")],
@@ -143,6 +151,11 @@ def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tm
     scontrol = bindir / "scontrol"
     scontrol.write_text("#!/bin/sh\nprintf 'node0\\nnode1\\n'\n")
     scontrol.chmod(0o755)
+    srun = bindir / "srun"
+    srun.write_text("#!/bin/sh\nwhile [ \"$1\" != bash ]; do shift; done\nexec \"$@\"\n")
+    srun.chmod(0o755)
+    tokenizer_cache = tmp_path / "p50k.cache"
+    tokenizer_cache.write_text("offline-tokenizer-cache")
     env = {
         **os.environ,
         "PATH": f"{bindir}:{os.environ['PATH']}",
@@ -160,6 +173,8 @@ def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tm
         "RESILIENT_E97_SEED": "/seed.pt",
         "RESILIENT_E97_TRAIN_ARGS_JSON": str(approved_args),
         "RESILIENT_E97_DATA": "/data",
+        "RESILIENT_E97_TIKTOKEN_CACHE_FILE": str(tokenizer_cache),
+        "RESILIENT_E97_TIKTOKEN_SHA256": hashlib.sha256(tokenizer_cache.read_bytes()).hexdigest(),
     }
     env.pop("SLURM_TIMELIMIT", None)
     subprocess.run(["bash", str(ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch")],
@@ -179,6 +194,16 @@ def test_launcher_rejects_nonapproved_training_arguments_before_roles_start():
     assert 'APPROVED_TRAIN_ARGS="$REPO/configs/frontier/e97_resilient_split_role_flat.json"' in script
     assert 'realpath "$RESILIENT_E97_TRAIN_ARGS_JSON"' in script
     assert "training arguments must be the approved flat E97 split-role configuration" in script
+
+
+def test_launcher_stages_verified_p50k_cache_to_each_node_before_roles_start():
+    script = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
+    assert "RESILIENT_E97_TIKTOKEN_CACHE_FILE:?" in script
+    assert "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069" in script
+    assert "ec7223a39ce59f226a68acc30dc1af2788490e15" in script
+    assert "--nodes=2 --ntasks=2 --ntasks-per-node=1" in script
+    assert "export TIKTOKEN_CACHE_DIR=$RESILIENT_E97_NODE_TIKTOKEN_CACHE" in script
+    assert script.index("export TIKTOKEN_CACHE_DIR=") < script.index("RESILIENT_E97_TRAINER_COMMAND=")
 
 
 def test_launch_modes_preserve_identical_local_role_identity_and_environment(tmp_path, monkeypatch):
@@ -336,6 +361,9 @@ def test_all_real_roles_publish_import_liveness_without_generation_progress():
     text = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
     assert 'sys.argv[1] not in {"manager", "trainer"}' in text
     assert 'f"node-{node_rank}-trainer-{local_rank}"' in text
+    assert '"stage": "runtime_import"' in text
+    assert '"generation": 0, "step": 0' in text
+    assert text.count("if _IMPORT_HEARTBEAT is not None:") == 2
 
 
 def test_real_trainer_keeps_liveness_during_checkpoint_load_and_training():
@@ -343,9 +371,6 @@ def test_real_trainer_keeps_liveness_during_checkpoint_load_and_training():
     trainer = text[text.index("def trainer(args)"):]
     assert trainer.index("_liveness_heartbeat(bulk, identity)") < trainer.index("_load_real(args)")
     assert 'f"{identity}.liveness.json"' in text
-    assert '"stage": "runtime_import"' in text
-    assert '"generation": 0, "step": 0' in text
-    assert text.count("if _IMPORT_HEARTBEAT is not None:") == 2
 
 
 def test_frontier_default_keeps_supervision_state_node_local():
