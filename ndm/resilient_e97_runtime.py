@@ -69,24 +69,32 @@ def tensor_layout(state: Mapping[str, torch.Tensor]) -> tuple[tuple[str, tuple[i
     return tuple((name, tuple(state[name].shape), state[name].numel()) for name in sorted(state))
 
 
-def flatten_delta(before: Mapping[str, torch.Tensor], after: Mapping[str, torch.Tensor]
-                  ) -> tuple[torch.Tensor, ...]:
+def flatten_delta(before: Mapping[str, torch.Tensor], after: Mapping[str, torch.Tensor], *,
+                  chunk_elements: int = 131072) -> tuple[torch.Tensor, ...]:
     if tensor_layout(before) != tensor_layout(after):
         raise ValueError("trainer state layout changed during local generation")
-    return tuple((after[name].detach().cpu().to(torch.float64) -
-                  before[name].detach().cpu().to(torch.float64)).reshape(-1)
-                 for name in sorted(before))
+    if chunk_elements <= 0:
+        raise ValueError("chunk_elements must be positive")
+    flat = torch.cat(tuple((after[name].detach().cpu().to(torch.float64) -
+                            before[name].detach().cpu().to(torch.float64)).reshape(-1)
+                           for name in sorted(before)))
+    return tuple(flat[offset:offset + chunk_elements].clone()
+                 for offset in range(0, flat.numel(), chunk_elements))
 
 
 def apply_delta(base: Mapping[str, torch.Tensor], shards: Sequence[torch.Tensor], *,
                 eta_outer: float) -> dict[str, torch.Tensor]:
-    if len(shards) != len(base):
+    flat = torch.cat(tuple(shard.reshape(-1) for shard in shards)) if shards else torch.empty(0)
+    if flat.numel() != sum(value.numel() for value in base.values()):
         raise ValueError("aggregate shard count does not match trainer state")
     result = {}
-    for (name, value), shard in zip(sorted(base.items()), shards):
+    offset = 0
+    for name, value in sorted(base.items()):
+        shard = flat[offset:offset + value.numel()]
         if shard.numel() != value.numel() or not torch.isfinite(shard).all():
             raise ValueError(f"aggregate shard layout invalid for {name}")
         result[name] = value + shard.reshape(value.shape).to(value) * float(eta_outer)
+        offset += value.numel()
     return result
 
 

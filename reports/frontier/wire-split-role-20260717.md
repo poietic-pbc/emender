@@ -110,6 +110,20 @@ control. It also asserts the shared run tree contains only finalized
 The complete established-plus-new focused suite was rerun after the final user
 overrides: `132 passed in 238.63s (0:03:58)`.
 
+The final control/bulk split introduces `BulkChunkStream` and its bounded
+non-MPI implementation. Control JSON headers carry only identities and byte
+checksums; payloads travel as separate persistent stream frames. The window is
+one bounded chunk (1 MiB by default), each chunk has a fenced shard attempt and
+SHA256, identical reconnects are idempotent, conflicting duplicates fail, and
+the coordinator discards participant bytes immediately after incremental exact
+weighted reduction while retaining only compact receipts. The local manager
+likewise validates descriptors first and reads/aggregates one chunk across the
+accepted quorum at a time. The direct transport/runtime suite passed
+`19 passed in 75.11s` after this change.
+
+Final established-plus-new suite result after the streamed bulk-plane change:
+`133 passed in 234.79s (0:03:54)`.
+
 The system `python3` is Python 3.6 without Torch and failed during collection;
 as in the established project validation recipe, the result above supersedes it
 using the pinned ROCm/Torch environment.

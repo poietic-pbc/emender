@@ -22,7 +22,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Mapping, Protocol, Sequence
 
 import torch
 
@@ -168,11 +168,13 @@ class _Generation:
     def __init__(self, fence: GenerationFence, deadline: float):
         self.fence, self.deadline = fence, deadline
         self.updates: dict[str, dict[int, tuple[int, bytes]]] = {}
+        self.receipts: dict[tuple[str, int], tuple[int, str]] = {}
         self.accepted: tuple[str, ...] | None = None
         self.aggregates: dict[int, bytes] = {}
         self.condition = threading.Condition()
         self.last_heartbeat: dict[str, float] = {}
         self.applied: set[str] = set()
+        self.delivered: set[str] = set()
 
 
 class QuorumTransportServer(socketserver.ThreadingTCPServer):
@@ -217,12 +219,13 @@ class QuorumTransportServer(socketserver.ThreadingTCPServer):
                 raise TimeoutError("generation deadline expired")
             if state.accepted is not None and node not in state.accepted:
                 raise ValueError("late node rejected after accepted set was frozen")
-            prior = state.updates.get(node, {}).get(bucket)
-            if prior is not None:
-                if prior != (weight, payload):
+            receipt = state.receipts.get((node, bucket))
+            if receipt is not None:
+                if receipt != (weight, _sha(payload)):
                     raise ValueError("conflicting duplicate bucket rejected")
-                raise ValueError("duplicate bucket rejected")
+                return state  # idempotent reconnect/retry of the same chunk identity
             state.updates.setdefault(node, {})[bucket] = (weight, payload)
+            state.receipts[(node, bucket)] = (weight, _sha(payload))
             state.last_heartbeat[node] = time.monotonic()
             complete = sorted(
                 n for n, buckets in state.updates.items()
@@ -241,6 +244,7 @@ class QuorumTransportServer(socketserver.ThreadingTCPServer):
                         for i in range(len(vectors[0]))
                     ])
                 self._publish_manifest(state)
+                state.updates.clear()  # retain only compact receipts after incremental reduction
                 state.condition.notify_all()
             return state
 
@@ -271,6 +275,8 @@ class QuorumTransportServer(socketserver.ThreadingTCPServer):
             for node in evicted:
                 state.updates.pop(node, None)
                 state.last_heartbeat.pop(node, None)
+                for key in [key for key in state.receipts if key[0] == node]:
+                    state.receipts.pop(key, None)
             return evicted
 
     def acknowledge_apply(self, fence: GenerationFence, node_id: str,
@@ -297,34 +303,48 @@ class QuorumTransportServer(socketserver.ThreadingTCPServer):
                 state.condition.wait(remaining)
             return tuple(sorted(state.applied))
 
+    def acknowledge_delivery(self, state: _Generation, node_id: str) -> None:
+        """Release a reduced bulk chunk once every accepted stream received it."""
+        with state.condition:
+            state.delivered.add(node_id)
+            if state.accepted is not None and set(state.accepted) <= state.delivered:
+                state.aggregates.clear()
+
 
 class _RequestHandler(socketserver.StreamRequestHandler):
     def handle(self) -> None:
-        try:
-            header, payload = recv_frame(
-                self.rfile, max_payload_bytes=self.server.config.max_bucket_bytes
-            )
-            if header.get("op") != "submit":
-                raise ValueError("unsupported operation")
-            state = self.server.submit(header, payload)
-            with state.condition:
-                while state.accepted is None:
-                    remaining = state.deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise TimeoutError("node quorum lost before generation deadline")
-                    state.condition.wait(remaining)
-            send_frame(self.wfile, {
-                "op": "commit", "accepted_nodes": list(state.accepted),
-                "bucket_count": len(state.aggregates),
-                "generation": state.fence.generation,
-                "attempt": state.fence.attempt,
-                "coordinator_epoch": state.fence.coordinator_epoch,
-            })
-            for bucket in sorted(state.aggregates):
-                send_frame(self.wfile, {"op": "aggregate", "bucket": bucket},
-                           state.aggregates[bucket])
-        except Exception as error:
-            send_frame(self.wfile, {"op": "error", "error": str(error)})
+        persistent = True
+        while persistent:
+            try:
+                header, payload = recv_frame(
+                    self.rfile, max_payload_bytes=self.server.config.max_bucket_bytes
+                )
+                persistent = header.get("op") == "stream_submit"
+                if header.get("op") not in {"submit", "stream_submit"}:
+                    raise ValueError("unsupported operation")
+                state = self.server.submit(header, payload)
+                with state.condition:
+                    while state.accepted is None:
+                        remaining = state.deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError("node quorum lost before generation deadline")
+                        state.condition.wait(remaining)
+                send_frame(self.wfile, {
+                    "op": "commit", "accepted_nodes": list(state.accepted),
+                    "bucket_count": len(state.aggregates),
+                    "generation": state.fence.generation,
+                    "attempt": state.fence.attempt,
+                    "coordinator_epoch": state.fence.coordinator_epoch,
+                })
+                for bucket in sorted(state.aggregates):
+                    send_frame(self.wfile, {"op": "aggregate", "bucket": bucket},
+                               state.aggregates[bucket])
+                self.server.acknowledge_delivery(state, str(header["node_id"]))
+            except EOFError:
+                return
+            except Exception as error:
+                send_frame(self.wfile, {"op": "error", "error": str(error)})
+                return
 
 
 class NodeManagerClient:
@@ -380,6 +400,73 @@ class NodeManagerClient:
             for sock, stream in replies:
                 stream.close()
                 sock.close()
+
+
+class BulkChunkStream(Protocol):
+    """Bulk plane; control headers never contain update tensor bytes."""
+
+    def exchange_chunks(self, fence: GenerationFence, chunks: Sequence[bytes], *,
+                        weight: int) -> tuple[dict[str, object], tuple[bytes, ...]]: ...
+
+
+class BoundedNodeManagerBulkStream:
+    """Checksummed one-chunk window with reconnect/replay and shard identities.
+
+    Each chunk uses a distinct fenced attempt, so the coordinator incrementally
+    reduces and releases participant bytes before the next chunk is admitted.
+    The window is deliberately one: peak manager ownership is O(quorum*chunk),
+    never O(participants*full_update).
+    """
+
+    def __init__(self, client: NodeManagerClient, *, max_chunk_bytes: int):
+        self.client, self.max_chunk_bytes = client, int(max_chunk_bytes)
+        if self.max_chunk_bytes <= 0:
+            raise ValueError("max_chunk_bytes must be positive")
+        self.high_water_bytes = 0
+
+    def exchange_chunks(self, fence: GenerationFence, chunks: Sequence[bytes], *,
+                        weight: int) -> tuple[dict[str, object], tuple[bytes, ...]]:
+        aggregates, last_header = [], None
+        sock = self.client._connect(); sock.settimeout(self.client.timeout_s)
+        stream = sock.makefile("rwb", buffering=0)
+        try:
+            for shard, payload in enumerate(chunks):
+                if len(payload) > self.max_chunk_bytes:
+                    raise BufferError("bulk chunk exceeds bounded in-flight window")
+                self.high_water_bytes = max(self.high_water_bytes, len(payload))
+                chunk_fence = GenerationFence(fence.run_id, fence.generation, shard,
+                                              fence.coordinator_epoch)
+                deadline = time.monotonic() + self.client.timeout_s
+                while True:
+                    try:
+                        send_frame(stream, {
+                            "op": "stream_submit", "run_id": chunk_fence.run_id,
+                            "node_id": self.client.node_id,
+                            "generation": chunk_fence.generation,
+                            "attempt": chunk_fence.attempt,
+                            "coordinator_epoch": chunk_fence.coordinator_epoch,
+                            "bucket": 0, "weight": int(weight), "shard": shard,
+                        }, payload)
+                        last_header, _ = recv_frame(stream, max_payload_bytes=0)
+                        if last_header["op"] == "error":
+                            raise RuntimeError(str(last_header["error"]))
+                        aggregate_header, aggregate = recv_frame(
+                            stream, max_payload_bytes=self.max_chunk_bytes)
+                        if aggregate_header["op"] != "aggregate":
+                            raise RuntimeError("expected bulk aggregate chunk")
+                        aggregates.append(aggregate)
+                        break
+                    except (OSError, EOFError, ConnectionError):
+                        stream.close(); sock.close()
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("bulk chunk reconnect deadline expired")
+                        sock = self.client._connect(); sock.settimeout(self.client.timeout_s)
+                        stream = sock.makefile("rwb", buffering=0)
+        finally:
+            stream.close(); sock.close()
+        if last_header is None:
+            raise ValueError("bulk stream requires at least one chunk")
+        return last_header, tuple(aggregates)
 
 
 @dataclass(frozen=True)

@@ -10,6 +10,7 @@ import torch
 
 from ndm.resilient_node_quorum import GenerationFence
 from ndm.resilient_node_transport import (
+    BoundedNodeManagerBulkStream,
     DiskBucketSpool,
     NodeManagerClient,
     NodeStepSupervisor,
@@ -19,6 +20,26 @@ from ndm.resilient_node_transport import (
     encode_f64,
     exchange_dense_delta,
 )
+
+
+def test_bulk_stream_separates_control_from_bounded_chunk_payloads(tmp_path):
+    server, thread = _server(tmp_path, quorum=1, buckets=1)
+    client = NodeManagerClient(
+        "127.0.0.1", server.server_address[1], "n0",
+        DiskBucketSpool(tmp_path / "stream-spool", 1024), timeout_s=2,
+        max_bucket_bytes=8)
+    stream = BoundedNodeManagerBulkStream(client, max_chunk_bytes=8)
+    header, chunks = stream.exchange_chunks(
+        GenerationFence("run", 4, 0, 1), (encode_f64((1,)), encode_f64((2,))), weight=7)
+    assert tuple(decode_f64(item) for item in chunks) == ((1.0,), (2.0,))
+    assert sorted(attempt for generation, attempt in server._generations if generation == 4) == [0, 1]
+    assert all(not state.updates and not state.aggregates
+               for key, state in server._generations.items() if key[0] == 4)
+    assert stream.high_water_bytes == 8
+    assert "payload" not in header
+    with pytest.raises(BufferError, match="bounded"):
+        stream.exchange_chunks(GenerationFence("run", 5, 0, 2), (b"x" * 9,), weight=1)
+    server.shutdown(); server.server_close(); thread.join(2)
 
 
 def _server(tmp_path, *, quorum=2, buckets=2, deadline=2.0):

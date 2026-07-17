@@ -205,7 +205,7 @@ class CpuNodeManager:
                 expected_source_id: str) -> tuple[tuple[int, ...], int, tuple[torch.Tensor, ...]]:
         accepted = []
         while time.monotonic() < deadline:
-            accepted = self._validated(fence, expected_source_id)
+            accepted = self._validated_manifests(fence, expected_source_id)
             if len(accepted) >= self.quorum:
                 break
             time.sleep(.02)
@@ -213,19 +213,31 @@ class CpuNodeManager:
             raise TimeoutError("local trainer quorum lost at aggregation deadline")
         self.spool.high_water_bytes = max(self.spool.high_water_bytes, self.spool.bytes_used)
         accepted = accepted[:self.quorum]
-        widths = {tuple(item[2]) for item in accepted}
+        widths = {tuple(record["elements"] for record in item[3]["shards"])
+                  for item in accepted}
         if len(widths) != 1:
             raise ValueError("incompatible trainer shard layout")
         total_weight = sum(item[1] for item in accepted)
         aggregates = []
-        for shard_index in range(len(accepted[0][3])):
-            aggregate = sum(item[3][shard_index] * item[1] for item in accepted) / total_weight
+        for shard_index in range(len(accepted[0][3]["shards"])):
+            weighted = None
+            for trainer_id, weight, manifest_path, manifest in accepted:
+                record = manifest["shards"][shard_index]
+                raw = (manifest_path.parent / f"shard-{record['index']:05d}.f64").read_bytes()
+                if hashlib.sha256(raw).hexdigest() != record["sha256"]:
+                    raise ValueError("corrupt trainer shard")
+                tensor = torch.frombuffer(bytearray(raw), dtype=torch.float64).clone()
+                if tensor.numel() != record["elements"] or not torch.isfinite(tensor).all():
+                    raise ValueError("invalid trainer shard")
+                weighted = tensor * weight if weighted is None else weighted.add_(tensor, alpha=weight)
+                del tensor, raw
+            aggregate = weighted / total_weight
             if not torch.isfinite(aggregate).all():
                 raise ValueError("nonfinite aggregate rejected")
             aggregates.append(aggregate)
         return tuple(item[0] for item in accepted), total_weight, tuple(aggregates)
 
-    def _validated(self, fence: LocalFence, source_id: str):
+    def _validated_manifests(self, fence: LocalFence, source_id: str):
         values = []
         for manifest_path in sorted((self.spool.root / fence.key).glob("trainer-*/manifest.json")):
             manifest = json.loads(manifest_path.read_text())
@@ -233,15 +245,10 @@ class CpuNodeManager:
                 raise ValueError("stale or incompatible trainer fence")
             if manifest.get("source_id") != source_id:
                 raise ValueError("trainer payload/source identity mismatch")
-            shards = []
             for record in manifest["shards"]:
-                raw = (manifest_path.parent / f"shard-{record['index']:05d}.f64").read_bytes()
-                if hashlib.sha256(raw).hexdigest() != record["sha256"]:
-                    raise ValueError("corrupt trainer shard")
-                tensor = torch.frombuffer(bytearray(raw), dtype=torch.float64).clone()
-                if tensor.numel() != record["elements"] or not torch.isfinite(tensor).all():
-                    raise ValueError("invalid trainer shard")
-                shards.append(tensor)
+                shard_path = manifest_path.parent / f"shard-{record['index']:05d}.f64"
+                if not shard_path.is_file() or shard_path.stat().st_size != record["elements"] * 8:
+                    raise ValueError("corrupt trainer shard descriptor")
             values.append((int(manifest["trainer_id"]), int(manifest["weight"]),
-                           [int(r["elements"]) for r in manifest["shards"]], shards))
+                           manifest_path, manifest))
         return values

@@ -24,6 +24,7 @@ from ndm.resilient_e97_runtime import (SplitManagerLoop, apply_delta, atomic_jso
                                        outer_state_migration)
 from ndm.resilient_node_quorum import GenerationFence
 from ndm.resilient_node_transport import (DiskBucketSpool, NodeManagerClient,
+                                           BoundedNodeManagerBulkStream,
                                            QuorumTransportServer, TransportConfig,
                                            decode_f64, encode_f64)
 
@@ -52,6 +53,7 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--max-spool-bytes", type=int, default=32 << 30)
     value.add_argument("--initial-generation", type=int, default=0)
     value.add_argument("--resume-handoff", default="")
+    value.add_argument("--bulk-chunk-bytes", type=int, default=1 << 20)
     return value
 
 
@@ -71,7 +73,8 @@ def manager(args) -> int:
     if args.node_count > 1 and node == 0:
         server = QuorumTransportServer(
             ("0.0.0.0", args.coordinator_port),
-            TransportConfig(args.run_id, args.global_quorum, 1, 32 << 30, args.deadline_s,
+            TransportConfig(args.run_id, args.global_quorum, 1, args.bulk_chunk_bytes,
+                            args.deadline_s,
                             args.deadline_s, args.deadline_s),
             run / "manager-network", args.coordinator_epoch)
         thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
@@ -87,27 +90,27 @@ def manager(args) -> int:
                 members, local_weight, local_shards = loop.manager.collect(
                     fence, deadline=time.monotonic() + args.deadline_s,
                     expected_source_id=args.source_id)
-                counts = [shard.numel() for shard in local_shards]
-                flat = torch.cat([shard.reshape(-1) for shard in local_shards])
                 client = NodeManagerClient(args.coordinator_host, args.coordinator_port,
                                            f"node-{node}", DiskBucketSpool(
                                                bulk / "network-spool", args.max_spool_bytes),
                                            timeout_s=args.deadline_s,
-                                           max_bucket_bytes=args.max_spool_bytes)
-                header, aggregate = client.exchange(
+                                           max_bucket_bytes=args.bulk_chunk_bytes)
+                stream = BoundedNodeManagerBulkStream(
+                    client, max_chunk_bytes=args.bulk_chunk_bytes)
+                header, aggregate = stream.exchange_chunks(
                     GenerationFence(args.run_id, generation, 0, args.coordinator_epoch),
-                    (encode_f64(flat.tolist()),), weight=local_weight)
-                global_flat = torch.tensor(decode_f64(aggregate[0]), dtype=torch.float64)
-                global_shards, offset = [], 0
-                for count in counts:
-                    global_shards.append(global_flat[offset:offset + count].clone()); offset += count
+                    tuple(encode_f64(shard.tolist()) for shard in local_shards),
+                    weight=local_weight)
+                global_shards = [torch.tensor(decode_f64(chunk), dtype=torch.float64)
+                                 for chunk in aggregate]
                 spool.publish_aggregate(fence, members, global_shards,
                                         weight=local_weight,
                                         source_id=args.source_id)
                 for trainer_id in members:
                     spool.release_trainer(fence, trainer_id)
                 result = {"members": members, "weight": local_weight,
-                          "accepted_nodes": header["accepted_nodes"]}
+                          "accepted_nodes": header["accepted_nodes"],
+                          "network_high_water_bytes": stream.high_water_bytes}
             atomic_json(bulk / "control" / f"node-{node}-bulk-ownership.json", {
                 "backend": "bounded-node-local-filesystem", "bulk_root": str(bulk),
                 "shared_run_dir_is_bulk_path": bulk.is_relative_to(run),
@@ -224,7 +227,8 @@ def trainer(args) -> int:
             optimizer_state = report.optimizer_state_dict or {}
             tokens, loss = report.tokens, float(report.losses[-1])
         fence = _fence(args, generation)
-        spool.publish(fence, rank, flatten_delta(before, after), weight=tokens,
+        spool.publish(fence, rank, flatten_delta(
+            before, after, chunk_elements=max(1, args.bulk_chunk_bytes // 8)), weight=tokens,
                       source_id=args.source_id)
         heartbeat(bulk, identity, generation=generation, step=step, loss=loss, stage="submitted")
         manifest, aggregate = spool.wait_aggregate(
