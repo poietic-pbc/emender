@@ -121,6 +121,13 @@ class AllocationSupervisor:
                 return "startup_deadline"
             return None
         state = json.loads(state_path.read_text())
+        liveness_path = state_path.with_name(f"{child.identity}.liveness.json")
+        if liveness_path.exists():
+            liveness = json.loads(liveness_path.read_text())
+            if liveness.get("identity") == child.identity:
+                state["heartbeat_time"] = max(
+                    float(state.get("heartbeat_time", 0)),
+                    float(liveness.get("heartbeat_time", 0)))
         injection_variable = {
             "trainer": "RESILIENT_E97_INJECT_TRAINER",
             "manager": "RESILIENT_E97_INJECT_MANAGER",

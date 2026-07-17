@@ -117,6 +117,20 @@ def _publish_role_recovery(control: Path, identity: str, args, generation: int,
         "coordinator_epoch": args.coordinator_epoch, "generation": generation, **extra})
 
 
+def _liveness_heartbeat(bulk: Path, identity: str, interval_s: float = 5.0):
+    """Refresh liveness without disguising stalled generation progress."""
+    state = bulk / "supervision" / f"{identity}.liveness.json"
+    stop = threading.Event()
+
+    def publish() -> None:
+        while not stop.wait(interval_s):
+            atomic_json(state, {"identity": identity, "heartbeat_time": time.time()})
+
+    thread = threading.Thread(target=publish, name=f"{identity}-heartbeat", daemon=True)
+    thread.start()
+    return stop, thread
+
+
 def manager(args) -> int:
     run = Path(args.run_dir); node = int(os.environ.get("RESILIENT_E97_NODE_RANK", "0"))
     identity = f"node-{node}-manager"
@@ -140,6 +154,7 @@ def manager(args) -> int:
     control = bulk / "control"
     target_generation = args.initial_generation + args.generations
     start_generation = _latest_role_generation(control, identity, args)
+    liveness_stop, liveness_thread = _liveness_heartbeat(bulk, identity)
     try:
         for generation in range(start_generation, target_generation):
             fence = _fence(args, generation)
@@ -205,6 +220,7 @@ def manager(args) -> int:
                 outer_update_state=value["outer_update_state"], migration=value["migration"])
             proposal.unlink()
     finally:
+        liveness_stop.set(); liveness_thread.join(10)
         if server is not None:
             server.shutdown(); server.server_close()
         if thread is not None: thread.join(2)

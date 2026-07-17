@@ -232,6 +232,22 @@ def test_child_without_first_heartbeat_hits_startup_deadline(tmp_path):
     assert supervisor._deadline_reason(child, 131) == "startup_deadline"
 
 
+def test_manager_liveness_does_not_disguise_stalled_generation_progress(tmp_path, monkeypatch):
+    child = Child("manager", 0, "node000", None, "python manager.py")
+    supervisor = AllocationSupervisor(tmp_path, [child], heartbeat_s=10,
+                                      progress_s=20, max_restarts=1)
+    child.process = type("Process", (), {"poll": lambda self: None})()
+    state = tmp_path / "supervision" / "node-0-manager.json"
+    state.write_text(json.dumps({"heartbeat_time": 100, "progress_time": 100,
+                                 "generation": 0}))
+    liveness = tmp_path / "supervision" / "node-0-manager.liveness.json"
+    liveness.write_text(json.dumps({"identity": child.identity,
+                                    "heartbeat_time": 125}))
+    monkeypatch.delenv("RESILIENT_E97_BULK_ROOT", raising=False)
+    monkeypatch.delenv("RESILIENT_E97_RUN_ID", raising=False)
+    assert supervisor._deadline_reason(child, 126) == "progress_deadline"
+
+
 def test_frontier_default_avoids_nested_srun_steps():
     text = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
     assert 'os.environ.get("RESILIENT_E97_LAUNCH_MODE", "independent-step")' in text
