@@ -37,3 +37,24 @@ R14, and R16. The preceding changed payload passed the focused launcher suite,
 rendered parity, Python compilation, shell syntax, and diff checks. Final
 scheduler accounting and generation evidence will be appended after the job
 terminates.
+
+## Terminal result
+
+The job started at `2026-07-17T16:56:24-04:00` and ended at
+`2026-07-17T17:11:00-04:00`; queue time was `00:01:07` and allocation runtime
+was `00:14:36`.  Slurm reports `COMPLETED` for the batch wrapper, but the smoke
+gate **failed before any manager/trainer heartbeat or finalized generation**.
+Both node-supervisor steps repeatedly reported `Requested nodes are busy` and
+were evicted at the bounded 300-second startup deadline.  Their retry steps
+were blocked identically until TERM handoff.  The retained `events.jsonl`
+contains only node-supervisor starts/evictions; there are no manager/trainer,
+network-connectivity, or generation-finalization events.
+
+The concrete diagnosis is that payload `2d47a46` requested the allocation's
+eight GPUs again on each overlapping node-supervisor step.  Frontier does not
+share that GRES allocation between the two nested steps.  The next payload is
+therefore changed by commit `34d73e5b21a732a7d52fc95596e17a87153a235e`,
+which reuses the batch allocation's device cgroup while each direct trainer
+still binds `ROCR_VISIBLE_DEVICES=0..7`.  Per the queue-efficiency directive,
+another full two-hour gate remains forbidden until that changed payload passes
+the short startup smoke.
