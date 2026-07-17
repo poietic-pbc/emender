@@ -104,12 +104,21 @@ class AllocationSupervisor:
         state_root = (Path(bulk_root) / run_id / f"node-{child.node_rank}"
                       if bulk_root and run_id else self.run_dir)
         state_path = state_root / "supervision" / f"{child.identity}.json"
+        # A node supervisor deliberately owns no training loop.  Its progress is
+        # the model-free manager that it supervises, so use that fenced heartbeat
+        # for generation-gated whole-node-step injection.
+        if child.role == "node-supervisor":
+            state_path = (state_root / "supervision" /
+                          f"node-{child.node_rank}-manager.json")
         if not state_path.exists():
             return None  # connect deadline is enforced by role command itself
         state = json.loads(state_path.read_text())
-        injection = os.environ.get(
-            "RESILIENT_E97_INJECT_MANAGER" if child.role in {"manager", "node-supervisor"}
-            else "RESILIENT_E97_INJECT_TRAINER", "")
+        injection_variable = {
+            "trainer": "RESILIENT_E97_INJECT_TRAINER",
+            "manager": "RESILIENT_E97_INJECT_MANAGER",
+            "node-supervisor": "RESILIENT_E97_INJECT_NODE_STEP",
+        }[child.role]
+        injection = os.environ.get(injection_variable, "")
         if injection and child.identity not in self.injected:
             fields = injection.split(":")
             if len(fields) != 3:
