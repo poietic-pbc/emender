@@ -15,6 +15,7 @@ def test_true_launcher_is_exact_debug_two_hour_topology_without_sentinels():
     supervisor = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
     assert "#SBATCH -q debug" in text
     assert "#SBATCH -N 2" in text
+    assert "#SBATCH --gpus-per-node=8" in text
     assert "#SBATCH -t 02:00:00" in text
     assert "#SBATCH --signal=B:TERM@300" in text
     assert '"RESILIENT_E97_ROLE": child.role' in supervisor

@@ -8,6 +8,7 @@
 #SBATCH -p batch
 #SBATCH -q debug
 #SBATCH -N 2
+#SBATCH --gpus-per-node=8
 #SBATCH -t 02:00:00
 #SBATCH --signal=B:TERM@300
 #SBATCH -o logs/frontier/trainpy_async_quorum/%x-%j.out
