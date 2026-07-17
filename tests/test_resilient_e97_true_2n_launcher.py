@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 from scripts.frontier.resilient_e97_allocation_supervisor import AllocationSupervisor, Child
 
@@ -42,6 +43,22 @@ def test_allocation_supervisor_uses_independent_restartable_steps():
     assert '"allocation_term_handoff"' in text
     assert '"restart_exhausted"' in text
     assert "MPI" not in text
+
+
+def test_launcher_discovers_coordinator_and_wires_exact_restart_handoff():
+    text = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
+    assert 'scontrol show hostnames "$SLURM_JOB_NODELIST"' in text
+    assert 'RESILIENT_E97_COORDINATOR_HOST:-${ALLOCATION_NODES[0]}' in text
+    assert "--initial-generation $RESILIENT_E97_INITIAL_GENERATION" in text
+    assert '--resume-handoff "$RESILIENT_E97_RESUME_HANDOFF"' in text
+
+
+def test_approved_training_arguments_are_flat_overrides():
+    path = ROOT / "configs/frontier/e97_resilient_split_role_flat.json"
+    value = json.loads(path.read_text())
+    assert value["level"] == "E97" and value["optimizer"] == "schedulefree"
+    assert value["dim"] == 1792 and value["lr"] == 0.001007
+    assert not ({"resolved", "export", "source_artifacts"} & value.keys())
 
 
 def test_launch_modes_preserve_identical_local_role_identity_and_environment(tmp_path, monkeypatch):

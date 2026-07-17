@@ -4,6 +4,7 @@ import sys
 import time
 
 import pytest
+from scripts.frontier.resilient_e97_allocation_supervisor import AllocationSupervisor, Child
 
 from ndm.resilient_e97_topology import (
     ChildSpec, IndependentProcessSupervisor, true_frontier_topology,
@@ -61,3 +62,27 @@ def test_progress_deadline_evicts_only_stalled_manager(tmp_path):
     (state / "node-0-manager.json").write_text(json.dumps({"heartbeat_time": now, "progress_time": now - 1}))
     assert supervisor.check(now) == ("node-0/manager",)
     process.wait(2)
+
+
+def test_generation_gated_injections_are_distinct_and_one_shot(tmp_path, monkeypatch):
+    monkeypatch.setenv("RESILIENT_E97_BULK_ROOT", str(tmp_path / "bulk"))
+    monkeypatch.setenv("RESILIENT_E97_RUN_ID", "run")
+    monkeypatch.setenv("RESILIENT_E97_INJECT_TRAINER", "0:3:2")
+    child = Child("trainer", 0, "node0", 3, "true")
+    class Process:
+        returncode = None
+        def poll(self): return None
+    child.process = Process()
+    state = tmp_path / "bulk/run/node-0/supervision"
+    state.mkdir(parents=True)
+    now = time.time()
+    path = state / "node-0-trainer-3.json"
+    supervisor = AllocationSupervisor(tmp_path / "run", [child], heartbeat_s=10,
+                                      progress_s=10, max_restarts=1)
+    path.write_text(json.dumps({"generation": 1, "heartbeat_time": now,
+                                "progress_time": now}))
+    assert supervisor._deadline_reason(child, now) is None
+    path.write_text(json.dumps({"generation": 2, "heartbeat_time": now,
+                                "progress_time": now}))
+    assert supervisor._deadline_reason(child, now) == "injected_generation_gate"
+    assert supervisor._deadline_reason(child, now) is None

@@ -126,6 +126,13 @@ def test_fresh_process_restart_matches_uninterrupted_continuation(tmp_path):
     assert actual["optimizer_state_dict"] == expected["optimizer_state_dict"]
     assert actual["outer_update_state"] == expected["outer_update_state"]
     assert actual["step"] == expected["step"] == 120
+    recovery = torch.load(
+        bulk_b / "control-b/node-0/recovery/node-0-trainer-0/generation-00000003.pt",
+        weights_only=True)
+    assert recovery["identity"] == "node-0-trainer-0"
+    assert recovery["generation"] == 3 and recovery["step"] == 120
+    assert {"model_state_dict", "optimizer_state_dict", "outer_update_state",
+            "membership", "fence", "async_chain"} <= recovery.keys()
 
 
 def test_apply_identity_deadline_and_corruption_fail_closed(tmp_path):

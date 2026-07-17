@@ -51,6 +51,7 @@ class AllocationSupervisor:
             raise ValueError("unsupported supervisor launch backend")
         self.launch_backend = launch_backend
         self.stopping = False
+        self.injected: set[str] = set()
         (run_dir / "supervision").mkdir(parents=True, exist_ok=True)
         (run_dir / "logs").mkdir(parents=True, exist_ok=True)
 
@@ -106,6 +107,22 @@ class AllocationSupervisor:
         if not state_path.exists():
             return None  # connect deadline is enforced by role command itself
         state = json.loads(state_path.read_text())
+        injection = os.environ.get(
+            "RESILIENT_E97_INJECT_MANAGER" if child.role in {"manager", "node-supervisor"}
+            else "RESILIENT_E97_INJECT_TRAINER", "")
+        if injection and child.identity not in self.injected:
+            fields = injection.split(":")
+            if len(fields) != 3:
+                raise ValueError("injection must be NODE:RANK:FINALIZED_GENERATION")
+            node, rank, generation = map(int, fields)
+            matches = (child.node_rank == node and
+                       ((child.role == "trainer" and child.local_rank == rank) or
+                        (child.role in {"manager", "node-supervisor"} and rank == -1)))
+            if matches and int(state.get("generation", -1)) >= generation:
+                self.injected.add(child.identity)
+                self._event("generation_gated_injection", child, generation=generation,
+                            injection_class=child.role)
+                return "injected_generation_gate"
         if now - float(state.get("heartbeat_time", 0)) > self.heartbeat_s:
             return "heartbeat_deadline"
         if now - float(state.get("progress_time", 0)) > self.progress_s:
@@ -126,11 +143,18 @@ class AllocationSupervisor:
     def run(self) -> int:
         for child in self.children:
             self.start(child)
+        completed: set[str] = set()
         while not self.stopping:
             now = time.time()
             for child in self.children:
+                if child.identity in completed:
+                    continue
                 reason = self._deadline_reason(child, now)
                 if reason is None:
+                    continue
+                if reason == "exit:0":
+                    completed.add(child.identity)
+                    self._event("completed", child, exit_code=0)
                     continue
                 self.stop_child(child, reason)
                 if child.restarts >= self.max_restarts:
@@ -138,6 +162,8 @@ class AllocationSupervisor:
                     return 1
                 child.restarts += 1
                 self.start(child)
+            if len(completed) == len(self.children):
+                return 0
             time.sleep(self.poll_s)
         for child in self.children:
             if child.process is not None and child.process.poll() is None:

@@ -61,6 +61,27 @@ def _fence(args, generation: int) -> LocalFence:
     return LocalFence(args.run_id, generation, 0, args.coordinator_epoch, args.payload_id)
 
 
+def _latest_role_generation(control: Path, identity: str, args) -> int:
+    path = control / "recovery" / f"{identity}.json"
+    if not path.exists():
+        return args.initial_generation
+    value = json.loads(path.read_text())
+    if (value.get("identity") != identity or value.get("run_id") != args.run_id
+            or value.get("payload_id") != args.payload_id
+            or value.get("source_id") != args.source_id
+            or int(value.get("coordinator_epoch", -1)) != args.coordinator_epoch):
+        raise ValueError("role recovery identity/fence mismatch")
+    return max(args.initial_generation, int(value["generation"]))
+
+
+def _publish_role_recovery(control: Path, identity: str, args, generation: int,
+                           **extra: object) -> None:
+    atomic_json(control / "recovery" / f"{identity}.json", {
+        "schema": 1, "identity": identity, "run_id": args.run_id,
+        "payload_id": args.payload_id, "source_id": args.source_id,
+        "coordinator_epoch": args.coordinator_epoch, "generation": generation, **extra})
+
+
 def manager(args) -> int:
     run = Path(args.run_dir); node = int(os.environ.get("RESILIENT_E97_NODE_RANK", "0"))
     identity = f"node-{node}-manager"
@@ -78,9 +99,11 @@ def manager(args) -> int:
                             args.deadline_s, args.deadline_s),
             run / "manager-network", args.coordinator_epoch)
         thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+    control = bulk / "control"
+    target_generation = args.initial_generation + args.generations
+    start_generation = _latest_role_generation(control, identity, args)
     try:
-        for generation in range(args.initial_generation,
-                                args.initial_generation + args.generations):
+        for generation in range(start_generation, target_generation):
             fence = _fence(args, generation)
             heartbeat(bulk, identity, generation=generation, step=generation * args.local_steps,
                       loss=None, stage="collecting")
@@ -121,6 +144,9 @@ def manager(args) -> int:
                 "generation": generation, "members": list(result["members"]),
                 "weight": int(result["weight"]), "source_id": args.source_id,
                 "payload_id": args.payload_id})
+            _publish_role_recovery(control, identity, args, generation + 1,
+                                   step=(generation + 1) * args.local_steps,
+                                   membership=list(result["members"]))
             spool.prune_aggregates(keep_generations=2)
             heartbeat(bulk, identity, generation=generation + 1,
                       step=(generation + 1) * args.local_steps, loss=None, stage="published")
@@ -178,6 +204,8 @@ def trainer(args) -> int:
     bulk = Path(args.bulk_root) / args.run_id / f"node-{node}"
     bulk = assert_node_local_path(bulk, run)
     spool = LocalTrainerSpool(bulk / "mailbox", args.max_spool_bytes)
+    control = bulk / "control"
+    target_generation = args.initial_generation + args.generations
     if args.control:
         state, optimizer_state, step, migration = {"weight": torch.tensor([0.0])}, {}, 0, {
             "status": "control_initialized", "policy": "control"}
@@ -199,12 +227,34 @@ def trainer(args) -> int:
         migration = {"status": "restored", "state": resumed["outer_update_state"],
                      "policy": "new-harness-handoff"}
         async_chain = list(handoff.get("async_chain", ())) + [str(Path(args.resume_handoff).resolve())]
+        if (handoff.get("run_id") != args.run_id or handoff.get("payload_id") != args.payload_id
+                or handoff.get("source_id") != args.source_id
+                or int(handoff["fence"]["coordinator_epoch"]) != args.coordinator_epoch
+                or not handoff.get("finalized")):
+            raise ValueError("resume handoff membership/identity/fence mismatch")
+    recovery_manifest = control / "recovery" / f"{identity}.json"
+    if recovery_manifest.exists():
+        recovery = json.loads(recovery_manifest.read_text())
+        start_generation = _latest_role_generation(control, identity, args)
+        checkpoint_path = Path(recovery["checkpoint"])
+        if __import__("hashlib").sha256(checkpoint_path.read_bytes()).hexdigest() != recovery["checkpoint_sha256"]:
+            raise ValueError("role recovery checkpoint checksum mismatch")
+        saved = torch.load(checkpoint_path, map_location="cpu", mmap=True, weights_only=True)
+        if (saved["identity"] != identity or saved["run_id"] != args.run_id
+                or saved["payload_id"] != args.payload_id
+                or int(saved["coordinator_epoch"]) != args.coordinator_epoch
+                or int(saved["generation"]) != start_generation):
+            raise ValueError("role recovery checkpoint fence mismatch")
+        state = {name: value.clone() for name, value in saved["model_state_dict"].items()}
+        optimizer_state, migration = saved["optimizer_state_dict"], saved["migration"]
+        step, async_chain = int(saved["step"]), list(saved["async_chain"])
+    else:
+        start_generation = args.initial_generation
     losses = []
     stop = {"requested": False}
     signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__("requested", True))
-    completed = args.initial_generation
-    for generation in range(args.initial_generation,
-                            args.initial_generation + args.generations):
+    completed = start_generation
+    for generation in range(start_generation, target_generation):
         if stop["requested"]:
             break
         before = {name: value.clone() for name, value in state.items()}
@@ -238,8 +288,26 @@ def trainer(args) -> int:
         state = apply_delta(before, aggregate, eta_outer=args.eta_outer)
         step += args.local_steps; losses.append(loss)
         completed = generation + 1
+        recovery_checkpoint = bulk / "recovery" / identity / f"generation-{completed:08d}.pt"
+        recovery_checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        temporary = recovery_checkpoint.with_suffix(".tmp")
+        torch.save({"identity": identity, "model_state_dict": state,
+                    "optimizer_state_dict": optimizer_state, "migration": migration,
+                    "outer_update_state": migration.get("state", {}), "step": step,
+                    "generation": completed, "run_id": args.run_id,
+                    "source_id": args.source_id, "payload_id": args.payload_id,
+                    "coordinator_epoch": args.coordinator_epoch,
+                    "membership": manifest["members"], "fence": fence.__dict__,
+                    "async_chain": async_chain}, temporary)
+        os.replace(temporary, recovery_checkpoint)
+        _publish_role_recovery(
+            control, identity, args, completed, step=step,
+            checkpoint=str(recovery_checkpoint),
+            checkpoint_sha256=__import__("hashlib").sha256(
+                recovery_checkpoint.read_bytes()).hexdigest(),
+            membership=manifest["members"], fence=fence.__dict__)
         heartbeat(bulk, identity, generation=generation + 1, step=step, loss=loss, stage="applied")
-    if node == 0 and rank == 0 and completed > args.initial_generation:
+    if node == 0 and rank == 0 and completed > start_generation:
         checkpoint = run / "checkpoints" / f"generation-{completed:08d}.pt"
         checkpoint.parent.mkdir(parents=True, exist_ok=True)
         temporary = checkpoint.with_suffix(".tmp")
