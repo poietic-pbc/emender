@@ -21,9 +21,11 @@ and control-plane only.
 - The designated node-0/trainer-0 serializes model and inner-optimizer state.
   The node-0 manager validates it and atomically publishes the immutable handoff
   manifest with byte count, SHA256, chain, membership, fences and identities.
-- A seed without outer state fails closed. The sole accepted migration string,
-  `initialize-zero-from-verified-generation-9`, records
-`initialized_not_restored`; it never represents absent state as restored.
+- Generation zero is pinned to the original verified step-1,525,000 seed with
+  SHA256 `1da27d2e09bc6c6f5ffc30e3e4476df1cebd807267431c8524de1a5b0dc5bca9`.
+  Its absent outer state is initialized from the approved outer configuration
+  and recorded as `initialized_not_restored`. Generation 9 from job 5000436 is
+  old-path evidence only and is never selected as the new harness seed.
 - TERM is latched by trainers and takes effect only between fully applied
   generations. The manager only finalizes a designated trainer proposal for a
   completed generation, so a partial generation cannot become the handoff.
@@ -37,12 +39,13 @@ spawns and independently supervises its CPU manager plus eight GPU children.
 gate. A control test proves that both backends preserve role identity, device
 binding, heartbeat/progress deadlines, eviction, and restart configuration.
 
-Full tensor shards do not use the shared run directory. `--bulk-root` defaults
-to node-local `/tmp/resilient-e97`; the shared directory contains only bounded
-control, heartbeat, fence, and immutable handoff manifests. Each local mailbox
-and network replay spool has an explicit byte limit. Managers publish the
-configured bound, observed high-water mark, and post-release ownership in the
-small control record, and tests require prompt consumption below high water.
+No live update, tensor shard, aggregate, redistribution, heartbeat, quorum, or
+replay message uses the shared run directory. `--bulk-root` defaults to
+node-local `/tmp/resilient-e97`; a fail-closed guard rejects roots under the
+shared run tree or on Lustre/NFS/GPFS/CIFS mounts. Each local mailbox and network
+replay spool has an explicit byte limit. Managers record the configured bound,
+observed high-water mark, and post-release ownership locally. Shared Lustre is
+limited to the initial seed read and atomically finalized checkpoint/handoff.
 
 ## Validation evidence
 
@@ -95,6 +98,17 @@ After the node-local launch and bulk-staging architecture additions, the direct
 runtime/launcher control command was rerun: `8 passed in 34.71s`. This includes
 both launch backends, the bounded/high-water assertions, two-manager transport,
 and the eight-trainer three-generation flow.
+
+After the pinned-seed/restart and strict no-shared-hot-path override, the
+expanded split protocol command passed `30 passed in 74.33s`. It includes a
+fresh-process reload of model, inner optimizer, initialized/restored outer
+state, step, generation, async chain, and fencing identities, followed by a
+continuation generation that exactly equals an uninterrupted three-generation
+control. It also asserts the shared run tree contains only finalized
+`checkpoints/` and `handoff/` files.
+
+The complete established-plus-new focused suite was rerun after the final user
+overrides: `132 passed in 238.63s (0:03:58)`.
 
 The system `python3` is Python 3.6 without Torch and failed during collection;
 as in the established project validation recipe, the result above supersedes it

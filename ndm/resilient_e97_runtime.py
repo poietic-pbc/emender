@@ -18,6 +18,31 @@ import torch
 
 from ndm.resilient_e97_roles import CpuNodeManager, LocalFence, LocalTrainerSpool
 
+PINNED_STEP_1525000_SHA256 = "1da27d2e09bc6c6f5ffc30e3e4476df1cebd807267431c8524de1a5b0dc5bca9"
+
+
+def assert_node_local_path(path: str | Path, shared_root: str | Path) -> Path:
+    """Reject project-shared or Lustre-backed live-path configuration."""
+    target, shared = Path(path).resolve(), Path(shared_root).resolve()
+    if target == shared or target.is_relative_to(shared):
+        raise ValueError("live resilient path must not be inside the shared run directory")
+    mounts = []
+    try:
+        for line in Path("/proc/mounts").read_text().splitlines():
+            fields = line.split()
+            if len(fields) >= 3:
+                mount = Path(fields[1].replace("\\040", " ")).resolve()
+                if target == mount or target.is_relative_to(mount):
+                    mounts.append((len(str(mount)), fields[2]))
+    except OSError as error:
+        raise RuntimeError(f"cannot verify node-local mount: {error}") from error
+    if not mounts:
+        raise ValueError("live resilient path has no verifiable mount")
+    if max(mounts)[1].lower() in {"lustre", "gpfs", "nfs", "nfs4", "cifs"}:
+        raise ValueError("live resilient path is on a shared filesystem")
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
 
 def atomic_json(path: Path, value: Mapping[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -84,17 +109,22 @@ class SplitManagerLoop:
         return {"members": members, "weight": weight, "manifest": str(path)}
 
 
-def outer_state_migration(seed: Mapping[str, object], *, policy: str) -> dict[str, object]:
-    """Fail closed unless the absent generation-9 outer state is explicitly initialized."""
+def outer_state_migration(seed: Mapping[str, object], *, policy: str,
+                          approved_config: Mapping[str, object] | None = None) -> dict[str, object]:
+    """Restore new-harness outer state or explicitly initialize the pinned cold start."""
     outer = seed.get("outer_update_state")
     if outer is not None:
         return {"status": "restored", "state": outer, "policy": "checkpoint"}
-    if policy != "initialize-zero-from-verified-generation-9":
-        raise ValueError("seed has no outer state; explicit generation-9 migration policy required")
-    if int(seed.get("generation", -1)) != 9 or not seed.get("verified", False):
-        raise ValueError("missing-outer migration is restricted to the verified generation-9 seed")
-    return {"status": "initialized_not_restored", "state": {}, "policy": policy,
-            "source_generation": 9}
+    if policy != "initialize-from-approved-config":
+        raise ValueError("cold-start seed has no outer state; approved initialization is required")
+    if seed.get("sha256") != PINNED_STEP_1525000_SHA256 or int(seed.get("step", -1)) != 1525000:
+        raise ValueError("outer initialization is restricted to the pinned step-1525000 seed")
+    state = dict(approved_config or {})
+    if not state:
+        raise ValueError("approved outer-update configuration is required")
+    return {"status": "initialized_not_restored", "state": state, "policy": policy,
+            "source_step": 1525000, "source_generation": 0,
+            "source_sha256": PINNED_STEP_1525000_SHA256}
 
 
 def finalize_checkpoint(run_dir: str | Path, checkpoint: str | Path, *,
@@ -108,9 +138,15 @@ def finalize_checkpoint(run_dir: str | Path, checkpoint: str | Path, *,
     if not checkpoint.is_file() or checkpoint.stat().st_size <= 0:
         raise ValueError("trainer checkpoint is missing or empty")
     loaded = torch.load(checkpoint, map_location="cpu", mmap=True, weights_only=True)
-    required = {"model_state_dict", "optimizer_state_dict", "step"}
-    if not required <= set(loaded) or int(loaded["step"]) != int(step):
-        raise ValueError("checkpoint model/inner optimizer/step validation failed")
+    required = {"model_state_dict", "optimizer_state_dict", "outer_update_state", "step",
+                "generation", "run_id", "source_id", "payload_id", "coordinator_epoch"}
+    if (not required <= set(loaded) or int(loaded["step"]) != int(step)
+            or int(loaded["generation"]) != int(generation)
+            or loaded["outer_update_state"] != dict(outer_update_state)
+            or loaded["run_id"] != run_id or loaded["source_id"] != source_id
+            or loaded["payload_id"] != fence.payload_id
+            or int(loaded["coordinator_epoch"]) != fence.coordinator_epoch):
+        raise ValueError("checkpoint complete-state/fencing validation failed")
     del loaded
     raw_sha = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
     target = root / "handoff" / f"generation-{generation:08d}.json"

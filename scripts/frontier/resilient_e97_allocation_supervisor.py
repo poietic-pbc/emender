@@ -98,7 +98,11 @@ class AllocationSupervisor:
         assert child.process is not None
         if child.process.poll() is not None:
             return f"exit:{child.process.returncode}"
-        state_path = self.run_dir / "supervision" / f"{child.identity}.json"
+        bulk_root = os.environ.get("RESILIENT_E97_BULK_ROOT")
+        run_id = os.environ.get("RESILIENT_E97_RUN_ID")
+        state_root = (Path(bulk_root) / run_id / f"node-{child.node_rank}"
+                      if bulk_root and run_id else self.run_dir)
+        state_path = state_root / "supervision" / f"{child.identity}.json"
         if not state_path.exists():
             return None  # connect deadline is enforced by role command itself
         state = json.loads(state_path.read_text())

@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
 
 from ndm.resilient_e97_roles import LocalFence, LocalTrainerSpool
 from ndm.resilient_e97_runtime import (SplitManagerLoop, apply_delta, atomic_json,
+                                       PINNED_STEP_1525000_SHA256, assert_node_local_path,
                                        finalize_checkpoint, flatten_delta, heartbeat,
                                        outer_state_migration)
 from ndm.resilient_node_quorum import GenerationFence
@@ -49,6 +50,8 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--migration-policy", default="")
     value.add_argument("--bulk-root", default=os.environ.get("RESILIENT_E97_BULK_ROOT", "/tmp/resilient-e97"))
     value.add_argument("--max-spool-bytes", type=int, default=32 << 30)
+    value.add_argument("--initial-generation", type=int, default=0)
+    value.add_argument("--resume-handoff", default="")
     return value
 
 
@@ -60,6 +63,7 @@ def manager(args) -> int:
     run = Path(args.run_dir); node = int(os.environ.get("RESILIENT_E97_NODE_RANK", "0"))
     identity = f"node-{node}-manager"
     bulk = Path(args.bulk_root) / args.run_id / f"node-{node}"
+    bulk = assert_node_local_path(bulk, run)
     spool = LocalTrainerSpool(bulk / "mailbox", args.max_spool_bytes)
     loop = SplitManagerLoop(spool, quorum=args.local_quorum, source_id=args.source_id,
                             aggregation_deadline_s=args.deadline_s)
@@ -72,9 +76,10 @@ def manager(args) -> int:
             run / "manager-network", args.coordinator_epoch)
         thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
     try:
-        for generation in range(args.generations):
+        for generation in range(args.initial_generation,
+                                args.initial_generation + args.generations):
             fence = _fence(args, generation)
-            heartbeat(run, identity, generation=generation, step=generation * args.local_steps,
+            heartbeat(bulk, identity, generation=generation, step=generation * args.local_steps,
                       loss=None, stage="collecting")
             if args.node_count == 1:
                 result = loop.generation(fence)
@@ -103,21 +108,21 @@ def manager(args) -> int:
                     spool.release_trainer(fence, trainer_id)
                 result = {"members": members, "weight": local_weight,
                           "accepted_nodes": header["accepted_nodes"]}
-            atomic_json(run / "control" / f"node-{node}-bulk-ownership.json", {
+            atomic_json(bulk / "control" / f"node-{node}-bulk-ownership.json", {
                 "backend": "bounded-node-local-filesystem", "bulk_root": str(bulk),
                 "shared_run_dir_is_bulk_path": bulk.is_relative_to(run),
                 "max_bytes": args.max_spool_bytes,
                 "high_water_bytes": spool.high_water_bytes,
                 "post_release_bytes": spool.bytes_used})
-            atomic_json(run / "control" / f"node-{node}-generation-{generation:08d}.json", {
+            atomic_json(bulk / "control" / f"node-{node}-generation-{generation:08d}.json", {
                 "generation": generation, "members": list(result["members"]),
                 "weight": int(result["weight"]), "source_id": args.source_id,
                 "payload_id": args.payload_id})
             spool.prune_aggregates(keep_generations=2)
-            heartbeat(run, identity, generation=generation + 1,
+            heartbeat(bulk, identity, generation=generation + 1,
                       step=(generation + 1) * args.local_steps, loss=None, stage="published")
         if node == 0:
-            proposal = run / "handoff" / "trainer-proposal.json"
+            proposal = bulk / "control" / "trainer-proposal.json"
             deadline = time.monotonic() + args.deadline_s
             while time.monotonic() < deadline and not proposal.exists():
                 time.sleep(.02)
@@ -146,15 +151,19 @@ def _load_real(args):
     overrides = json.loads(Path(args.train_args_json).read_text())
     overrides.update({"data": args.data, "optimizer": "schedulefree"})
     train_args = default_tiny_e97_train_args(**overrides)
+    seed_sha = __import__("hashlib").sha256(Path(args.seed).read_bytes()).hexdigest()
+    if seed_sha != PINNED_STEP_1525000_SHA256:
+        raise ValueError("seed SHA256 does not match pinned step-1525000 checkpoint")
     payload = torch.load(args.seed, map_location="cpu", mmap=True, weights_only=True)
     if "model_state_dict" not in payload or "optimizer_state_dict" not in payload:
         raise ValueError("verified seed lacks model or ScheduleFree inner optimizer state")
     state = {name: value.clone() for name, value in payload["model_state_dict"].items()
              if value.is_floating_point()}
-    seed_meta = {"generation": int(payload.get("generation", 9)),
-                 "verified": bool(payload.get("verified", False)),
+    seed_meta = {"step": int(payload.get("step", -1)), "sha256": seed_sha,
                  "outer_update_state": payload.get("outer_update_state")}
-    migration = outer_state_migration(seed_meta, policy=args.migration_policy)
+    migration = outer_state_migration(
+        seed_meta, policy=args.migration_policy,
+        approved_config={"algorithm": "weighted-mean", "eta_outer": args.eta_outer})
     return train_args, state, payload["optimizer_state_dict"], int(payload.get("step", 0)), migration
 
 
@@ -164,6 +173,7 @@ def trainer(args) -> int:
     run = Path(args.run_dir); node = int(os.environ.get("RESILIENT_E97_NODE_RANK", "0"))
     rank = int(os.environ.get("RESILIENT_E97_LOCAL_RANK", "0")); identity = f"node-{node}-trainer-{rank}"
     bulk = Path(args.bulk_root) / args.run_id / f"node-{node}"
+    bulk = assert_node_local_path(bulk, run)
     spool = LocalTrainerSpool(bulk / "mailbox", args.max_spool_bytes)
     if args.control:
         state, optimizer_state, step, migration = {"weight": torch.tensor([0.0])}, {}, 0, {
@@ -171,11 +181,27 @@ def trainer(args) -> int:
         train_args = None
     else:
         train_args, state, optimizer_state, step, migration = _load_real(args)
+    async_chain = [args.seed] if args.seed else []
+    if args.resume_handoff:
+        handoff = json.loads(Path(args.resume_handoff).read_text())
+        checkpoint_path = Path(handoff["checkpoint"])
+        if __import__("hashlib").sha256(checkpoint_path.read_bytes()).hexdigest() != handoff["checkpoint_sha256"]:
+            raise ValueError("resume checkpoint checksum mismatch")
+        resumed = torch.load(checkpoint_path, map_location="cpu", mmap=True, weights_only=True)
+        if (int(resumed["generation"]) != args.initial_generation
+                or resumed["outer_update_state"] != handoff["outer_update_state"]):
+            raise ValueError("resume generation/outer state does not match handoff")
+        state = {name: value.clone() for name, value in resumed["model_state_dict"].items()}
+        optimizer_state, step = resumed["optimizer_state_dict"], int(resumed["step"])
+        migration = {"status": "restored", "state": resumed["outer_update_state"],
+                     "policy": "new-harness-handoff"}
+        async_chain = list(handoff.get("async_chain", ())) + [str(Path(args.resume_handoff).resolve())]
     losses = []
     stop = {"requested": False}
     signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__("requested", True))
-    completed = 0
-    for generation in range(args.generations):
+    completed = args.initial_generation
+    for generation in range(args.initial_generation,
+                            args.initial_generation + args.generations):
         if stop["requested"]:
             break
         before = {name: value.clone() for name, value in state.items()}
@@ -200,7 +226,7 @@ def trainer(args) -> int:
         fence = _fence(args, generation)
         spool.publish(fence, rank, flatten_delta(before, after), weight=tokens,
                       source_id=args.source_id)
-        heartbeat(run, identity, generation=generation, step=step, loss=loss, stage="submitted")
+        heartbeat(bulk, identity, generation=generation, step=step, loss=loss, stage="submitted")
         manifest, aggregate = spool.wait_aggregate(
             fence, deadline=time.monotonic() + args.deadline_s,
             expected_source_id=args.source_id)
@@ -208,19 +234,23 @@ def trainer(args) -> int:
         state = apply_delta(before, aggregate, eta_outer=args.eta_outer)
         step += args.local_steps; losses.append(loss)
         completed = generation + 1
-        heartbeat(run, identity, generation=generation + 1, step=step, loss=loss, stage="applied")
-    if node == 0 and rank == 0 and completed:
-        checkpoint = bulk / "trainer-checkpoints" / f"g{completed}.pt"
+        heartbeat(bulk, identity, generation=generation + 1, step=step, loss=loss, stage="applied")
+    if node == 0 and rank == 0 and completed > args.initial_generation:
+        checkpoint = run / "checkpoints" / f"generation-{completed:08d}.pt"
         checkpoint.parent.mkdir(parents=True, exist_ok=True)
         temporary = checkpoint.with_suffix(".tmp")
         torch.save({"model_state_dict": state, "optimizer_state_dict": optimizer_state,
-                    "step": step, "loss": losses[-1]}, temporary); os.replace(temporary, checkpoint)
+                    "outer_update_state": migration.get("state", {}), "step": step,
+                    "generation": completed, "run_id": args.run_id,
+                    "source_id": args.source_id, "payload_id": args.payload_id,
+                    "coordinator_epoch": args.coordinator_epoch,
+                    "loss": losses[-1]}, temporary); os.replace(temporary, checkpoint)
         fence = _fence(args, completed - 1)
         aggregate_manifest, _ = spool.wait_aggregate(
             fence, deadline=time.monotonic() + args.deadline_s, expected_source_id=args.source_id)
-        atomic_json(run / "handoff" / "trainer-proposal.json", {
+        atomic_json(bulk / "control" / "trainer-proposal.json", {
             "checkpoint": str(checkpoint.resolve()), "generation": completed, "step": step,
-            "async_chain": [args.seed] if args.seed else [],
+            "async_chain": async_chain,
             "membership": aggregate_manifest["members"], "fence": fence.__dict__,
             "outer_update_state": migration.get("state", {}), "migration": migration})
     return 0
