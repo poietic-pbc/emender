@@ -250,6 +250,25 @@ def test_node_local_supervisors_inherit_allocation_gpus_without_step_gres(monkey
     assert argv[-1] == "--node-local"
 
 
+def test_node_local_entrypoint_uses_slurm_node_identity(monkeypatch, tmp_path):
+    monkeypatch.setenv("RUN_DIR", str(tmp_path))
+    monkeypatch.setenv("SLURM_NODEID", "1")
+    monkeypatch.delenv("RESILIENT_E97_NODE_RANK", raising=False)
+    monkeypatch.setenv("RESILIENT_E97_MANAGER_COMMAND", "manager")
+    monkeypatch.setenv("RESILIENT_E97_TRAINER_COMMAND", "trainer")
+    captured = {}
+
+    def fake_run(self):
+        captured["ranks"] = {child.node_rank for child in self.children}
+        return 0
+
+    monkeypatch.setattr(AllocationSupervisor, "run", fake_run)
+    from scripts.frontier import resilient_e97_allocation_supervisor as module
+
+    assert module._node_local_main() == 0
+    assert captured["ranks"] == {1}
+
+
 def test_rendered_debug_production_contract_has_only_approved_deltas():
     debug = json.loads((ROOT / "configs/frontier/e97_resilient_debug_rendered.json").read_text())
     production = json.loads((ROOT / "configs/frontier/e97_resilient_production_rendered.json").read_text())

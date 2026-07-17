@@ -205,7 +205,13 @@ class AllocationSupervisor:
 
 def _node_local_main() -> int:
     run_dir = Path(os.environ["RUN_DIR"])
-    node_rank = int(os.environ["RESILIENT_E97_NODE_RANK"])
+    # The one-task-per-node srun supplies SLURM_NODEID.  The explicit role
+    # variable is present only when this entrypoint is launched as a Child by
+    # an outer supervisor, so do not require it in the default live mode.
+    node_rank_text = os.environ.get("RESILIENT_E97_NODE_RANK")
+    if node_rank_text is None:
+        node_rank_text = os.environ["SLURM_NODEID"]
+    node_rank = int(node_rank_text)
     node = os.environ.get("SLURMD_NODENAME", os.uname().nodename)
     manager = os.environ["RESILIENT_E97_MANAGER_COMMAND"]
     trainer = os.environ["RESILIENT_E97_TRAINER_COMMAND"]

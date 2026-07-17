@@ -38,3 +38,18 @@ trainers, bounded startup/heartbeat/generation deadlines, node-local/network
 bulk transport rather than a Lustre hot path, and at least one immutable
 finalized generation. It does not by itself satisfy the later failure,
 TERM-checkpoint, or fresh-allocation gates.
+
+## Result and diagnosis
+
+Job 5021992 queued for 27 seconds and ran for 13 seconds. The corrected `-c56`
+two-node step started immediately and accounting recorded step `5021992.0`
+with two tasks and 112 CPUs, proving the prior step-admission defect fixed.
+Both node-local supervisor tasks then failed before role heartbeats because
+`_node_local_main` required `RESILIENT_E97_NODE_RANK`, an environment variable
+only populated by the alternate outer-supervisor `Child` path. The default
+one-task-per-node `srun` supplies the equivalent stable `SLURM_NODEID` instead.
+
+The next changed payload derives node rank from `SLURM_NODEID` in the default
+live launch while retaining the explicit variable as an override. No full
+gate or unchanged retry is authorized after this pre-generation failure; the
+next allocation must again be a short two-node startup smoke.
