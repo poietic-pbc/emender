@@ -36,3 +36,21 @@ managers, all sixteen real GPU trainers, first heartbeat, network connectivity,
 and at least one finalized generation before any full `02:00:00` gate can be
 submitted. Queue time and runtime are recorded separately, and pending queue
 state is not a failure or a reason to retry.
+
+## Result and diagnosis
+
+Job 5021768 queued for 36 minutes 16 seconds, from `2026-07-17T17:54:49-04:00`
+until `2026-07-17T18:31:05-04:00`, then ran for 14 minutes 38 seconds. It failed
+before any role heartbeat or finalized generation. The only application output
+was the expected topology declaration; Slurm repeatedly reported
+`Requested nodes are busy` for the single two-node supervisor step and
+terminated the batch step at `2026-07-17T18:45:43-04:00` with state `FAILED`
+and exit code `0:15`.
+
+The changed payload correctly stopped re-requesting GPU GRES, but the step
+still requested `-c64` on each Frontier node. Accounting shows this allocation
+contained 112 CPUs total, exactly 56 per node, so a 64-CPU-per-task step could
+never be admitted. The next changed payload requests the allocation's actual
+56 Slurm-visible CPUs per node. Per the queue-efficiency directive, no full
+gate or unchanged retry follows this pre-generation failure; another short
+two-node startup smoke is required first.

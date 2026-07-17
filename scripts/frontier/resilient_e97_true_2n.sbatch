@@ -21,7 +21,7 @@ source "$REPO/scripts/frontier/frontier_runtime_env.sh"
 frontier_load_default_modules
 frontier_activate_emender_conda_env
 frontier_assert_emender_conda_env
-TRAIN_PYTHON_BIN=$(command -v python)
+TRAIN_PYTHON_BIN=$(command -v python || command -v python3)
 : "${TRAIN_PYTHON_BIN:?Frontier runtime activation did not select TRAIN_PYTHON_BIN}"
 
 [[ ${SLURM_JOB_NUM_NODES:?} == 2 ]] || { echo "requires exactly two nodes" >&2; exit 64; }

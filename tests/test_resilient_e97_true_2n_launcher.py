@@ -245,6 +245,8 @@ def test_node_local_supervisors_inherit_allocation_gpus_without_step_gres(monkey
     # Live Frontier smoke 5021737 proved a repeated step-level GRES request
     # remains pending while a CPU-only two-node step starts immediately.
     assert not any("gpu" in argument for argument in argv)
+    assert "-c56" in argv
+    assert "-c64" not in argv
     assert argv[-1] == "--node-local"
 
 

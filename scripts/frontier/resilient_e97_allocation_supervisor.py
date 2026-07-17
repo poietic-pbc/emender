@@ -90,7 +90,10 @@ class AllocationSupervisor:
             # doing so leaves both node-supervisor steps pending with
             # "Requested nodes are busy".  Reuse the allocation's device
             # cgroup; direct children bind ROCR_VISIBLE_DEVICES=0..7.
-            resources = ["-c64"]
+            # Frontier exposes 56 allocatable CPU cores per node to Slurm.
+            # A 64-CPU step is unsatisfiable and remains pending as
+            # "Requested nodes are busy" until the allocation expires.
+            resources = ["-c56"]
         if self.launch_backend == "node-local-child":
             env = os.environ.copy(); env.update(role_values)
             argv = shlex.split(child.command)
@@ -243,7 +246,7 @@ def main() -> int:
         # ``--gpus-per-node`` again attempts a second GRES allocation and
         # leaves the step pending with "Requested nodes are busy".
         argv = ["srun", "--overlap", "--no-kill", "--exact", "-N2", "-n2",
-                "--ntasks-per-node=1", "-c64",
+                "--ntasks-per-node=1", "-c56",
                 sys.executable, __file__, "--node-local"]
         return subprocess.call(argv)
     elif launch_mode == "independent-step":
