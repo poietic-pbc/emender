@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 
 from scripts.frontier.resilient_e97_allocation_supervisor import AllocationSupervisor, Child
+from scripts.frontier.check_resilient_e97_parity import compare
 
 
 ROOT = Path(__file__).parents[1]
@@ -90,3 +91,28 @@ def test_launch_modes_preserve_identical_local_role_identity_and_environment(tmp
     assert local_env["RESILIENT_E97_NODE_RANK"] == "7"
     assert local_env["RESILIENT_E97_LOCAL_RANK"] == "3"
     assert local_env["ROCR_VISIBLE_DEVICES"] == "3"
+
+
+def test_rendered_debug_production_contract_has_only_approved_deltas():
+    debug = json.loads((ROOT / "configs/frontier/e97_resilient_debug_rendered.json").read_text())
+    production = json.loads((ROOT / "configs/frontier/e97_resilient_production_rendered.json").read_text())
+    result = compare(debug, production)
+    assert result["ok"], result
+    assert set(result["allowlisted_diff"]) == {
+        "qos", "walltime", "nodes", "failure_injection"}
+    assert result["injection_disabled_in_production"]
+
+
+def test_node_step_injection_uses_manager_generation_and_distinct_control(tmp_path, monkeypatch):
+    child = Child("node-supervisor", 1, "node001", None, "python supervisor.py")
+    supervisor = AllocationSupervisor(tmp_path, [child], heartbeat_s=60,
+                                      progress_s=60, max_restarts=1)
+    child.process = type("Process", (), {"poll": lambda self: None})()
+    state = tmp_path / "supervision" / "node-1-manager.json"
+    state.write_text(json.dumps({"heartbeat_time": 10, "progress_time": 10,
+                                 "generation": 2}))
+    monkeypatch.setenv("RESILIENT_E97_INJECT_MANAGER", "1:-1:2")
+    assert supervisor._deadline_reason(child, 10) is None
+    monkeypatch.setenv("RESILIENT_E97_INJECT_NODE_STEP", "1:-1:2")
+    assert supervisor._deadline_reason(child, 10) == "injected_generation_gate"
+    assert supervisor._deadline_reason(child, 10) is None
