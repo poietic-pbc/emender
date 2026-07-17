@@ -263,9 +263,8 @@ def trainer(args) -> int:
     bulk = Path(args.bulk_root) / args.run_id / f"node-{node}"
     bulk = assert_node_local_path(bulk, run)
     # Loading and cloning the real E97 checkpoint can exceed the steady-state
-    # heartbeat deadline when all eight local trainers start together.  Keep
-    # liveness independent from generation progress throughout bootstrap and
-    # local training so the supervisor does not kill healthy GPU workers.
+    # heartbeat deadline when all eight local trainers start together. Keep
+    # liveness independent from generation progress throughout bootstrap.
     _liveness_heartbeat(bulk, identity)
     if _IMPORT_HEARTBEAT is not None:
         stop, thread = _IMPORT_HEARTBEAT

@@ -186,6 +186,9 @@ def test_approved_training_arguments_are_flat_overrides():
     value = json.loads(path.read_text())
     assert value["level"] == "E97" and value["optimizer"] == "schedulefree"
     assert value["dim"] == 1792 and value["lr"] == 0.001007
+    assert value["use_chunked_e97"] == 1
+    assert value["use_triton"] == 1 and value["use_split_edit"] == 1
+    assert value["linear_state"] == 1 and value["e88_raw_write"] == 0
     assert not ({"resolved", "export", "source_artifacts"} & value.keys())
 
 
