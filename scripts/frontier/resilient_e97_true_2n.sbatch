@@ -15,6 +15,14 @@
 
 set -euo pipefail
 
+REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
+source "$REPO/scripts/frontier/frontier_runtime_env.sh"
+frontier_load_default_modules
+frontier_activate_emender_conda_env
+frontier_assert_emender_conda_env
+TRAIN_PYTHON_BIN=$(command -v python)
+: "${TRAIN_PYTHON_BIN:?Frontier runtime activation did not select TRAIN_PYTHON_BIN}"
+
 [[ ${SLURM_JOB_NUM_NODES:?} == 2 ]] || { echo "requires exactly two nodes" >&2; exit 64; }
 [[ ${SLURM_JOB_QOS:?} == debug ]] || { echo "requires debug QoS" >&2; exit 64; }
 if [[ ${RESILIENT_E97_STARTUP_SMOKE:-0} == 1 ]]; then
@@ -39,7 +47,6 @@ else
   }
 fi
 [[ ${ASYNC_LOCAL_STEPS:-40} == 40 ]] || { echo "E97 gate requires local_steps=40" >&2; exit 64; }
-REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
 RUN_DIR=${RUN_DIR:?set immutable run directory}
 : "${RESILIENT_E97_RUN_ID:?set fenced run identity}"
 : "${RESILIENT_E97_SOURCE_ID:?set verified seed/source identity}"
@@ -54,13 +61,13 @@ RESILIENT_E97_INITIAL_GENERATION=${RESILIENT_E97_INITIAL_GENERATION:-0}
 RESILIENT_E97_RESUME_HANDOFF=${RESILIENT_E97_RESUME_HANDOFF:-}
 ROLE="$REPO/scripts/frontier/resilient_e97_role.py"
 COMMON="--run-dir $RUN_DIR --run-id $RESILIENT_E97_RUN_ID --generations ${RESILIENT_E97_GENERATIONS:-1} --initial-generation $RESILIENT_E97_INITIAL_GENERATION --local-steps 40 --node-count 2 --global-quorum ${RESILIENT_E97_GLOBAL_QUORUM:-2} --coordinator-host $RESILIENT_E97_COORDINATOR_HOST --coordinator-port ${RESILIENT_E97_COORDINATOR_PORT:-29571} --deadline-s ${RESILIENT_E97_GENERATION_DEADLINE_S:-900} --source-id $RESILIENT_E97_SOURCE_ID --payload-id $RESILIENT_E97_PAYLOAD_ID --code-id ${RESILIENT_E97_CODE_ID:-unknown} --coordinator-epoch ${RESILIENT_E97_COORDINATOR_EPOCH:-1} --bulk-root ${RESILIENT_E97_BULK_ROOT:-/tmp/resilient-e97} --max-spool-bytes ${RESILIENT_E97_MAX_SPOOL_BYTES:-34359738368} --bulk-chunk-bytes ${RESILIENT_E97_BULK_CHUNK_BYTES:-1048576}"
-export RESILIENT_E97_MANAGER_COMMAND="python3 $ROLE manager $COMMON --local-quorum 6"
+export RESILIENT_E97_MANAGER_COMMAND="$TRAIN_PYTHON_BIN $ROLE manager $COMMON --local-quorum 6"
 RESUME_ARGS=()
 [[ -z $RESILIENT_E97_RESUME_HANDOFF ]] || RESUME_ARGS=(--resume-handoff "$RESILIENT_E97_RESUME_HANDOFF")
 RESUME_COMMAND=
 if ((${#RESUME_ARGS[@]})); then
   printf -v RESUME_COMMAND ' %q' "${RESUME_ARGS[@]}"
 fi
-export RESILIENT_E97_TRAINER_COMMAND="python3 $ROLE trainer $COMMON --seed $RESILIENT_E97_SEED --train-args-json $RESILIENT_E97_TRAIN_ARGS_JSON --data $RESILIENT_E97_DATA --migration-policy initialize-from-approved-config$RESUME_COMMAND"
+export RESILIENT_E97_TRAINER_COMMAND="$TRAIN_PYTHON_BIN $ROLE trainer $COMMON --seed $RESILIENT_E97_SEED --train-args-json $RESILIENT_E97_TRAIN_ARGS_JSON --data $RESILIENT_E97_DATA --migration-policy initialize-from-approved-config$RESUME_COMMAND"
 printf 'topology managers=2 real_trainers=16 trainers_per_node=8 local_steps=40 collective=none\n'
-exec python3 "$REPO/scripts/frontier/resilient_e97_allocation_supervisor.py"
+exec "$TRAIN_PYTHON_BIN" "$REPO/scripts/frontier/resilient_e97_allocation_supervisor.py"

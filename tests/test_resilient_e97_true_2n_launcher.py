@@ -65,6 +65,11 @@ def test_launcher_omits_empty_resume_argument(tmp_path):
     supervisor.write_text(
         "import os\nprint(os.environ['RESILIENT_E97_TRAINER_COMMAND'])\n"
     )
+    (repo / "scripts/frontier/frontier_runtime_env.sh").write_text(
+        "frontier_load_default_modules() { :; }\n"
+        "frontier_activate_emender_conda_env() { :; }\n"
+        "frontier_assert_emender_conda_env() { :; }\n"
+    )
     bindir = tmp_path / "bin"
     bindir.mkdir()
     scontrol = bindir / "scontrol"
@@ -104,10 +109,28 @@ def test_startup_smoke_is_short_one_generation_and_forbids_injection():
     assert "RESILIENT_E97_REQUESTED_WALLTIME" in text
 
 
+def test_launcher_activates_approved_frontier_python_before_any_role():
+    text = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
+    activation = text.index("frontier_activate_emender_conda_env")
+    supervisor = text.index('exec "$TRAIN_PYTHON_BIN"')
+    assert 'source "$REPO/scripts/frontier/frontier_runtime_env.sh"' in text
+    assert "frontier_load_default_modules" in text
+    assert "frontier_assert_emender_conda_env" in text
+    assert activation < supervisor
+    assert 'RESILIENT_E97_MANAGER_COMMAND="$TRAIN_PYTHON_BIN ' in text
+    assert 'RESILIENT_E97_TRAINER_COMMAND="$TRAIN_PYTHON_BIN ' in text
+    assert 'exec python3 "$REPO/scripts/frontier/resilient_e97_allocation_supervisor.py"' not in text
+
+
 def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tmp_path):
     repo = tmp_path / "repo"
     (repo / "scripts/frontier").mkdir(parents=True)
     (repo / "scripts/frontier/resilient_e97_allocation_supervisor.py").write_text("pass\n")
+    (repo / "scripts/frontier/frontier_runtime_env.sh").write_text(
+        "frontier_load_default_modules() { :; }\n"
+        "frontier_activate_emender_conda_env() { :; }\n"
+        "frontier_assert_emender_conda_env() { :; }\n"
+    )
     bindir = tmp_path / "bin"
     bindir.mkdir()
     scontrol = bindir / "scontrol"
