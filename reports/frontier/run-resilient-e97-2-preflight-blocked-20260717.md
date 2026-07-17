@@ -107,3 +107,36 @@ coordinator discovery, an approved flat training-arguments artifact, and an
 immutable-handoff restart launch. Only after that payload is committed,
 pushed, fetched, and locally validated should the one live attempt be made.
 
+## Production-path identity disclosure requested before submission
+
+At the final preflight checkpoint, fetched authoritative `origin/main`, local
+`HEAD`, and the clean tracked worktree were all `f884988` (the evidence-only
+report was subsequently committed as `88e1b6e`). The proposed live gate is
+**not** identical to the retained 256-node production path with only QoS,
+walltime, and node count changed:
+
+- It intends to use the same pinned step-1525000 checkpoint and same CommaPile
+  data path, with no synthetic-data, synthetic-model, or `--control` flag.
+- Exact model/optimizer equivalence is not yet established because the split
+  launcher needs a flat `default_tiny_e97_train_args` override JSON, whereas
+  the available golden artifact is a nested production launch record.
+- The split-role gate uses two model-free CPU managers and sixteen independent
+  GPU trainers with dynamic local 6/8 quorum. The retained production job used
+  2,048 worker ranks across 256 nodes and a global quorum of 2,048.
+- Its hot path is the new bounded node-local mailbox plus persistent non-MPI
+  manager network stream. The retained production path used the compiled Cray
+  MPICH helper collective-reduce transport.
+- Its default launcher mode is `node-local`: one durable Slurm step per node
+  supervises one manager and eight trainer children. The alternative
+  `independent-step` mode creates eighteen separate manager/trainer steps. This
+  differs from the retained production launcher.
+- No live fault-injection controls are exposed by the true two-node launcher.
+  The unused legacy node-step supervisor has a timer-based kill option, but it
+  is not on this launch path.
+- The only scheduler-only flag actually exercised was `sbatch --test-only`.
+  The rendered command also used literal placeholder
+  `RESILIENT_E97_COORDINATOR_HOST=SLURM_ASSIGNED_NODE0`, because allocation-time
+  node-zero discovery is missing. Neither item is suitable for the live job.
+
+Therefore no claim of identical production-path execution was made and no live
+submission followed this disclosure.
