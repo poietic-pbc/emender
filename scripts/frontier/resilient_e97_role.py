@@ -16,16 +16,21 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-def _manager_import_heartbeat() -> tuple[threading.Event, threading.Thread] | None:
-    """Refresh first-heartbeat admission while Frontier imports initialize."""
-    if len(sys.argv) < 2 or sys.argv[1] != "manager":
+def _role_import_heartbeat() -> tuple[threading.Event, threading.Thread] | None:
+    """Publish liveness, but no generation progress, during heavy imports."""
+    if len(sys.argv) < 2 or sys.argv[1] not in {"manager", "trainer"}:
         return None
     run_id = os.environ.get("RESILIENT_E97_RUN_ID")
     bulk_root = os.environ.get("RESILIENT_E97_BULK_ROOT")
     node_rank = os.environ.get("RESILIENT_E97_NODE_RANK", "0")
     if not run_id or not bulk_root:
         return None
-    identity = f"node-{node_rank}-manager"
+    role = sys.argv[1]
+    local_rank = os.environ.get("RESILIENT_E97_LOCAL_RANK")
+    if role == "trainer" and local_rank is None:
+        return None
+    identity = (f"node-{node_rank}-manager" if role == "manager"
+                else f"node-{node_rank}-trainer-{local_rank}")
     state = (Path(bulk_root) / run_id / f"node-{node_rank}" / "supervision" /
              f"{identity}.json")
     stop = threading.Event()
@@ -43,12 +48,12 @@ def _manager_import_heartbeat() -> tuple[threading.Event, threading.Thread] | No
             os.replace(temporary, state)
             stop.wait(5)
 
-    thread = threading.Thread(target=publish, name="manager-import-heartbeat", daemon=True)
+    thread = threading.Thread(target=publish, name=f"{role}-import-heartbeat", daemon=True)
     thread.start()
     return stop, thread
 
 
-_IMPORT_HEARTBEAT = _manager_import_heartbeat()
+_IMPORT_HEARTBEAT = _role_import_heartbeat()
 
 import torch
 
@@ -257,6 +262,9 @@ def trainer(args) -> int:
     rank = int(os.environ.get("RESILIENT_E97_LOCAL_RANK", "0")); identity = f"node-{node}-trainer-{rank}"
     bulk = Path(args.bulk_root) / args.run_id / f"node-{node}"
     bulk = assert_node_local_path(bulk, run)
+    if _IMPORT_HEARTBEAT is not None:
+        stop, thread = _IMPORT_HEARTBEAT
+        stop.set(); thread.join(10)
     spool = LocalTrainerSpool(bulk / "mailbox", args.max_spool_bytes)
     control = bulk / "control"
     target_generation = args.initial_generation + args.generations

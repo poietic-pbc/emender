@@ -19,7 +19,7 @@ ROLE = Path(__file__).parents[1] / "scripts/frontier/resilient_e97_role.py"
 
 def test_manager_publishes_heartbeat_before_heavy_runtime_imports():
     text = ROLE.read_text()
-    bootstrap = text.index("_IMPORT_HEARTBEAT = _manager_import_heartbeat()")
+    bootstrap = text.index("_IMPORT_HEARTBEAT = _role_import_heartbeat()")
     assert bootstrap < text.index("import torch")
     assert bootstrap < text.index("from ndm.resilient_e97_runtime import")
     assert '"stage": "runtime_import"' in text

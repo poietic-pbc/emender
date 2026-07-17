@@ -248,6 +248,15 @@ def test_manager_liveness_does_not_disguise_stalled_generation_progress(tmp_path
     assert supervisor._deadline_reason(child, 126) == "progress_deadline"
 
 
+def test_all_real_roles_publish_import_liveness_without_generation_progress():
+    text = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    assert 'sys.argv[1] not in {"manager", "trainer"}' in text
+    assert 'f"node-{node_rank}-trainer-{local_rank}"' in text
+    assert '"stage": "runtime_import"' in text
+    assert '"generation": 0, "step": 0' in text
+    assert text.count("if _IMPORT_HEARTBEAT is not None:") == 2
+
+
 def test_frontier_default_avoids_nested_srun_steps():
     text = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
     assert 'os.environ.get("RESILIENT_E97_LAUNCH_MODE", "independent-step")' in text
