@@ -9,6 +9,7 @@ in bounded node/shard stores and are replayable after owner reassignment.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import hashlib
 import json
 import os
@@ -74,6 +75,199 @@ class BucketUpdate:
     def validate(self) -> None:
         if _digest(self.payload) != self.checksum:
             raise ValueError("bucket checksum mismatch")
+
+
+@dataclass(frozen=True, order=True)
+class ContributionIdentity:
+    """R04 identity; every field is fenced and participates in idempotence."""
+
+    run_id: str
+    coordinator_epoch: int
+    generation: int
+    attempt: int
+    worker_id: str
+    incarnation: str
+    contribution_seq: int
+
+
+@dataclass(frozen=True)
+class Contribution:
+    identity: ContributionIdentity
+    accepted_tokens: int
+    payload: bytes
+    payload_digest: str
+    base_digest: str
+    policy_digest: str
+    layout_digest: str
+    code_digest: str
+
+    @classmethod
+    def create(cls, fence: GenerationFence, worker_id: str, incarnation: str,
+               contribution_seq: int, accepted_tokens: int, payload: bytes, *,
+               base_digest: str, policy_digest: str, layout_digest: str,
+               code_digest: str) -> "Contribution":
+        identity = ContributionIdentity(
+            fence.run_id, fence.coordinator_epoch, fence.generation, fence.attempt,
+            worker_id, incarnation, contribution_seq,
+        )
+        payload = bytes(payload)
+        return cls(identity, accepted_tokens, payload, _digest(payload), base_digest,
+                   policy_digest, layout_digest, code_digest)
+
+    def content_digest(self) -> str:
+        value = {
+            "identity": self.identity.__dict__, "accepted_tokens": self.accepted_tokens,
+            "payload_digest": self.payload_digest, "base_digest": self.base_digest,
+            "policy_digest": self.policy_digest, "layout_digest": self.layout_digest,
+            "code_digest": self.code_digest,
+        }
+        return _digest(json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
+
+
+@dataclass(frozen=True)
+class ContributionReceipt:
+    identity: ContributionIdentity
+    status: str
+    content_digest: str
+    recorded_at: float
+
+
+@dataclass(frozen=True)
+class GenerationClosePolicy:
+    q_min: int
+    t_min: int
+    ready_fraction: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.q_min <= 0 or self.t_min <= 0:
+            raise ValueError("q_min and t_min must be positive")
+        if self.ready_fraction is not None and not (0 < self.ready_fraction <= 1):
+            raise ValueError("ready_fraction must be in (0, 1]")
+
+
+@dataclass(frozen=True)
+class GenerationClose:
+    status: str
+    reason: str
+    fence: GenerationFence
+    ready_snapshot: tuple[tuple[str, str], ...]
+    required_contributions: int
+    accepted_tokens: int
+    frozen_identities: tuple[ContributionIdentity, ...]
+    recorded_at: float
+
+
+class GenerationAdmission:
+    """Strict fresh-generation admission and bounded R04/R06 close policy.
+
+    This is metadata-only protocol logic. It neither defines a launched world
+    nor moves tensor payloads through the durable metadata/evidence path.
+    """
+
+    def __init__(self, fence: GenerationFence, ready_snapshot: Sequence[tuple[str, str]],
+                 policy: GenerationClosePolicy, deadline: float, *, base_digest: str,
+                 policy_digest: str, layout_digest: str, code_digest: str,
+                 evidence_path: str | Path | None = None):
+        if not math.isfinite(deadline):
+            raise ValueError("generation deadline must be finite")
+        snapshot = tuple(sorted(set(ready_snapshot)))
+        if len(snapshot) != len(ready_snapshot):
+            raise ValueError("READY snapshot contains duplicates")
+        self.fence, self.ready_snapshot, self.policy, self.deadline = (
+            fence, snapshot, policy, deadline)
+        self.base_digest, self.policy_digest = base_digest, policy_digest
+        self.layout_digest, self.code_digest = layout_digest, code_digest
+        self.evidence_path = Path(evidence_path) if evidence_path is not None else None
+        fraction_count = 0 if policy.ready_fraction is None else min(
+            len(snapshot), math.ceil(policy.ready_fraction * len(snapshot)))
+        self.required_contributions = max(policy.q_min, fraction_count)
+        self._receipts: dict[ContributionIdentity, ContributionReceipt] = {}
+        self._accepted: dict[ContributionIdentity, Contribution] = {}
+        self._terminal_close: GenerationClose | None = None
+
+    @classmethod
+    def open(cls, fence: GenerationFence, ready_snapshot: Sequence[tuple[str, str]],
+             policy: GenerationClosePolicy, deadline: float, **digests: object
+             ) -> "GenerationAdmission":
+        return cls(fence, ready_snapshot, policy, deadline, **digests)
+
+    def _receipt(self, contribution: Contribution, status: str, now: float
+                 ) -> ContributionReceipt:
+        return ContributionReceipt(contribution.identity, status,
+                                   contribution.content_digest(), now)
+
+    def admit(self, contribution: Contribution, *, now: float) -> ContributionReceipt:
+        identity = contribution.identity
+        prior = self._receipts.get(identity)
+        content_digest = contribution.content_digest()
+        if prior is not None:
+            if prior.content_digest == content_digest:
+                return prior
+            return self._receipt(contribution, "rejected_conflicting_duplicate", now)
+        expected_fence = (self.fence.run_id, self.fence.coordinator_epoch,
+                          self.fence.generation, self.fence.attempt)
+        actual_fence = (identity.run_id, identity.coordinator_epoch,
+                        identity.generation, identity.attempt)
+        if self._terminal_close is not None or actual_fence != expected_fence or now > self.deadline:
+            receipt = self._receipt(contribution, "rejected_stale_fence", now)
+        elif (identity.worker_id, identity.incarnation) not in self.ready_snapshot:
+            receipt = self._receipt(contribution, "rejected_not_ready", now)
+        elif (_digest(contribution.payload) != contribution.payload_digest
+              or contribution.accepted_tokens <= 0 or identity.contribution_seq < 0):
+            receipt = self._receipt(contribution, "rejected_corrupt", now)
+        elif (contribution.base_digest != self.base_digest
+              or contribution.policy_digest != self.policy_digest
+              or contribution.layout_digest != self.layout_digest
+              or contribution.code_digest != self.code_digest):
+            receipt = self._receipt(contribution, "rejected_corrupt", now)
+        else:
+            receipt = self._receipt(contribution, "accepted", now)
+            self._accepted[identity] = contribution
+        self._receipts[identity] = receipt
+        return receipt
+
+    def close(self, *, now: float, run_deadline: float) -> GenerationClose:
+        if not math.isfinite(run_deadline) or run_deadline < self.deadline:
+            raise ValueError("run deadline must be finite and not precede generation deadline")
+        if self._terminal_close is not None:
+            return self._terminal_close
+        accepted = tuple(self._accepted[key] for key in sorted(self._accepted))
+        tokens = sum(item.accepted_tokens for item in accepted)
+        floor_met = (len(accepted) >= self.required_contributions
+                     and tokens >= self.policy.t_min)
+        if floor_met:
+            result = GenerationClose(
+                "commit_ready", "accepted_floor_met", self.fence, self.ready_snapshot,
+                self.required_contributions, tokens,
+                tuple(item.identity for item in accepted), now)
+        else:
+            if now < self.deadline:
+                raise RuntimeError("generation is still open")
+            status = "deferred" if now < run_deadline else "aborted"
+            result = GenerationClose(
+                status, "generation_deadline_floor_unavailable", self.fence,
+                self.ready_snapshot, self.required_contributions, tokens, (), now)
+        self._record_close(result)
+        if result.status in ("commit_ready", "aborted"):
+            self._terminal_close = result
+        return result
+
+    def _record_close(self, result: GenerationClose) -> None:
+        if self.evidence_path is None:
+            return
+        self.evidence_path.parent.mkdir(parents=True, exist_ok=True)
+        value = {
+            "schema_version": SCHEMA_VERSION, "status": result.status,
+            "reason": result.reason, "run_id": result.fence.run_id,
+            "coordinator_epoch": result.fence.coordinator_epoch,
+            "generation": result.fence.generation, "attempt": result.fence.attempt,
+            "ready_snapshot": result.ready_snapshot,
+            "required_contributions": result.required_contributions,
+            "accepted_tokens": result.accepted_tokens, "recorded_at": result.recorded_at,
+            "frozen_identities": [item.__dict__ for item in result.frozen_identities],
+        }
+        with self.evidence_path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
 
 
 class BoundedBucketStore:

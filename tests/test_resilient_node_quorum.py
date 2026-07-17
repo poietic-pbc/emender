@@ -7,7 +7,8 @@ import pytest
 
 from ndm.resilient_node_quorum import (
     BoundedBucketStore, BucketUpdate, MetadataCoordinator, reassign_and_replay,
-    ShardOwnerServer, send_bucket, supervise_until_quorum,
+    ShardOwnerServer, send_bucket, supervise_until_quorum, Contribution,
+    ContributionIdentity, GenerationAdmission, GenerationClosePolicy, GenerationFence,
 )
 
 
@@ -141,3 +142,84 @@ def test_network_owner_rejects_stale_fence_and_oversize_frame(tmp_path):
     with pytest.raises(ValueError, match="configured maximum"):
         send_bucket(owner.address, huge, timeout=1, max_frame_bytes=512)
     owner.close()
+
+
+def _contribution(admission, worker, incarnation, seq, tokens, payload=b"delta"):
+    return Contribution.create(
+        admission.fence, worker, incarnation, seq, tokens, payload,
+        base_digest=admission.base_digest, policy_digest=admission.policy_digest,
+        layout_digest=admission.layout_digest, code_digest=admission.code_digest,
+    )
+
+
+def test_contribution_identity_fencing_replay_conflict_stale_and_corrupt_rejection(tmp_path):
+    coordinator = MetadataCoordinator(tmp_path, "identity-run", 3)
+    admission = GenerationAdmission.open(
+        coordinator.fence(7, 2), ready_snapshot=(("n0", "boot-a"),),
+        policy=GenerationClosePolicy(q_min=1, t_min=10), deadline=20.0,
+        base_digest="base", policy_digest="policy", layout_digest="layout",
+        code_digest="code",
+    )
+    original = _contribution(admission, "n0", "boot-a", 4, 10)
+    receipt = admission.admit(original, now=10.0)
+    assert receipt.status == "accepted"
+    assert admission.admit(original, now=11.0) == receipt
+
+    conflict = _contribution(admission, "n0", "boot-a", 4, 11, b"other")
+    assert admission.admit(conflict, now=12.0).status == "rejected_conflicting_duplicate"
+    stale = _contribution(admission, "n0", "boot-a", 5, 10)
+    stale = Contribution.create(
+        coordinator.fence(6, 2), stale.identity.worker_id, stale.identity.incarnation,
+        stale.identity.contribution_seq, stale.accepted_tokens, stale.payload,
+        base_digest="base", policy_digest="policy", layout_digest="layout", code_digest="code",
+    )
+    assert admission.admit(stale, now=13.0).status == "rejected_stale_fence"
+    corrupt_source = _contribution(admission, "n0", "boot-a", 6, 10)
+    corrupt = Contribution(corrupt_source.identity, original.accepted_tokens, original.payload,
+                           "bad", original.base_digest, original.policy_digest,
+                           original.layout_digest, original.code_digest)
+    assert admission.admit(corrupt, now=14.0).status == "rejected_corrupt"
+    wrong_incarnation = _contribution(admission, "n0", "boot-old", 9, 10)
+    assert admission.admit(wrong_incarnation, now=15.0).status == "rejected_not_ready"
+
+
+def test_token_floor_ready_snapshot_fraction_and_deterministic_freeze():
+    policy = GenerationClosePolicy(q_min=1, t_min=25, ready_fraction=.75)
+    admission = GenerationAdmission.open(
+        GenerationFence("run", 4, 0, 8),
+        ready_snapshot=(("n3", "i3"), ("n1", "i1"), ("n2", "i2"), ("n0", "i0")),
+        policy=policy, deadline=100.0, base_digest="b", policy_digest="p",
+        layout_digest="l", code_digest="c",
+    )
+    # The fraction is computed once from the four-member READY snapshot: ceil(3).
+    assert admission.required_contributions == 3
+    for worker, incarnation, seq, tokens in (
+        ("n2", "i2", 2, 10), ("n0", "i0", 0, 10), ("n1", "i1", 1, 10)
+    ):
+        admission.admit(_contribution(admission, worker, incarnation, seq, tokens), now=50.0)
+    close = admission.close(now=50.0, run_deadline=200.0)
+    assert close.status == "commit_ready"
+    assert close.accepted_tokens == 30
+    assert [identity.worker_id for identity in close.frozen_identities] == ["n0", "n1", "n2"]
+    assert close.ready_snapshot == (("n0", "i0"), ("n1", "i1"), ("n2", "i2"), ("n3", "i3"))
+    late = admission.admit(_contribution(admission, "n3", "i3", 3, 100), now=51.0)
+    assert late.status == "rejected_stale_fence"
+    assert admission.close(now=51.0, run_deadline=200.0) == close
+
+
+def test_quorum_collapse_deadline_defers_then_aborts_without_commit(tmp_path):
+    admission = GenerationAdmission.open(
+        GenerationFence("run", 9, 1, 2), ready_snapshot=(("n0", "i0"), ("n1", "i1")),
+        policy=GenerationClosePolicy(q_min=2, t_min=20, ready_fraction=1.0),
+        deadline=10.0, base_digest="b", policy_digest="p", layout_digest="l", code_digest="c",
+        evidence_path=tmp_path / "close-evidence.jsonl",
+    )
+    admission.admit(_contribution(admission, "n0", "i0", 0, 10), now=5.0)
+    deferred = admission.close(now=10.0, run_deadline=20.0)
+    assert deferred.status == "deferred" and deferred.frozen_identities == ()
+    assert not (tmp_path / "latest.json").exists()
+    aborted = admission.close(now=20.0, run_deadline=20.0)
+    assert aborted.status == "aborted" and aborted.frozen_identities == ()
+    evidence = [json.loads(line) for line in (tmp_path / "close-evidence.jsonl").read_text().splitlines()]
+    assert [item["status"] for item in evidence] == ["deferred", "aborted"]
+    assert all(item["reason"] == "generation_deadline_floor_unavailable" for item in evidence)
