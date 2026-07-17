@@ -39,7 +39,10 @@ COMMON="--run-dir $RUN_DIR --run-id $RESILIENT_E97_RUN_ID --generations ${RESILI
 export RESILIENT_E97_MANAGER_COMMAND="python3 $ROLE manager $COMMON --local-quorum 6"
 RESUME_ARGS=()
 [[ -z $RESILIENT_E97_RESUME_HANDOFF ]] || RESUME_ARGS=(--resume-handoff "$RESILIENT_E97_RESUME_HANDOFF")
-printf -v RESUME_COMMAND ' %q' "${RESUME_ARGS[@]}"
+RESUME_COMMAND=
+if ((${#RESUME_ARGS[@]})); then
+  printf -v RESUME_COMMAND ' %q' "${RESUME_ARGS[@]}"
+fi
 export RESILIENT_E97_TRAINER_COMMAND="python3 $ROLE trainer $COMMON --seed $RESILIENT_E97_SEED --train-args-json $RESILIENT_E97_TRAIN_ARGS_JSON --data $RESILIENT_E97_DATA --migration-policy initialize-from-approved-config$RESUME_COMMAND"
 printf 'topology managers=2 real_trainers=16 trainers_per_node=8 local_steps=40 collective=none\n'
 exec python3 "$REPO/scripts/frontier/resilient_e97_allocation_supervisor.py"

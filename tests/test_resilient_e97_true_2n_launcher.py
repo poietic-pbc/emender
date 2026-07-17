@@ -1,5 +1,7 @@
 from pathlib import Path
 import json
+import os
+import subprocess
 
 from scripts.frontier.resilient_e97_allocation_supervisor import AllocationSupervisor, Child
 from scripts.frontier.check_resilient_e97_parity import compare
@@ -38,6 +40,8 @@ def test_allocation_supervisor_uses_independent_restartable_steps():
     assert 'Child("manager"' in text
     assert 'Child("trainer"' in text
     assert '"--overlap", "--no-kill", "--exact"' in text
+    assert '"--gpus-per-node=8"' in text
+    assert '"--gpus-per-task=1"' not in text
     assert '"ASYNC_LOCAL_STEPS=40"' in text
     assert '"heartbeat_deadline"' in text
     assert '"progress_deadline"' in text
@@ -52,6 +56,43 @@ def test_launcher_discovers_coordinator_and_wires_exact_restart_handoff():
     assert 'RESILIENT_E97_COORDINATOR_HOST:-${ALLOCATION_NODES[0]}' in text
     assert "--initial-generation $RESILIENT_E97_INITIAL_GENERATION" in text
     assert '--resume-handoff "$RESILIENT_E97_RESUME_HANDOFF"' in text
+
+
+def test_launcher_omits_empty_resume_argument(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "scripts/frontier").mkdir(parents=True)
+    supervisor = repo / "scripts/frontier/resilient_e97_allocation_supervisor.py"
+    supervisor.write_text(
+        "import os\nprint(os.environ['RESILIENT_E97_TRAINER_COMMAND'])\n"
+    )
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    scontrol = bindir / "scontrol"
+    scontrol.write_text("#!/bin/sh\nprintf 'node0\\nnode1\\n'\n")
+    scontrol.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{bindir}:{os.environ['PATH']}",
+        "SLURM_JOB_NUM_NODES": "2",
+        "SLURM_JOB_QOS": "debug",
+        "SLURM_TIMELIMIT": "02:00:00",
+        "SLURM_JOB_NODELIST": "node[0-1]",
+        "REPO": str(repo),
+        "RUN_DIR": str(tmp_path / "run"),
+        "RESILIENT_E97_RUN_ID": "run",
+        "RESILIENT_E97_SOURCE_ID": "source",
+        "RESILIENT_E97_PAYLOAD_ID": "payload",
+        "RESILIENT_E97_SEED": "/seed.pt",
+        "RESILIENT_E97_TRAIN_ARGS_JSON": "/args.json",
+        "RESILIENT_E97_DATA": "/data",
+    }
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch")],
+        env=env, text=True, capture_output=True, check=True,
+    )
+    trainer_command = result.stdout.splitlines()[-1]
+    assert trainer_command.endswith("--migration-policy initialize-from-approved-config")
+    assert "  " not in trainer_command
 
 
 def test_approved_training_arguments_are_flat_overrides():

@@ -75,7 +75,9 @@ class AllocationSupervisor:
             role_env.append("CUDA_VISIBLE_DEVICES=")
             role_values["CUDA_VISIBLE_DEVICES"] = ""
         elif child.role == "trainer":
-            resources = ["-c7", "--gpus-per-task=1",
+            # Keep the complete node allocation visible to each overlapping
+            # one-task step so map_gpu can select its stable local rank.
+            resources = ["-c7", "--gpus-per-node=8",
                          f"--gpu-bind=map_gpu:{child.local_rank}"]
             role_env += [f"RESILIENT_E97_LOCAL_RANK={child.local_rank}",
                          "ASYNC_LOCAL_STEPS=40"]
