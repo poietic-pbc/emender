@@ -11,11 +11,46 @@ import sys
 import threading
 import time
 
-import torch
-
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+
+def _manager_import_heartbeat() -> tuple[threading.Event, threading.Thread] | None:
+    """Refresh first-heartbeat admission while Frontier imports initialize."""
+    if len(sys.argv) < 2 or sys.argv[1] != "manager":
+        return None
+    run_id = os.environ.get("RESILIENT_E97_RUN_ID")
+    bulk_root = os.environ.get("RESILIENT_E97_BULK_ROOT")
+    node_rank = os.environ.get("RESILIENT_E97_NODE_RANK", "0")
+    if not run_id or not bulk_root:
+        return None
+    identity = f"node-{node_rank}-manager"
+    state = (Path(bulk_root) / run_id / f"node-{node_rank}" / "supervision" /
+             f"{identity}.json")
+    stop = threading.Event()
+
+    def publish() -> None:
+        state.parent.mkdir(parents=True, exist_ok=True)
+        while not stop.is_set():
+            now = time.time()
+            temporary = state.with_suffix(f".{os.getpid()}.tmp")
+            temporary.write_text(json.dumps({
+                "identity": identity, "heartbeat_time": now, "progress_time": now,
+                "generation": 0, "step": 0, "loss": None,
+                "stage": "runtime_import", "bootstrap_pid": os.getpid(),
+            }, sort_keys=True))
+            os.replace(temporary, state)
+            stop.wait(5)
+
+    thread = threading.Thread(target=publish, name="manager-import-heartbeat", daemon=True)
+    thread.start()
+    return stop, thread
+
+
+_IMPORT_HEARTBEAT = _manager_import_heartbeat()
+
+import torch
 
 from ndm.resilient_e97_roles import LocalFence, LocalTrainerSpool
 from ndm.resilient_e97_runtime import (SplitManagerLoop, apply_delta, atomic_json,
@@ -87,6 +122,9 @@ def manager(args) -> int:
     identity = f"node-{node}-manager"
     bulk = Path(args.bulk_root) / args.run_id / f"node-{node}"
     bulk = assert_node_local_path(bulk, run)
+    if _IMPORT_HEARTBEAT is not None:
+        stop, thread = _IMPORT_HEARTBEAT
+        stop.set(); thread.join(10)
     spool = LocalTrainerSpool(bulk / "mailbox", args.max_spool_bytes)
     loop = SplitManagerLoop(spool, quorum=args.local_quorum, source_id=args.source_id,
                             aggregation_deadline_s=args.deadline_s)

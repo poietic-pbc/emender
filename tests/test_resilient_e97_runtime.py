@@ -17,6 +17,15 @@ from ndm.resilient_e97_runtime import (apply_delta, finalize_checkpoint,
 ROLE = Path(__file__).parents[1] / "scripts/frontier/resilient_e97_role.py"
 
 
+def test_manager_publishes_heartbeat_before_heavy_runtime_imports():
+    text = ROLE.read_text()
+    bootstrap = text.index("_IMPORT_HEARTBEAT = _manager_import_heartbeat()")
+    assert bootstrap < text.index("import torch")
+    assert bootstrap < text.index("from ndm.resilient_e97_runtime import")
+    assert '"stage": "runtime_import"' in text
+    assert "os.replace(temporary, state)" in text
+
+
 def _control_processes(run, bulk, *, run_id, generations, initial=0, resume=""):
     common = ["--run-dir", str(run), "--run-id", run_id, "--generations", str(generations),
               "--initial-generation", str(initial), "--local-steps", "40", "--deadline-s", "15",
