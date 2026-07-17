@@ -1,0 +1,22 @@
+{
+  "architecture": "Resilient DiLoCo Compute Pool version 1",
+  "requirements": ["R08", "R11", "R14"],
+  "focused_fixture": {
+    "configured_owner_bytes_per_shard": 4096,
+    "configured_retained_bytes": 4096,
+    "expected_peak_retained_bytes": 224,
+    "expected_release_bytes": 224,
+    "expected_replay_bytes": 224,
+    "expected_redistribution_bytes": 112
+  },
+  "direct_smoke": {
+    "peak_owner_bytes": 4,
+    "peak_retained_bytes": 4,
+    "p2p_bytes_sent": 12,
+    "released_bytes": 4,
+    "replay_bytes_sent": 4,
+    "redistribution_bytes_sent": 4,
+    "status": "pass"
+  },
+  "hot_path": "bounded in-memory point-to-point; no Lustre payload path"
+}
