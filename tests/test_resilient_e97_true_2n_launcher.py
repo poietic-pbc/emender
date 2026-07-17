@@ -221,6 +221,31 @@ def test_node_supervisor_reuses_allocation_gpus_without_step_gres(tmp_path, monk
     assert not any("gpu" in argument for argument in argv)
 
 
+def test_node_local_supervisors_share_one_two_node_gpu_step(monkeypatch):
+    monkeypatch.setenv("RUN_DIR", "/tmp/resilient-test")
+    monkeypatch.setenv("SLURM_JOB_NODELIST", "node[000-001]")
+    monkeypatch.setenv("RESILIENT_E97_MANAGER_COMMAND", "manager")
+    monkeypatch.setenv("RESILIENT_E97_TRAINER_COMMAND", "trainer")
+    monkeypatch.setattr(
+        "scripts.frontier.resilient_e97_allocation_supervisor.subprocess.check_output",
+        lambda *args, **kwargs: "node000\nnode001\n",
+    )
+    calls = []
+    monkeypatch.setattr(
+        "scripts.frontier.resilient_e97_allocation_supervisor.subprocess.call",
+        lambda argv: calls.append(argv) or 0,
+    )
+    from scripts.frontier import resilient_e97_allocation_supervisor as module
+
+    assert module.main() == 0
+    assert len(calls) == 1
+    argv = calls[0]
+    assert argv[:7] == ["srun", "--overlap", "--no-kill", "--exact", "-N2", "-n2",
+                        "--ntasks-per-node=1"]
+    assert "--gpus-per-node=8" in argv
+    assert argv[-1] == "--node-local"
+
+
 def test_rendered_debug_production_contract_has_only_approved_deltas():
     debug = json.loads((ROOT / "configs/frontier/e97_resilient_debug_rendered.json").read_text())
     production = json.loads((ROOT / "configs/frontier/e97_resilient_production_rendered.json").read_text())
@@ -284,4 +309,5 @@ def test_frontier_default_keeps_supervision_state_node_local():
     text = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
     assert 'os.environ.get("RESILIENT_E97_LAUNCH_MODE", "node-local")' in text
     assert 'launch_backend="node-local-child"' in text
-    assert 'children.extend(Child("node-supervisor"' in text
+    assert 'sys.executable, __file__, "--node-local"' in text
+    assert '"-N2", "-n2"' in text

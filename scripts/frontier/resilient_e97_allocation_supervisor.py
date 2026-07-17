@@ -238,9 +238,13 @@ def main() -> int:
     # not nested sruns, so this does not depend on nested-step scheduling.
     launch_mode = os.environ.get("RESILIENT_E97_LAUNCH_MODE", "node-local")
     if launch_mode == "node-local":
-        command = f"{shlex.quote(sys.executable)} {shlex.quote(__file__)} --node-local"
-        children.extend(Child("node-supervisor", node_rank, node, None, command)
-                        for node_rank, node in enumerate(nodes))
+        # Assign the allocation GRES once.  Two concurrently-created steps
+        # which both inherit the allocation's GPUs remain pending on Frontier
+        # with "Requested nodes are busy" even when they use --overlap.
+        argv = ["srun", "--overlap", "--no-kill", "--exact", "-N2", "-n2",
+                "--ntasks-per-node=1", "-c64", "--gpus-per-node=8",
+                sys.executable, __file__, "--node-local"]
+        return subprocess.call(argv)
     elif launch_mode == "independent-step":
         for node_rank, node in enumerate(nodes):
             children.append(Child("manager", node_rank, node, None, manager))
