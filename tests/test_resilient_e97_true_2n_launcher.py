@@ -198,6 +198,26 @@ def test_launch_modes_preserve_identical_local_role_identity_and_environment(tmp
     assert local_env["ROCR_VISIBLE_DEVICES"] == "3"
 
 
+def test_node_supervisor_requests_frontier_gpus_as_node_resources(tmp_path, monkeypatch):
+    launched = []
+
+    class Process:
+        pid = 123
+        returncode = None
+        def poll(self): return None
+
+    monkeypatch.setattr(
+        "scripts.frontier.resilient_e97_allocation_supervisor.subprocess.Popen",
+        lambda argv, **kwargs: launched.append(argv) or Process())
+    child = Child("node-supervisor", 0, "node000", None, "python supervisor.py")
+    supervisor = AllocationSupervisor(tmp_path, [child], heartbeat_s=2,
+                                      progress_s=3, max_restarts=1)
+    supervisor.start(child)
+    argv = launched[0]
+    assert "--gpus-per-node=8" in argv
+    assert "--gpus-per-task=8" not in argv
+
+
 def test_rendered_debug_production_contract_has_only_approved_deltas():
     debug = json.loads((ROOT / "configs/frontier/e97_resilient_debug_rendered.json").read_text())
     production = json.loads((ROOT / "configs/frontier/e97_resilient_production_rendered.json").read_text())

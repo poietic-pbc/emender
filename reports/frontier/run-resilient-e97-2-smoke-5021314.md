@@ -1,5 +1,22 @@
 # Resilient E97 changed-payload startup smoke — job 5021314
 
+## Terminal result
+
+- Queue time: `00:00:53` (`Submit=2026-07-17T16:21:27`,
+  `Start=2026-07-17T16:22:20`, America/New_York).
+- Runtime before the documented startup fail-fast: `00:11:07`; cancelled at
+  `2026-07-17T16:33:27` only after two complete 300-second startup-deadline
+  intervals produced zero manager/trainer heartbeats and zero finalized
+  generations.
+- Both node-supervisor steps remained pending with `Requested nodes are busy`.
+  The preserved supervisor event stream records startup-deadline eviction at
+  300 seconds and again at 600 seconds. No full-gate pass is claimed.
+- Root cause: the Frontier node-supervisor step requested all eight GPUs with
+  task-level `--gpus-per-task=8`; Frontier's node-level GCD allocation requires
+  `--gpus-per-node=8`. The changed payload is covered by
+  `test_node_supervisor_requests_frontier_gpus_as_node_resources` before the
+  next unique startup smoke.
+
 Submitted at `2026-07-17T20:21:27Z` from fetched authoritative commit
 `cec0abceb0a1d1d5b50a615e2375f07c3421c6c1`. This is a real Slurm
 submission, not `--test-only`. Immediate state was `PENDING (Priority)`.
