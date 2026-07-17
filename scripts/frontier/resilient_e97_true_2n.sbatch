@@ -17,9 +17,21 @@ set -euo pipefail
 
 [[ ${SLURM_JOB_NUM_NODES:?} == 2 ]] || { echo "requires exactly two nodes" >&2; exit 64; }
 [[ ${SLURM_JOB_QOS:?} == debug ]] || { echo "requires debug QoS" >&2; exit 64; }
-[[ ${SLURM_TIMELIMIT:-02:00:00} == 02:00:00 || ${SLURM_TIMELIMIT:-} == 120 ]] || {
-  echo "requires exactly 02:00:00" >&2; exit 64;
-}
+if [[ ${RESILIENT_E97_STARTUP_SMOKE:-0} == 1 ]]; then
+  [[ ${SLURM_TIMELIMIT:-} == 00:20:00 || ${SLURM_TIMELIMIT:-} == 20 ]] || {
+    echo "startup smoke requires exactly 00:20:00" >&2; exit 64;
+  }
+  [[ ${RESILIENT_E97_GENERATIONS:-1} == 1 ]] || {
+    echo "startup smoke requires exactly one finalized generation" >&2; exit 64;
+  }
+  [[ -z ${RESILIENT_E97_INJECT_TRAINER:-}${RESILIENT_E97_INJECT_MANAGER:-}${RESILIENT_E97_INJECT_NODE_STEP:-} ]] || {
+    echo "startup smoke forbids failure injection" >&2; exit 64;
+  }
+else
+  [[ ${SLURM_TIMELIMIT:-02:00:00} == 02:00:00 || ${SLURM_TIMELIMIT:-} == 120 ]] || {
+    echo "requires exactly 02:00:00" >&2; exit 64;
+  }
+fi
 [[ ${ASYNC_LOCAL_STEPS:-40} == 40 ]] || { echo "E97 gate requires local_steps=40" >&2; exit 64; }
 REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
 RUN_DIR=${RUN_DIR:?set immutable run directory}

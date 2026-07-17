@@ -95,6 +95,14 @@ def test_launcher_omits_empty_resume_argument(tmp_path):
     assert "  " not in trainer_command
 
 
+def test_startup_smoke_is_short_one_generation_and_forbids_injection():
+    text = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
+    assert "RESILIENT_E97_STARTUP_SMOKE" in text
+    assert "startup smoke requires exactly 00:20:00" in text
+    assert "startup smoke requires exactly one finalized generation" in text
+    assert "startup smoke forbids failure injection" in text
+
+
 def test_approved_training_arguments_are_flat_overrides():
     path = ROOT / "configs/frontier/e97_resilient_split_role_flat.json"
     value = json.loads(path.read_text())
