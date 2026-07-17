@@ -116,3 +116,19 @@ def test_node_step_injection_uses_manager_generation_and_distinct_control(tmp_pa
     monkeypatch.setenv("RESILIENT_E97_INJECT_NODE_STEP", "1:-1:2")
     assert supervisor._deadline_reason(child, 10) == "injected_generation_gate"
     assert supervisor._deadline_reason(child, 10) is None
+
+
+def test_child_without_first_heartbeat_hits_startup_deadline(tmp_path):
+    child = Child("manager", 0, "node000", None, "python manager.py")
+    supervisor = AllocationSupervisor(tmp_path, [child], heartbeat_s=60,
+                                      progress_s=900, max_restarts=1,
+                                      startup_s=30)
+    child.process = type("Process", (), {"poll": lambda self: None})()
+    child.started_at = 100
+    assert supervisor._deadline_reason(child, 129) is None
+    assert supervisor._deadline_reason(child, 131) == "startup_deadline"
+
+
+def test_frontier_default_avoids_nested_srun_steps():
+    text = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
+    assert 'os.environ.get("RESILIENT_E97_LAUNCH_MODE", "independent-step")' in text
