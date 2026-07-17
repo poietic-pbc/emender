@@ -61,6 +61,7 @@ class LocalTrainerSpool:
 
     def __init__(self, root: str | Path, max_bytes: int):
         self.root, self.max_bytes = Path(root), int(max_bytes)
+        self.high_water_bytes = 0
         self.root.mkdir(parents=True, exist_ok=True)
         if self.max_bytes <= 0:
             raise ValueError("max_bytes must be positive")
@@ -103,6 +104,7 @@ class LocalTrainerSpool:
         for record, raw in zip(records, encoded):
             _atomic(directory / f"shard-{record['index']:05d}.f64", raw)
         _atomic(directory / "manifest.json", manifest_bytes)
+        self.high_water_bytes = max(self.high_water_bytes, self.bytes_used)
         return directory / "manifest.json"
 
     def release_generation(self, fence: LocalFence) -> None:
@@ -115,9 +117,12 @@ class LocalTrainerSpool:
     def release_trainer(self, fence: LocalFence, trainer_id: int) -> None:
         directory = self.root / fence.key / f"trainer-{trainer_id}"
         if directory.exists():
-            for path in sorted(directory.iterdir()):
-                path.unlink(missing_ok=True)
-            directory.rmdir()
+            try:
+                for path in sorted(directory.iterdir()):
+                    path.unlink(missing_ok=True)
+                directory.rmdir()
+            except FileNotFoundError:
+                pass  # manager and owning trainer may release concurrently
 
     def publish_aggregate(self, fence: LocalFence, members: Sequence[int],
                           shards: Sequence[torch.Tensor], *, weight: int,
@@ -132,7 +137,7 @@ class LocalTrainerSpool:
             if current.get("fence") == fence.__dict__:
                 return manifest_path
             raise ValueError("conflicting aggregate publication")
-        records = []
+        records, encoded = [], []
         for index, tensor in enumerate(shards):
             value = tensor.detach().cpu().to(torch.float64).contiguous()
             if not torch.isfinite(value).all():
@@ -140,13 +145,30 @@ class LocalTrainerSpool:
             raw = value.numpy().tobytes()
             records.append({"index": index, "elements": value.numel(),
                             "sha256": hashlib.sha256(raw).hexdigest()})
-            _atomic(directory / f"shard-{index:05d}.f64", raw)
+            encoded.append(raw)
         manifest = {"schema": SCHEMA, "fence": fence.__dict__,
                     "members": sorted(int(member) for member in members),
                     "weight": int(weight), "source_id": source_id,
                     "shards": records}
-        _atomic(manifest_path, (json.dumps(manifest, sort_keys=True) + "\n").encode())
+        manifest_bytes = (json.dumps(manifest, sort_keys=True) + "\n").encode()
+        if self.bytes_used + sum(map(len, encoded)) + len(manifest_bytes) > self.max_bytes:
+            raise BufferError("local aggregate spool byte limit exceeded")
+        for record, raw in zip(records, encoded):
+            _atomic(directory / f"shard-{record['index']:05d}.f64", raw)
+        _atomic(manifest_path, manifest_bytes)
+        self.high_water_bytes = max(self.high_water_bytes, self.bytes_used)
         return manifest_path
+
+    def prune_aggregates(self, *, keep_generations: int = 2) -> None:
+        if keep_generations <= 0:
+            raise ValueError("keep_generations must be positive")
+        root = self.root / "aggregates"
+        generations = sorted((path for path in root.glob("*") if path.is_dir()),
+                             key=lambda path: path.stat().st_mtime_ns)
+        for directory in generations[:-keep_generations]:
+            for path in directory.iterdir():
+                path.unlink()
+            directory.rmdir()
 
     def wait_aggregate(self, fence: LocalFence, *, deadline: float,
                        expected_source_id: str) -> tuple[dict[str, object], tuple[torch.Tensor, ...]]:
@@ -189,6 +211,7 @@ class CpuNodeManager:
             time.sleep(.02)
         if len(accepted) < self.quorum:
             raise TimeoutError("local trainer quorum lost at aggregation deadline")
+        self.spool.high_water_bytes = max(self.spool.high_water_bytes, self.spool.bytes_used)
         accepted = accepted[:self.quorum]
         widths = {tuple(item[2]) for item in accepted}
         if len(widths) != 1:

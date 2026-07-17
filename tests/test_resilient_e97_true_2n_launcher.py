@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from scripts.frontier.resilient_e97_allocation_supervisor import AllocationSupervisor, Child
+
 
 ROOT = Path(__file__).parents[1]
 
@@ -11,7 +13,7 @@ def test_true_launcher_is_exact_debug_two_hour_topology_without_sentinels():
     assert "#SBATCH -N 2" in text
     assert "#SBATCH -t 02:00:00" in text
     assert "#SBATCH --signal=B:TERM@300" in text
-    assert 'f"RESILIENT_E97_ROLE={child.role}"' in supervisor
+    assert '"RESILIENT_E97_ROLE": child.role' in supervisor
     assert '"CUDA_VISIBLE_DEVICES="' in supervisor
     assert '"--overlap", "--no-kill", "--exact"' in supervisor
     assert '"ASYNC_LOCAL_STEPS=40"' in supervisor
@@ -40,3 +42,34 @@ def test_allocation_supervisor_uses_independent_restartable_steps():
     assert '"allocation_term_handoff"' in text
     assert '"restart_exhausted"' in text
     assert "MPI" not in text
+
+
+def test_launch_modes_preserve_identical_local_role_identity_and_environment(tmp_path, monkeypatch):
+    launched = []
+
+    class Process:
+        pid = 123
+        returncode = None
+        def poll(self): return None
+
+    def fake_popen(argv, **kwargs):
+        launched.append((argv, kwargs.get("env")))
+        return Process()
+
+    monkeypatch.setattr("scripts.frontier.resilient_e97_allocation_supervisor.subprocess.Popen",
+                        fake_popen)
+    child = Child("trainer", 7, "node007", 3, "python trainer.py")
+    for backend in ("independent-step", "node-local-child"):
+        supervisor = AllocationSupervisor(tmp_path / backend, [child], heartbeat_s=2,
+                                          progress_s=3, max_restarts=1,
+                                          launch_backend=backend)
+        supervisor.start(child)
+        assert child.identity == "node-7-trainer-3"
+    step_argv, _ = launched[0]
+    local_argv, local_env = launched[1]
+    assert step_argv[0] == "srun" and "--no-kill" in step_argv
+    assert local_argv == ["python", "trainer.py"]
+    assert local_env["RESILIENT_E97_ROLE"] == "trainer"
+    assert local_env["RESILIENT_E97_NODE_RANK"] == "7"
+    assert local_env["RESILIENT_E97_LOCAL_RANK"] == "3"
+    assert local_env["ROCR_VISIBLE_DEVICES"] == "3"

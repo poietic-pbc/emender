@@ -35,16 +35,21 @@ class Child:
 
     @property
     def identity(self) -> str:
-        suffix = "manager" if self.local_rank is None else f"trainer-{self.local_rank}"
+        suffix = (self.role if self.local_rank is None
+                  else f"trainer-{self.local_rank}")
         return f"node-{self.node_rank}-{suffix}"
 
 
 class AllocationSupervisor:
     def __init__(self, run_dir: Path, children: list[Child], *, heartbeat_s: float,
-                 progress_s: float, max_restarts: int, poll_s: float = 2.0):
+                 progress_s: float, max_restarts: int, poll_s: float = 2.0,
+                 launch_backend: str = "independent-step"):
         self.run_dir, self.children = run_dir, children
         self.heartbeat_s, self.progress_s = heartbeat_s, progress_s
         self.max_restarts, self.poll_s = max_restarts, poll_s
+        if launch_backend not in {"independent-step", "node-local-child"}:
+            raise ValueError("unsupported supervisor launch backend")
+        self.launch_backend = launch_backend
         self.stopping = False
         (run_dir / "supervision").mkdir(parents=True, exist_ok=True)
         (run_dir / "logs").mkdir(parents=True, exist_ok=True)
@@ -57,23 +62,35 @@ class AllocationSupervisor:
             stream.write(json.dumps(record, sort_keys=True) + "\n")
 
     def start(self, child: Child) -> None:
-        role_env = [f"RESILIENT_E97_ROLE={child.role}",
-                    f"RESILIENT_E97_NODE_RANK={child.node_rank}",
-                    f"RUN_DIR={self.run_dir}"]
-        resources = ["-c8"] if child.role == "manager" else [
-            "-c7", "--gpus-per-task=1", f"--gpu-bind=map_gpu:{child.local_rank}"
-        ]
+        role_values = {"RESILIENT_E97_ROLE": child.role,
+                       "RESILIENT_E97_NODE_RANK": str(child.node_rank),
+                       "RUN_DIR": str(self.run_dir)}
+        role_env = [f"{key}={value}" for key, value in role_values.items()]
         if child.role == "manager":
+            resources = ["-c8"]
             role_env.append("CUDA_VISIBLE_DEVICES=")
-        else:
+            role_values["CUDA_VISIBLE_DEVICES"] = ""
+        elif child.role == "trainer":
+            resources = ["-c7", "--gpus-per-task=1",
+                         f"--gpu-bind=map_gpu:{child.local_rank}"]
             role_env += [f"RESILIENT_E97_LOCAL_RANK={child.local_rank}",
                          "ASYNC_LOCAL_STEPS=40"]
-        argv = ["srun", "--overlap", "--no-kill", "--exact", "-N1", "-n1",
-                "-w", child.node, *resources, "env", *role_env, *shlex.split(child.command)]
+            role_values.update({"RESILIENT_E97_LOCAL_RANK": str(child.local_rank),
+                                "ASYNC_LOCAL_STEPS": "40",
+                                "ROCR_VISIBLE_DEVICES": str(child.local_rank)})
+        else:
+            resources = ["-c64", "--gpus-per-task=8"]
+        if self.launch_backend == "node-local-child":
+            env = os.environ.copy(); env.update(role_values)
+            argv = shlex.split(child.command)
+        else:
+            env = None
+            argv = ["srun", "--overlap", "--no-kill", "--exact", "-N1", "-n1",
+                    "-w", child.node, *resources, "env", *role_env, *shlex.split(child.command)]
         log = self.run_dir / "logs" / child.identity
         stdout = (log.with_suffix(".out")).open("ab", buffering=0)
         stderr = (log.with_suffix(".err")).open("ab", buffering=0)
-        child.process = subprocess.Popen(argv, stdout=stdout, stderr=stderr,
+        child.process = subprocess.Popen(argv, stdout=stdout, stderr=stderr, env=env,
                                          start_new_session=True)
         self._event("started", child, pid=child.process.pid, restart=child.restarts)
 
@@ -124,7 +141,28 @@ class AllocationSupervisor:
         return 0
 
 
+def _node_local_main() -> int:
+    run_dir = Path(os.environ["RUN_DIR"])
+    node_rank = int(os.environ["RESILIENT_E97_NODE_RANK"])
+    node = os.environ.get("SLURMD_NODENAME", os.uname().nodename)
+    manager = os.environ["RESILIENT_E97_MANAGER_COMMAND"]
+    trainer = os.environ["RESILIENT_E97_TRAINER_COMMAND"]
+    children = [Child("manager", node_rank, node, None, manager)]
+    children.extend(Child("trainer", node_rank, node, rank, trainer)
+                    for rank in range(TRAINERS_PER_NODE))
+    supervisor = AllocationSupervisor(
+        run_dir, children,
+        heartbeat_s=float(os.environ.get("RESILIENT_E97_HEARTBEAT_DEADLINE_S", "60")),
+        progress_s=float(os.environ.get("RESILIENT_E97_PROGRESS_DEADLINE_S", "900")),
+        max_restarts=int(os.environ.get("RESILIENT_E97_MAX_RESTARTS", "2")),
+        launch_backend="node-local-child")
+    signal.signal(signal.SIGTERM, lambda *_: setattr(supervisor, "stopping", True))
+    return supervisor.run()
+
+
 def main() -> int:
+    if "--node-local" in sys.argv:
+        return _node_local_main()
     run_dir = Path(os.environ["RUN_DIR"])
     nodes = subprocess.check_output(
         ["scontrol", "show", "hostnames", os.environ["SLURM_JOB_NODELIST"]], text=True
@@ -134,10 +172,18 @@ def main() -> int:
     manager = os.environ["RESILIENT_E97_MANAGER_COMMAND"]
     trainer = os.environ["RESILIENT_E97_TRAINER_COMMAND"]
     children: list[Child] = []
-    for node_rank, node in enumerate(nodes):
-        children.append(Child("manager", node_rank, node, None, manager))
-        children.extend(Child("trainer", node_rank, node, rank, trainer)
-                        for rank in range(TRAINERS_PER_NODE))
+    launch_mode = os.environ.get("RESILIENT_E97_LAUNCH_MODE", "node-local")
+    if launch_mode == "node-local":
+        command = f"{shlex.quote(sys.executable)} {shlex.quote(__file__)} --node-local"
+        children.extend(Child("node-supervisor", node_rank, node, None, command)
+                        for node_rank, node in enumerate(nodes))
+    elif launch_mode == "independent-step":
+        for node_rank, node in enumerate(nodes):
+            children.append(Child("manager", node_rank, node, None, manager))
+            children.extend(Child("trainer", node_rank, node, rank, trainer)
+                            for rank in range(TRAINERS_PER_NODE))
+    else:
+        raise ValueError("RESILIENT_E97_LAUNCH_MODE must be node-local or independent-step")
     supervisor = AllocationSupervisor(
         run_dir, children,
         heartbeat_s=float(os.environ.get("RESILIENT_E97_HEARTBEAT_DEADLINE_S", "60")),

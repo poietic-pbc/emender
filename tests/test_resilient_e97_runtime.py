@@ -18,9 +18,11 @@ ROLE = Path(__file__).parents[1] / "scripts/frontier/resilient_e97_role.py"
 
 
 def test_eight_independent_trainers_advance_three_exact_generations(tmp_path):
+    bulk_root = tmp_path.with_name(tmp_path.name + "-bulk")
     common = ["--run-dir", str(tmp_path), "--run-id", "control", "--generations", "3",
               "--local-steps", "40", "--deadline-s", "15", "--source-id", "seed-sha",
-              "--payload-id", "layout-sha", "--code-id", "code-sha", "--control"]
+              "--payload-id", "layout-sha", "--code-id", "code-sha", "--control",
+              "--bulk-root", str(bulk_root)]
     manager = subprocess.Popen([sys.executable, str(ROLE), "manager", *common],
                                env={**os.environ, "RESILIENT_E97_NODE_RANK": "0"})
     trainers = []
@@ -35,9 +37,11 @@ def test_eight_independent_trainers_advance_three_exact_generations(tmp_path):
         state = json.loads((tmp_path / "supervision" / f"node-0-trainer-{rank}.json").read_text())
         assert state["generation"] == 3 and state["step"] == 120
         assert state["loss"] > 0
-    checkpoint = torch.load(tmp_path / "node-0/trainer-checkpoints/g3.pt", weights_only=True)
+    checkpoint = torch.load(bulk_root / "control/node-0/trainer-checkpoints/g3.pt",
+                            weights_only=True)
     reference = 0.0
-    for manifest_path in sorted((tmp_path / "node-0/mailbox/aggregates").glob("*/manifest.json")):
+    mailbox = bulk_root / "control/node-0/mailbox"
+    for manifest_path in sorted((tmp_path / "control").glob("node-0-generation-*.json")):
         members = json.loads(manifest_path.read_text())["members"]
         reference += sum((rank + 1) ** 2 for rank in members) / sum(rank + 1 for rank in members)
     assert checkpoint["model_state_dict"]["weight"].item() == pytest.approx(reference)
@@ -45,17 +49,23 @@ def test_eight_independent_trainers_advance_three_exact_generations(tmp_path):
     assert len(handoff["membership"]) == 6
     assert handoff["checkpoint_sha256"] == hashlib.sha256(
         Path(handoff["checkpoint"]).read_bytes()).hexdigest()
-    assert not list((tmp_path / "node-0/mailbox").glob("control-g*/trainer-*"))
+    assert not list(mailbox.glob("control-g*/trainer-*"))
+    ownership = json.loads((tmp_path / "control/node-0-bulk-ownership.json").read_text())
+    assert ownership["shared_run_dir_is_bulk_path"] is False
+    assert 0 < ownership["high_water_bytes"] <= ownership["max_bytes"]
+    assert ownership["post_release_bytes"] < ownership["high_water_bytes"]
+    assert len(list((mailbox / "aggregates").glob("*/manifest.json"))) <= 2
 
 
 def test_two_model_free_managers_exchange_without_collective(tmp_path):
+    bulk_root = tmp_path.with_name(tmp_path.name + "-bulk")
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0)); port = probe.getsockname()[1]
     common = ["--run-dir", str(tmp_path), "--run-id", "network", "--generations", "1",
               "--local-steps", "40", "--deadline-s", "20", "--source-id", "seed",
               "--payload-id", "layout", "--code-id", "code", "--control",
               "--node-count", "2", "--global-quorum", "2", "--coordinator-host", "127.0.0.1",
-              "--coordinator-port", str(port)]
+              "--coordinator-port", str(port), "--bulk-root", str(bulk_root)]
     processes = []
     for node in range(2):
         processes.append(subprocess.Popen([sys.executable, str(ROLE), "manager", *common],

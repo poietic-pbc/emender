@@ -47,6 +47,8 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--control", action="store_true")
     value.add_argument("--eta-outer", type=float, default=1.0)
     value.add_argument("--migration-policy", default="")
+    value.add_argument("--bulk-root", default=os.environ.get("RESILIENT_E97_BULK_ROOT", "/tmp/resilient-e97"))
+    value.add_argument("--max-spool-bytes", type=int, default=32 << 30)
     return value
 
 
@@ -57,7 +59,8 @@ def _fence(args, generation: int) -> LocalFence:
 def manager(args) -> int:
     run = Path(args.run_dir); node = int(os.environ.get("RESILIENT_E97_NODE_RANK", "0"))
     identity = f"node-{node}-manager"
-    spool = LocalTrainerSpool(run / f"node-{node}" / "mailbox", 32 << 30)
+    bulk = Path(args.bulk_root) / args.run_id / f"node-{node}"
+    spool = LocalTrainerSpool(bulk / "mailbox", args.max_spool_bytes)
     loop = SplitManagerLoop(spool, quorum=args.local_quorum, source_id=args.source_id,
                             aggregation_deadline_s=args.deadline_s)
     server = thread = None
@@ -83,8 +86,9 @@ def manager(args) -> int:
                 flat = torch.cat([shard.reshape(-1) for shard in local_shards])
                 client = NodeManagerClient(args.coordinator_host, args.coordinator_port,
                                            f"node-{node}", DiskBucketSpool(
-                                               run / f"node-{node}" / "network-spool", 32 << 30),
-                                           timeout_s=args.deadline_s, max_bucket_bytes=32 << 30)
+                                               bulk / "network-spool", args.max_spool_bytes),
+                                           timeout_s=args.deadline_s,
+                                           max_bucket_bytes=args.max_spool_bytes)
                 header, aggregate = client.exchange(
                     GenerationFence(args.run_id, generation, 0, args.coordinator_epoch),
                     (encode_f64(flat.tolist()),), weight=local_weight)
@@ -99,6 +103,17 @@ def manager(args) -> int:
                     spool.release_trainer(fence, trainer_id)
                 result = {"members": members, "weight": local_weight,
                           "accepted_nodes": header["accepted_nodes"]}
+            atomic_json(run / "control" / f"node-{node}-bulk-ownership.json", {
+                "backend": "bounded-node-local-filesystem", "bulk_root": str(bulk),
+                "shared_run_dir_is_bulk_path": bulk.is_relative_to(run),
+                "max_bytes": args.max_spool_bytes,
+                "high_water_bytes": spool.high_water_bytes,
+                "post_release_bytes": spool.bytes_used})
+            atomic_json(run / "control" / f"node-{node}-generation-{generation:08d}.json", {
+                "generation": generation, "members": list(result["members"]),
+                "weight": int(result["weight"]), "source_id": args.source_id,
+                "payload_id": args.payload_id})
+            spool.prune_aggregates(keep_generations=2)
             heartbeat(run, identity, generation=generation + 1,
                       step=(generation + 1) * args.local_steps, loss=None, stage="published")
         if node == 0:
@@ -148,7 +163,8 @@ def trainer(args) -> int:
         raise ValueError("approved E97 runtime requires local_steps=40")
     run = Path(args.run_dir); node = int(os.environ.get("RESILIENT_E97_NODE_RANK", "0"))
     rank = int(os.environ.get("RESILIENT_E97_LOCAL_RANK", "0")); identity = f"node-{node}-trainer-{rank}"
-    spool = LocalTrainerSpool(run / f"node-{node}" / "mailbox", 32 << 30)
+    bulk = Path(args.bulk_root) / args.run_id / f"node-{node}"
+    spool = LocalTrainerSpool(bulk / "mailbox", args.max_spool_bytes)
     if args.control:
         state, optimizer_state, step, migration = {"weight": torch.tensor([0.0])}, {}, 0, {
             "status": "control_initialized", "policy": "control"}
@@ -194,7 +210,7 @@ def trainer(args) -> int:
         completed = generation + 1
         heartbeat(run, identity, generation=generation + 1, step=step, loss=loss, stage="applied")
     if node == 0 and rank == 0 and completed:
-        checkpoint = run / f"node-{node}" / "trainer-checkpoints" / f"g{completed}.pt"
+        checkpoint = bulk / "trainer-checkpoints" / f"g{completed}.pt"
         checkpoint.parent.mkdir(parents=True, exist_ok=True)
         temporary = checkpoint.with_suffix(".tmp")
         torch.save({"model_state_dict": state, "optimizer_state_dict": optimizer_state,
