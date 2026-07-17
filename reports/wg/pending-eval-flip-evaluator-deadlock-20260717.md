@@ -5,6 +5,10 @@ Reporter graph: `spinozans/emender`
 Affected WG: `wg 0.1.0`, binary `/ccs/home/erikgarrison/.cargo/bin/wg`, mtime `2026-07-16T15:20:21-04:00`  
 Owning repository: `https://github.com/graphwork/wg.git` (`main` inspected at `ca35e2cc976e1062895930833e8fcd10348a702a`)
 
+Upstream routing completed: branch `report/pending-eval-flip-inline-route`, commit
+`80bcbfabec53f0ad5fe4bc3f11c9cfe27dd86716`. Maintainer intake/PR URL:
+`https://github.com/graphwork/wg/pull/new/report/pending-eval-flip-inline-route`.
+
 ## Summary
 
 With `agency.auto_evaluate=true`, `agency.flip_enabled=true`, and the standard `codex-cli` route, a completed task can remain `PendingEval` indefinitely. Its `.flip-<id>` task repeatedly fails before claim with:
@@ -118,4 +122,3 @@ Make `why-blocked` use the same dependent-aware predicate as dispatcher readines
 - [ ] Readiness and `why-blocked` agree about the PendingEval system-task bypass.
 - [ ] Tests cover Codex plus at least one non-Codex handler/profile so the fix does not hard-code a provider.
 - [ ] `wg cycles` remains structural; a separate lifecycle diagnostic identifies this non-SCC wait.
-

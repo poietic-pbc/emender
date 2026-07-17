@@ -229,3 +229,13 @@ wg add 'Fix: inline FLIP evaluator loses provider and strands PendingEval' \
 ```
 
 The upstream issue URL/identifier is recorded in the task log and appended to the concise report after filing.
+
+API issue filing was unavailable because this environment has GitHub SSH access
+but no HTTPS/API credential. The report was therefore routed through the writable
+upstream source repository as required:
+
+```text
+branch: report/pending-eval-flip-inline-route
+commit: 80bcbfabec53f0ad5fe4bc3f11c9cfe27dd86716
+intake: https://github.com/graphwork/wg/pull/new/report/pending-eval-flip-inline-route
+```
