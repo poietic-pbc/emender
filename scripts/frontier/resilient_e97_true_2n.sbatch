@@ -17,9 +17,27 @@ set -euo pipefail
 
 [[ ${SLURM_JOB_NUM_NODES:?} == 2 ]] || { echo "requires exactly two nodes" >&2; exit 64; }
 [[ ${SLURM_JOB_QOS:?} == debug ]] || { echo "requires debug QoS" >&2; exit 64; }
-[[ ${SLURM_TIMELIMIT:-02:00:00} == 02:00:00 || ${SLURM_TIMELIMIT:-} == 120 ]] || {
-  echo "requires exactly 02:00:00" >&2; exit 64;
-}
+if [[ ${RESILIENT_E97_STARTUP_SMOKE:-0} == 1 ]]; then
+  # Frontier does not consistently export SLURM_TIMELIMIT into batch jobs.
+  # The submitter must therefore bind the requested value into the immutable
+  # payload; when Slurm does expose its value, require the two to agree.
+  [[ ${RESILIENT_E97_REQUESTED_WALLTIME:-} == 00:20:00 ]] || {
+    echo "startup smoke requires exactly 00:20:00" >&2; exit 64;
+  }
+  [[ -z ${SLURM_TIMELIMIT:-} || ${SLURM_TIMELIMIT} == 00:20:00 || ${SLURM_TIMELIMIT} == 20 ]] || {
+    echo "startup smoke Slurm walltime disagrees with requested 00:20:00" >&2; exit 64;
+  }
+  [[ ${RESILIENT_E97_GENERATIONS:-1} == 1 ]] || {
+    echo "startup smoke requires exactly one finalized generation" >&2; exit 64;
+  }
+  [[ -z ${RESILIENT_E97_INJECT_TRAINER:-}${RESILIENT_E97_INJECT_MANAGER:-}${RESILIENT_E97_INJECT_NODE_STEP:-} ]] || {
+    echo "startup smoke forbids failure injection" >&2; exit 64;
+  }
+else
+  [[ ${SLURM_TIMELIMIT:-02:00:00} == 02:00:00 || ${SLURM_TIMELIMIT:-} == 120 ]] || {
+    echo "requires exactly 02:00:00" >&2; exit 64;
+  }
+fi
 [[ ${ASYNC_LOCAL_STEPS:-40} == 40 ]] || { echo "E97 gate requires local_steps=40" >&2; exit 64; }
 REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
 RUN_DIR=${RUN_DIR:?set immutable run directory}
@@ -39,7 +57,10 @@ COMMON="--run-dir $RUN_DIR --run-id $RESILIENT_E97_RUN_ID --generations ${RESILI
 export RESILIENT_E97_MANAGER_COMMAND="python3 $ROLE manager $COMMON --local-quorum 6"
 RESUME_ARGS=()
 [[ -z $RESILIENT_E97_RESUME_HANDOFF ]] || RESUME_ARGS=(--resume-handoff "$RESILIENT_E97_RESUME_HANDOFF")
-printf -v RESUME_COMMAND ' %q' "${RESUME_ARGS[@]}"
+RESUME_COMMAND=
+if ((${#RESUME_ARGS[@]})); then
+  printf -v RESUME_COMMAND ' %q' "${RESUME_ARGS[@]}"
+fi
 export RESILIENT_E97_TRAINER_COMMAND="python3 $ROLE trainer $COMMON --seed $RESILIENT_E97_SEED --train-args-json $RESILIENT_E97_TRAIN_ARGS_JSON --data $RESILIENT_E97_DATA --migration-policy initialize-from-approved-config$RESUME_COMMAND"
 printf 'topology managers=2 real_trainers=16 trainers_per_node=8 local_steps=40 collective=none\n'
 exec python3 "$REPO/scripts/frontier/resilient_e97_allocation_supervisor.py"

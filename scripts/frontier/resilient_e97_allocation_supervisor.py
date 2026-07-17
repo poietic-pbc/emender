@@ -32,6 +32,7 @@ class Child:
     command: str
     process: subprocess.Popen | None = None
     restarts: int = 0
+    started_at: float | None = None
 
     @property
     def identity(self) -> str:
@@ -42,11 +43,13 @@ class Child:
 
 class AllocationSupervisor:
     def __init__(self, run_dir: Path, children: list[Child], *, heartbeat_s: float,
-                 progress_s: float, max_restarts: int, poll_s: float = 2.0,
+                 progress_s: float, max_restarts: int, startup_s: float = 120.0,
+                 poll_s: float = 2.0,
                  launch_backend: str = "independent-step"):
         self.run_dir, self.children = run_dir, children
         self.heartbeat_s, self.progress_s = heartbeat_s, progress_s
         self.max_restarts, self.poll_s = max_restarts, poll_s
+        self.startup_s = startup_s
         if launch_backend not in {"independent-step", "node-local-child"}:
             raise ValueError("unsupported supervisor launch backend")
         self.launch_backend = launch_backend
@@ -72,7 +75,9 @@ class AllocationSupervisor:
             role_env.append("CUDA_VISIBLE_DEVICES=")
             role_values["CUDA_VISIBLE_DEVICES"] = ""
         elif child.role == "trainer":
-            resources = ["-c7", "--gpus-per-task=1",
+            # Keep the complete node allocation visible to each overlapping
+            # one-task step so map_gpu can select its stable local rank.
+            resources = ["-c7", "--gpus-per-node=8",
                          f"--gpu-bind=map_gpu:{child.local_rank}"]
             role_env += [f"RESILIENT_E97_LOCAL_RANK={child.local_rank}",
                          "ASYNC_LOCAL_STEPS=40"]
@@ -93,6 +98,7 @@ class AllocationSupervisor:
         stderr = (log.with_suffix(".err")).open("ab", buffering=0)
         child.process = subprocess.Popen(argv, stdout=stdout, stderr=stderr, env=env,
                                          start_new_session=True)
+        child.started_at = time.time()
         self._event("started", child, pid=child.process.pid, restart=child.restarts)
 
     def _deadline_reason(self, child: Child, now: float) -> str | None:
@@ -111,7 +117,9 @@ class AllocationSupervisor:
             state_path = (state_root / "supervision" /
                           f"node-{child.node_rank}-manager.json")
         if not state_path.exists():
-            return None  # connect deadline is enforced by role command itself
+            if child.started_at is not None and now - child.started_at > self.startup_s:
+                return "startup_deadline"
+            return None
         state = json.loads(state_path.read_text())
         injection_variable = {
             "trainer": "RESILIENT_E97_INJECT_TRAINER",
@@ -194,6 +202,7 @@ def _node_local_main() -> int:
         heartbeat_s=float(os.environ.get("RESILIENT_E97_HEARTBEAT_DEADLINE_S", "60")),
         progress_s=float(os.environ.get("RESILIENT_E97_PROGRESS_DEADLINE_S", "900")),
         max_restarts=int(os.environ.get("RESILIENT_E97_MAX_RESTARTS", "2")),
+        startup_s=float(os.environ.get("RESILIENT_E97_STARTUP_DEADLINE_S", "120")),
         launch_backend="node-local-child")
     signal.signal(signal.SIGTERM, lambda *_: setattr(supervisor, "stopping", True))
     return supervisor.run()
@@ -211,7 +220,10 @@ def main() -> int:
     manager = os.environ["RESILIENT_E97_MANAGER_COMMAND"]
     trainer = os.environ["RESILIENT_E97_TRAINER_COMMAND"]
     children: list[Child] = []
-    launch_mode = os.environ.get("RESILIENT_E97_LAUNCH_MODE", "node-local")
+    # Frontier does not permit the node-local supervisor's child sruns to
+    # overlap their parent step reliably.  Independent allocation-level steps
+    # preserve the same role identities while avoiding nested srun deadlock.
+    launch_mode = os.environ.get("RESILIENT_E97_LAUNCH_MODE", "independent-step")
     if launch_mode == "node-local":
         command = f"{shlex.quote(sys.executable)} {shlex.quote(__file__)} --node-local"
         children.extend(Child("node-supervisor", node_rank, node, None, command)
@@ -228,6 +240,7 @@ def main() -> int:
         heartbeat_s=float(os.environ.get("RESILIENT_E97_HEARTBEAT_DEADLINE_S", "60")),
         progress_s=float(os.environ.get("RESILIENT_E97_PROGRESS_DEADLINE_S", "900")),
         max_restarts=int(os.environ.get("RESILIENT_E97_MAX_RESTARTS", "2")),
+        startup_s=float(os.environ.get("RESILIENT_E97_STARTUP_DEADLINE_S", "120")),
     )
     signal.signal(signal.SIGTERM, lambda *_: setattr(supervisor, "stopping", True))
     return supervisor.run()

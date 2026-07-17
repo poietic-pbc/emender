@@ -38,6 +38,16 @@ the universal WG guidance from `wg agent-guide`.
 **At the start of each session, run `wg quickstart` in your terminal to orient yourself.**
 Use `wg service start` to dispatch work — do not manually claim tasks.
 
+## Resilient DiLoCo design authority
+
+Before changing, testing, running, or scaling resilient training behavior, read
+[`docs/RESILIENT_DILOCO_COMPUTE_POOL.md`](docs/RESILIENT_DILOCO_COMPUTE_POOL.md).
+It is the normative architecture. Every related task MUST cite its conformance
+checklist and the applicable requirement IDs from
+[`docs/RESILIENT_DILOCO_GAP_MATRIX.md`](docs/RESILIENT_DILOCO_GAP_MATRIX.md) in
+the task's `## Validation` section. The older async design notes and current
+harness are evidence and scaffolding, not competing design authorities.
+
 This guide is written to both `CLAUDE.md` and `AGENTS.md` and kept in
 lock-step. The two files exist because Claude Code and Codex CLI look for
 different filenames, but they should never drift in content. Any divergence is
