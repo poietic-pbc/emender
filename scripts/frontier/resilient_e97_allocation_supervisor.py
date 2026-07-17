@@ -227,10 +227,11 @@ def main() -> int:
     manager = os.environ["RESILIENT_E97_MANAGER_COMMAND"]
     trainer = os.environ["RESILIENT_E97_TRAINER_COMMAND"]
     children: list[Child] = []
-    # Frontier does not permit the node-local supervisor's child sruns to
-    # overlap their parent step reliably.  Independent allocation-level steps
-    # preserve the same role identities while avoiding nested srun deadlock.
-    launch_mode = os.environ.get("RESILIENT_E97_LAUNCH_MODE", "independent-step")
+    # The supervision state is deliberately node-local.  Keep its reader on
+    # the same physical node as its writers and launch role processes directly
+    # beneath one allocation step per node.  The children are subprocesses,
+    # not nested sruns, so this does not depend on nested-step scheduling.
+    launch_mode = os.environ.get("RESILIENT_E97_LAUNCH_MODE", "node-local")
     if launch_mode == "node-local":
         command = f"{shlex.quote(sys.executable)} {shlex.quote(__file__)} --node-local"
         children.extend(Child("node-supervisor", node_rank, node, None, command)

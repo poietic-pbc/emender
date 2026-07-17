@@ -257,6 +257,8 @@ def test_all_real_roles_publish_import_liveness_without_generation_progress():
     assert text.count("if _IMPORT_HEARTBEAT is not None:") == 2
 
 
-def test_frontier_default_avoids_nested_srun_steps():
+def test_frontier_default_keeps_supervision_state_node_local():
     text = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
-    assert 'os.environ.get("RESILIENT_E97_LAUNCH_MODE", "independent-step")' in text
+    assert 'os.environ.get("RESILIENT_E97_LAUNCH_MODE", "node-local")' in text
+    assert 'launch_backend="node-local-child"' in text
+    assert 'children.extend(Child("node-supervisor"' in text
