@@ -221,7 +221,7 @@ def test_node_supervisor_reuses_allocation_gpus_without_step_gres(tmp_path, monk
     assert not any("gpu" in argument for argument in argv)
 
 
-def test_node_local_supervisors_share_one_two_node_gpu_step(monkeypatch):
+def test_node_local_supervisors_inherit_allocation_gpus_without_step_gres(monkeypatch):
     monkeypatch.setenv("RUN_DIR", "/tmp/resilient-test")
     monkeypatch.setenv("SLURM_JOB_NODELIST", "node[000-001]")
     monkeypatch.setenv("RESILIENT_E97_MANAGER_COMMAND", "manager")
@@ -242,7 +242,9 @@ def test_node_local_supervisors_share_one_two_node_gpu_step(monkeypatch):
     argv = calls[0]
     assert argv[:7] == ["srun", "--overlap", "--no-kill", "--exact", "-N2", "-n2",
                         "--ntasks-per-node=1"]
-    assert "--gpus-per-node=8" in argv
+    # Live Frontier smoke 5021737 proved a repeated step-level GRES request
+    # remains pending while a CPU-only two-node step starts immediately.
+    assert not any("gpu" in argument for argument in argv)
     assert argv[-1] == "--node-local"
 
 

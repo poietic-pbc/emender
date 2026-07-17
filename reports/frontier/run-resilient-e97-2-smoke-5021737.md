@@ -36,3 +36,26 @@ submitted, job 5021737 must demonstrate both model-free managers, all sixteen
 real GPU trainers, first heartbeat, network connectivity, and at least one
 finalized generation. Queue time and allocation runtime are recorded
 separately; pending queue state is not failure and will not trigger a retry.
+
+## Terminal outcome and changed payload
+
+Job 5021737 started at `2026-07-17T17:39:22-04:00` after `00:01:05` queued.
+It was cancelled at `2026-07-17T17:50:59-04:00` after `00:11:37` runtime and
+zero role heartbeats or finalized generations. The single node-supervisor
+`srun` repeatedly reported `Requested nodes are busy`.
+
+While the allocation was still assigned, this exact diagnostic launched on
+both nodes immediately and returned their hostnames:
+
+```bash
+timeout 20s srun --jobid 5021737 --overlap --no-kill --exact \
+  -N2 -n2 --ntasks-per-node=1 -c1 hostname
+```
+
+That isolated the redundant step-level `--gpus-per-node=8` request: the batch
+allocation already owned eight GPUs per node, and asking for the same GRES on
+the child step blocked it. The changed payload retains allocation-level
+`#SBATCH --gpus-per-node=8`, but the one two-node supervisor step now inherits
+that device cgroup without requesting GRES again. This is a pre-generation
+failure, so no checkpoint is eligible for restart and no unchanged retry is
+allowed.

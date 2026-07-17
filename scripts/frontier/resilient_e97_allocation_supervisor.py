@@ -238,11 +238,12 @@ def main() -> int:
     # not nested sruns, so this does not depend on nested-step scheduling.
     launch_mode = os.environ.get("RESILIENT_E97_LAUNCH_MODE", "node-local")
     if launch_mode == "node-local":
-        # Assign the allocation GRES once.  Two concurrently-created steps
-        # which both inherit the allocation's GPUs remain pending on Frontier
-        # with "Requested nodes are busy" even when they use --overlap.
+        # The batch allocation already owns all eight GPUs on each node.  A
+        # single two-node step inherits that device cgroup; asking Slurm for
+        # ``--gpus-per-node`` again attempts a second GRES allocation and
+        # leaves the step pending with "Requested nodes are busy".
         argv = ["srun", "--overlap", "--no-kill", "--exact", "-N2", "-n2",
-                "--ntasks-per-node=1", "-c64", "--gpus-per-node=8",
+                "--ntasks-per-node=1", "-c64",
                 sys.executable, __file__, "--node-local"]
         return subprocess.call(argv)
     elif launch_mode == "independent-step":
