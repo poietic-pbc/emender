@@ -101,6 +101,39 @@ def test_startup_smoke_is_short_one_generation_and_forbids_injection():
     assert "startup smoke requires exactly 00:20:00" in text
     assert "startup smoke requires exactly one finalized generation" in text
     assert "startup smoke forbids failure injection" in text
+    assert "RESILIENT_E97_REQUESTED_WALLTIME" in text
+
+
+def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "scripts/frontier").mkdir(parents=True)
+    (repo / "scripts/frontier/resilient_e97_allocation_supervisor.py").write_text("pass\n")
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    scontrol = bindir / "scontrol"
+    scontrol.write_text("#!/bin/sh\nprintf 'node0\\nnode1\\n'\n")
+    scontrol.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{bindir}:{os.environ['PATH']}",
+        "SLURM_JOB_NUM_NODES": "2",
+        "SLURM_JOB_QOS": "debug",
+        "SLURM_JOB_NODELIST": "node[0-1]",
+        "RESILIENT_E97_STARTUP_SMOKE": "1",
+        "RESILIENT_E97_REQUESTED_WALLTIME": "00:20:00",
+        "RESILIENT_E97_GENERATIONS": "1",
+        "REPO": str(repo),
+        "RUN_DIR": str(tmp_path / "run"),
+        "RESILIENT_E97_RUN_ID": "run",
+        "RESILIENT_E97_SOURCE_ID": "source",
+        "RESILIENT_E97_PAYLOAD_ID": "payload",
+        "RESILIENT_E97_SEED": "/seed.pt",
+        "RESILIENT_E97_TRAIN_ARGS_JSON": "/args.json",
+        "RESILIENT_E97_DATA": "/data",
+    }
+    env.pop("SLURM_TIMELIMIT", None)
+    subprocess.run(["bash", str(ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch")],
+                   env=env, text=True, capture_output=True, check=True)
 
 
 def test_approved_training_arguments_are_flat_overrides():

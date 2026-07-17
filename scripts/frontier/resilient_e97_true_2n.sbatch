@@ -18,8 +18,14 @@ set -euo pipefail
 [[ ${SLURM_JOB_NUM_NODES:?} == 2 ]] || { echo "requires exactly two nodes" >&2; exit 64; }
 [[ ${SLURM_JOB_QOS:?} == debug ]] || { echo "requires debug QoS" >&2; exit 64; }
 if [[ ${RESILIENT_E97_STARTUP_SMOKE:-0} == 1 ]]; then
-  [[ ${SLURM_TIMELIMIT:-} == 00:20:00 || ${SLURM_TIMELIMIT:-} == 20 ]] || {
+  # Frontier does not consistently export SLURM_TIMELIMIT into batch jobs.
+  # The submitter must therefore bind the requested value into the immutable
+  # payload; when Slurm does expose its value, require the two to agree.
+  [[ ${RESILIENT_E97_REQUESTED_WALLTIME:-} == 00:20:00 ]] || {
     echo "startup smoke requires exactly 00:20:00" >&2; exit 64;
+  }
+  [[ -z ${SLURM_TIMELIMIT:-} || ${SLURM_TIMELIMIT} == 00:20:00 || ${SLURM_TIMELIMIT} == 20 ]] || {
+    echo "startup smoke Slurm walltime disagrees with requested 00:20:00" >&2; exit 64;
   }
   [[ ${RESILIENT_E97_GENERATIONS:-1} == 1 ]] || {
     echo "startup smoke requires exactly one finalized generation" >&2; exit 64;
