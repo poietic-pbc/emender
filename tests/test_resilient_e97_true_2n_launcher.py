@@ -336,6 +336,13 @@ def test_all_real_roles_publish_import_liveness_without_generation_progress():
     text = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
     assert 'sys.argv[1] not in {"manager", "trainer"}' in text
     assert 'f"node-{node_rank}-trainer-{local_rank}"' in text
+
+
+def test_real_trainer_keeps_liveness_during_checkpoint_load_and_training():
+    text = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    trainer = text[text.index("def trainer(args)"):]
+    assert trainer.index("_liveness_heartbeat(bulk, identity)") < trainer.index("_load_real(args)")
+    assert 'f"{identity}.liveness.json"' in text
     assert '"stage": "runtime_import"' in text
     assert '"generation": 0, "step": 0' in text
     assert text.count("if _IMPORT_HEARTBEAT is not None:") == 2

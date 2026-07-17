@@ -27,3 +27,26 @@ Conformance: *Resilient DiLoCo Compute Pool* version 1; applicable R02, R03,
 R04, R06, R08, R09, R10, R14, R16. Acceptance still requires both model-free
 managers, all sixteen real trainers, bounded heartbeats and network/node-local
 transport, and one immutable finalized generation.
+
+## Terminal result and diagnosis
+
+Slurm accounting recorded `FAILED (ExitCode 1:0)`: submitted
+`2026-07-17T19:30:22-04:00`, started `19:30:44`, and ended `19:36:12`.
+Queue time was 22 seconds and runtime was 5 minutes 28 seconds. Both managers
+and all sixteen trainers launched with the intended identities, but no
+generation finalized.
+
+The live event stream proves a deterministic pre-generation failure: each
+trainer was evicted at `heartbeat_deadline`, restarted twice, and trainer 0
+then exhausted its bounded restart budget. The trainer stopped its import
+heartbeat immediately before `_load_real`; cloning the real E97 checkpoint
+under eight-way node startup exceeded 60 seconds, and unlike managers the
+trainer had never started the independent liveness heartbeat. This was not a
+model, checkpoint-integrity, network, or generation-quorum rejection.
+
+Job 5023212 is retained and will not be retried unchanged. The next changed
+payload keeps trainer liveness active independently of generation progress
+during checkpoint load and training, while the separate 900-second progress
+deadline remains authoritative. Another short 2-node smoke is mandatory.
+Conformance checked against architecture version 1 and R02, R06, R09, R14,
+and R16; this failed run supplies no R16 acceptance proof.
