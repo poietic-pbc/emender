@@ -746,7 +746,7 @@ owner, bounded-transport, fencing/restart, launcher, real-trainer, and helper
 suite passed all 133 tests in 127.25 seconds. Approved-Python `compileall`,
 metrics `json.tool`, `git diff --check`, forbidden dense-packing/collective/MPI
 scanning, r6/r7 evidence checksums, and the empty Frontier queue gate passed.
-No r8 command has yet been rendered.
+The changed r8 command is now rendered but has not been submitted.
 
 The compact retained tree is `reports/frontier/evidence/job-5029077`; it
 contains the fenced database, runtime identity, full supervisor event stream,
@@ -756,6 +756,39 @@ publication rows. It contains 44 files including its manifest; the
 `SHA256SUMS` digest is
 `1efb21312d24218a1813d690575be4ed961273d7574969028550bbb894dd4bb1`,
 and `sha256sum -c` passes.
+
+### Changed startup payload r8
+
+Focused code/evidence commit
+`077da1e76f5d4728e90ef6c9be3d131d738812e8` was pushed to the task branch and
+authoritative `origin/main`, fetched, and verified equal before rendering. The
+exact retained command is:
+
+```bash
+bash reports/frontier/validate-resilient-pool-v1-2n-startup-r8-submit-20260718T190322Z.sh
+```
+
+The script SHA-256 is
+`710820e3a30dffccd185fb71ee91af92fdb835d2ffaa2ecc4efdea0dbe5a3704`.
+Its run identity is
+`validate-resilient-pool-v1-2n-startup-r8-20260718T190322Z-077da1e` and its
+payload identity is
+`077da1e-20260718T190322Z-pool-v1-startup-r8-2n20m-k40-managerfirst-f32stream`.
+The launcher, supervisor, live role, pool runtime, node transport, split-role
+spool, fenced apply runtime, and batch-size-4 configuration hashes are
+`6bad3f77…`, `4b1c3c27…`, `02bd039c…`, `37de7776…`, `e322c4c8…`,
+`f32a87c0…`, `30e46a04…`, and `afc2a65f…`, respectively; the script verifies
+all full hashes.
+
+Payload r8 remains exactly two nodes, debug QoS, `00:20:00`, two model-free
+managers, 16 real GPU trainers, batch size 4, K=40, one generation, quorum two,
+64 MiB local/network frames, 64 GiB node-local bound, fixed stage budgets, no
+injection, no resume, and zero retries. Relative to r7 it changes only the
+manager-first role ordering, fixed runtime-import progress timestamp, and
+shared bounded TERM grace. It refuses tree/input drift, missing integrated-v1
+ancestry, an existing run directory, or a nonempty user queue. `bash -n`, the
+exact r7/r8 diff, `git diff --check`, and the external empty-queue gate pass.
+The command has not yet been executed.
 
 ## Authoritative integration and queue gate
 
