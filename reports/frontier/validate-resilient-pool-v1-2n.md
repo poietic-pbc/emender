@@ -45,12 +45,13 @@ after a truncated payload. This is a framing correctness bug, not evidence for
 an unbounded timeout increase. The fenced store still has zero publications.
 
 The ladder therefore remains on rung 1. No resilience or fresh-restart job has
-been rendered or submitted. The next changed payload retains the one-second
+been rendered or submitted. Changed startup payload r5 retains the one-second
 connection bound, bounded 64 MiB frames, and unchanged 180-second overall
 exchange deadline, but makes every framed segment write exact by advancing a
 memoryview until all accepted bytes are sent. A regression using a deliberately
 partial raw writer failed on the r4 tree and passes with the focused fix. It is
-not an unchanged retry.
+not an unchanged retry; its immutable command is retained below and was not yet
+submitted when committed.
 
 No production allocation, normal-QoS allocation, 4+ node allocation, or
 two-hour allocation is authorized by this report.
@@ -406,6 +407,36 @@ allowance, while the independent 0.2-second quorum-deadline test remains
 unchanged. The final pinned exact suite passed all 126 tests in 117.86 seconds;
 approved-Python compileall, JSON validation, `git diff --check`, forbidden
 live-path scanning, r4 `sha256sum -c`, and the empty-queue gate also passed.
+
+### Changed startup payload r5
+
+Focused code/evidence commit
+`bfc2050b3f2e922f4c965aa3f3bd02688eaaeb92` was pushed to the task branch
+and authoritative `origin/main`, fetched, and verified equal before rendering.
+The exact retained command is:
+
+```bash
+bash reports/frontier/validate-resilient-pool-v1-2n-startup-r5-submit-20260718T171539Z.sh
+```
+
+The script SHA-256 is
+`0c2c8e70c16c98bcb226f785d7633b9310a3d20841c6754223a2e2fdee5ad11c`.
+Its run identity is
+`validate-resilient-pool-v1-2n-startup-r5-20260718T171539Z-bfc2050` and its
+payload identity is
+`bfc2050-20260718T171539Z-pool-v1-startup-r5-2n20m-k40-owner64m-exactwrite`.
+The script pins the launcher, supervisor, role, pool runtime, node transport,
+and batch-size-4 configuration hashes to `6bad3f77…`, `1893cdef…`,
+`c8202521…`, `37de7776…`, `e322c4c8…`, and `afc2a65f…`, respectively, and
+checks authoritative ancestry, live-tree equality, absent run directory, and
+an empty user queue before calling `sbatch`.
+
+Payload r5 remains exactly two nodes, debug QoS, `00:20:00`, two model-free
+managers, 16 real GPU trainers, batch size 4, K=40, one generation, node quorum
+two, 64 MiB local/network frames, and a 64 GiB bounded node-local ledger. It
+has no failure injection, resume handoff, or role retry. Relative to r4 it uses
+the exact-write implementation and associated r4 evidence/tests; no walltime,
+shape, model, optimizer, quorum, or deadline value changed.
 
 ## Authoritative integration and queue gate
 
