@@ -505,7 +505,12 @@
         }
     },
     "startup_r8_payload": {
-        "status": "rendered, committed command required before single submission",
+        "status": "submitted exactly once; pending startup result",
+        "job_id": 5029183,
+        "submit_utc": "2026-07-18T19:05:54Z",
+        "initial_state": "PENDING (Priority)",
+        "requeue": 0,
+        "restarts": 0,
         "code_commit": "077da1e76f5d4728e90ef6c9be3d131d738812e8",
         "run_id": "validate-resilient-pool-v1-2n-startup-r8-20260718T190322Z-077da1e",
         "payload_id": "077da1e-20260718T190322Z-pool-v1-startup-r8-2n20m-k40-managerfirst-f32stream",

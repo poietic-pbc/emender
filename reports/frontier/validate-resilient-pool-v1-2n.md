@@ -788,7 +788,12 @@ manager-first role ordering, fixed runtime-import progress timestamp, and
 shared bounded TERM grace. It refuses tree/input drift, missing integrated-v1
 ancestry, an existing run directory, or a nonempty user queue. `bash -n`, the
 exact r7/r8 diff, `git diff --check`, and the external empty-queue gate pass.
-The command has not yet been executed.
+After its immutable record was committed, pushed, fetched, and verified, the
+command was executed exactly once and returned Frontier job `5029183`. Slurm
+recorded submit/eligible time `2026-07-18T19:05:54Z`, exactly two requested
+nodes, debug QoS, `00:20:00`, 16 requested GPUs, no dependency, no requeue,
+and zero restarts. Its first state was `PENDING (Priority)` as the only user
+job. Queue time is recorded separately from runtime.
 
 ## Authoritative integration and queue gate
 
