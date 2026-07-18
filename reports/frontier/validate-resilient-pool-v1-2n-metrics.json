@@ -505,7 +505,7 @@
         }
     },
     "startup_r8_payload": {
-        "status": "submitted exactly once; pending startup result",
+        "status": "failed clean completion after valid bounded first atomic commit; changed peer-apply heartbeat payload required",
         "job_id": 5029183,
         "submit_utc": "2026-07-18T19:05:54Z",
         "initial_state": "PENDING (Priority)",
@@ -549,6 +549,117 @@
         "overall_exchange_commit_seconds": 180,
         "local_gate_passed": 133,
         "local_gate_seconds": 127.25,
-        "empty_queue_before_render": true
+        "empty_queue_before_render": true,
+        "allocation_start_utc": "2026-07-18T19:06:36Z",
+        "end_utc": "2026-07-18T19:16:52Z",
+        "queue_seconds": 42,
+        "runtime_seconds": 616,
+        "state": "FAILED",
+        "allocation_exit_code": "1:0",
+        "step_exit_code": "1:0",
+        "allocated_nodes": [
+            "frontier05125",
+            "frontier05126"
+        ],
+        "runtime_attested": true,
+        "topology_attested": true,
+        "manager_ready_seconds_from_allocation_start": [
+            57.498316526412964,
+            60.98897337913513
+        ],
+        "trainer_start_seconds_from_allocation_start": {
+            "min": 57.85047197341919,
+            "max": 61.37657284736633
+        },
+        "k40_seconds_from_trainer_start": {
+            "min": 129.18446445465088,
+            "max": 133.8245234489441
+        },
+        "k40_seconds_from_allocation_start": {
+            "min": 187.03493642807007,
+            "max": 195.20109629631042
+        },
+        "local_spool_seconds": {
+            "min": 135.3301801942289,
+            "max": 144.10675904061645
+        },
+        "local_spool_bytes_per_trainer": 5506770496,
+        "local_spool_files_per_trainer": 2,
+        "local_reduce_seconds": [
+            330.15126106888056,
+            331.8344694590196
+        ],
+        "local_members_per_manager": 6,
+        "local_tokens_per_manager": 1967040,
+        "freeze_seconds_from_allocation_start": 412.7685356140137,
+        "accepted_node_contributions": 2,
+        "accepted_tokens": 3934080,
+        "owner_elapsed_seconds": [
+            98.73916324833408,
+            99.16857533995062
+        ],
+        "p2p_bytes_sent_per_manager": 11013540992,
+        "redistribution_bytes_per_manager": 11013540992,
+        "owner_bytes_per_second": [
+            223083592.35133493,
+            222117626.03035688
+        ],
+        "owner_high_water_bytes": 11013540992,
+        "owner_released_bytes": 11013540992,
+        "owner_count": 2,
+        "replay_bytes": 0,
+        "global_aggregate_bytes": 5506770496,
+        "global_aggregate_publish_seconds": [
+            7.166811498813331,
+            7.263860438019037
+        ],
+        "local_ledger_high_water_bytes": 49561322978,
+        "local_ledger_post_release_bytes": [
+            16520430812,
+            5506800090
+        ],
+        "shared_run_dir_is_bulk_path": false,
+        "central_full_model_broker": false,
+        "atomic_commit_seconds_from_allocation_start": 567.0664343833923,
+        "freeze_to_atomic_commit_seconds": 154.29789876937866,
+        "fenced_atomic_commit_elapsed_seconds": 19.83209760207683,
+        "atomic_publications": 3,
+        "committed_generation": 1,
+        "committed_fence": 1,
+        "checkpoint_bytes": 7899872371,
+        "checkpoint_sha256": "24bc0147edeb955e4bb4a1763370e5fa358abb734d123689d2a3e2adc65829ca",
+        "handoff_manifest_sha256": "c99c453d477503c2023c7c55f55af468782b4301439d72d5799be16d7e3ca438",
+        "independent_reload": {
+            "passed": true,
+            "mmap": true,
+            "weights_only": true,
+            "model_tensors": 146,
+            "model_numel": 1376692624,
+            "model_dtype": "torch.bfloat16",
+            "inner_optimizer_state_entries": 145,
+            "inner_optimizer_param_groups": 1,
+            "outer_state": "weighted-mean",
+            "accepted_tokens": 3934080,
+            "accepted_peers": 2,
+            "step": 1525040
+        },
+        "terminal_stage": "nonleader trainer supervisor progress deadline after aggregate visibility",
+        "slurm_total_cpu": "08:45:06",
+        "slurm_energy": 892647,
+        "step_max_rss_kib": 145931580,
+        "step_max_disk_read": "110717.24M",
+        "step_max_disk_write": "49647.74M",
+        "evidence_files": 128,
+        "evidence_manifest_sha256": "d386c9c0eb440e9d6644a5bbabcdf4a8ff84c1e2f8d0fc9191f60b878672dd9d",
+        "next_change": {
+            "supervisor_stage": "peer_apply",
+            "heartbeat_after_aggregate_visibility": true,
+            "peer_apply_hard_seconds": 180,
+            "unchanged_exchange_commit_seconds": 180,
+            "tdd_failed_before_fix": 1,
+            "tdd_failed_seconds": 18.25,
+            "focused_tests_passed": 3,
+            "focused_tests_seconds": 15.54
+        }
     }
 }

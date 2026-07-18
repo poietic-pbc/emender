@@ -9,7 +9,7 @@ requirements R01–R16 in `docs/RESILIENT_DILOCO_GAP_MATRIX.md`.
 
 ## Status
 
-The startup rung has failed closed seven times without an unchanged retry. Job
+The startup rung has failed closed eight times without an unchanged retry. Job
 `5028225` failed at the post-K40 local-delta streaming stage. Changed payload
 r2 job `5028347` then proved the 64 MiB/two-file local spool fix: both managers
 were READY within 61 seconds of allocation start, all 16 real trainers finished
@@ -78,15 +78,29 @@ groups serially. The exact job was escalated to KILL after 63 seconds of grace
 and became terminal at allocation +367 seconds. The fenced store has one lease
 epoch and zero publications.
 
+Changed payload r8 job `5029183` proved the manager-first startup and completed
+the full data plane. Both managers were READY by allocation +60.989 seconds;
+all 16 real trainers completed K=40 in 129.184--133.825 seconds from child
+start. The two managers exactly reduced six contributions each, froze the same
+two-node/3,934,080-token membership, exchanged and redistributed
+11,013,540,992 bytes each with full sender release, and published one bounded
+float32 aggregate each. The leader wrote a 7,899,872,371-byte fenced immutable
+checkpoint and atomically committed generation 1 at allocation +567.066
+seconds, 154.298 seconds after freeze. Independent mmap/weights-only reload and
+SHA-256 verification succeeded. The allocation nevertheless failed after that
+valid commit because the 15 nonleader trainer supervisors retained their
+pre-aggregate progress timestamps. Their actual bounded apply windows had been
+reset after aggregate visibility, but the supervisor evicted them using the
+older `submitted`/`leader_apply_wait` timestamps. This is a clean-completion
+failure, so r8 is not accepted as the startup rung.
+
 The ladder therefore remains on rung 1. No resilience or fresh-restart job has
-been rendered or submitted. Changed startup payload r7 was submitted exactly
-once as job `5029077` and failed closed at READY. The focused manager-first,
-fixed import-progress, and shared-grace shutdown changes pass the complete
-local gate, but no r8 payload has been rendered or submitted. The prospective
-r8 tree preserves the one-second connection bound, bounded 64 MiB frames,
-exact segment writes, float32 bounded aggregate stream, leader priority, and
-unchanged 180-second exchange deadline; it is a changed payload, not an
-unchanged retry.
+been rendered or submitted. The focused changed follow-up publishes a
+`peer_apply` heartbeat immediately after each trainer observes its complete
+aggregate and gives that explicit stage the existing 180-second bound. It does
+not extend any budget or change training, exact math, ownership, checkpoint, or
+publication semantics. Payload r8 was submitted exactly once and will not be
+resubmitted unchanged.
 
 No production allocation, normal-QoS allocation, 4+ node allocation, or
 two-hour allocation is authorized by this report.
@@ -794,6 +808,73 @@ recorded submit/eligible time `2026-07-18T19:05:54Z`, exactly two requested
 nodes, debug QoS, `00:20:00`, 16 requested GPUs, no dependency, no requeue,
 and zero restarts. Its first state was `PENDING (Priority)` as the only user
 job. Queue time is recorded separately from runtime.
+
+Job `5029183` started at `2026-07-18T19:06:36Z` after 42 seconds of queue
+time on `frontier05125` and `frontier05126`. Runtime, topology, pinned Python
+3.12.13 / torch 2.10 ROCm 7.1 / Triton 3.6, two model-free managers, and 16
+real GPU trainers were attested. Manager READY occurred at allocation +57.498
+and +60.989 seconds. Trainers were launched only afterward, at +57.850 through
++61.377 seconds, and all completed K=40 in 129.184--133.825 seconds from their
+child start (+187.035--195.201 from allocation start).
+
+Each trainer published exactly one 5,506,770,496-byte data file plus one
+manifest in 135.330--144.107 seconds. Managers reduced six trainers and
+1,967,040 tokens each in 330.151/331.834 seconds, then froze exactly two node
+contributions and 3,934,080 accepted tokens at allocation +412.769 seconds.
+Owner transport and redistribution took 98.739/99.169 seconds, with
+11,013,540,992 point-to-point bytes and the same redistribution bytes per
+manager, 223,083,592/222,117,626 bytes/s, two deterministic owners, zero replay,
+11,013,540,992-byte high-water, and full sender release. The bounded float32
+global aggregate was 5,506,770,496 bytes and published in 7.167/7.264 seconds.
+The manager ledgers stayed within their 64 GiB bound: each reached
+49,561,322,978 bytes; node 0 retained 16,520,430,812 bytes and node 1 retained
+5,506,800,090 bytes after release. Their records explicitly attest
+`shared_run_dir_is_bulk_path=false`, exactly two final published files, and
+`central_full_model_broker=false`.
+
+The leader checkpointed and atomically published generation 1 at Unix timestamp
+`1784402163.0664344`, allocation +567.066 seconds and 154.298 seconds after
+freeze. That is within the 12-minute allocation bound and the further
+three-minute exchange/commit bound. The fenced store contains exactly one
+checkpoint, one commit, and one monotonic latest publication at fence 1. The
+immutable checkpoint is 7,899,872,371 bytes with SHA-256
+`24bc0147edeb955e4bb4a1763370e5fa358abb734d123689d2a3e2adc65829ca`;
+the handoff manifest SHA-256 is
+`c99c453d477503c2023c7c55f55af468782b4301439d72d5799be16d7e3ca438`.
+An independent approved-Python `torch.load(map_location="cpu", mmap=True,
+weights_only=True)` verified 146 bfloat16 model tensors / 1,376,692,624
+elements, 145 inner-optimizer state entries and one parameter group, outer
+weighted-mean state, 3,934,080 accepted tokens, two accepted node peers,
+generation 1, fence epoch 1, step 1,525,040, source/payload identities, and all
+manifest digests.
+
+The two managers and leader trainer exited cleanly, but the remaining trainer
+supervisors still held their earlier `submitted` or `leader_apply_wait`
+progress timestamps. They began progress-deadline eviction near allocation
++605 seconds even though their actual aggregate-visibility windows had just
+opened and rank 0 did not finish apply until allocation +566 seconds. The
+allocation ended `FAILED 1:0` at `2026-07-18T19:16:52Z` after 616 runtime
+seconds; role step `5029183.1` ended `1:0` after 584 seconds. Slurm reports
+`TotalCPU=08:45:06`, raw energy `892647`, role-step `MaxRSS=145931580K`,
+`MaxDiskRead=110717.24M`, and `MaxDiskWrite=49647.74M`.
+
+The compact retained evidence is
+`reports/frontier/evidence/job-5029183`: 128 files including its checksum
+manifest, full role/top-level logs, runtime identity, supervision state,
+node-local telemetry/control records, fenced SQLite, both handoff manifests,
+Slurm accounting, and independent reload proof. It excludes the 7.9 GB `.pt`
+payload while retaining its absolute path, size, and independently verified
+digest. The `SHA256SUMS` digest is
+`d386c9c0eb440e9d6644a5bbabcdf4a8ff84c1e2f8d0fc9191f60b878672dd9d`,
+and `sha256sum -c` passes.
+
+The focused r9 change adds a `peer_apply` heartbeat immediately after complete
+aggregate visibility and assigns that explicit stage the unchanged 180-second
+exchange/commit bound. Its regression first failed against the r8 tree and the
+focused aggregate-visibility, leader-first, and stage-bound slice now passes
+3/3 in 15.54 seconds. No r9 command will be rendered until the exact local gate
+passes and this evidence/fix is committed, pushed, fetched, and present on
+authoritative `origin/main`.
 
 ## Authoritative integration and queue gate
 

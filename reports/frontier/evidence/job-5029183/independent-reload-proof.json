@@ -1,0 +1,68 @@
+{
+  "accepted_peers": [
+    "node-0",
+    "node-1"
+  ],
+  "accepted_tokens": 3934080,
+  "coordinator_epoch": 1,
+  "fence": {
+    "attempt": 0,
+    "coordinator_epoch": 1,
+    "generation": 0,
+    "payload_id": "077da1e-20260718T190322Z-pool-v1-startup-r8-2n20m-k40-managerfirst-f32stream",
+    "run_id": "validate-resilient-pool-v1-2n-startup-r8-20260718T190322Z-077da1e"
+  },
+  "generation": 1,
+  "identity": "node-0-trainer-0",
+  "load": {
+    "map_location": "cpu",
+    "mmap": true,
+    "weights_only": true
+  },
+  "membership": [
+    0,
+    1,
+    2,
+    4,
+    6,
+    7
+  ],
+  "model_dtypes": [
+    "torch.bfloat16"
+  ],
+  "model_numel": 1376692624,
+  "model_tensor_count": 146,
+  "optimizer_nonempty": true,
+  "optimizer_param_groups": 1,
+  "optimizer_state_entries": 145,
+  "outer_update_state": {
+    "algorithm": "weighted-mean",
+    "eta_outer": 1.0
+  },
+  "path": "/lustre/orion/bif148/proj-shared/emender/runs/validate-resilient-pool-v1-2n-startup-r8-20260718T190322Z-077da1e/checkpoints/generation-00000001-fence-00000001.pt",
+  "payload_id": "077da1e-20260718T190322Z-pool-v1-startup-r8-2n20m-k40-managerfirst-f32stream",
+  "run_id": "validate-resilient-pool-v1-2n-startup-r8-20260718T190322Z-077da1e",
+  "sha256": "24bc0147edeb955e4bb4a1763370e5fa358abb734d123689d2a3e2adc65829ca",
+  "size_bytes": 7899872371,
+  "source_id": "step-1525000-sha256-1da27d2e09bc6c6f5ffc30e3e4476df1cebd807267431c8524de1a5b0dc5bca9",
+  "step": 1525040,
+  "top_level_keys": [
+    "accepted_peers",
+    "accepted_tokens",
+    "async_chain",
+    "coordinator_epoch",
+    "fence",
+    "generation",
+    "identity",
+    "loss",
+    "membership",
+    "migration",
+    "model_state_dict",
+    "optimizer_state_dict",
+    "outer_update_state",
+    "payload_id",
+    "run_id",
+    "source_id",
+    "step"
+  ]
+}
