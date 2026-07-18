@@ -84,6 +84,24 @@ class AllocationSupervisor:
             role_values.update({"RESILIENT_E97_LOCAL_RANK": str(child.local_rank),
                                 "ASYNC_LOCAL_STEPS": "40",
                                 "ROCR_VISIBLE_DEVICES": str(child.local_rank)})
+            # Eight cold E97 trainers sharing the default home-directory
+            # kernel caches serialize on Triton/Inductor locks. On Frontier
+            # that kept every trainer inside its first optimizer step until the
+            # bounded generation deadline. Match the established production
+            # launchers: isolate caches per local trainer and keep kernel-build
+            # traffic on node-local storage.
+            cache_root = Path(os.environ.get(
+                "RESILIENT_E97_KERNEL_CACHE_ROOT", "/tmp/resilient-e97-kernel-cache"))
+            cache_identity = (
+                f"{os.environ.get('RESILIENT_E97_RUN_ID', 'unknown')}-rank-{child.local_rank}")
+            triton_cache = cache_root / cache_identity / "triton"
+            inductor_cache = cache_root / cache_identity / "inductor"
+            triton_cache.mkdir(parents=True, exist_ok=True)
+            inductor_cache.mkdir(parents=True, exist_ok=True)
+            role_values.update({"TRITON_CACHE_DIR": str(triton_cache),
+                                "TORCHINDUCTOR_CACHE_DIR": str(inductor_cache)})
+            role_env.extend([f"TRITON_CACHE_DIR={triton_cache}",
+                             f"TORCHINDUCTOR_CACHE_DIR={inductor_cache}"])
         else:
             # The batch allocation already owns all eight GCDs on each node.
             # Frontier GRES cannot be allocated again to overlapping steps:

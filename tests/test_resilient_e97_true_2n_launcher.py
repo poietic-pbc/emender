@@ -215,6 +215,8 @@ def test_launcher_stages_verified_p50k_cache_to_each_node_before_roles_start():
 
 def test_launch_modes_preserve_identical_local_role_identity_and_environment(tmp_path, monkeypatch):
     launched = []
+    monkeypatch.setenv("RESILIENT_E97_RUN_ID", "cache-isolation-test")
+    monkeypatch.setenv("RESILIENT_E97_KERNEL_CACHE_ROOT", str(tmp_path / "kernel-cache"))
 
     class Process:
         pid = 123
@@ -242,6 +244,14 @@ def test_launch_modes_preserve_identical_local_role_identity_and_environment(tmp
     assert local_env["RESILIENT_E97_NODE_RANK"] == "7"
     assert local_env["RESILIENT_E97_LOCAL_RANK"] == "3"
     assert local_env["ROCR_VISIBLE_DEVICES"] == "3"
+    assert local_env["TRITON_CACHE_DIR"] == str(
+        tmp_path / "kernel-cache/cache-isolation-test-rank-3/triton")
+    assert local_env["TORCHINDUCTOR_CACHE_DIR"] == str(
+        tmp_path / "kernel-cache/cache-isolation-test-rank-3/inductor")
+    assert Path(local_env["TRITON_CACHE_DIR"]).is_dir()
+    assert Path(local_env["TORCHINDUCTOR_CACHE_DIR"]).is_dir()
+    assert any(value.startswith("TRITON_CACHE_DIR=") for value in step_argv)
+    assert any(value.startswith("TORCHINDUCTOR_CACHE_DIR=") for value in step_argv)
 
 
 def test_node_supervisor_reuses_allocation_gpus_without_step_gres(tmp_path, monkeypatch):
