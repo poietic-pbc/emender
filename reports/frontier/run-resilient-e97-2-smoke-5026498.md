@@ -95,3 +95,16 @@ progress. This makes a subsequent startup smoke diagnose the exact stalled
 phase while the unchanged 900-second generation/progress fail-fast remains
 bounded. Applicable authority requirements are R03, R06, R09, R10, R14, and
 R16; no R16 success is claimed.
+
+Subsequent inspection identified the primary runtime-selection root cause. The
+immutable submit command did not export `EMENDER_CONDA_ENV`; both activation
+helpers accepted the unset value, so the live roles used module-default Python
+3.10 and Triton 3.2. Known-good job 5000436 explicitly used
+`/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312`
+with Python 3.12.13, torch 2.10.0+rocm7.1 (HIP 7.1.25424), and Triton 3.6.0,
+finalizing K=40 generations every 212--215 seconds. The launcher now requires
+that exact exported absolute environment, verifies the resolved interpreter and
+all four runtime versions before any role starts, and writes the attestation to
+`runtime-identity.json` in the immutable run evidence. Omitted or differently
+resolved environments fail closed. The 900-second maximum is more than four
+times the measured baseline and is not extended.

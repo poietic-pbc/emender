@@ -3,12 +3,14 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 
 from scripts.frontier.resilient_e97_allocation_supervisor import AllocationSupervisor, Child
 from scripts.frontier.check_resilient_e97_parity import compare
 
 
 ROOT = Path(__file__).parents[1]
+APPROVED_ENV = Path("/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312")
 
 
 def test_true_launcher_is_exact_debug_two_hour_topology_without_sentinels():
@@ -87,7 +89,8 @@ def test_launcher_omits_empty_resume_argument(tmp_path):
     tokenizer_cache.write_text("offline-tokenizer-cache")
     env = {
         **os.environ,
-        "PATH": f"{bindir}:{os.environ['PATH']}",
+        "PATH": f"{bindir}:{APPROVED_ENV / 'bin'}:{os.environ['PATH']}",
+        "EMENDER_CONDA_ENV": str(APPROVED_ENV),
         "SLURM_JOB_NUM_NODES": "2",
         "SLURM_JOB_QOS": "debug",
         "SLURM_TIMELIMIT": "02:00:00",
@@ -134,6 +137,37 @@ def test_launcher_activates_approved_frontier_python_before_any_role():
     assert 'exec python3 "$REPO/scripts/frontier/resilient_e97_allocation_supervisor.py"' not in text
 
 
+def test_launcher_requires_and_attests_exact_known_good_runtime():
+    text = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
+    approved = "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312"
+    assert f"APPROVED_EMENDER_CONDA_ENV={approved}" in text
+    assert 'EMENDER_CONDA_ENV:?' in text
+    assert 'realpath "$EMENDER_CONDA_ENV"' in text
+    assert 'realpath "$APPROVED_EMENDER_CONDA_ENV/bin/python"' in text
+    assert '"python": "3.12.13"' in text
+    assert '"torch": "2.10.0+rocm7.1"' in text
+    assert '"torch_hip": "7.1.25424"' in text
+    assert '"triton": "3.6.0"' in text
+    assert '"$RUN_DIR/runtime-identity.json"' in text
+    assert text.index("runtime identity mismatch") < text.index("RESILIENT_E97_MANAGER_COMMAND=")
+
+
+def test_launcher_rejects_omitted_or_wrong_runtime_before_module_activation(tmp_path):
+    script = ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch"
+    base = {**os.environ, "REPO": str(ROOT)}
+    base.pop("EMENDER_CONDA_ENV", None)
+    omitted = subprocess.run(["bash", str(script)], env=base, text=True, capture_output=True)
+    assert omitted.returncode != 0
+    assert "immutable submit payload must export EMENDER_CONDA_ENV" in omitted.stderr
+
+    wrong = subprocess.run(
+        ["bash", str(script)], env={**base, "EMENDER_CONDA_ENV": str(tmp_path)},
+        text=True, capture_output=True,
+    )
+    assert wrong.returncode == 64
+    assert "EMENDER_CONDA_ENV must resolve" in wrong.stderr
+
+
 def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tmp_path):
     repo = tmp_path / "repo"
     (repo / "scripts/frontier").mkdir(parents=True)
@@ -158,7 +192,8 @@ def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tm
     tokenizer_cache.write_text("offline-tokenizer-cache")
     env = {
         **os.environ,
-        "PATH": f"{bindir}:{os.environ['PATH']}",
+        "PATH": f"{bindir}:{APPROVED_ENV / 'bin'}:{os.environ['PATH']}",
+        "EMENDER_CONDA_ENV": str(APPROVED_ENV),
         "SLURM_JOB_NUM_NODES": "2",
         "SLURM_JOB_QOS": "debug",
         "SLURM_JOB_NODELIST": "node[0-1]",

@@ -17,12 +17,43 @@
 set -euo pipefail
 
 REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
+APPROVED_EMENDER_CONDA_ENV=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312
+: "${EMENDER_CONDA_ENV:?immutable submit payload must export EMENDER_CONDA_ENV=$APPROVED_EMENDER_CONDA_ENV}"
+[[ $(realpath "$EMENDER_CONDA_ENV") == $(realpath "$APPROVED_EMENDER_CONDA_ENV") ]] || {
+  echo "EMENDER_CONDA_ENV must resolve to $APPROVED_EMENDER_CONDA_ENV" >&2; exit 64;
+}
+export EMENDER_CONDA_ENV
 source "$REPO/scripts/frontier/frontier_runtime_env.sh"
 frontier_load_default_modules
 frontier_activate_emender_conda_env
 frontier_assert_emender_conda_env
 TRAIN_PYTHON_BIN=$(command -v python || command -v python3)
 : "${TRAIN_PYTHON_BIN:?Frontier runtime activation did not select TRAIN_PYTHON_BIN}"
+[[ $(realpath "$TRAIN_PYTHON_BIN") == $(realpath "$APPROVED_EMENDER_CONDA_ENV/bin/python") ]] || {
+  echo "activated Python is not the approved immutable runtime" >&2; exit 64;
+}
+RUNTIME_IDENTITY=$($TRAIN_PYTHON_BIN - <<'PY'
+import json, platform, sys
+import torch, triton
+identity = {
+    "executable": sys.executable,
+    "python": platform.python_version(),
+    "torch": torch.__version__,
+    "torch_hip": torch.version.hip,
+    "triton": triton.__version__,
+}
+expected = {
+    "python": "3.12.13", "torch": "2.10.0+rocm7.1",
+    "torch_hip": "7.1.25424", "triton": "3.6.0",
+}
+if any(identity[key] != value for key, value in expected.items()):
+    raise SystemExit("runtime identity mismatch: " + json.dumps(identity, sort_keys=True))
+print(json.dumps(identity, sort_keys=True))
+PY
+)
+printf 'resilient_e97_runtime_identity=%s\n' "$RUNTIME_IDENTITY"
+mkdir -p "${RUN_DIR:?set immutable run directory}"
+printf '%s\n' "$RUNTIME_IDENTITY" > "$RUN_DIR/runtime-identity.json"
 
 [[ ${SLURM_JOB_NUM_NODES:?} == 2 ]] || { echo "requires exactly two nodes" >&2; exit 64; }
 [[ ${SLURM_JOB_QOS:?} == debug ]] || { echo "requires debug QoS" >&2; exit 64; }
