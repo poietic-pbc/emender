@@ -32,3 +32,22 @@ deadlines, node-local bulk root, and two role restarts.
 Conformance: *Resilient DiLoCo Compute Pool* version 1; applicable R02, R03,
 R04, R06, R08, R09, R10, R14, R16. No full gate will be submitted unless this
 job finalizes one immutable generation.
+
+## Live runtime checkpoint
+
+At `2026-07-17T21:50:09-04:00` the job remained `RUNNING` on exactly
+`frontier04928` and `frontier04929`.  Queue time was `00:07:16`; runtime was
+`00:27:17`.  A read-only overlapping diagnostic step inspected the node-local
+bulk roots on both nodes.  All sixteen trainer progress records reported real
+optimizer step `1525040` for generation 0, with finite losses, and all sixteen
+trainer liveness records plus both model-free manager liveness records were
+fresh.  Both managers remained in `collecting`; no update file, finalized
+generation, or checkpoint existed yet.  This proves 40 real local steps and
+healthy roles, but it does **not** satisfy the smoke gate until the 1.3B-parameter
+updates finish materializing and one generation is finalized.  The allocation
+was left running; no cancellation or duplicate submission was made.
+
+The active files observed by the diagnostic were exclusively below
+`/tmp/resilient-e97/<run-id>/node-{0,1}/supervision`.  The retained Lustre run
+directory contained only logs, the supervisor event record, and coordinator
+discovery metadata at this checkpoint; it contained no bulk update payload.
