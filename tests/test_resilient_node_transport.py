@@ -178,7 +178,12 @@ def test_heartbeat_eviction_and_fenced_apply_acknowledgement(tmp_path):
 
 
 def test_supervisor_kills_only_stuck_step_and_healthy_step_survives():
-    supervisor = NodeStepSupervisor(2)
+    # Importing this module loads torch.  Forking the approved Python from that
+    # process can spend several seconds copying page tables on a busy Frontier
+    # login node, which is launch latency rather than a stuck child.  Keep a
+    # bounded, production-representative allowance for healthy launches; the
+    # separate 0.2 second case below remains the fail-fast deadline proof.
+    supervisor = NodeStepSupervisor(30)
     healthy = supervisor.run([sys.executable, "-c", "print('healthy')"])
     assert healthy.returncode == 0 and healthy.stdout.strip() == b"healthy"
     with pytest.raises(TimeoutError, match="deadline"):
