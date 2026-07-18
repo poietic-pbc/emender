@@ -1028,17 +1028,27 @@ def _run_real_worker(
         args = _copy_train_args(train_args)
         torch.manual_seed(int(getattr(args, "seed", 42)) + int(spec.seed_offset))
         device = torch.device(spec.device)
+        def bootstrap_phase(name: str) -> None:
+            if phase_callback is not None:
+                phase_callback(name, {"step": int(generation) * max(1, int(spec.local_steps))})
+
+        bootstrap_phase("model_build_start")
         model = train.build_training_model(args).to(device)
+        bootstrap_phase("model_device_ready")
         model.load_state_dict(base_state, strict=False)
+        bootstrap_phase("model_state_loaded")
         if bool(getattr(args, "bf16", False)):
             model = model.bfloat16()
+        bootstrap_phase("model_dtype_ready")
         optimizer = train.build_training_optimizer(model, args)
+        bootstrap_phase("optimizer_built")
         if optimizer_state_dict is not None:
             optimizer.load_state_dict(optimizer_state_dict)
             if consume_optimizer_state:
                 _release_consumed_optimizer_state(optimizer_state_dict)
             for param_group in optimizer.param_groups:
                 param_group["lr"] = args.lr
+        bootstrap_phase("optimizer_state_loaded")
         batch_iter = _build_batch_iter(
             args,
             rank=spec.seed_offset,
@@ -1046,6 +1056,7 @@ def _run_real_worker(
             synthetic=synthetic_token_stream,
             synthetic_vocab_size=synthetic_vocab_size,
         )
+        bootstrap_phase("data_iterator_ready")
         losses: list[float] = []
         tokens = 0
         hidden_state = None
