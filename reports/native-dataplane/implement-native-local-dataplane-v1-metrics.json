@@ -1,0 +1,59 @@
+{
+  "schema": "emender-native-local-dataplane-validation-v1",
+  "task_id": "implement-native-local-dataplane-v1",
+  "measured_at": "2026-07-18",
+  "fixture": {
+    "elements": 128,
+    "trainers": 8,
+    "source_dtype": "f32",
+    "source_bytes_per_trainer": 512,
+    "float64_layout_bytes": 1024,
+    "weights": [1, 2, 3, 4, 5, 6, 7, 8]
+  },
+  "default_memory_replay": {
+    "shared_bytes_high_water": 4096,
+    "mapped_bytes_high_water": 512,
+    "admitted_shared_bytes": 4608,
+    "released_shared_bytes": 4608,
+    "prompt_source_released_bytes": 4096,
+    "result_bytes": 512,
+    "projection_count": 1,
+    "disk_replay_files": 0,
+    "disk_replay_bytes": 0,
+    "trainer_spool_files": 0,
+    "trainer_spool_bytes": 0,
+    "python_dense_socket_bytes": 0,
+    "handoff_full_copy_bytes": 0,
+    "post_generation_shared_bytes": 0,
+    "post_generation_mapped_bytes": 0
+  },
+  "explicit_fallback_during_freeze": {
+    "journal_files": 1,
+    "journal_bytes": 1120,
+    "journal_bound_bytes": 1049600,
+    "journal_formula": "float64_layout_bytes + 64-byte header + 32-byte checksum",
+    "trainer_count_times_float64_layout_bytes": 8192,
+    "trainer_spool_files": 0,
+    "trainer_spool_bytes": 0,
+    "shared_bytes_high_water": 4096,
+    "mapped_bytes_high_water": 512
+  },
+  "explicit_fallback_after_commit": {
+    "journal_files": 0,
+    "post_generation_shared_bytes": 0,
+    "admitted_shared_bytes": 4608,
+    "released_shared_bytes": 4608,
+    "projection_count": 1
+  },
+  "builds": {
+    "portable": {
+      "compiler": "GNU C++ 7.5.0",
+      "binary_sha256": "b514c0c28c3afed3205d571e6bca37c436fa7a6769e5056482f3ed7dadb90ddc"
+    },
+    "frontier": {
+      "compiler": "Cray clang 18.0.1, PrgEnv-cray 8.6.0",
+      "binary_sha256": "8a591eabc1f86a5bd8b44d8a244970971dd581f7ba6ede1b41cb9d77a2aea8d3"
+    }
+  },
+  "slurm_jobs_submitted": 0
+}
