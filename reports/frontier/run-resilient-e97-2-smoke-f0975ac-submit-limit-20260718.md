@@ -15,6 +15,17 @@ existing job was cancelled. A retry must preserve the exact run and payload
 identity below so it is an idempotent continuation of this unadmitted attempt,
 not a new unchanged payload.
 
+Immediately after the rejection, queue inspection found the already-admitted
+changed-payload smoke `5026731`, submitted at `2026-07-18T02:41:55-04:00` by
+the prior task turn. It is the authoritative continuation: run
+`run-resilient-e97-2-smoke-20260718T064039Z-f0975ac`, payload
+`f0975ac-20260718T064039Z-startup-smoke-pinned-runtime-phase-telemetry`, with
+the same `f0975ac` code, exact exported approved environment, two-node debug
+shape, 02:00:00 limit, and 900-second deadlines. At inspection it was
+`PD/Priority` with Slurm's estimated start `2026-07-18T04:28:00-04:00`.
+Accordingly, the later unadmitted identity below is retired and must **not** be
+retried; job `5026731` is left queued and must not be cancelled for queue delay.
+
 ## Authoritative payload and validation
 
 - Fetched authoritative `HEAD == origin/main ==
