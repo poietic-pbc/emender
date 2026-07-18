@@ -22,8 +22,9 @@ fenced exchange window. The remaining 1 MiB owner frame also required about
 40,000 short-lived request/response connections per E97 generation. No atomic
 publication, checkpoint, handoff, or production mutation occurred.
 
-The ladder remains on rung 1. No resilience or fresh-restart job has been
-rendered or submitted. The next focused payload starts the trainer apply timer
+The ladder remains on rung 1. Changed startup payload r3 was submitted once as
+job `5028483` and is pending for scheduler priority. No resilience or fresh-
+restart job has been rendered or submitted. The focused payload starts the trainer apply timer
 only after the node-local manager advertises its fenced exchange transition and
 uses independently bounded 64 MiB owner frames under the unchanged 64 GiB
 ledger. It is not an unchanged retry.
@@ -234,7 +235,10 @@ quorum two. It has no injection or resume handoff, uses a 64 GiB hard spool
 ledger with separate 64 MiB local and owner-network records, and configures
 zero role restarts. The script refuses a nonempty user queue, existing run
 directory, non-authoritative origin, changed live tree, or absent integrated-v1
-ancestry. This is a retained changed payload; it has not yet been submitted.
+ancestry. The exact command returned job ID `5028483`; Slurm recorded
+submit/eligible time `2026-07-18T16:14:33Z`. At `2026-07-18T16:14:40Z` it was
+the sole user job, pending for `Priority`, with the requested two nodes, debug
+QoS, and `00:20:00` unchanged. Queue time is recorded separately from runtime.
 
 ## Authoritative integration and queue gate
 
