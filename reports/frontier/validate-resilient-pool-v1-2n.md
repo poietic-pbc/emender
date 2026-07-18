@@ -112,6 +112,37 @@ pool, exact weighted reducer, stale/duplicate/corrupt rejection, owner replay,
 fencing/newer-allocation restart, and production real-trainer parity remain in
 the passing suite.
 
+### Changed startup payload r2
+
+The focused runtime/evidence commit is
+`2c337a83d8effac04c54b1805dbb9451460f2818`; it was pushed, fetched, and
+verified equal to authoritative `origin/main` before rendering. The changed
+payload identity is
+`2c337a8-20260718T152955Z-pool-v1-startup-r2-2n20m-k40-local64m-ledger64g`.
+Its exact retained command is:
+
+```bash
+bash reports/frontier/validate-resilient-pool-v1-2n-startup-r2-submit-20260718T152955Z.sh
+```
+
+The submit script SHA-256 is
+`6aab23241a0fb67359dbbbc917fbc1a609b73aadfee44bb6000c1de93008b3ca`.
+Changed live-file hashes are:
+
+| Artifact | SHA-256 |
+|---|---|
+| two-node sbatch launcher | `807a0bdfde8fd9056bccd2b0e7e2d0315802f504f8762d511eb6cc28383585bf` |
+| allocation supervisor | `fd1a194767b0442e9ae6298547966fe3fc6fa8240bb41ec1c46707a2e5fd5e0b` |
+| live role entrypoint | `62a7721a6c41e437532c6f4eafe88609adec19216b0a9fa8ad6b6e363289ae2e` |
+
+All other runtime/config hashes remain the values in the immutable-identity
+table below. Payload r2 is still exactly 2 nodes, debug QoS, `00:20:00`, one
+generation, two model-free managers, 16 real GPU trainers, batch size 4, K=40,
+and node quorum 2 with no injection or resume handoff. It sets a bounded 64 GiB
+node-local spool, 64 MiB local spool records, and unchanged 1 MiB network
+frames. Startup retries are zero: a new stage failure ends the allocation
+without repeating the unchanged role payload.
+
 ## Authoritative integration and queue gate
 
 - Integrated v1 commit `ae2e6f26046fb7a6b348e845fb4615092a7c37e0` is an

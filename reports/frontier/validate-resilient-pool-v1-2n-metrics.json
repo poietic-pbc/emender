@@ -62,11 +62,16 @@
     },
     "startup_retry_fix": {
         "automatic_json_evidence_retention": true,
+        "code_commit": "2c337a83d8effac04c54b1805dbb9451460f2818",
         "local_gate_passed": 122,
         "local_gate_seconds": 134.64,
         "local_spool_chunk_bytes": 67108864,
         "max_spool_bytes": 68719476736,
         "network_chunk_bytes": 1048576,
-        "status": "local validation passed; not submitted"
+        "payload_id": "2c337a8-20260718T152955Z-pool-v1-startup-r2-2n20m-k40-local64m-ledger64g",
+        "role_restarts": 0,
+        "status": "local validation passed; retained, not submitted",
+        "submit_script": "reports/frontier/validate-resilient-pool-v1-2n-startup-r2-submit-20260718T152955Z.sh",
+        "submit_script_sha256": "6aab23241a0fb67359dbbbc917fbc1a609b73aadfee44bb6000c1de93008b3ca"
     }
 }
