@@ -419,7 +419,7 @@
         }
     },
     "startup_r7_payload": {
-        "status": "submitted exactly once; pending startup result",
+        "status": "failed closed at runtime-import/READY gate; manager-first and bounded parallel shutdown fix required",
         "job_id": 5029077,
         "submit_utc": "2026-07-18T18:41:05Z",
         "initial_state": "PENDING (Priority)",
@@ -461,5 +461,35 @@
         "local_gate_passed": 130,
         "local_gate_seconds": 123.33,
         "empty_queue_before_render": true
+        ,
+        "allocation_start_utc": "2026-07-18T18:41:28Z",
+        "end_utc": "2026-07-18T18:47:35Z",
+        "queue_seconds": 23,
+        "runtime_seconds": 367,
+        "state": "CANCELLED by 19032",
+        "allocation_exit_code": "0:0",
+        "batch_exit_code": "0:15",
+        "step_exit_code": "0:9",
+        "allocated_nodes": ["frontier02941", "frontier02943"],
+        "runtime_attested": true,
+        "topology_attested": true,
+        "manager_ready_seconds_from_allocation_start": [],
+        "ready_acceptance_seconds": 180,
+        "term_utc": "2026-07-18T18:46:32Z",
+        "kill_escalation_utc": "2026-07-18T18:47:35Z",
+        "terminal_stage": "runtime_import/READY",
+        "atomic_publications": 0,
+        "evidence_files": 44,
+        "evidence_manifest_sha256": "1efb21312d24218a1813d690575be4ed961273d7574969028550bbb894dd4bb1",
+        "slurm_total_cpu": "05:36:24",
+        "slurm_energy": 587141,
+        "step_max_rss_kib": 90329000,
+        "next_change": {
+            "manager_first_role_start": true,
+            "fixed_import_progress_time": true,
+            "parallel_term_shared_grace": true,
+            "ready_hard_seconds": 180,
+            "unchanged_training_or_exchange_budget": true
+        }
     }
 }

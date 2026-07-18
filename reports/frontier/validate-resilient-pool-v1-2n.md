@@ -9,7 +9,7 @@ requirements R01–R16 in `docs/RESILIENT_DILOCO_GAP_MATRIX.md`.
 
 ## Status
 
-The startup rung has failed closed six times without an unchanged retry. Job
+The startup rung has failed closed seven times without an unchanged retry. Job
 `5028225` failed at the post-K40 local-delta streaming stage. Changed payload
 r2 job `5028347` then proved the 64 MiB/two-file local spool fix: both managers
 were READY within 61 seconds of allocation start, all 16 real trainers finished
@@ -65,6 +65,18 @@ model apply dtype, streams bounded records in place, and lets the designated
 leader apply/propose before releasing its seven same-node peers. Conflicting
 same-fence aggregate reuse is also rejected by content rather than fence alone.
 The 180-second bound remains unchanged.
+
+Changed payload r7 job `5029077` did not reach the new aggregate path. Runtime
+and topology attestation succeeded, but all 18 role processes imported the
+pinned Python/torch runtime concurrently on the two nodes. Neither manager
+left `runtime_import` or published READY by allocation +304 seconds, so the
+explicit 180-second allocation-start READY acceptance gate failed. The job was
+sent TERM at `2026-07-18T18:46:32Z` rather than allowed to consume the later
+training/exchange budgets. Its node-local supervisor then revealed a separate
+bounded-shutdown defect: it waited up to 15 seconds for each of 18 process
+groups serially. The exact job was escalated to KILL after 63 seconds of grace
+and became terminal at allocation +367 seconds. The fenced store has one lease
+epoch and zero publications.
 
 The ladder therefore remains on rung 1. No resilience or fresh-restart job has
 been rendered or submitted. Changed startup payload r6 was submitted exactly
@@ -691,6 +703,47 @@ fetched, and verified, it was executed exactly once and returned Frontier job
 two requested nodes, debug QoS, `00:20:00`, 16 requested GPUs, no dependency,
 no requeue, and zero restarts. Its first state was `PENDING (Priority)` as the
 only user job. Queue time is recorded separately from runtime.
+
+### Startup r7 result and manager-first diagnosis
+
+Job `5029077` started after 23 seconds of queue time on exactly
+`frontier02941` and `frontier02943`. Runtime identity was Python 3.12.13,
+torch 2.10.0+rocm7.1, HIP 7.1.25424, and Triton 3.6.0; the launcher attested
+two model-free managers, 16 real GPU trainers, batch size 4, K=40, and no
+collective. Both manager children and all trainer children launched between
+allocation +42 and +46 seconds. Each role created a node-local
+`runtime_import` heartbeat, but both manager stdout files remained empty and
+their stderr ended after the pinned-autotune import message. No READY, K40,
+spool, owner, checkpoint, handoff, or publication record exists.
+
+The exact acceptance threshold was READY by allocation +180 seconds. At +304
+seconds neither manager was READY, so TERM was sent to the exact job. The
+supervisors recorded manager eviction at +308 seconds, then waited and killed
+trainer process groups sequentially. KILL was sent after 63 seconds of TERM
+grace, and Slurm made the allocation terminal `CANCELLED by 19032` at
+`2026-07-18T18:47:35Z`, runtime 367 seconds. Accounting reports allocation
+`0:0`, batch `0:15`, role step `0:9`, `TotalCPU=05:36:24`, raw energy
+`587141`, role-step `MaxRSS=90329000K`, `MaxDiskRead=72550.24M`, and
+`MaxDiskWrite=44396.02M`. Queue time remains separate from runtime.
+
+The focused changed retry must start the node manager before its eight cold
+trainer imports, hold trainer launch until that manager leaves
+`runtime_import`, and keep the import heartbeat's original `progress_time`
+fixed while refreshing only liveness. That both prioritizes the model-free
+control plane and lets the 180-second runtime-import progress gate fire. TERM
+shutdown must signal all child process groups together, wait one shared bounded
+grace interval, then kill only survivors; the bound must not multiply by role
+count. These changes affect startup/shutdown only and do not alter the r7
+float32 stream, exact owner math, K40, topology, or stage budgets.
+
+The compact retained tree is `reports/frontier/evidence/job-5029077`; it
+contains the fenced database, runtime identity, full supervisor event stream,
+all small role stdout/stderr files, top-level logs, and Slurm accounting, with
+no `.pt`, `.data`, mailbox, or cache payload. The database has fence 1 and zero
+publication rows. It contains 44 files including its manifest; the
+`SHA256SUMS` digest is
+`1efb21312d24218a1813d690575be4ed961273d7574969028550bbb894dd4bb1`,
+and `sha256sum -c` passes.
 
 ## Authoritative integration and queue gate
 
