@@ -9,4 +9,3 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../src/native_resilient_dataplane
                  ${CMAKE_CURRENT_BINARY_DIR}/local)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dataplane
                  ${CMAKE_CURRENT_BINARY_DIR}/transport)
-

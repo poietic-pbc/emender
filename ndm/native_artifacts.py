@@ -261,4 +261,3 @@ def attest_launch(*, backend: str, production: bool, full_layout: bool,
         "artifacts": {name: record["sha256"]
                       for name, record in build.artifacts.items()},
     }
-

@@ -121,4 +121,3 @@ def test_artifact_tamper_and_gate_digest_mismatch_fail_closed(tmp_path):
             backend=NATIVE_TEST, production=False, full_layout=False,
             build_manifest=manifest_path, gate_json=None,
         )
-

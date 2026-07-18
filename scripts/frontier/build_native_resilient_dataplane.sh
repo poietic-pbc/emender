@@ -19,4 +19,3 @@ cmake --install "$BUILD_DIR"
 "$PYTHON_BIN" "$REPO/scripts/frontier/attest_native_dataplane.py" record-build \
   --prefix "$INSTALL_DIR" --source-root "$REPO" \
   --cmake-cache "$BUILD_DIR/CMakeCache.txt"
-

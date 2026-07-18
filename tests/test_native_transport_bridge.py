@@ -83,4 +83,3 @@ def test_production_provider_and_poll_bounds_cannot_be_weakened():
     with _open(5) as transport:
         with pytest.raises(ValueError, match="bounded"):
             transport.poll(timeout_ms=-1)
-
