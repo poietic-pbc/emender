@@ -33,5 +33,40 @@
     "local_k40": 420,
     "ready": 180
   },
-  "startup_job": null
+    "startup_job": {
+        "allocation_exit_code": "137:0",
+        "allocation_start_utc": "2026-07-18T14:55:43Z",
+        "end_utc": "2026-07-18T15:09:11Z",
+        "evidence_collector_sha256": "72899cbbdeac214965a834cdfe4b237770503f62556a3a5aab2c68bade08999e",
+        "evidence_tree_sha256": "b235b50fc29a4601d6e78f272b4cd0f9f7c07b7f352136754272ac3bed85159a",
+        "first_atomic_commit": null,
+        "id": 5028225,
+        "k40_seconds_from_trainer_start": {
+            "max": 134.31742429733276,
+            "min": 129.14038014411926
+        },
+        "manager_ready_seconds_from_allocation_start": [
+            59.11266207695007,
+            64.40685415267944
+        ],
+        "node_count": 2,
+        "publication_count": 0,
+        "qos": "debug",
+        "queue_seconds": 933,
+        "runtime_seconds": 808,
+        "slurm_step_exit_code": "1:0",
+        "state": "FAILED",
+        "submit_utc": "2026-07-18T14:40:10Z",
+        "terminal_stage": "streaming_delta/local trainer quorum",
+        "walltime": "00:20:00"
+    },
+    "startup_retry_fix": {
+        "automatic_json_evidence_retention": true,
+        "local_gate_passed": 122,
+        "local_gate_seconds": 134.64,
+        "local_spool_chunk_bytes": 67108864,
+        "max_spool_bytes": 68719476736,
+        "network_chunk_bytes": 1048576,
+        "status": "local validation passed; not submitted"
+    }
 }

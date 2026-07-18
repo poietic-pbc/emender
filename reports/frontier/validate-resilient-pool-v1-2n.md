@@ -9,14 +9,108 @@ requirements R01–R16 in `docs/RESILIENT_DILOCO_GAP_MATRIX.md`.
 
 ## Status
 
-The local pre-submit gate passed at source commit
-`87355275976184898fc3fb1975473ce69952f49f`. The ordered live ladder remains
-stage-gated: this report first retains the immutable startup-smoke payload; the
-resilience and newer-fence restart payloads may be rendered and submitted only
-after their preceding live rung passes.
+Startup rung job `5028225` used the retained immutable payload and **failed
+closed at the post-K40 local-delta streaming stage**. Both managers were READY
+within 65 seconds of allocation start and all 16 original real trainers
+completed K=40 within 135 seconds of their child start. No trainer contribution
+finished its bounded local spool publication within the following 180-second
+exchange window, so the supervisors evicted/restarted the affected trainers,
+both managers eventually reported local-quorum timeout, and the first-atomic-
+generation deadline ended the job before Slurm TERM. There was no publication,
+checkpoint, handoff, or production mutation.
+
+The ladder therefore remains stopped at rung 1. No resilience or fresh-restart
+job has been rendered or submitted. A focused changed payload uses bounded
+64 MiB local spool records rather than the failed 1 MiB local records, retains
+the network owner-frame bound at 1 MiB, raises the hard node-local ledger from
+an insufficient 32 GiB to a bounded 64 GiB, and automatically retains only
+JSON/JSONL node-local evidence after role shutdown.
 
 No production allocation, normal-QoS allocation, 4+ node allocation, or
 two-hour allocation is authorized by this report.
+
+## Startup job 5028225 result
+
+Exact Slurm state and accounting:
+
+| Field | Observed |
+|---|---|
+| submit / eligible | `2026-07-18T10:40:10-04:00` |
+| start | `2026-07-18T10:55:43-04:00` (`2026-07-18T14:55:43Z`) |
+| queue time | `00:15:33` (recorded separately from runtime) |
+| end / runtime | `2026-07-18T11:09:11-04:00`, `00:13:28` |
+| allocation | exactly 2 nodes, 16 GPUs, debug QoS, `00:20:00` limit |
+| state / exit | `FAILED`, allocation `137:0`, step `5028225.1` `1:0` |
+| Slurm totals | `TotalCPU=18:58:31`, `energy=1356707`; step raw accounting reports `AveDiskRead=144840.53M`, `AveDiskWrite=7651.52M` |
+
+The allocation lease was acquired before role/model load at Unix timestamp
+`1784386573.075951` with fence 1 and renewed throughout the attempt. Manager
+READY records occurred at `1784386602.112662` and `1784386607.406854`, or
+59.113 and 64.407 seconds after allocation start. All original trainer children
+started at `1784386586.643..1784386591.707`; their first K40 completions were
+`1784386715.836..1784386724.547`, 129.140–134.317 seconds after child start and
+172.836–181.547 seconds after allocation start.
+
+Every original trainer then entered `streaming_delta`. The 180-second stage
+deadline was detected and bounded eviction began; serialized stop/event
+recording puts the first eviction events 196.163–304.500 seconds after each
+K40 completion. No local contribution manifest reached the manager before its
+420-second collection deadline. Both managers exited with
+`TimeoutError: local trainer quorum lost at aggregation deadline`; the
+supervisor recorded 23 `progress_deadline` evictions, two manager `exit:1`
+evictions, two `first_atomic_generation_deadline` evictions, four bounded
+shutdown evictions, and one `restart_exhausted`. The fenced SQLite store has
+zero publication rows and only fence epoch 1, so the failure produced no
+authoritative result.
+
+The exact post-failure evidence collector is
+`reports/frontier/validate-resilient-pool-v1-2n-job-5028225-evidence.sh`, SHA-256
+`72899cbbdeac214965a834cdfe4b237770503f62556a3a5aab2c68bade08999e`.
+It ran as completed CPU-only step `5028225.2` at 11:05:15 EDT and copied only
+JSON/JSONL supervision, phase telemetry, and compact control records—never
+mailbox/tensor/checkpoint data—to `reports/frontier/evidence/job-5028225`.
+That retained tree has 94 files and aggregate path-bound digest
+`b235b50fc29a4601d6e78f272b4cd0f9f7c07b7f352136754272ac3bed85159a`.
+The top-level stdout, stderr, events, and control-database hashes are,
+respectively, `c7b8c2ee0144f9781b534f2e62186979c2c3a8bf2fd7dec165609e23d1788edb`,
+`2a1b4d1d4885fb7cd7fd215a8867147c04e31d39fa04e230fc8fc144532a828a`,
+`9662baa8fd7eb3b731f72610b0f24112412a67a83584abdfff79564c33beafdd`,
+and `e508bd348fce66e365cf7a1cb20d0598d37844a2b54ba1e503a72659c53a2efa`.
+
+### Focused fix
+
+The failure was not slow K40 or missing READY. It was the local handoff after
+K40: each real trainer divided the 1.3B-parameter delta according to the 1 MiB
+network frame, causing thousands of finite-check, conversion, hash, and
+cross-process ledger operations while eight trainers concurrently streamed one
+large file each. In addition, the 32 GiB ledger was arithmetically too small:
+six f32 trainer contributions plus the f64 exact local aggregate require about
+42 GB simultaneously before trainer release.
+
+The fix separates these bounds. Local trainer-to-manager records are bounded at
+64 MiB and still append to exactly one data file plus one manifest per trainer;
+the manager repacks its exact float64 reduction into independently bounded
+1 MiB network owner chunks. The shared node-local spool ledger is hard-bounded
+at 64 GiB, enough for the configured six-trainer floor and aggregate without
+unbounded admission. A `local_delta_spool` timing/byte metric records the stage.
+Finally, node supervisors atomically retain JSON/JSONL evidence after success or
+failure while explicitly excluding mailbox data, tensor streams, recovery `.pt`
+files, and caches.
+
+The changed-tree pre-submit gate passed with the approved Python 3.12 runtime:
+
+```text
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/bin/python -m pytest -q -p no:cacheprovider tests/test_fenced_admission.py tests/test_resilient_peer_membership.py tests/test_resilient_node_quorum.py tests/test_resilient_e97_reducer.py tests/test_resilient_shard_owner.py tests/test_resilient_pool_runtime.py tests/test_resilient_e97_split_roles.py tests/test_resilient_node_transport.py tests/test_resilient_e97_runtime.py tests/test_resilient_e97_true_2n_launcher.py tests/test_async_diloco_real_trainer.py tests/test_train_helpers.py
+122 passed in 134.64s
+```
+
+Approved-Python `compileall`, `json.tool`, `git diff --check`, and the live-path
+forbidden `.tolist()`/collective/MPI token scan also passed. New regression
+tests first failed against the job-5028225 code and now prove the separated
+local/network bounds and JSON-only post-role evidence retention. The local TCP
+pool, exact weighted reducer, stale/duplicate/corrupt rejection, owner replay,
+fencing/newer-allocation restart, and production real-trainer parity remain in
+the passing suite.
 
 ## Authoritative integration and queue gate
 

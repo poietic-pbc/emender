@@ -95,7 +95,7 @@ def test_two_model_free_managers_exchange_without_collective(tmp_path):
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0)); port = probe.getsockname()[1]
     common = ["--run-dir", str(tmp_path), "--run-id", "network", "--generations", "1",
-              "--local-steps", "40", "--deadline-s", "20", "--source-id", "seed",
+              "--local-steps", "40", "--deadline-s", "60", "--source-id", "seed",
               "--payload-id", "layout", "--code-id", "code", "--control",
               "--node-count", "2", "--global-quorum", "2", "--coordinator-host", "127.0.0.1",
               "--coordinator-port", str(port), "--bulk-root", str(bulk_root)]
@@ -109,7 +109,10 @@ def test_two_model_free_managers_exchange_without_collective(tmp_path):
                 [sys.executable, str(ROLE), "trainer", *common],
                 env={**os.environ, "RESILIENT_E97_NODE_RANK": str(node),
                      "RESILIENT_E97_LOCAL_RANK": str(rank)}))
-    assert [item.wait(timeout=45) for item in processes] == [0] * len(processes)
+    # Fourteen cold Python/torch processes contend on shared login nodes. Keep
+    # this local fixture bounded without conflating login load with the live
+    # Frontier READY/K40 stage SLOs exercised by the launcher tests and jobs.
+    assert [item.wait(timeout=120) for item in processes] == [0] * len(processes)
     manifests = list((tmp_path / "retained-evidence/pool-control").glob("*.jsonl"))
     assert len(manifests) == 1
     closes = [json.loads(line) for line in manifests[0].read_text().splitlines()]

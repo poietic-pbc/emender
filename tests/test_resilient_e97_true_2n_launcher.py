@@ -371,6 +371,11 @@ def test_allocation_fence_is_acquired_before_roles_and_loser_is_zero_work(
     monkeypatch.setenv("RESILIENT_E97_ALLOCATION_INCARNATION", "inc-a")
     monkeypatch.setenv("RESILIENT_E97_LEASE_TTL_S", "10")
     monkeypatch.setenv("RESILIENT_E97_LEASE_RENEW_S", "1")
+    # Admission publishes these keys directly. Register their original values
+    # with monkeypatch so later subprocess integration tests cannot inherit a
+    # lease after its database path has been restored.
+    monkeypatch.setenv("RESILIENT_E97_ALLOCATION_LEASE", "")
+    monkeypatch.setenv("RESILIENT_E97_FENCE_EPOCH", "0")
     first = module._allocation_admission(tmp_path)
     try:
         assert isinstance(first, module.AllocationLeaseGuard)
@@ -483,6 +488,51 @@ def test_generation_deadline_includes_local_training_and_aggregate_wait():
     assert "exchange_deadline = time.monotonic() + min(args.deadline_s, 180.0)" in role
     assert "aggregation_deadline_s=min(args.deadline_s, 420.0)" in role
     assert "generation_started, pool_config.slo.training_hard_s" in role
+
+
+def test_local_delta_spool_uses_coarse_bounded_chunks_without_widening_network_frames():
+    launcher = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
+    role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+
+    # Job 5028225 completed K40 in 129-138s but then spent >180s serializing
+    # 1 MiB local fragments.  Local trainer-to-manager files may use a larger
+    # bounded record; owner transport remains independently bounded at 1 MiB.
+    assert "--local-spool-chunk-bytes" in role
+    assert "RESILIENT_E97_LOCAL_SPOOL_CHUNK_BYTES:-67108864" in launcher
+    assert "RESILIENT_E97_MAX_SPOOL_BYTES:-68719476736" in launcher
+    assert 'value.add_argument("--max-spool-bytes", type=int, default=64 << 30)' in role
+    assert "--bulk-chunk-bytes ${RESILIENT_E97_BULK_CHUNK_BYTES:-1048576}" in launcher
+    assert "chunk_elements = max(1, args.local_spool_chunk_bytes // 8)" in role
+    assert '"local_delta_spool"' in role
+    assert "local_spool_chunk_bytes=args.local_spool_chunk_bytes" in role
+
+
+def test_node_local_exit_retains_only_small_control_evidence(tmp_path):
+    from scripts.frontier import resilient_e97_allocation_supervisor as supervisor
+
+    run = tmp_path / "run"
+    bulk = tmp_path / "bulk" / "run-a" / "node-1"
+    (bulk / "supervision").mkdir(parents=True)
+    (bulk / "telemetry").mkdir()
+    (bulk / "control/recovery").mkdir(parents=True)
+    (bulk / "mailbox").mkdir()
+    (bulk / "supervision/trainer.json").write_text('{"stage":"streaming_delta"}\n')
+    (bulk / "telemetry/trainer.jsonl").write_text('{"phase":"K40"}\n')
+    (bulk / "control/recovery/trainer.json").write_text('{"generation":0}\n')
+    (bulk / "mailbox/contribution.data").write_bytes(b"tensor bytes")
+    (bulk / "control/recovery/generation.pt").write_bytes(b"checkpoint bytes")
+
+    retained = supervisor._retain_node_evidence(
+        run, bulk_root=tmp_path / "bulk", run_id="run-a", node_rank=1)
+
+    assert json.loads((retained / "snapshot.json").read_text())["node_rank"] == 1
+    assert (retained / "supervision/trainer.json").exists()
+    assert (retained / "telemetry/trainer.jsonl").exists()
+    assert (retained / "control/recovery/trainer.json").exists()
+    assert not (retained / "mailbox").exists()
+    assert not (retained / "control/recovery/generation.pt").exists()
+    assert all(path.suffix in {".json", ".jsonl"}
+               for path in retained.rglob("*") if path.is_file())
 
 
 def test_real_trainer_streams_model_delta_without_full_cpu_materialization():

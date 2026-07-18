@@ -96,10 +96,14 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--eta-outer", type=float, default=1.0)
     value.add_argument("--migration-policy", default="")
     value.add_argument("--bulk-root", default=os.environ.get("RESILIENT_E97_BULK_ROOT", "/tmp/resilient-e97"))
-    value.add_argument("--max-spool-bytes", type=int, default=32 << 30)
+    # Six f32 trainer contributions plus one f64 local aggregate for E97 require
+    # roughly 42 GB.  Keep a hard 64 GiB node-local ledger so the configured
+    # quorum can exist at once without admitting unbounded storage.
+    value.add_argument("--max-spool-bytes", type=int, default=64 << 30)
     value.add_argument("--initial-generation", type=int, default=0)
     value.add_argument("--resume-handoff", default="")
     value.add_argument("--bulk-chunk-bytes", type=int, default=1 << 20)
+    value.add_argument("--local-spool-chunk-bytes", type=int, default=64 << 20)
     return value
 
 
@@ -608,12 +612,20 @@ def trainer(args) -> int:
                     loss=details.get("loss"), stage=phase)
 
             def publish_trained_delta(base_state, model, tokens):
+                local_spool_started = time.monotonic()
+                bytes_before = spool.bytes_written
                 heartbeat(bulk, identity, generation=generation, step=step, loss=None,
                           stage="streaming_delta")
                 worker_state = model.state_dict()
 
                 def shards():
-                    chunk_elements = max(1, args.bulk_chunk_bytes // 8)
+                    # Local trainer-to-manager files are already bounded by the
+                    # shared byte ledger and contain one sequential data file.
+                    # Use a coarse record here to avoid tens of thousands of
+                    # finite-check/hash/ledger operations per E97 contribution.
+                    # The distributed owner transport repacks these shards to
+                    # the independent ``bulk_chunk_bytes`` network bound.
+                    chunk_elements = max(1, args.local_spool_chunk_bytes // 8)
                     for name, base_tensor in sorted(base_state.items()):
                         worker_tensor = worker_state[name].detach().reshape(-1)
                         base_flat = base_tensor.detach().reshape(-1)
@@ -627,6 +639,15 @@ def trainer(args) -> int:
 
                 spool.publish(fence, rank, shards(), weight=tokens,
                               source_id=args.source_id)
+                _stage_telemetry(
+                    bulk, identity, generation, "local_delta_spool",
+                    local_spool_started, 180.0,
+                    spool_bytes=spool.bytes_written - bytes_before,
+                    local_spool_chunk_bytes=args.local_spool_chunk_bytes,
+                    network_chunk_bytes=args.bulk_chunk_bytes,
+                    files_published=2)
+                heartbeat(bulk, identity, generation=generation, step=step, loss=None,
+                          stage="delta_spooled")
 
             def training_progress(local_step, metrics):
                 if time.monotonic() >= generation_deadline:
@@ -731,6 +752,8 @@ def main() -> int:
     args = parser().parse_args()
     if args.generations <= 0 or args.deadline_s <= 0:
         raise ValueError("generations and deadlines must be positive")
+    if not 0 < args.local_spool_chunk_bytes <= args.max_spool_bytes:
+        raise ValueError("local spool chunk bound must be positive and within the byte ledger")
     return manager(args) if args.role == "manager" else trainer(args)
 
 

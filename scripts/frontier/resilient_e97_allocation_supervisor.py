@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import shlex
 import signal
+import shutil
 import subprocess
 import sys
 import threading
@@ -148,6 +149,43 @@ class Child:
         suffix = (self.role if self.local_rank is None
                   else f"trainer-{self.local_rank}")
         return f"node-{self.node_rank}-{suffix}"
+
+
+def _retain_node_evidence(run_dir: Path, *, bulk_root: Path, run_id: str,
+                          node_rank: int) -> Path:
+    """Atomically retain only small node-local control evidence after roles stop.
+
+    Tensor mailboxes, recovery checkpoints, and caches remain excluded from the
+    shared filesystem. JSON/JSONL supervision, stage telemetry, and compact
+    generation/control manifests are sufficient to audit deadlines, bytes,
+    high-water/release, membership, and failure/rejoin behavior.
+    """
+    source_root = bulk_root / run_id / f"node-{node_rank}"
+    retained = run_dir / "retained-evidence" / f"node-{node_rank}"
+    for tree in ("supervision", "telemetry", "control"):
+        source_tree = source_root / tree
+        if not source_tree.is_dir():
+            continue
+        for source in source_tree.rglob("*"):
+            if not source.is_file() or source.suffix not in {".json", ".jsonl"}:
+                continue
+            target = retained / tree / source.relative_to(source_tree)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+            shutil.copyfile(source, temporary)
+            os.replace(temporary, target)
+    retained.mkdir(parents=True, exist_ok=True)
+    snapshot = retained / "snapshot.json"
+    temporary = snapshot.with_name(f".{snapshot.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps({
+        "schema": 1, "run_id": run_id, "node_rank": node_rank,
+        "source": str(source_root), "retained_at": time.time(),
+        "included": ["supervision/**/*.json", "telemetry/**/*.jsonl",
+                     "control/**/*.json", "control/**/*.jsonl"],
+        "excluded": ["mailbox", "*.data", "*.pt", "kernel-cache"],
+    }, sort_keys=True) + "\n")
+    os.replace(temporary, snapshot)
+    return retained
 
 
 class AllocationSupervisor:
@@ -370,7 +408,15 @@ def _node_local_main() -> int:
         startup_s=float(os.environ.get("RESILIENT_E97_STARTUP_DEADLINE_S", "120")),
         launch_backend="node-local-child")
     signal.signal(signal.SIGTERM, lambda *_: setattr(supervisor, "stopping", True))
-    return supervisor.run()
+    try:
+        return supervisor.run()
+    finally:
+        run_id = os.environ.get("RESILIENT_E97_RUN_ID")
+        bulk_root = os.environ.get("RESILIENT_E97_BULK_ROOT")
+        if run_id and bulk_root:
+            _retain_node_evidence(
+                run_dir, bulk_root=Path(bulk_root), run_id=run_id,
+                node_rank=node_rank)
 
 
 def _allocation_main() -> int:
