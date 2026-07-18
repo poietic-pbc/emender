@@ -308,7 +308,7 @@
         }
     },
     "startup_r6_payload": {
-        "status": "failed closed at proposal deadline; premature local aggregate occupied global namespace",
+        "status": "failed closed at proposal deadline; exact owner reduction completed but late dense global aggregate application did not finish",
         "job_id": 5028835,
         "submit_utc": "2026-07-18T17:50:11Z",
         "allocation_start_utc": "2026-07-18T17:50:25Z",
@@ -417,5 +417,44 @@
             "evidence_checksum": "passed",
             "empty_queue": true
         }
+    },
+    "startup_r7_payload": {
+        "status": "rendered, committed command required before single submission",
+        "code_commit": "fd15073f6909ea4d7e39df6dcd98b8cd943086a9",
+        "run_id": "validate-resilient-pool-v1-2n-startup-r7-20260718T183830Z-fd15073",
+        "payload_id": "fd15073-20260718T183830Z-pool-v1-startup-r7-2n20m-k40-f32stream-leaderfirst",
+        "submit_script": "reports/frontier/validate-resilient-pool-v1-2n-startup-r7-submit-20260718T183830Z.sh",
+        "submit_script_sha256": "2fdb68ba724c9a71d0c3d2e15f2b8db9c5503a9179e1b18c8f8e7ac65db9183c",
+        "launcher_sha256": "6bad3f77e6a20834a13452c04de35299bd53f1d4304e4ab089a3524f3596d6ec",
+        "supervisor_sha256": "463c42af743265c083e827483a0d79e85b95ddef846ea85043fd2c4c5ce85199",
+        "role_sha256": "feb3f3b6a18431f9f32492cfaa5413d3d87e973290c29744da4acb69efbfb169",
+        "pool_runtime_sha256": "37de7776e5aee7d66e5e7b5737e6849dc5cd344cc283166beb88876a5f52264f",
+        "node_transport_sha256": "e322c4c82c9f63c3528dc7a30fece9537d243ea07560ea4d272f446ddcd1cb70",
+        "split_roles_sha256": "f32a87c0777932b10e8d24063d89701a60b547d9a209758b1b20c405b9464752",
+        "fenced_runtime_sha256": "30e46a04478d30fc2ab4a27afbc1866535f96e2acb39a5f36b0148593a846988",
+        "train_config_sha256": "afc2a65fd8c73499e74e21cb9531c978206c3a9c898e42d18cc58bb93eb9fe9c",
+        "nodes": 2,
+        "qos": "debug",
+        "walltime": "00:20:00",
+        "model_free_managers": 2,
+        "gpu_trainers": 16,
+        "batch_size": 4,
+        "local_steps": 40,
+        "generations": 1,
+        "role_restarts": 0,
+        "failure_injection": null,
+        "resume_handoff": null,
+        "local_spool_chunk_bytes": 67108864,
+        "network_chunk_bytes": 67108864,
+        "max_spool_bytes": 68719476736,
+        "global_aggregate_storage_dtype": "float32",
+        "expected_global_aggregate_bytes": 5506770496,
+        "exact_reduction_dtype": "float64",
+        "bounded_streaming_in_place": true,
+        "leader_apply_priority": true,
+        "overall_exchange_commit_seconds": 180,
+        "local_gate_passed": 130,
+        "local_gate_seconds": 123.33,
+        "empty_queue_before_render": true
     }
 }

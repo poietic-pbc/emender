@@ -67,13 +67,14 @@ same-fence aggregate reuse is also rejected by content rather than fence alone.
 The 180-second bound remains unchanged.
 
 The ladder therefore remains on rung 1. No resilience or fresh-restart job has
-been rendered or submitted. The full pinned checkpoint-first gate passed, and
-changed startup payload r6 was submitted exactly once as job `5028835` and
-failed closed. It preserved the
-one-second connection bound, bounded 64 MiB frames, exact segment writes, and
-unchanged 180-second overall exchange deadline. Its only live-code difference
-from r5 was the checkpoint-critical-path ordering described above, so it was
-not an unchanged retry. No r7 payload has been rendered or submitted.
+been rendered or submitted. Changed startup payload r6 was submitted exactly
+once as job `5028835` and failed closed. Changed payload r7 is now rendered but
+not yet submitted from authoritative commit `fd15073f6909ea4d7e39df6dcd98b8cd943086a9`.
+It preserves the one-second connection bound, bounded 64 MiB frames, exact
+segment writes, and unchanged 180-second overall exchange deadline. Its live
+code differs from r6 only in the focused, locally tested model-dtype aggregate
+stream and leader-first bounded application path, so it is not an unchanged
+retry.
 
 No production allocation, normal-QoS allocation, 4+ node allocation, or
 two-hour allocation is authorized by this report.
@@ -652,6 +653,40 @@ port collision passed standalone without a production change. The final exact
 suite passed all 130 tests in 123.33 seconds. Approved-Python `compileall`,
 metrics `json.tool`, `git diff --check`, the dense-packing/collective/MPI scan,
 r5 and r6 evidence checksums, and the empty Frontier queue gate also passed.
+
+### Changed startup payload r7
+
+Focused code/evidence commit
+`fd15073f6909ea4d7e39df6dcd98b8cd943086a9` was pushed to the task branch and
+authoritative `origin/main`, fetched, and verified equal before rendering. The
+exact retained command is:
+
+```bash
+bash reports/frontier/validate-resilient-pool-v1-2n-startup-r7-submit-20260718T183830Z.sh
+```
+
+The submit script SHA-256 is
+`2fdb68ba724c9a71d0c3d2e15f2b8db9c5503a9179e1b18c8f8e7ac65db9183c`.
+Its run identity is
+`validate-resilient-pool-v1-2n-startup-r7-20260718T183830Z-fd15073` and its
+payload identity is
+`fd15073-20260718T183830Z-pool-v1-startup-r7-2n20m-k40-f32stream-leaderfirst`.
+The launcher, supervisor, live role, pool runtime, node transport, split-role
+spool, fenced apply runtime, and batch-size-4 configuration hashes are
+`6bad3f77…`, `463c42af…`, `feb3f3b6…`, `37de7776…`, `e322c4c8…`,
+`f32a87c0…`, `30e46a04…`, and `afc2a65f…`, respectively. The script verifies
+all eight full hashes before invoking Slurm.
+
+Payload r7 remains exactly two nodes, debug QoS, `00:20:00`, two model-free
+managers, 16 real GPU trainers, batch size 4, K=40, one generation, quorum two,
+64 MiB local/network frames, a 64 GiB bounded node-local ledger, fixed stage
+bounds, no injection, no handoff, and zero role retries. It retains the
+transport size from r6 specifically to isolate the aggregate-storage and
+application fix. It refuses source drift, an existing run directory, missing
+integrated-v1 ancestry, or any active/pending user job. `bash -n`, exact
+r6/r7 command diff review, `git diff --check`, and the external empty-queue
+check passed. The command is retained before submission and has not yet been
+executed.
 
 ## Authoritative integration and queue gate
 
