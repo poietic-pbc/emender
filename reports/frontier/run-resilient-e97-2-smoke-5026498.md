@@ -45,3 +45,23 @@ R05, R06, R08, R09, R10, R14, and R16. Success requires committed-generation
 evidence, not process presence. R07/R11/R12 and complete R16 acceptance remain
 unclaimed until failure/rejoin, immutable checkpoint, and fresh-allocation
 continuation are exercised live.
+
+## Live checkpoint at 45 minutes
+
+Slurm started the allocation at `2026-07-18T05:36:28Z`, after 33 seconds in
+the queue. At elapsed `00:45:40`, job `5026498` and its two-node role step were
+still `RUNNING`; no cancellation or retry was requested. The supervision log
+accounts for exactly two managers and sixteen trainers. Both managers formed
+the coordinator network, and every trainer entered the real HIP E97 loop using
+the `e88-sequential-split-edit-triton` path. The role step reported
+`MaxRSS=88,904,292 KiB`, `MaxDiskRead=83,631,620,024`, and
+`MaxDiskWrite=37,281,603,171` bytes.
+
+There was still no optimizer-step heartbeat, trainer contribution, manager
+quorum freeze, or finalized-generation/checkpoint marker. Trainer logs stopped
+advancing between `05:41:30Z` and `05:41:42Z`, after entering the first real
+training step. The manager generation deadline begins after initialization;
+the first manager reached its local-quorum wait at approximately `05:40:39Z`,
+putting the configured 2,700-second fail-fast near `06:25:39Z`. The job is being
+left to enforce that bounded deadline. This checkpoint is live evidence only,
+not a successful smoke or R16 claim.
