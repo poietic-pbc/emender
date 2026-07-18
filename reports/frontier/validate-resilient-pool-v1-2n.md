@@ -57,14 +57,12 @@ recovery and reuses that immutable file for leader recovery. No deadline is
 extended and no second full leader serialization is needed.
 
 The ladder therefore remains on rung 1. No resilience or fresh-restart job has
-been rendered or submitted. Changed startup payload r5 retained the one-second
-connection bound, bounded 64 MiB frames, and unchanged 180-second overall
-exchange deadline, but makes every framed segment write exact by advancing a
-memoryview until all accepted bytes are sent. A regression using a deliberately
-partial raw writer failed on the r4 tree and passes with the focused fix. It is
-not an unchanged retry. The next payload will differ by the checkpoint-critical
-path ordering described above and will not be rendered until the full pinned
-gate passes.
+been rendered or submitted. The full pinned checkpoint-first gate passed, and
+changed startup payload r6 is retained but not yet submitted. It preserves the
+one-second connection bound, bounded 64 MiB frames, exact segment writes, and
+unchanged 180-second overall exchange deadline. Its only live-code difference
+from r5 is the checkpoint-critical-path ordering described above, so it is not
+an unchanged retry.
 
 No production allocation, normal-QoS allocation, 4+ node allocation, or
 two-hour allocation is authorized by this report.
@@ -521,6 +519,37 @@ seconds. Approved-Python `compileall`, metrics `json.tool`, `git diff --check`,
 the forbidden dense-packing/collective/MPI live-path scan, the r5 retained
 evidence checksum, and the empty Frontier queue check also passed. This is the
 only code change permitted in the next startup payload.
+
+### Changed startup payload r6
+
+Focused code/evidence commit
+`08d05419cb67ed5ec3546db27410756218a5e79b` was pushed to the task branch
+and authoritative `origin/main`, fetched, and verified equal before rendering.
+The exact retained command is:
+
+```bash
+bash reports/frontier/validate-resilient-pool-v1-2n-startup-r6-submit-20260718T174732Z.sh
+```
+
+The submit script SHA-256 is
+`424f48e8b41577f2f4ab2ac08ee78e47c65874b1858289e14e1ca6ef06789f4d`.
+Its run identity is
+`validate-resilient-pool-v1-2n-startup-r6-20260718T174732Z-08d0541` and its
+payload identity is
+`08d0541-20260718T174732Z-pool-v1-startup-r6-2n20m-k40-checkpointfirst`.
+Pinned launcher, supervisor, role, pool runtime, node transport, and
+batch-size-4 configuration hashes are `6bad3f77…`, `1893cdef…`, `69eb4269…`,
+`37de7776…`, `e322c4c8…`, and `afc2a65f…`, respectively.
+
+The r5/r6 command diff contains only the immutable run/payload/code identity,
+job name, and changed role-entrypoint hash. Payload r6 is still exactly two
+nodes, debug QoS, `00:20:00`, two model-free managers, 16 real GPU trainers,
+batch size 4, K=40, one generation, quorum two, 64 MiB local/network frames,
+64 GiB bounded node-local ledger, fixed stage bounds, no failure injection,
+no resume handoff, and zero role retries. It refuses drift, an existing run
+directory, a missing integrated-v1 ancestry, or any active/pending user job.
+It will be submitted once after this immutable command record is committed,
+pushed, fetched, and verified; it is not an unchanged retry.
 
 ## Authoritative integration and queue gate
 

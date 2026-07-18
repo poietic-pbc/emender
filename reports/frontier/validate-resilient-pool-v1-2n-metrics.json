@@ -306,5 +306,38 @@
             "evidence_checksum": "passed",
             "empty_queue": true
         }
+    },
+    "startup_r6_payload": {
+        "status": "rendered; awaiting immutable command commit before one submission",
+        "code_commit": "08d05419cb67ed5ec3546db27410756218a5e79b",
+        "run_id": "validate-resilient-pool-v1-2n-startup-r6-20260718T174732Z-08d0541",
+        "payload_id": "08d0541-20260718T174732Z-pool-v1-startup-r6-2n20m-k40-checkpointfirst",
+        "submit_script": "reports/frontier/validate-resilient-pool-v1-2n-startup-r6-submit-20260718T174732Z.sh",
+        "submit_script_sha256": "424f48e8b41577f2f4ab2ac08ee78e47c65874b1858289e14e1ca6ef06789f4d",
+        "launcher_sha256": "6bad3f77e6a20834a13452c04de35299bd53f1d4304e4ab089a3524f3596d6ec",
+        "supervisor_sha256": "1893cdef5413945a0c49e6bc219dc0e9227eb5e510679429416851637b4c122e",
+        "role_sha256": "69eb42692bf3cbd18df7197e0277f2420fef4b70209d031d7f4099f3767d7051",
+        "pool_runtime_sha256": "37de7776e5aee7d66e5e7b5737e6849dc5cd344cc283166beb88876a5f52264f",
+        "node_transport_sha256": "e322c4c82c9f63c3528dc7a30fece9537d243ea07560ea4d272f446ddcd1cb70",
+        "train_config_sha256": "afc2a65fd8c73499e74e21cb9531c978206c3a9c898e42d18cc58bb93eb9fe9c",
+        "nodes": 2,
+        "qos": "debug",
+        "walltime": "00:20:00",
+        "model_free_managers": 2,
+        "gpu_trainers": 16,
+        "batch_size": 4,
+        "local_steps": 40,
+        "generations": 1,
+        "role_restarts": 0,
+        "failure_injection": null,
+        "resume_handoff": null,
+        "local_spool_chunk_bytes": 67108864,
+        "network_chunk_bytes": 67108864,
+        "max_spool_bytes": 68719476736,
+        "overall_exchange_commit_seconds": 180,
+        "authoritative_checkpoint_before_local_recovery": true,
+        "leader_single_serialization": true,
+        "local_gate_passed": 127,
+        "local_gate_seconds": 123.05
     }
 }
