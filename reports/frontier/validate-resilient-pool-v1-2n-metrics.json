@@ -672,7 +672,12 @@
         }
     },
     "startup_r9_payload": {
-        "status": "rendered, not submitted",
+        "status": "submitted exactly once; pending startup result",
+        "job_id": 5029220,
+        "submit_utc": "2026-07-18T19:37:17Z",
+        "initial_state": "PENDING (Priority)",
+        "requeue": 0,
+        "restarts": 0,
         "code_commit": "1379df52175425015c746b9afe81fc8681fa8776",
         "run_id": "validate-resilient-pool-v1-2n-startup-r9-20260718T193507Z-1379df5",
         "payload_id": "1379df5-20260718T193507Z-pool-v1-startup-r9-2n20m-k40-peerapply",

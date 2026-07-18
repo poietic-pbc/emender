@@ -905,7 +905,12 @@ generation, quorum two, bounded 64 MiB local/network records and 64 GiB ledger,
 no injection, no handoff, and zero role restarts. It retains the exact
 180/420/180/720 stage bounds and refuses a changed runtime tree, absent
 integrated-v1 ancestry, an existing run directory, or any active/pending user
-job. The command is rendered but has not been executed.
+job. After the command record was committed, pushed, fetched, and verified on
+authoritative `origin/main`, it was executed exactly once and returned job
+`5029220`. Slurm recorded submit/eligible time `2026-07-18T19:37:17Z`, exactly
+two requested nodes, debug QoS, `00:20:00`, 16 requested GPUs, no dependency,
+no requeue, and zero restarts. Its initial state was `PENDING (Priority)` as
+the only user job; queue time remains separate from runtime.
 
 ## Authoritative integration and queue gate
 
