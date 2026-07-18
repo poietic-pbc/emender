@@ -60,7 +60,7 @@ import torch
 from ndm.resilient_e97_roles import LocalFence, LocalTrainerSpool
 from ndm.resilient_e97_runtime import (SplitManagerLoop, apply_delta, atomic_json,
                                        PINNED_STEP_1525000_SHA256, assert_node_local_path,
-                                       finalize_checkpoint, flatten_delta, heartbeat,
+                                       finalize_checkpoint, flatten_tensors, heartbeat,
                                        outer_state_migration)
 from ndm.resilient_node_quorum import GenerationFence
 from ndm.resilient_node_transport import (DiskBucketSpool, NodeManagerClient,
@@ -323,10 +323,9 @@ def trainer(args) -> int:
     for generation in range(start_generation, target_generation):
         if stop["requested"]:
             break
-        before = {name: value.clone() for name, value in state.items()}
         if args.control:
             loss = 1.0 / (step + args.local_steps + rank + 1)
-            after = {"weight": state["weight"] + float(rank + 1)}
+            delta = {"weight": torch.full_like(state["weight"], float(rank + 1))}
             tokens = rank + 1
         else:
             from ndm.async_diloco_real import RealAsyncWorkerSpec, _run_real_worker
@@ -343,19 +342,22 @@ def trainer(args) -> int:
                     stage="training"))
             if report.update is None:
                 raise RuntimeError(report.error or "real E97 trainer produced no update")
-            after = {name: before[name] + report.update.delta[name] for name in before}
+            delta = report.update.delta
             optimizer_state = report.optimizer_state_dict or {}
             tokens, loss = report.tokens, float(report.losses[-1])
         fence = _fence(args, generation)
-        spool.publish(fence, rank, flatten_delta(
-            before, after, chunk_elements=max(1, args.bulk_chunk_bytes // 8)), weight=tokens,
+        heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
+                  stage="streaming_delta")
+        spool.publish(fence, rank, flatten_tensors(
+            delta, chunk_elements=max(1, args.bulk_chunk_bytes // 8)), weight=tokens,
                       source_id=args.source_id)
+        del delta
         heartbeat(bulk, identity, generation=generation, step=step, loss=loss, stage="submitted")
         manifest, aggregate = spool.wait_aggregate(
             fence, deadline=time.monotonic() + args.deadline_s,
             expected_source_id=args.source_id)
         spool.release_trainer(fence, rank)
-        state = apply_delta(before, aggregate, eta_outer=args.eta_outer)
+        state = apply_delta(state, aggregate, eta_outer=args.eta_outer)
         step += args.local_steps; losses.append(loss)
         completed = generation + 1
         recovery_checkpoint = bulk / "recovery" / identity / f"generation-{completed:08d}.pt"
