@@ -270,6 +270,13 @@ ldd build/native-resilient-dataplane/lib64/libemender_ndp.so.1
 ldd build/native-resilient-dataplane/lib64/libemender_ndp_transport.so.1
 git diff --check
 cmp -s AGENTS.md CLAUDE.md
+
+git fetch origin main
+git merge-base --is-ancestor origin/main HEAD
+git push -u origin wg/agent-1283/integrate-native-resilient-dataplane-v1
+git push origin HEAD:main
+git fetch origin main
+test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
 ```
 
 The unified CTest result is 8/8. The complete focused native/resilient Python
