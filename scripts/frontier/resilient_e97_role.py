@@ -36,6 +36,7 @@ def _role_import_heartbeat() -> tuple[threading.Event, threading.Thread] | None:
     state = (Path(bulk_root) / run_id / f"node-{node_rank}" / "supervision" /
              f"{identity}.json")
     stop = threading.Event()
+    progress_started = time.time()
 
     def publish() -> None:
         state.parent.mkdir(parents=True, exist_ok=True)
@@ -43,7 +44,8 @@ def _role_import_heartbeat() -> tuple[threading.Event, threading.Thread] | None:
             now = time.time()
             temporary = state.with_suffix(f".{os.getpid()}.tmp")
             temporary.write_text(json.dumps({
-                "identity": identity, "heartbeat_time": now, "progress_time": now,
+                "identity": identity, "heartbeat_time": now,
+                "progress_time": progress_started,
                 "generation": 0, "step": 0, "loss": None,
                 "stage": "runtime_import", "bootstrap_pid": os.getpid(),
             }, sort_keys=True))

@@ -278,17 +278,7 @@ class AllocationSupervisor:
         assert child.process is not None
         if child.process.poll() is not None:
             return f"exit:{child.process.returncode}"
-        bulk_root = os.environ.get("RESILIENT_E97_BULK_ROOT")
-        run_id = os.environ.get("RESILIENT_E97_RUN_ID")
-        state_root = (Path(bulk_root) / run_id / f"node-{child.node_rank}"
-                      if bulk_root and run_id else self.run_dir)
-        state_path = state_root / "supervision" / f"{child.identity}.json"
-        # A node supervisor deliberately owns no training loop.  Its progress is
-        # the model-free manager that it supervises, so use that fenced heartbeat
-        # for generation-gated whole-node-step injection.
-        if child.role == "node-supervisor":
-            state_path = (state_root / "supervision" /
-                          f"node-{child.node_rank}-manager.json")
+        state_path = self._state_path(child)
         if not state_path.exists():
             if child.started_at is not None and now - child.started_at > self.startup_s:
                 return "startup_deadline"
@@ -345,20 +335,96 @@ class AllocationSupervisor:
             return "first_atomic_generation_deadline"
         return None
 
+    def _state_path(self, child: Child) -> Path:
+        bulk_root = os.environ.get("RESILIENT_E97_BULK_ROOT")
+        run_id = os.environ.get("RESILIENT_E97_RUN_ID")
+        state_root = (Path(bulk_root) / run_id / f"node-{child.node_rank}"
+                      if bulk_root and run_id else self.run_dir)
+        state_path = state_root / "supervision" / f"{child.identity}.json"
+        # A node supervisor deliberately owns no training loop.  Its progress is
+        # the model-free manager that it supervises, so use that fenced heartbeat
+        # for generation-gated whole-node-step injection.
+        if child.role == "node-supervisor":
+            state_path = (state_root / "supervision" /
+                          f"node-{child.node_rank}-manager.json")
+        return state_path
+
+    def _manager_ready_for_trainers(self, child: Child) -> bool:
+        """A manager is READY after import and fenced pool admission."""
+        state_path = self._state_path(child)
+        try:
+            state = json.loads(state_path.read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            return False
+        return (state.get("identity") == child.identity
+                and str(state.get("stage", "runtime_import")) != "runtime_import")
+
+    def stop_children(self, children: list[Child], reason: str, *,
+                      grace_s: float = 15.0, kill_grace_s: float = 2.0) -> None:
+        """Stop every role under one shared grace bound, independent of count."""
+        active = [child for child in children
+                  if child.process is not None and child.process.poll() is None]
+        for child in active:
+            try:
+                os.killpg(child.process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        deadline = time.monotonic() + max(0.0, grace_s)
+        while active and time.monotonic() < deadline:
+            active = [child for child in active if child.process.poll() is None]
+            if active:
+                time.sleep(min(self.poll_s, max(0.0, deadline - time.monotonic())))
+        for child in active:
+            try:
+                os.killpg(child.process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        kill_deadline = time.monotonic() + max(0.0, kill_grace_s)
+        while active and time.monotonic() < kill_deadline:
+            active = [child for child in active if child.process.poll() is None]
+            if active:
+                time.sleep(min(self.poll_s,
+                               max(0.0, kill_deadline - time.monotonic())))
+        for child in children:
+            if child.process is not None:
+                self._event("evicted", child, reason=reason,
+                            exit_code=child.process.poll())
+
     def stop_child(self, child: Child, reason: str) -> None:
         assert child.process is not None
-        if child.process.poll() is None:
-            os.killpg(child.process.pid, signal.SIGTERM)
-            try:
-                child.process.wait(15)
-            except subprocess.TimeoutExpired:
-                os.killpg(child.process.pid, signal.SIGKILL)
-                child.process.wait()
-        self._event("evicted", child, reason=reason, exit_code=child.process.returncode)
+        self.stop_children([child], reason)
 
     def run(self) -> int:
-        for child in self.children:
-            self.start(child)
+        if self.launch_backend == "node-local-child":
+            managers = [child for child in self.children if child.role == "manager"]
+            deferred = [child for child in self.children if child.role != "manager"]
+            for child in managers:
+                self.start(child)
+            while not self.stopping:
+                if all(self._manager_ready_for_trainers(child) for child in managers):
+                    break
+                now = time.time()
+                for child in managers:
+                    if self._manager_ready_for_trainers(child):
+                        continue
+                    reason = self._deadline_reason(child, now)
+                    if reason is None:
+                        continue
+                    self.stop_child(child, reason)
+                    if child.restarts >= self.max_restarts:
+                        self._event("restart_exhausted", child, reason=reason)
+                        return 1
+                    child.restarts += 1
+                    self.start(child)
+                time.sleep(self.poll_s)
+            if self.stopping:
+                self.stop_children(managers, "allocation_term_handoff")
+                return 0
+            for child in deferred:
+                self.start(child)
+        else:
+            for child in self.children:
+                self.start(child)
         completed: set[str] = set()
         while not self.stopping:
             now = time.time()
@@ -381,9 +447,9 @@ class AllocationSupervisor:
             if len(completed) == len(self.children):
                 return 0
             time.sleep(self.poll_s)
-        for child in self.children:
-            if child.process is not None and child.process.poll() is None:
-                self.stop_child(child, "allocation_term_handoff")
+        self.stop_children(
+            [child for child in self.children if child.identity not in completed],
+            "allocation_term_handoff")
         return 0
 
 

@@ -2,6 +2,7 @@ from pathlib import Path
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -292,6 +293,89 @@ def test_launch_modes_preserve_identical_local_role_identity_and_environment(tmp
     assert Path(local_env["TORCHINDUCTOR_CACHE_DIR"]).is_dir()
     assert any(value.startswith("TRITON_CACHE_DIR=") for value in step_argv)
     assert any(value.startswith("TORCHINDUCTOR_CACHE_DIR=") for value in step_argv)
+
+
+def test_node_local_supervisor_waits_for_manager_ready_before_cold_trainers(
+        tmp_path, monkeypatch):
+    manager = Child("manager", 0, "node000", None, "manager")
+    trainers = [Child("trainer", 0, "node000", rank, "trainer") for rank in range(2)]
+    supervisor = AllocationSupervisor(
+        tmp_path, [manager, *trainers], heartbeat_s=2, progress_s=3,
+        max_restarts=0, startup_s=1, poll_s=.001,
+        launch_backend="node-local-child")
+    state = tmp_path / "supervision/node-0-manager.json"
+    starts = []
+    trainer_started_before_ready = []
+
+    class Process:
+        returncode = None
+        pid = 123
+
+        def poll(self):
+            if len(starts) == 3:
+                self.returncode = 0
+            return self.returncode
+
+    def fake_start(child):
+        starts.append(child.identity)
+        child.started_at = time.time()
+        child.process = Process()
+        if child.role == "manager":
+            def publish_ready():
+                time.sleep(.03)
+                state.parent.mkdir(parents=True, exist_ok=True)
+                state.write_text(json.dumps({
+                    "identity": child.identity, "heartbeat_time": time.time(),
+                    "progress_time": time.time(), "generation": 0,
+                    "stage": "collecting"}))
+            threading.Thread(target=publish_ready, daemon=True).start()
+        else:
+            trainer_started_before_ready.append(not state.exists())
+
+    monkeypatch.setattr(supervisor, "start", fake_start)
+    assert supervisor.run() == 0
+    assert starts == [manager.identity, *(item.identity for item in trainers)]
+    assert trainer_started_before_ready == [False, False]
+
+
+def test_allocation_term_uses_one_shared_grace_for_all_role_groups(tmp_path, monkeypatch):
+    children = [Child("trainer", 0, "node000", rank, "trainer") for rank in range(3)]
+    supervisor = AllocationSupervisor(
+        tmp_path, children, heartbeat_s=2, progress_s=3,
+        max_restarts=0, poll_s=.001)
+    processes = {}
+
+    class Process:
+        returncode = None
+
+        def __init__(self, pid):
+            self.pid = pid
+            processes[pid] = self
+
+        def poll(self):
+            return self.returncode
+
+    for pid, child in enumerate(children, start=100):
+        child.process = Process(pid)
+        child.started_at = time.time()
+    signals = []
+
+    def fake_killpg(pid, requested):
+        signals.append((pid, requested))
+        if requested == signal.SIGKILL:
+            processes[pid].returncode = -signal.SIGKILL
+
+    monkeypatch.setattr(
+        "scripts.frontier.resilient_e97_allocation_supervisor.os.killpg", fake_killpg)
+    started = time.monotonic()
+    supervisor.stop_children(
+        children, "allocation_term_handoff", grace_s=.02, kill_grace_s=.02)
+    elapsed = time.monotonic() - started
+    assert signals[:3] == [(100, signal.SIGTERM), (101, signal.SIGTERM),
+                           (102, signal.SIGTERM)]
+    assert signals[3:] == [(100, signal.SIGKILL), (101, signal.SIGKILL),
+                           (102, signal.SIGKILL)]
+    assert elapsed < .10
 
 
 def test_node_supervisor_reuses_allocation_gpus_without_step_gres(tmp_path, monkeypatch):

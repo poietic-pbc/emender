@@ -28,6 +28,15 @@ def test_manager_publishes_heartbeat_before_heavy_runtime_imports():
     assert "os.replace(temporary, state)" in text
 
 
+def test_import_liveness_does_not_refresh_runtime_import_progress_deadline():
+    text = ROLE.read_text()
+    bootstrap = text[text.index("def _role_import_heartbeat"):
+                     text.index("_IMPORT_HEARTBEAT = _role_import_heartbeat()")]
+    assert "progress_started = time.time()" in bootstrap
+    assert '"progress_time": progress_started' in bootstrap
+    assert '"progress_time": now' not in bootstrap
+
+
 def _control_processes(run, bulk, *, run_id, generations, initial=0, resume="", epoch=1):
     common = ["--run-dir", str(run), "--run-id", run_id, "--generations", str(generations),
               "--initial-generation", str(initial), "--local-steps", "40", "--deadline-s", "15",

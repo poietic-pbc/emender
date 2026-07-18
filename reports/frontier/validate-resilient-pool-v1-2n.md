@@ -79,14 +79,14 @@ and became terminal at allocation +367 seconds. The fenced store has one lease
 epoch and zero publications.
 
 The ladder therefore remains on rung 1. No resilience or fresh-restart job has
-been rendered or submitted. Changed startup payload r6 was submitted exactly
-once as job `5028835` and failed closed. Changed payload r7 is now rendered but
-not yet submitted from authoritative commit `fd15073f6909ea4d7e39df6dcd98b8cd943086a9`.
-It preserves the one-second connection bound, bounded 64 MiB frames, exact
-segment writes, and unchanged 180-second overall exchange deadline. Its live
-code differs from r6 only in the focused, locally tested model-dtype aggregate
-stream and leader-first bounded application path, so it is not an unchanged
-retry.
+been rendered or submitted. Changed startup payload r7 was submitted exactly
+once as job `5029077` and failed closed at READY. The focused manager-first,
+fixed import-progress, and shared-grace shutdown changes pass the complete
+local gate, but no r8 payload has been rendered or submitted. The prospective
+r8 tree preserves the one-second connection bound, bounded 64 MiB frames,
+exact segment writes, float32 bounded aggregate stream, leader priority, and
+unchanged 180-second exchange deadline; it is a changed payload, not an
+unchanged retry.
 
 No production allocation, normal-QoS allocation, 4+ node allocation, or
 two-hour allocation is authorized by this report.
@@ -735,6 +735,18 @@ shutdown must signal all child process groups together, wait one shared bounded
 grace interval, then kill only survivors; the bound must not multiply by role
 count. These changes affect startup/shutdown only and do not alter the r7
 float32 stream, exact owner math, K40, topology, or stage budgets.
+
+The changes are now implemented. Three focused regressions first failed 3/3
+against the r7 tree in 22.73 seconds: runtime-import liveness refreshed its
+progress deadline, trainers launched before a manager READY transition, and
+no shared-grace multi-child stop operation existed. After implementation the
+three passed in 19.02 seconds. The launcher/runtime slice passed all 45 tests,
+and the exact pinned lifecycle, weighted-math, membership/quorum, reducer,
+owner, bounded-transport, fencing/restart, launcher, real-trainer, and helper
+suite passed all 133 tests in 127.25 seconds. Approved-Python `compileall`,
+metrics `json.tool`, `git diff --check`, forbidden dense-packing/collective/MPI
+scanning, r6/r7 evidence checksums, and the empty Frontier queue gate passed.
+No r8 command has yet been rendered.
 
 The compact retained tree is `reports/frontier/evidence/job-5029077`; it
 contains the fenced database, runtime identity, full supervisor event stream,

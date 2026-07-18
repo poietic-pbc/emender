@@ -460,8 +460,7 @@
         "overall_exchange_commit_seconds": 180,
         "local_gate_passed": 130,
         "local_gate_seconds": 123.33,
-        "empty_queue_before_render": true
-        ,
+        "empty_queue_before_render": true,
         "allocation_start_utc": "2026-07-18T18:41:28Z",
         "end_utc": "2026-07-18T18:47:35Z",
         "queue_seconds": 23,
@@ -489,7 +488,20 @@
             "fixed_import_progress_time": true,
             "parallel_term_shared_grace": true,
             "ready_hard_seconds": 180,
-            "unchanged_training_or_exchange_budget": true
+            "unchanged_training_or_exchange_budget": true,
+            "tdd_failed_before_fix": 3,
+            "tdd_failed_seconds": 22.73,
+            "tdd_passed_after_fix": 3,
+            "tdd_passed_seconds": 19.02,
+            "launcher_runtime_tests_passed": 45,
+            "local_gate_passed": 133,
+            "local_gate_seconds": 127.25,
+            "compileall": "passed",
+            "json_tool": "passed",
+            "forbidden_live_path_scan": "passed",
+            "r6_r7_evidence_checksums": "passed",
+            "empty_queue": true,
+            "implemented": true
         }
     }
 }
