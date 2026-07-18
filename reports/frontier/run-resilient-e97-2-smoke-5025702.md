@@ -35,3 +35,16 @@ QoS, and walltime differences.  Conformance: *Resilient DiLoCo Compute Pool*
 version 1, applicable R03, R05, R06, R08, R09, R10, R14, and R16.  This job
 must finalize one immutable generation before any full `02:00:00` resilience
 gate is authorized.
+
+## Live runtime checkpoint
+
+At `2026-07-18T00:18:12-04:00`, Slurm reported the allocation `RUNNING` on
+`frontier[08022-08023]` with elapsed time `00:33:55`. Queue time was 13 seconds
+(`Submit=2026-07-17T23:44:04`, `Start=2026-07-17T23:44:17`) and is tracked
+separately from runtime. The supervisor evidence records both model-free
+managers and all sixteen real GPU trainers starting. The immutable run
+directory contained no generation manifest or checkpoint at this checkpoint;
+process presence was therefore not counted as progress. Trainer logs had last
+advanced during model startup between 23:46 and 23:50, still inside the
+explicit 2,700-second whole-generation deadline. The job was not cancelled and
+no duplicate or follow-on allocation was submitted.
