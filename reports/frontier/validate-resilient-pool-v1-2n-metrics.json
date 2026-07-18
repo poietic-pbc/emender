@@ -75,8 +75,32 @@
         "allocation_start_utc": "2026-07-18T15:33:25Z",
         "queue_seconds": 44,
         "nodes": ["frontier06911", "frontier08316"],
-        "status": "submitted once; running startup rung",
+        "end_utc": "2026-07-18T15:41:47Z",
+        "runtime_seconds": 502,
+        "state": "FAILED",
+        "exit_code": "1:0",
+        "manager_ready_seconds_from_allocation_start": [56.612836837768555, 60.36300349235535],
+        "k40_seconds_from_trainer_start": {"min": 131.38996005058289, "max": 133.6393358707428},
+        "k40_seconds_from_allocation_start": {"min": 173.09479331970215, "max": 176.66996026039124},
+        "local_spool_seconds": {"min": 139.03665634896606, "max": 144.10212461231276},
+        "local_spool_bytes_per_trainer": 5506770496,
+        "local_spool_files_per_trainer": 2,
+        "accepted_node_contributions": 2,
+        "accepted_tokens": 3934080,
+        "atomic_publications": 0,
+        "terminal_stage": "owner_transport/trainer aggregate apply deadline",
+        "evidence_files": 114,
+        "evidence_tree_sha256": "9bda0ac24cc62fc5f39815ce70548f5a36cbd95b4d608ce7e6f4455c571ea81e",
+        "status": "failed closed; focused changed owner-window payload required",
         "submit_script": "reports/frontier/validate-resilient-pool-v1-2n-startup-r2-submit-20260718T152955Z.sh",
-        "submit_script_sha256": "6aab23241a0fb67359dbbbc917fbc1a609b73aadfee44bb6000c1de93008b3ca"
+        "submit_script_sha256": "6aab23241a0fb67359dbbbc917fbc1a609b73aadfee44bb6000c1de93008b3ca",
+        "next_change": {
+            "trainer_exchange_window_opens_at_manager_freeze": true,
+            "bounded_wait_stage": "local_reduce_wait",
+            "network_chunk_bytes": 67108864,
+            "measured_e97_owner_shards": 165,
+            "local_gate_passed": 123,
+            "local_gate_seconds": 111.68
+        }
     }
 }

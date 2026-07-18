@@ -92,8 +92,32 @@ def test_eight_independent_trainers_advance_three_exact_generations(tmp_path):
 
 def test_two_model_free_managers_exchange_without_collective(tmp_path):
     bulk_root = tmp_path.with_name(tmp_path.name + "-bulk")
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0)); port = probe.getsockname()[1]
+    # The live runtime derives two owner endpoints at coordinator_port+1/+2.
+    # Reserving only the coordinator port is racy on shared login nodes: a
+    # healthy manager can fail before READY because either adjacent port is in
+    # use. Verify the complete local fixture block before launching processes.
+    port = None
+    for _ in range(256):
+        probes = []
+        try:
+            first = socket.socket()
+            first.bind(("127.0.0.1", 0))
+            candidate = first.getsockname()[1]
+            probes.append(first)
+            if candidate > 65532:
+                continue
+            for offset in (1, 2):
+                probe = socket.socket()
+                probe.bind(("127.0.0.1", candidate + offset))
+                probes.append(probe)
+            port = candidate
+            break
+        except OSError:
+            continue
+        finally:
+            for probe in probes:
+                probe.close()
+    assert port is not None, "no free contiguous local three-port block"
     common = ["--run-dir", str(tmp_path), "--run-id", "network", "--generations", "1",
               "--local-steps", "40", "--deadline-s", "60", "--source-id", "seed",
               "--payload-id", "layout", "--code-id", "code", "--control",

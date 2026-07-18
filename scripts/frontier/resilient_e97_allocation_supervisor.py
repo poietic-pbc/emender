@@ -328,6 +328,7 @@ class AllocationSupervisor:
             "collecting": K40_HARD_S + EXCHANGE_COMMIT_HARD_S,
             "training": K40_HARD_S,
             "streaming_delta": EXCHANGE_COMMIT_HARD_S,
+            "local_reduce_wait": K40_HARD_S,
             "submitted": EXCHANGE_COMMIT_HARD_S,
             "owner_transport": EXCHANGE_COMMIT_HARD_S,
             "freeze": EXCHANGE_COMMIT_HARD_S,

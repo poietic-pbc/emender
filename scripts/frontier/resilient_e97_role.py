@@ -102,7 +102,7 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--max-spool-bytes", type=int, default=64 << 30)
     value.add_argument("--initial-generation", type=int, default=0)
     value.add_argument("--resume-handoff", default="")
-    value.add_argument("--bulk-chunk-bytes", type=int, default=1 << 20)
+    value.add_argument("--bulk-chunk-bytes", type=int, default=64 << 20)
     value.add_argument("--local-spool-chunk-bytes", type=int, default=64 << 20)
     return value
 
@@ -183,6 +183,37 @@ def _stage_telemetry(bulk: Path, identity: str, generation: int, stage: str,
         stream.flush()
     if elapsed > hard_s:
         raise TimeoutError(f"{stage} exceeded {hard_s}s stage SLO")
+
+
+_MANAGER_EXCHANGE_STAGES = frozenset({
+    "freeze", "owner_transport", "redistribution", "checkpoint_commit", "published",
+})
+
+
+def _wait_for_manager_exchange_window(bulk: Path, *, node: int, generation: int,
+                                      deadline: float) -> str:
+    """Do not spend a trainer's apply bound while its manager reduces locally.
+
+    The manager's generation deadline covers K40 contribution collection and
+    exact local reduction.  Only its fenced transition to ``freeze`` opens the
+    distinct 180-second owner-transport/apply window.  The compact heartbeat is
+    node-local, atomically replaced, and contains no tensor or model data.
+    """
+    state_path = bulk / "supervision" / f"node-{node}-manager.json"
+    last_stage = "missing"
+    while time.monotonic() < deadline:
+        try:
+            state = json.loads(state_path.read_text())
+        except FileNotFoundError:
+            time.sleep(.02)
+            continue
+        last_stage = str(state.get("stage", "unknown"))
+        if (int(state.get("generation", -1)) >= generation
+                and last_stage in _MANAGER_EXCHANGE_STAGES):
+            return last_stage
+        time.sleep(.02)
+    raise TimeoutError(
+        f"manager local reduction deadline expired before exchange: {last_stage}")
 
 
 def _pool_hosts(args) -> tuple[str, ...]:
@@ -682,7 +713,13 @@ def trainer(args) -> int:
                 delta, chunk_elements=max(1, args.bulk_chunk_bytes // 8)), weight=tokens,
                           source_id=args.source_id)
         del delta
-        heartbeat(bulk, identity, generation=generation, step=step, loss=loss, stage="submitted")
+        if args.node_count > 1:
+            heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
+                      stage="local_reduce_wait")
+            _wait_for_manager_exchange_window(
+                bulk, node=node, generation=generation, deadline=generation_deadline)
+        heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
+                  stage="submitted")
         exchange_deadline = time.monotonic() + min(args.deadline_s, 180.0)
         manifest, aggregate = spool.wait_aggregate(
             fence, deadline=exchange_deadline,
@@ -754,6 +791,8 @@ def main() -> int:
         raise ValueError("generations and deadlines must be positive")
     if not 0 < args.local_spool_chunk_bytes <= args.max_spool_bytes:
         raise ValueError("local spool chunk bound must be positive and within the byte ledger")
+    if not 0 < args.bulk_chunk_bytes <= args.max_spool_bytes:
+        raise ValueError("owner transport chunk bound must be positive and within the byte ledger")
     return manager(args) if args.role == "manager" else trainer(args)
 
 

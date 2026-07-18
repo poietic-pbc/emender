@@ -9,25 +9,24 @@ requirements R01–R16 in `docs/RESILIENT_DILOCO_GAP_MATRIX.md`.
 
 ## Status
 
-Startup rung job `5028225` used the retained immutable payload and **failed
-closed at the post-K40 local-delta streaming stage**. Both managers were READY
-within 65 seconds of allocation start and all 16 original real trainers
-completed K=40 within 135 seconds of their child start. No trainer contribution
-finished its bounded local spool publication within the following 180-second
-exchange window, so the supervisors evicted/restarted the affected trainers,
-both managers eventually reported local-quorum timeout, and the first-atomic-
-generation deadline ended the job before Slurm TERM. There was no publication,
-checkpoint, handoff, or production mutation.
+The startup rung has failed closed twice without an unchanged retry. Job
+`5028225` failed at the post-K40 local-delta streaming stage. Changed payload
+r2 job `5028347` then proved the 64 MiB/two-file local spool fix: both managers
+were READY within 61 seconds of allocation start, all 16 real trainers finished
+K=40 within 134 seconds of child start, every local contribution published in
+139–145 seconds, both managers exactly reduced six trainers and froze two node
+contributions carrying 3,934,080 tokens. It then failed in distributed owner
+transport because the trainers' 180-second aggregate-apply timers had started
+at their own local publication, about 72 seconds before the managers opened the
+fenced exchange window. The remaining 1 MiB owner frame also required about
+40,000 short-lived request/response connections per E97 generation. No atomic
+publication, checkpoint, handoff, or production mutation occurred.
 
-The ladder remains on rung 1. Changed startup payload r2 was submitted once as
-job `5028347` after its immutable code and payload were pushed and fetched; it
-entered RUNNING on exactly two Frontier nodes at `2026-07-18T15:33:25Z`. No
-resilience or fresh-restart job has been rendered or submitted. The focused
-changed payload uses bounded
-64 MiB local spool records rather than the failed 1 MiB local records, retains
-the network owner-frame bound at 1 MiB, raises the hard node-local ledger from
-an insufficient 32 GiB to a bounded 64 GiB, and automatically retains only
-JSON/JSONL node-local evidence after role shutdown.
+The ladder remains on rung 1. No resilience or fresh-restart job has been
+rendered or submitted. The next focused payload starts the trainer apply timer
+only after the node-local manager advertises its fenced exchange transition and
+uses independently bounded 64 MiB owner frames under the unchanged 64 GiB
+ledger. It is not an unchanged retry.
 
 No production allocation, normal-QoS allocation, 4+ node allocation, or
 two-hour allocation is authorized by this report.
@@ -151,11 +150,58 @@ directory, and exact-hash gates and returned job ID `5028347`. Slurm recorded
 submit/eligible time `2026-07-18T15:32:41Z`, start time
 `2026-07-18T15:33:25Z`, queue time 44 seconds, debug QoS, `00:20:00`, exactly
 two nodes (`frontier06911,frontier08316`), and 16 allocated GPUs. Runtime
-identity was attested at allocation start. At the +180-second READY boundary,
-the allocation and its two-node role step remained RUNNING with no startup
-deadline, eviction, or restart event. Exact node-local READY and subsequent
-stage telemetry will be retained after role shutdown; this paragraph records
-an in-flight observation, not a success verdict.
+identity was attested at allocation start. The allocation failed closed at
+`2026-07-18T15:41:47Z` after 502 runtime seconds with allocation/step exit
+`1:0`; Slurm reports `TotalCPU=06:18:03` and raw energy `756077`.
+
+Retained measurements are:
+
+| Stage | Job 5028347 observation |
+|---|---|
+| manager READY | +56.613 / +60.363 seconds from allocation start |
+| all trainer K40 | 131.390–133.639 seconds from child start; +173.095–176.670 seconds from allocation start |
+| two-file local delta spool | 5,506,770,496 bytes per trainer in 139.037–144.102 seconds; completion at +312.132–320.219 seconds |
+| exact six-trainer local reduce | managers completed at +373.178/+375.851 seconds; accepted 1,967,040 tokens each |
+| deterministic global freeze | two node peers and 3,934,080 tokens at +387.026 seconds; `commit_ready` metadata, no atomic model publication |
+| terminal stage | managers live in `owner_transport`; trainer aggregate deadline expired; no configured role retry |
+
+The automatically retained JSON/JSONL/control/log tree is
+`reports/frontier/evidence/job-5028347`: 114 files, path-bound SHA-256
+`9bda0ac24cc62fc5f39815ce70548f5a36cbd95b4d608ce7e6f4455c571ea81e`.
+Its manifest SHA-256 is
+`923410328b65d0ed5cfac49d4a4826a17d584b854f64ab4e5bdce6b2d360ae3a`;
+`sha256sum -c` passes. Top-level stdout, stderr, events, and fenced SQLite
+hashes are `c7b8c2ee0144f9781b534f2e62186979c2c3a8bf2fd7dec165609e23d1788edb`,
+`f0123c112c0f002333daa6da39e8e69643fcf38b8b5bbe4013e43c0b5f375c73`,
+`17f2705785b5eec6fa5bdf0c1bd5f6e97abe34bd3d793e16752d0161a450ec15`,
+and `5825d346e4a38dd64ac574acd9983f0ed9d5b401fb855e3e5c92a705a13507f9`.
+The SQLite publication count is zero and its last fence is one.
+
+### Focused owner-window fix after job 5028347
+
+The trainer now enters a bounded `local_reduce_wait` after its two-file
+publication. It observes only the node-local manager heartbeat and opens its
+distinct 180-second aggregate-apply timer when that manager reaches `freeze`
+or owner transport; a missing transition still fails at the existing
+420-second generation deadline. This removes the premature timer without an
+unbounded wait. The network owner frame changes from 1 MiB to a hard 64 MiB:
+the measured E97 flat update has 165 rather than about 10,504 shards, while
+checksums, one-frame RPC bounds, sender replay retention, deterministic owners,
+and the 64 GiB high-water ledger remain enforced. No all-rank collective,
+central full-model broker, Lustre hot path, or dense elementwise packing was
+introduced.
+
+The changed-tree gate passed with the pinned Python 3.12 / torch 2.10 ROCm 7.1
+/ Triton 3.6 environment: the focused owner-window tests first failed against
+job-5028347 code, then the pool/launcher slice passed 35 tests in 97.97 seconds.
+An intervening exact-suite run exposed that the shared-login fixture reserved
+only its coordinator port, not the two derived owner ports; the fixture now
+verifies a free contiguous three-port block, its focused reproducer passed in
+32.48 seconds, and the final exact pre-submit suite passed 123 tests in 111.68
+seconds. Approved-Python `compileall`, metrics `json.tool`, `git diff --check`,
+the live-path
+`.tolist()`/collective/MPI ban, and the job-5028347 evidence manifest check also
+passed. The user Frontier queue was empty after the gates.
 
 ## Authoritative integration and queue gate
 

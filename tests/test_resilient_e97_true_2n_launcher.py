@@ -4,6 +4,10 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
+
+import pytest
 
 from scripts.frontier.resilient_e97_allocation_supervisor import AllocationSupervisor, Child
 from scripts.frontier.check_resilient_e97_parity import compare
@@ -490,21 +494,70 @@ def test_generation_deadline_includes_local_training_and_aggregate_wait():
     assert "generation_started, pool_config.slo.training_hard_s" in role
 
 
-def test_local_delta_spool_uses_coarse_bounded_chunks_without_widening_network_frames():
+def test_local_and_owner_transport_use_separate_bounded_frontier_chunks():
+    from ndm.resilient_e97_reducer import TensorLayout
+
     launcher = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
     role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    supervisor = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
 
-    # Job 5028225 completed K40 in 129-138s but then spent >180s serializing
-    # 1 MiB local fragments.  Local trainer-to-manager files may use a larger
-    # bounded record; owner transport remains independently bounded at 1 MiB.
+    # Job 5028225 proved 1 MiB local records too slow. Job 5028347 proved that
+    # reusing 1 MiB for the full owner plane creates about 40,000 short-lived
+    # request/response connections per E97 generation. Both planes retain hard,
+    # independent 64 MiB bounds under the shared 64 GiB byte ledger.
     assert "--local-spool-chunk-bytes" in role
     assert "RESILIENT_E97_LOCAL_SPOOL_CHUNK_BYTES:-67108864" in launcher
     assert "RESILIENT_E97_MAX_SPOOL_BYTES:-68719476736" in launcher
     assert 'value.add_argument("--max-spool-bytes", type=int, default=64 << 30)' in role
-    assert "--bulk-chunk-bytes ${RESILIENT_E97_BULK_CHUNK_BYTES:-1048576}" in launcher
+    assert "--bulk-chunk-bytes ${RESILIENT_E97_BULK_CHUNK_BYTES:-67108864}" in launcher
+    assert 'value.add_argument("--bulk-chunk-bytes", type=int, default=64 << 20)' in role
     assert "chunk_elements = max(1, args.local_spool_chunk_bytes // 8)" in role
     assert '"local_delta_spool"' in role
     assert "local_spool_chunk_bytes=args.local_spool_chunk_bytes" in role
+    assert '"local_reduce_wait": K40_HARD_S' in supervisor
+
+    # The measured 5,506,770,496-byte f32 trainer delta becomes this many
+    # float64 owner bytes. The larger frame remains bounded and cuts the live
+    # request count by 64x without materializing a Python element list.
+    layout = TensorLayout.from_flat_stream(
+        5_506_770_496 // 4, max_chunk_bytes=64 << 20)
+    assert layout.shard_count == 165
+    assert layout.chunk_elements * 8 == 64 << 20
+
+
+def test_trainer_exchange_window_waits_for_manager_local_reduce(tmp_path):
+    from scripts.frontier import resilient_e97_role as role
+
+    bulk = tmp_path / "bulk"
+    supervision = bulk / "supervision"
+    supervision.mkdir(parents=True)
+    observed = {}
+
+    def wait_for_window():
+        observed["stage"] = role._wait_for_manager_exchange_window(
+            bulk, node=1, generation=3, deadline=time.monotonic() + 2)
+
+    waiter = threading.Thread(target=wait_for_window)
+    waiter.start()
+    time.sleep(.05)
+    assert waiter.is_alive(), "trainer must not spend its apply window during local reduction"
+    (supervision / "node-1-manager.json").write_text(json.dumps({
+        "generation": 3, "stage": "owner_transport",
+    }))
+    waiter.join(2)
+
+    assert not waiter.is_alive()
+    assert observed == {"stage": "owner_transport"}
+    (supervision / "node-1-manager.json").write_text(json.dumps({
+        "generation": 4, "stage": "collecting",
+    }))
+    with pytest.raises(TimeoutError, match="local reduction deadline expired"):
+        role._wait_for_manager_exchange_window(
+            bulk, node=1, generation=4, deadline=time.monotonic() + .03)
+    source = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    trainer = source[source.index("def trainer(args)"):]
+    assert trainer.index("_wait_for_manager_exchange_window(") < trainer.index(
+        "exchange_deadline = time.monotonic() + min(args.deadline_s, 180.0)")
 
 
 def test_node_local_exit_retains_only_small_control_evidence(tmp_path):
