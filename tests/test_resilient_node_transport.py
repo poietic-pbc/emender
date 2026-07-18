@@ -87,7 +87,10 @@ def _exchange(server, tmp_path, node, values, result, *, weight=1, fence=None):
     fence = fence or GenerationFence("run", 0, 0, 1)
     client = NodeManagerClient(
         "127.0.0.1", server.server_address[1], node,
-        DiskBucketSpool(tmp_path / node, 4096), timeout_s=4,
+        # Match the healthy server allowance: imported torch threads on a
+        # shared login node can exceed four seconds without a transport stall.
+        # Explicit fail-fast behavior is covered by the 0.2s server test.
+        DiskBucketSpool(tmp_path / node, 4096), timeout_s=30,
     )
     try:
         result[node] = client.exchange(
@@ -114,7 +117,9 @@ def test_real_tcp_missing_node_advances_and_redistributes_exact_weighted_mean(tm
 
     # n2 is completely missing; two independent TCP peers still commit.
     assert set(result) == {"n0", "n1"}
-    for header, buckets in result.values():
+    for value in result.values():
+        assert not isinstance(value, Exception), repr(value)
+        header, buckets = value
         assert header["accepted_nodes"] == ["n0", "n1"]
         assert decode_f64(buckets[0]) == pytest.approx((4.0, 6.0))
         assert decode_f64(buckets[1]) == pytest.approx((8.0,))

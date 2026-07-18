@@ -9,7 +9,7 @@ requirements R01–R16 in `docs/RESILIENT_DILOCO_GAP_MATRIX.md`.
 
 ## Status
 
-The startup rung has failed closed five times without an unchanged retry. Job
+The startup rung has failed closed six times without an unchanged retry. Job
 `5028225` failed at the post-K40 local-delta streaming stage. Changed payload
 r2 job `5028347` then proved the 64 MiB/two-file local spool fix: both managers
 were READY within 61 seconds of allocation start, all 16 real trainers finished
@@ -48,22 +48,32 @@ Changed payload r5 job `5028767` proved the exact-write fix and completed the
 entire distributed owner plane: 11,013,540,992 bytes sent plus the same amount
 redistributed in 98.961 seconds (222.6 MB/s), with two owners, zero replay,
 11,013,540,992-byte high-water, and full sender release. It then failed closed
-at checkpoint proposal. Node 0's designated trainer was still writing and
-hashing a redundant node-local 7.7 GB recovery checkpoint before beginning the
-authoritative checkpoint/proposal; node 0's manager exhausted the unchanged
-180-second exchange/commit deadline while waiting. The focused follow-up moves
-the one complete leader checkpoint and proposal ahead of disposable local
-recovery and reuses that immutable file for leader recovery. No deadline is
-extended and no second full leader serialization is needed.
+at checkpoint proposal. The r5 evidence did not retain a post-apply trainer
+heartbeat, so the first focused hypothesis was that a redundant 7.7 GB
+recovery serialization delayed the proposal. Payload r6 moved the
+authoritative checkpoint first without extending a deadline; r6 then proved
+that hypothesis wrong because no trainer reached apply or checkpoint code.
+
+Changed payload r6 job `5028835` proved that checkpoint ordering was not yet
+on the live critical path: no trainer reached aggregate apply or checkpoint
+code. Exact local collection and distributed ownership completed correctly,
+but the 11,013,540,992-byte float64 global aggregate became trainer-visible
+only 31.489 seconds before the manager deadline. Eight same-node trainers then
+contended to read, checksum, clone, and apply the entire file; none finished.
+The changed follow-up projects the already-exact global result once to the f32
+model apply dtype, streams bounded records in place, and lets the designated
+leader apply/propose before releasing its seven same-node peers. Conflicting
+same-fence aggregate reuse is also rejected by content rather than fence alone.
+The 180-second bound remains unchanged.
 
 The ladder therefore remains on rung 1. No resilience or fresh-restart job has
 been rendered or submitted. The full pinned checkpoint-first gate passed, and
-changed startup payload r6 was submitted exactly once as job `5028835`. It
-preserves the
+changed startup payload r6 was submitted exactly once as job `5028835` and
+failed closed. It preserved the
 one-second connection bound, bounded 64 MiB frames, exact segment writes, and
 unchanged 180-second overall exchange deadline. Its only live-code difference
-from r5 is the checkpoint-critical-path ordering described above, so it is not
-an unchanged retry.
+from r5 was the checkpoint-critical-path ordering described above, so it was
+not an unchanged retry. No r7 payload has been rendered or submitted.
 
 No production allocation, normal-QoS allocation, 4+ node allocation, or
 two-hour allocation is authorized by this report.
@@ -557,6 +567,91 @@ job ID `5028835`. Slurm records submit/eligible time
 state was `PENDING (Priority)` as the only user job. Queue time is recorded
 separately from runtime; no resilience or fresh-restart payload has been
 rendered or submitted.
+
+### Startup r6 result and bounded leader-apply diagnosis
+
+Job `5028835` started at `2026-07-18T17:50:25Z` after 14 seconds of queue
+time on exactly `frontier06191` and `frontier06210`. It failed closed at
+`2026-07-18T18:00:20Z` after 595 runtime seconds with allocation exit `137:0`
+and role-step exit `1:0`. Slurm records `TotalCPU=08:10:05`, raw energy
+`855655`, and role-step `MaxRSS=151184476K`, `MaxDiskRead=144345.34M`, and
+`MaxDiskWrite=54899.40M`.
+
+Node 0 retained the complete critical path:
+
+| Stage | Job 5028835 observation |
+|---|---|
+| manager READY | allocation +60.078 seconds |
+| node-0 trainer K40 | 131.519–133.582 seconds from child start; allocation +176.002–178.065 seconds |
+| two-file local spool | 5,506,770,496 bytes per trainer in 141.362–143.246 seconds; complete by allocation +321.020 seconds |
+| exact six-trainer local reduce | 1,967,040 tokens at allocation +376.494 seconds |
+| deterministic global freeze | two complete contributions and 3,934,080 tokens at allocation +397.844 seconds |
+| owner transport and redistribution | 11,013,540,992 bytes each in 98.375 seconds, 223,909,079.39 bytes/s, two owners, zero replay, full release; complete at allocation +496.220 seconds |
+| terminal stage | manager heartbeat reached `published` at allocation +529.433 seconds, but all eight node-0 trainers remained at `submitted`; proposal deadline expired at +560.922 seconds; zero publications |
+
+The ownership record again proves a bounded 55,068,090,115-byte high-water
+under the 68,719,476,736-byte ledger, 22,027,197,991 bytes after release,
+exactly two aggregate files, node-local bulk, two distributed owners, no
+central full-model broker, and no replay. The nonzero post-release bytes are
+the correct 11.0 GB global aggregate plus two unselected trainer contributions.
+In the trainer protocol, `submitted` is written immediately before
+`wait_aggregate`; it records bounded waiting, not proof that a manifest exists.
+The global aggregate was published only after owner completion, at allocation
++529.433 seconds. That left 31.489 seconds for eight node-local readers before
+the manager expired at +560.922 seconds. Their unchanged `submitted`
+heartbeats and the absent checkpoint directory prove the leader never
+completed the former dense aggregate load/apply path.
+
+The retained evidence at `reports/frontier/evidence/job-5028835` contains 83
+files and explicitly excludes tensor mailbox, `.data`, `.pt`, and cache
+payloads. Its manifest SHA-256 is
+`0067b430335e6585fe910e9e692d9bf83b269948eb73a60dc7e430a8f9a75279`;
+`sha256sum -c` passes. The fenced SQLite, supervisor events, top-level stdout,
+and top-level stderr hashes are respectively
+`b073d7f483cb8206623607978201497ca4dc28f885e71eaf9c864b373c3078e4`,
+`5447f5d17384ace44fa5235d9609a0e14c76ddb11dae1776d78deafd63451de4`,
+`c7b8c2ee0144f9781b534f2e62186979c2c3a8bf2fd7dec165609e23d1788edb`,
+and `48b685fa8ba59da9b5782727af890f3cbe98681d1dc86d6348ddfc1598e54c85`.
+The store has fence epoch 1 and zero publication rows. No checkpoint,
+handoff, resilience job, restart job, or production mutation exists.
+
+### Focused bounded leader-apply fix after job 5028835
+
+Managers continue to compute both local and distributed weighted reductions in
+float64. Immediately before the trainer-visible node-local publication, the
+final exact global shards are projected once to float32—the same conversion
+the former `apply_delta` performed when adding every float64 piece to the f32
+model state. This preserves the resulting model bits while reducing the
+aggregate from 11,013,540,992 to 5,506,770,496 bytes. The manifest binds each
+record's dtype, byte count, offset, and SHA-256; conflicting reuse under the
+same fence is now rejected by content, while a byte-identical retry remains
+idempotent.
+
+Trainers consume that file as a bounded iterator instead of first creating a
+second full-model tuple, and apply each checked record in place to their own
+model state. On node 0 only, ranks 1–7 wait on a small generation/fence-bound
+marker while rank 0 performs this stream, writes the complete authoritative
+checkpoint, and publishes its proposal. The marker then opens a fresh bounded
+180-second peer-apply window. Node 1 trainers use their separate node-local
+file concurrently, so there is no central broker or all-rank collective. The
+manager's original 180-second owner/apply/commit deadline is unchanged, and
+the leader marker is covered by an explicit supervisor stage bound.
+
+Three focused regressions first failed against the r6 tree in 19.16 seconds:
+the spool lacked model-dtype storage/streaming, same-fence conflicting content
+was incorrectly accepted, and the live role had no leader-first apply path.
+After implementation, those tests plus existing apply/corruption proofs passed
+5/5 in 18.00 seconds, and the split-role/runtime/launcher slice passed 50 tests
+in 92.45 seconds. The first loaded exact-suite run had 127 passes and exposed
+two fixture issues: leader serialization was unnecessary in the single-node
+control harness, and the healthy TCP test client retained a four-second
+allowance while its server used 30 seconds. Multi-node leader priority is now
+explicit, the healthy client matches the bounded server allowance, and the
+independent 0.2-second deadline proof remains unchanged. A transient shared
+port collision passed standalone without a production change. The final exact
+suite passed all 130 tests in 123.33 seconds. Approved-Python `compileall`,
+metrics `json.tool`, `git diff --check`, the dense-packing/collective/MPI scan,
+r5 and r6 evidence checksums, and the empty Frontier queue gate also passed.
 
 ## Authoritative integration and queue gate
 

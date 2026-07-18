@@ -110,17 +110,25 @@ def flatten_tensors(tensors: Mapping[str, torch.Tensor], *,
         yield torch.cat(pending) if len(pending) > 1 else pending[0]
 
 
-def apply_delta(base: Mapping[str, torch.Tensor], shards: Sequence[torch.Tensor], *,
-                eta_outer: float) -> dict[str, torch.Tensor]:
-    if sum(shard.numel() for shard in shards) != sum(value.numel() for value in base.values()):
-        raise ValueError("aggregate shard count does not match trainer state")
+def apply_delta(base: Mapping[str, torch.Tensor], shards: Iterable[torch.Tensor], *,
+                eta_outer: float, in_place: bool = False) -> dict[str, torch.Tensor]:
+    """Apply a bounded shard iterable, optionally reusing trainer-owned state."""
     result = {}
-    shard_index = shard_offset = 0
+    iterator = iter(shards)
+    shard = None
+    shard_offset = 0
     for name, value in sorted(base.items()):
-        updated = value.clone().reshape(-1)
+        updated = (value if in_place else value.clone()).reshape(-1)
         value_offset = 0
         while value_offset < value.numel():
-            shard = shards[shard_index].reshape(-1)
+            if shard is None:
+                try:
+                    shard = next(iterator).reshape(-1)
+                except StopIteration as error:
+                    raise ValueError(
+                        "aggregate shard count does not match trainer state") from error
+                if shard.numel() <= 0:
+                    raise ValueError("aggregate shard count does not match trainer state")
             take = min(value.numel() - value_offset, shard.numel() - shard_offset)
             piece = shard[shard_offset:shard_offset + take]
             if not torch.isfinite(piece).all():
@@ -130,9 +138,11 @@ def apply_delta(base: Mapping[str, torch.Tensor], shards: Sequence[torch.Tensor]
             value_offset += take
             shard_offset += take
             if shard_offset == shard.numel():
-                shard_index += 1
+                shard = None
                 shard_offset = 0
         result[name] = updated.reshape(value.shape)
+    if shard is not None or next(iterator, None) is not None:
+        raise ValueError("aggregate shard count does not match trainer state")
     return result
 
 

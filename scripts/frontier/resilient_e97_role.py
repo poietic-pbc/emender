@@ -216,6 +216,28 @@ def _wait_for_manager_exchange_window(bulk: Path, *, node: int, generation: int,
         f"manager local reduction deadline expired before exchange: {last_stage}")
 
 
+def _wait_for_leader_apply_release(bulk: Path, *, generation: int,
+                                   fence: LocalFence, deadline: float) -> None:
+    """Keep node-0 peers off the aggregate until its checkpoint leader applies.
+
+    Job 5028835 left only 31 seconds in the fixed commit window after the
+    global aggregate became visible. Eight simultaneous full-file readers
+    prevented the designated trainer from reaching checkpoint creation. The
+    generation-scoped marker contains no tensor data and opens a fresh bounded
+    peer-apply window only after the leader has applied (and, on the terminal
+    generation, proposed) its checkpoint.
+    """
+    marker = bulk / "control" / f"leader-apply-release-{generation:08d}.json"
+    while time.monotonic() < deadline and not marker.exists():
+        time.sleep(.02)
+    if not marker.exists():
+        raise TimeoutError("checkpoint leader apply deadline expired")
+    value = json.loads(marker.read_text())
+    if (int(value.get("generation", -1)) != generation
+            or value.get("fence") != fence.__dict__):
+        raise ValueError("checkpoint leader apply marker fence mismatch")
+
+
 def _pool_hosts(args) -> tuple[str, ...]:
     configured = os.environ.get("RESILIENT_E97_PEER_HOSTS", "")
     if configured:
@@ -408,10 +430,20 @@ def manager(args) -> int:
                     released_bytes=int(transport_metrics["released_bytes"]),
                     owner_count=len(endpoints))
                 global_shards = layout.unpack_flat_shards(committed_chunks)
-                spool.publish_aggregate(fence, members, global_shards,
-                                        weight=int(close["accepted_tokens"]),
-                                        source_id=args.source_id,
-                                        accepted_peers=tuple(sorted(accepted_workers)))
+                aggregate_started = time.monotonic()
+                spool.publish_aggregate(
+                    fence, members, global_shards,
+                    weight=int(close["accepted_tokens"]), source_id=args.source_id,
+                    accepted_peers=tuple(sorted(accepted_workers)),
+                    # Owners reduce exactly in float64. Trainers ultimately
+                    # apply to f32 model state, so project once here to the
+                    # identical apply dtype and halve the node-local stream.
+                    storage_dtype=torch.float32)
+                _stage_telemetry(
+                    bulk, identity, generation, "global_aggregate_publish",
+                    aggregate_started, pool_config.slo.apply_s,
+                    aggregate_bytes=sum(shard.numel() * 4 for shard in global_shards),
+                    storage_dtype="float32")
                 for trainer_id in members:
                     spool.release_trainer(fence, trainer_id)
                 result = {"members": members, "weight": int(close["accepted_tokens"]),
@@ -722,11 +754,17 @@ def trainer(args) -> int:
         heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
                   stage="submitted")
         exchange_deadline = time.monotonic() + min(args.deadline_s, 180.0)
-        manifest, aggregate = spool.wait_aggregate(
+        if args.node_count > 1 and node == 0 and rank != 0:
+            heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
+                      stage="leader_apply_wait")
+            _wait_for_leader_apply_release(
+                bulk, generation=generation, fence=fence, deadline=exchange_deadline)
+            exchange_deadline = time.monotonic() + min(args.deadline_s, 180.0)
+        manifest, aggregate = spool.stream_aggregate(
             fence, deadline=exchange_deadline,
             expected_source_id=args.source_id)
         spool.release_trainer(fence, rank)
-        state = apply_delta(state, aggregate, eta_outer=args.eta_outer)
+        state = apply_delta(state, aggregate, eta_outer=args.eta_outer, in_place=True)
         accepted_token_clock += int(manifest["weight"])
         step += args.local_steps; losses.append(loss)
         completed = generation + 1
@@ -735,12 +773,10 @@ def trainer(args) -> int:
                   else "redistribution")
 
         # The authoritative leader proposal is on the first-commit critical
-        # path. Job 5028767 proved that writing and hashing a separate 7.7 GB
-        # node-local recovery checkpoint before this block can consume the
-        # remainder of the fixed 180s exchange/commit window even after owner
-        # transport succeeds. Publish one complete leader checkpoint and its
-        # proposal first; the same immutable file is also valid leader recovery
-        # state, so do not serialize the model twice.
+        # path. Its exclusive streamed apply must flow directly into one
+        # complete checkpoint and proposal before same-node peer reads begin.
+        # The same immutable file is also valid leader recovery state, so do
+        # not serialize the model twice.
         if node == 0 and rank == 0 and completed == target_generation:
             if fenced is not None:
                 fenced[0].assert_current(fenced[1])
@@ -778,6 +814,12 @@ def trainer(args) -> int:
                 "fence": fence.__dict__,
                 "outer_update_state": migration.get("state", {}),
                 "migration": migration})
+
+        if node == 0 and rank == 0:
+            atomic_json(
+                bulk / "control" / f"leader-apply-release-{generation:08d}.json",
+                {"generation": generation, "result_generation": completed,
+                 "fence": fence.__dict__})
 
         if leader_checkpoint is None:
             recovery_checkpoint = (bulk / "recovery" / identity /

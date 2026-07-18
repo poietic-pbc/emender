@@ -571,6 +571,31 @@ def test_checkpoint_leader_proposes_before_disposable_local_recovery():
     assert "completed == target_generation" in trainer[:local_recovery]
 
 
+def test_multinode_manager_publishes_only_final_global_aggregate_and_leader_applies_first():
+    role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    manager = role[role.index("def manager(args)"):role.index("def _load_real(args)")]
+    trainer = role[role.index("def trainer(args)"):]
+
+    # The multi-node branch keeps exact local collection private to the
+    # manager; only the single-node fixture uses SplitManagerLoop.generation.
+    assert "loop.manager.collect(" in manager
+    assert manager.count("loop.generation(fence)") == 1
+    assert manager.index("loop.generation(fence)") < manager.index(
+        "members, local_weight, local_shards = loop.manager.collect(")
+    assert "storage_dtype=torch.float32" in manager
+
+    priority = trainer.index("_wait_for_leader_apply_release(")
+    streamed_apply = trainer.index("spool.stream_aggregate(")
+    proposal = trainer.index(
+        'atomic_json(bulk / "control" / "trainer-proposal.json"')
+    release = trainer.index('f"leader-apply-release-{generation:08d}.json"')
+    assert priority < streamed_apply < proposal < release
+    assert "if args.node_count > 1 and node == 0 and rank != 0:" in trainer
+    assert "in_place=True" in trainer[streamed_apply:proposal]
+    supervisor = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
+    assert '"leader_apply_wait": EXCHANGE_COMMIT_HARD_S' in supervisor
+
+
 def test_node_local_exit_retains_only_small_control_evidence(tmp_path):
     from scripts.frontier import resilient_e97_allocation_supervisor as supervisor
 

@@ -233,15 +233,40 @@ class LocalTrainerSpool:
     def publish_aggregate(self, fence: LocalFence, members: Sequence[int],
                           shards: Sequence[torch.Tensor], *, weight: int,
                           source_id: str,
-                          accepted_peers: Sequence[str] = ()) -> Path:
+                          accepted_peers: Sequence[str] = (),
+                          storage_dtype: torch.dtype = torch.float64) -> Path:
         """Atomically publish the manager result after every shard is durable."""
         if weight <= 0 or not members or not source_id:
             raise ValueError("aggregate membership, weight, and source are required")
+        if storage_dtype not in {torch.float32, torch.float64}:
+            raise ValueError("aggregate storage dtype must be float32 or float64")
+        dtype_name = "float32" if storage_dtype == torch.float32 else "float64"
         directory = self.root / "aggregates" / fence.key
         manifest_path = directory / "manifest.json"
         if manifest_path.exists():
             current = json.loads(manifest_path.read_text())
-            if current.get("fence") == fence.__dict__:
+            metadata_matches = (
+                current.get("schema") == SCHEMA
+                and current.get("fence") == fence.__dict__
+                and current.get("members") == sorted(int(member) for member in members)
+                and int(current.get("weight", -1)) == int(weight)
+                and current.get("source_id") == source_id
+                and current.get("accepted_peers") == sorted(set(map(str, accepted_peers)))
+                and current.get("storage_dtype", "float64") == dtype_name
+                and len(current.get("shards", ())) == len(shards)
+            )
+            payload_matches = metadata_matches
+            if payload_matches:
+                for tensor, record in zip(shards, current["shards"]):
+                    value = tensor.detach().cpu().to(storage_dtype).contiguous()
+                    raw = value.numpy().tobytes()
+                    if (record.get("dtype", "float64") != dtype_name
+                            or int(record.get("elements", -1)) != value.numel()
+                            or int(record.get("nbytes", -1)) != len(raw)
+                            or record.get("sha256") != hashlib.sha256(raw).hexdigest()):
+                        payload_matches = False
+                        break
+            if payload_matches:
                 return manifest_path
             raise ValueError("conflicting aggregate publication")
         records = []
@@ -254,7 +279,7 @@ class LocalTrainerSpool:
         try:
             with os.fdopen(fd, "wb", buffering=8 << 20) as stream:
                 for index, tensor in enumerate(shards):
-                    value = tensor.detach().cpu().to(torch.float64).contiguous()
+                    value = tensor.detach().cpu().to(storage_dtype).contiguous()
                     if not torch.isfinite(value).all():
                         raise ValueError("nonfinite aggregate rejected")
                     raw = value.numpy().tobytes()
@@ -262,6 +287,7 @@ class LocalTrainerSpool:
                     stream.write(raw)
                     records.append({"index": index, "offset": offset, "nbytes": len(raw),
                                     "elements": value.numel(),
+                                    "dtype": dtype_name,
                                     "sha256": hashlib.sha256(raw).hexdigest()})
                     offset += len(raw)
                 stream.flush(); os.fsync(stream.fileno())
@@ -274,6 +300,7 @@ class LocalTrainerSpool:
                     "members": sorted(int(member) for member in members),
                     "weight": int(weight), "source_id": source_id,
                     "accepted_peers": sorted(set(map(str, accepted_peers))),
+                    "storage_dtype": dtype_name,
                     "data_file": "aggregate.data", "data_bytes": offset,
                     "shards": records}
         manifest_bytes = (json.dumps(manifest, sort_keys=True) + "\n").encode()
@@ -299,8 +326,9 @@ class LocalTrainerSpool:
             self._remove_payloads(tuple(directory.iterdir()))
             directory.rmdir()
 
-    def wait_aggregate(self, fence: LocalFence, *, deadline: float,
-                       expected_source_id: str) -> tuple[dict[str, object], tuple[torch.Tensor, ...]]:
+    def stream_aggregate(self, fence: LocalFence, *, deadline: float,
+                         expected_source_id: str) -> tuple[dict[str, object], Iterable[torch.Tensor]]:
+        """Return one validated bounded shard stream without a dense aggregate copy."""
         path = self.root / "aggregates" / fence.key / "manifest.json"
         while time.monotonic() < deadline and not path.exists():
             time.sleep(.02)
@@ -310,21 +338,43 @@ class LocalTrainerSpool:
         if (manifest.get("schema") != SCHEMA or manifest.get("fence") != fence.__dict__
                 or manifest.get("source_id") != expected_source_id):
             raise ValueError("aggregate identity/fence mismatch")
-        shards = []
         data_path = path.parent / str(manifest["data_file"])
         if not data_path.is_file() or data_path.stat().st_size != int(manifest["data_bytes"]):
             raise ValueError("corrupt aggregate data stream")
-        with data_path.open("rb", buffering=8 << 20) as stream:
-            for record in manifest["shards"]:
-                stream.seek(int(record["offset"]))
-                raw = stream.read(int(record["nbytes"]))
-                self.bytes_read += len(raw)
-                if hashlib.sha256(raw).hexdigest() != record["sha256"]:
-                    raise ValueError("corrupt aggregate shard")
-                value = torch.frombuffer(bytearray(raw), dtype=torch.float64).clone()
-                if value.numel() != record["elements"] or not torch.isfinite(value).all():
-                    raise ValueError("invalid aggregate shard")
-                shards.append(value)
+
+        def shards() -> Iterable[torch.Tensor]:
+            expected_offset = 0
+            with data_path.open("rb", buffering=8 << 20) as stream:
+                for record in manifest["shards"]:
+                    dtype_name = record.get("dtype", "float64")
+                    if dtype_name not in {"float32", "float64"}:
+                        raise ValueError("invalid aggregate shard dtype")
+                    width = 4 if dtype_name == "float32" else 8
+                    if (int(record.get("offset", -1)) != expected_offset
+                            or int(record.get("nbytes", -1))
+                            != int(record.get("elements", -1)) * width):
+                        raise ValueError("invalid aggregate shard layout")
+                    stream.seek(expected_offset)
+                    raw = stream.read(int(record["nbytes"]))
+                    self.bytes_read += len(raw)
+                    if (len(raw) != int(record["nbytes"])
+                            or hashlib.sha256(raw).hexdigest() != record["sha256"]):
+                        raise ValueError("corrupt aggregate shard")
+                    dtype = torch.float32 if dtype_name == "float32" else torch.float64
+                    value = torch.frombuffer(bytearray(raw), dtype=dtype)
+                    if value.numel() != record["elements"] or not torch.isfinite(value).all():
+                        raise ValueError("invalid aggregate shard")
+                    expected_offset += len(raw)
+                    yield value
+            if expected_offset != int(manifest["data_bytes"]):
+                raise ValueError("invalid aggregate byte count")
+
+        return manifest, shards()
+
+    def wait_aggregate(self, fence: LocalFence, *, deadline: float,
+                       expected_source_id: str) -> tuple[dict[str, object], tuple[torch.Tensor, ...]]:
+        manifest, shards = self.stream_aggregate(
+            fence, deadline=deadline, expected_source_id=expected_source_id)
         return manifest, tuple(shards)
 
 

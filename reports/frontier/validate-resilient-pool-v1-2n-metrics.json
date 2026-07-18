@@ -308,9 +308,20 @@
         }
     },
     "startup_r6_payload": {
-        "status": "submitted exactly once; pending for Priority",
+        "status": "failed closed at proposal deadline; premature local aggregate occupied global namespace",
         "job_id": 5028835,
         "submit_utc": "2026-07-18T17:50:11Z",
+        "allocation_start_utc": "2026-07-18T17:50:25Z",
+        "end_utc": "2026-07-18T18:00:20Z",
+        "queue_seconds": 14,
+        "runtime_seconds": 595,
+        "state": "FAILED",
+        "allocation_exit_code": "137:0",
+        "step_exit_code": "1:0",
+        "allocated_nodes": [
+            "frontier06191",
+            "frontier06210"
+        ],
         "code_commit": "08d05419cb67ed5ec3546db27410756218a5e79b",
         "run_id": "validate-resilient-pool-v1-2n-startup-r6-20260718T174732Z-08d0541",
         "payload_id": "08d0541-20260718T174732Z-pool-v1-startup-r6-2n20m-k40-checkpointfirst",
@@ -340,6 +351,71 @@
         "authoritative_checkpoint_before_local_recovery": true,
         "leader_single_serialization": true,
         "local_gate_passed": 127,
-        "local_gate_seconds": 123.05
+        "local_gate_seconds": 123.05,
+        "node0_manager_ready_seconds_from_allocation_start": 60.078,
+        "node0_k40_seconds_from_trainer_start": {
+            "min": 131.519,
+            "max": 133.582
+        },
+        "node0_k40_seconds_from_allocation_start": {
+            "min": 176.002,
+            "max": 178.065
+        },
+        "node0_local_spool_seconds": {
+            "min": 141.36220594216138,
+            "max": 143.24588696938008
+        },
+        "local_spool_bytes_per_trainer": 5506770496,
+        "local_spool_files_per_trainer": 2,
+        "node0_local_reduce_seconds_from_allocation_start": 376.494,
+        "freeze_seconds_from_allocation_start": 397.844,
+        "accepted_node_contributions": 2,
+        "accepted_tokens": 3934080,
+        "owner_complete_seconds_from_allocation_start": 496.220,
+        "owner_elapsed_seconds": 98.37514790380374,
+        "p2p_bytes_sent": 11013540992,
+        "redistribution_bytes": 11013540992,
+        "owner_bytes_per_second": 223909079.38837326,
+        "owner_high_water_bytes": 11013540992,
+        "owner_released_bytes": 11013540992,
+        "owner_count": 2,
+        "replay_bytes": 0,
+        "local_ledger_high_water_bytes": 55068090115,
+        "local_ledger_post_release_bytes": 22027197991,
+        "manager_published_seconds_from_allocation_start": 529.433,
+        "proposal_deadline_seconds_from_allocation_start": 560.922,
+        "trainer_terminal_stage": "submitted/global aggregate wait-or-apply",
+        "terminal_stage": "checkpoint_commit/checkpoint proposal deadline",
+        "atomic_publications": 0,
+        "slurm_total_cpu": "08:10:05",
+        "slurm_energy": 855655,
+        "step_max_rss_kib": 151184476,
+        "evidence_files": 83,
+        "evidence_manifest_sha256": "0067b430335e6585fe910e9e692d9bf83b269948eb73a60dc7e430a8f9a75279",
+        "next_change": {
+            "reject_conflicting_same_fence_aggregate": true,
+            "model_dtype_global_apply_stream": true,
+            "global_aggregate_storage_dtype": "float32",
+            "global_aggregate_bytes": 5506770496,
+            "exact_reduction_dtype": "float64",
+            "bounded_streaming_in_place": true,
+            "leader_apply_priority": true,
+            "leader_priority_scope": "multi-node node-0 peers",
+            "overall_exchange_commit_seconds": 180,
+            "tdd_regressions": [
+                "test_global_aggregate_projects_once_to_model_dtype_and_streams_apply",
+                "test_same_fence_aggregate_is_idempotent_only_for_identical_payload",
+                "test_multinode_manager_publishes_only_final_global_aggregate_and_leader_applies_first"
+            ],
+            "focused_tests_passed": 50,
+            "focused_tests_seconds": 92.45,
+            "local_gate_passed": 130,
+            "local_gate_seconds": 123.33,
+            "compileall": "passed",
+            "json_tool": "passed",
+            "forbidden_live_path_scan": "passed",
+            "evidence_checksum": "passed",
+            "empty_queue": true
+        }
     }
 }
