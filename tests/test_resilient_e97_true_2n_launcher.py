@@ -1,13 +1,16 @@
 from pathlib import Path
+import hashlib
 import json
 import os
 import subprocess
+import sys
 
 from scripts.frontier.resilient_e97_allocation_supervisor import AllocationSupervisor, Child
 from scripts.frontier.check_resilient_e97_parity import compare
 
 
 ROOT = Path(__file__).parents[1]
+APPROVED_ENV = Path("/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312")
 
 
 def test_true_launcher_is_exact_debug_two_hour_topology_without_sentinels():
@@ -15,6 +18,7 @@ def test_true_launcher_is_exact_debug_two_hour_topology_without_sentinels():
     supervisor = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
     assert "#SBATCH -q debug" in text
     assert "#SBATCH -N 2" in text
+    assert "#SBATCH --gpus-per-node=8" in text
     assert "#SBATCH -t 02:00:00" in text
     assert "#SBATCH --signal=B:TERM@300" in text
     assert '"RESILIENT_E97_ROLE": child.role' in supervisor
@@ -61,18 +65,32 @@ def test_launcher_discovers_coordinator_and_wires_exact_restart_handoff():
 def test_launcher_omits_empty_resume_argument(tmp_path):
     repo = tmp_path / "repo"
     (repo / "scripts/frontier").mkdir(parents=True)
+    (repo / "configs/frontier").mkdir(parents=True)
+    approved_args = repo / "configs/frontier/e97_resilient_split_role_flat.json"
+    approved_args.write_text((ROOT / "configs/frontier/e97_resilient_split_role_flat.json").read_text())
     supervisor = repo / "scripts/frontier/resilient_e97_allocation_supervisor.py"
     supervisor.write_text(
         "import os\nprint(os.environ['RESILIENT_E97_TRAINER_COMMAND'])\n"
+    )
+    (repo / "scripts/frontier/frontier_runtime_env.sh").write_text(
+        "frontier_load_default_modules() { :; }\n"
+        "frontier_activate_emender_conda_env() { :; }\n"
+        "frontier_assert_emender_conda_env() { :; }\n"
     )
     bindir = tmp_path / "bin"
     bindir.mkdir()
     scontrol = bindir / "scontrol"
     scontrol.write_text("#!/bin/sh\nprintf 'node0\\nnode1\\n'\n")
     scontrol.chmod(0o755)
+    srun = bindir / "srun"
+    srun.write_text("#!/bin/sh\nwhile [ \"$1\" != bash ]; do shift; done\nexec \"$@\"\n")
+    srun.chmod(0o755)
+    tokenizer_cache = tmp_path / "p50k.cache"
+    tokenizer_cache.write_text("offline-tokenizer-cache")
     env = {
         **os.environ,
-        "PATH": f"{bindir}:{os.environ['PATH']}",
+        "PATH": f"{bindir}:{APPROVED_ENV / 'bin'}:{os.environ['PATH']}",
+        "EMENDER_CONDA_ENV": str(APPROVED_ENV),
         "SLURM_JOB_NUM_NODES": "2",
         "SLURM_JOB_QOS": "debug",
         "SLURM_TIMELIMIT": "02:00:00",
@@ -83,8 +101,10 @@ def test_launcher_omits_empty_resume_argument(tmp_path):
         "RESILIENT_E97_SOURCE_ID": "source",
         "RESILIENT_E97_PAYLOAD_ID": "payload",
         "RESILIENT_E97_SEED": "/seed.pt",
-        "RESILIENT_E97_TRAIN_ARGS_JSON": "/args.json",
+        "RESILIENT_E97_TRAIN_ARGS_JSON": str(approved_args),
         "RESILIENT_E97_DATA": "/data",
+        "RESILIENT_E97_TIKTOKEN_CACHE_FILE": str(tokenizer_cache),
+        "RESILIENT_E97_TIKTOKEN_SHA256": hashlib.sha256(tokenizer_cache.read_bytes()).hexdigest(),
     }
     result = subprocess.run(
         ["bash", str(ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch")],
@@ -98,29 +118,88 @@ def test_launcher_omits_empty_resume_argument(tmp_path):
 def test_startup_smoke_is_short_one_generation_and_forbids_injection():
     text = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
     assert "RESILIENT_E97_STARTUP_SMOKE" in text
-    assert "startup smoke requires exactly 00:20:00" in text
+    assert "startup smoke requires exactly 00:50:00" in text
     assert "startup smoke requires exactly one finalized generation" in text
     assert "startup smoke forbids failure injection" in text
     assert "RESILIENT_E97_REQUESTED_WALLTIME" in text
 
 
+def test_launcher_activates_approved_frontier_python_before_any_role():
+    text = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
+    activation = text.index("frontier_activate_emender_conda_env")
+    supervisor = text.index('exec "$TRAIN_PYTHON_BIN"')
+    assert 'source "$REPO/scripts/frontier/frontier_runtime_env.sh"' in text
+    assert "frontier_load_default_modules" in text
+    assert "frontier_assert_emender_conda_env" in text
+    assert activation < supervisor
+    assert 'RESILIENT_E97_MANAGER_COMMAND="$TRAIN_PYTHON_BIN ' in text
+    assert 'RESILIENT_E97_TRAINER_COMMAND="$TRAIN_PYTHON_BIN ' in text
+    assert 'exec python3 "$REPO/scripts/frontier/resilient_e97_allocation_supervisor.py"' not in text
+
+
+def test_launcher_requires_and_attests_exact_known_good_runtime():
+    text = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
+    approved = "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312"
+    assert f"APPROVED_EMENDER_CONDA_ENV={approved}" in text
+    assert 'EMENDER_CONDA_ENV:?' in text
+    assert 'realpath "$EMENDER_CONDA_ENV"' in text
+    assert 'realpath "$APPROVED_EMENDER_CONDA_ENV/bin/python"' in text
+    assert '"python": "3.12.13"' in text
+    assert '"torch": "2.10.0+rocm7.1"' in text
+    assert '"torch_hip": "7.1.25424"' in text
+    assert '"triton": "3.6.0"' in text
+    assert '"$RUN_DIR/runtime-identity.json"' in text
+    assert text.index("runtime identity mismatch") < text.index("RESILIENT_E97_MANAGER_COMMAND=")
+
+
+def test_launcher_rejects_omitted_or_wrong_runtime_before_module_activation(tmp_path):
+    script = ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch"
+    base = {**os.environ, "REPO": str(ROOT)}
+    base.pop("EMENDER_CONDA_ENV", None)
+    omitted = subprocess.run(["bash", str(script)], env=base, text=True, capture_output=True)
+    assert omitted.returncode != 0
+    assert "immutable submit payload must export EMENDER_CONDA_ENV" in omitted.stderr
+
+    wrong = subprocess.run(
+        ["bash", str(script)], env={**base, "EMENDER_CONDA_ENV": str(tmp_path)},
+        text=True, capture_output=True,
+    )
+    assert wrong.returncode == 64
+    assert "EMENDER_CONDA_ENV must resolve" in wrong.stderr
+
+
 def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tmp_path):
     repo = tmp_path / "repo"
     (repo / "scripts/frontier").mkdir(parents=True)
+    (repo / "configs/frontier").mkdir(parents=True)
+    approved_args = repo / "configs/frontier/e97_resilient_split_role_flat.json"
+    approved_args.write_text((ROOT / "configs/frontier/e97_resilient_split_role_flat.json").read_text())
     (repo / "scripts/frontier/resilient_e97_allocation_supervisor.py").write_text("pass\n")
+    (repo / "scripts/frontier/frontier_runtime_env.sh").write_text(
+        "frontier_load_default_modules() { :; }\n"
+        "frontier_activate_emender_conda_env() { :; }\n"
+        "frontier_assert_emender_conda_env() { :; }\n"
+    )
     bindir = tmp_path / "bin"
     bindir.mkdir()
     scontrol = bindir / "scontrol"
     scontrol.write_text("#!/bin/sh\nprintf 'node0\\nnode1\\n'\n")
     scontrol.chmod(0o755)
+    srun = bindir / "srun"
+    srun.write_text("#!/bin/sh\nwhile [ \"$1\" != bash ]; do shift; done\nexec \"$@\"\n")
+    srun.chmod(0o755)
+    tokenizer_cache = tmp_path / "p50k.cache"
+    tokenizer_cache.write_text("offline-tokenizer-cache")
     env = {
         **os.environ,
-        "PATH": f"{bindir}:{os.environ['PATH']}",
+        "PATH": f"{bindir}:{APPROVED_ENV / 'bin'}:{os.environ['PATH']}",
+        "EMENDER_CONDA_ENV": str(APPROVED_ENV),
         "SLURM_JOB_NUM_NODES": "2",
         "SLURM_JOB_QOS": "debug",
         "SLURM_JOB_NODELIST": "node[0-1]",
         "RESILIENT_E97_STARTUP_SMOKE": "1",
-        "RESILIENT_E97_REQUESTED_WALLTIME": "00:20:00",
+        "RESILIENT_E97_REQUESTED_WALLTIME": "02:00:00",
+        "SLURM_TIMELIMIT": "120",
         "RESILIENT_E97_GENERATIONS": "1",
         "REPO": str(repo),
         "RUN_DIR": str(tmp_path / "run"),
@@ -128,10 +207,11 @@ def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tm
         "RESILIENT_E97_SOURCE_ID": "source",
         "RESILIENT_E97_PAYLOAD_ID": "payload",
         "RESILIENT_E97_SEED": "/seed.pt",
-        "RESILIENT_E97_TRAIN_ARGS_JSON": "/args.json",
+        "RESILIENT_E97_TRAIN_ARGS_JSON": str(approved_args),
         "RESILIENT_E97_DATA": "/data",
+        "RESILIENT_E97_TIKTOKEN_CACHE_FILE": str(tokenizer_cache),
+        "RESILIENT_E97_TIKTOKEN_SHA256": hashlib.sha256(tokenizer_cache.read_bytes()).hexdigest(),
     }
-    env.pop("SLURM_TIMELIMIT", None)
     subprocess.run(["bash", str(ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch")],
                    env=env, text=True, capture_output=True, check=True)
 
@@ -140,12 +220,39 @@ def test_approved_training_arguments_are_flat_overrides():
     path = ROOT / "configs/frontier/e97_resilient_split_role_flat.json"
     value = json.loads(path.read_text())
     assert value["level"] == "E97" and value["optimizer"] == "schedulefree"
-    assert value["dim"] == 1792 and value["lr"] == 0.001007
+    assert value["dim"] == 1792 and value["depth"] == 11 and value["lr"] == 0.001007
+    assert value["n_groups"] == 32 and value["n_slots"] == 64
+    assert value["mlp_ratio"] == 2.2623 and value["mlp_multiple"] == 64
+    assert value["batch_size"] == 4 and value["chunk_size"] == 2048
+    assert value["gradient_checkpointing"] is False
+    assert value["use_chunked_e97"] == 0 and value["e97_chunk_size"] == 32
+    assert value["use_triton"] == 1 and value["use_split_edit"] == 1
+    assert value["linear_state"] == 0 and value["e88_raw_write"] == 0
+    assert value["gate_activation"] == "silu" and value["use_permutation"] == 1
     assert not ({"resolved", "export", "source_artifacts"} & value.keys())
+
+
+def test_launcher_rejects_nonapproved_training_arguments_before_roles_start():
+    script = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
+    assert 'APPROVED_TRAIN_ARGS="$REPO/configs/frontier/e97_resilient_split_role_flat.json"' in script
+    assert 'realpath "$RESILIENT_E97_TRAIN_ARGS_JSON"' in script
+    assert "training arguments must be the approved flat E97 split-role configuration" in script
+
+
+def test_launcher_stages_verified_p50k_cache_to_each_node_before_roles_start():
+    script = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
+    assert "RESILIENT_E97_TIKTOKEN_CACHE_FILE:?" in script
+    assert "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069" in script
+    assert "ec7223a39ce59f226a68acc30dc1af2788490e15" in script
+    assert "--nodes=2 --ntasks=2 --ntasks-per-node=1" in script
+    assert "export TIKTOKEN_CACHE_DIR=$RESILIENT_E97_NODE_TIKTOKEN_CACHE" in script
+    assert script.index("export TIKTOKEN_CACHE_DIR=") < script.index("RESILIENT_E97_TRAINER_COMMAND=")
 
 
 def test_launch_modes_preserve_identical_local_role_identity_and_environment(tmp_path, monkeypatch):
     launched = []
+    monkeypatch.setenv("RESILIENT_E97_RUN_ID", "cache-isolation-test")
+    monkeypatch.setenv("RESILIENT_E97_KERNEL_CACHE_ROOT", str(tmp_path / "kernel-cache"))
 
     class Process:
         pid = 123
@@ -173,6 +280,84 @@ def test_launch_modes_preserve_identical_local_role_identity_and_environment(tmp
     assert local_env["RESILIENT_E97_NODE_RANK"] == "7"
     assert local_env["RESILIENT_E97_LOCAL_RANK"] == "3"
     assert local_env["ROCR_VISIBLE_DEVICES"] == "3"
+    assert local_env["TRITON_CACHE_DIR"] == str(
+        tmp_path / "kernel-cache/cache-isolation-test-rank-3/triton")
+    assert local_env["TORCHINDUCTOR_CACHE_DIR"] == str(
+        tmp_path / "kernel-cache/cache-isolation-test-rank-3/inductor")
+    assert Path(local_env["TRITON_CACHE_DIR"]).is_dir()
+    assert Path(local_env["TORCHINDUCTOR_CACHE_DIR"]).is_dir()
+    assert any(value.startswith("TRITON_CACHE_DIR=") for value in step_argv)
+    assert any(value.startswith("TORCHINDUCTOR_CACHE_DIR=") for value in step_argv)
+
+
+def test_node_supervisor_reuses_allocation_gpus_without_step_gres(tmp_path, monkeypatch):
+    launched = []
+
+    class Process:
+        pid = 123
+        returncode = None
+        def poll(self): return None
+
+    monkeypatch.setattr(
+        "scripts.frontier.resilient_e97_allocation_supervisor.subprocess.Popen",
+        lambda argv, **kwargs: launched.append(argv) or Process())
+    child = Child("node-supervisor", 0, "node000", None, "python supervisor.py")
+    supervisor = AllocationSupervisor(tmp_path, [child], heartbeat_s=2,
+                                      progress_s=3, max_restarts=1)
+    supervisor.start(child)
+    argv = launched[0]
+    # The batch allocation already owns all eight node GPUs.  GRES are not
+    # shareable between overlapping steps on Frontier, so requesting them a
+    # second time leaves the step pending with "Requested nodes are busy".
+    assert not any("gpu" in argument for argument in argv)
+
+
+def test_node_local_supervisors_inherit_allocation_gpus_without_step_gres(monkeypatch):
+    monkeypatch.setenv("RUN_DIR", "/tmp/resilient-test")
+    monkeypatch.setenv("SLURM_JOB_NODELIST", "node[000-001]")
+    monkeypatch.setenv("RESILIENT_E97_MANAGER_COMMAND", "manager")
+    monkeypatch.setenv("RESILIENT_E97_TRAINER_COMMAND", "trainer")
+    monkeypatch.setattr(
+        "scripts.frontier.resilient_e97_allocation_supervisor.subprocess.check_output",
+        lambda *args, **kwargs: "node000\nnode001\n",
+    )
+    calls = []
+    monkeypatch.setattr(
+        "scripts.frontier.resilient_e97_allocation_supervisor.subprocess.call",
+        lambda argv: calls.append(argv) or 0,
+    )
+    from scripts.frontier import resilient_e97_allocation_supervisor as module
+
+    assert module.main() == 0
+    assert len(calls) == 1
+    argv = calls[0]
+    assert argv[:7] == ["srun", "--overlap", "--no-kill", "--exact", "-N2", "-n2",
+                        "--ntasks-per-node=1"]
+    # Live Frontier smoke 5021737 proved a repeated step-level GRES request
+    # remains pending while a CPU-only two-node step starts immediately.
+    assert not any("gpu" in argument for argument in argv)
+    assert "-c56" in argv
+    assert "-c64" not in argv
+    assert argv[-1] == "--node-local"
+
+
+def test_node_local_entrypoint_uses_slurm_node_identity(monkeypatch, tmp_path):
+    monkeypatch.setenv("RUN_DIR", str(tmp_path))
+    monkeypatch.setenv("SLURM_NODEID", "1")
+    monkeypatch.delenv("RESILIENT_E97_NODE_RANK", raising=False)
+    monkeypatch.setenv("RESILIENT_E97_MANAGER_COMMAND", "manager")
+    monkeypatch.setenv("RESILIENT_E97_TRAINER_COMMAND", "trainer")
+    captured = {}
+
+    def fake_run(self):
+        captured["ranks"] = {child.node_rank for child in self.children}
+        return 0
+
+    monkeypatch.setattr(AllocationSupervisor, "run", fake_run)
+    from scripts.frontier import resilient_e97_allocation_supervisor as module
+
+    assert module._node_local_main() == 0
+    assert captured["ranks"] == {1}
 
 
 def test_rendered_debug_production_contract_has_only_approved_deltas():
@@ -209,6 +394,64 @@ def test_child_without_first_heartbeat_hits_startup_deadline(tmp_path):
     assert supervisor._deadline_reason(child, 131) == "startup_deadline"
 
 
-def test_frontier_default_avoids_nested_srun_steps():
+def test_manager_liveness_does_not_disguise_stalled_generation_progress(tmp_path, monkeypatch):
+    child = Child("manager", 0, "node000", None, "python manager.py")
+    supervisor = AllocationSupervisor(tmp_path, [child], heartbeat_s=10,
+                                      progress_s=20, max_restarts=1)
+    child.process = type("Process", (), {"poll": lambda self: None})()
+    state = tmp_path / "supervision" / "node-0-manager.json"
+    state.write_text(json.dumps({"heartbeat_time": 100, "progress_time": 100,
+                                 "generation": 0}))
+    liveness = tmp_path / "supervision" / "node-0-manager.liveness.json"
+    liveness.write_text(json.dumps({"identity": child.identity,
+                                    "heartbeat_time": 125}))
+    monkeypatch.delenv("RESILIENT_E97_BULK_ROOT", raising=False)
+    monkeypatch.delenv("RESILIENT_E97_RUN_ID", raising=False)
+    assert supervisor._deadline_reason(child, 126) == "progress_deadline"
+
+
+def test_all_real_roles_publish_import_liveness_without_generation_progress():
+    text = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    assert 'sys.argv[1] not in {"manager", "trainer"}' in text
+    assert 'f"node-{node_rank}-trainer-{local_rank}"' in text
+    assert '"stage": "runtime_import"' in text
+    assert '"generation": 0, "step": 0' in text
+    assert text.count("if _IMPORT_HEARTBEAT is not None:") == 2
+
+
+def test_real_trainer_keeps_liveness_during_checkpoint_load_and_training():
+    text = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    trainer = text[text.index("def trainer(args)"):]
+    assert trainer.index("_liveness_heartbeat(bulk, identity)") < trainer.index("_load_real(args)")
+    assert 'f"{identity}.liveness.json"' in text
+
+
+def test_generation_deadline_includes_local_training_and_aggregate_wait():
+    role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    deadline = "generation_deadline = time.monotonic() + args.deadline_s"
+    training_guard = "if time.monotonic() >= generation_deadline:"
+    aggregate_wait = "fence, deadline=generation_deadline,"
+
+    assert role.count(deadline) == 1
+    assert role.index(deadline) < role.index("report = _run_real_worker(")
+    assert role.index(training_guard) < role.index("progress_callback=training_progress")
+    assert role.index("progress_callback=training_progress") < role.index(aggregate_wait)
+
+
+def test_real_trainer_streams_model_delta_without_full_cpu_materialization():
+    role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    worker = (ROOT / "ndm/async_diloco_real.py").read_text()
+
+    assert "delta_consumer=publish_trained_delta" in role
+    assert "spool.publish(fence, rank, shards(), weight=tokens" in role
+    assert "worker_chunk.sub(base_flat[offset:end])" in role
+    assert "if delta_consumer is None:" in worker
+    assert "delta_consumer(base_state, model, tokens)" in worker
+
+
+def test_frontier_default_keeps_supervision_state_node_local():
     text = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
-    assert 'os.environ.get("RESILIENT_E97_LAUNCH_MODE", "independent-step")' in text
+    assert 'os.environ.get("RESILIENT_E97_LAUNCH_MODE", "node-local")' in text
+    assert 'launch_backend="node-local-child"' in text
+    assert 'sys.executable, __file__, "--node-local"' in text
+    assert '"-N2", "-n2"' in text

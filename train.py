@@ -1433,7 +1433,7 @@ def compute_training_loss(model, chunks, args, *, prev_hiddens=None):
 
 
 def train_one_optimizer_step(model, optimizer, args, *, batch_iter=None, device=None,
-                             step=0, hidden_state=None):
+                             step=0, hidden_state=None, phase_callback=None):
     """Run one real train.py optimizer step, including grad accumulation."""
     if device is None:
         device = next(model.parameters()).device
@@ -1444,23 +1444,38 @@ def train_one_optimizer_step(model, optimizer, args, *, batch_iter=None, device=
 
     total_loss = 0.0
     tokens_processed = 0
-    for _ in range(max(1, int(getattr(args, 'grad_accum', 1)))):
+    def phase(name, **details):
+        if phase_callback is not None:
+            phase_callback(name, {"step": step, **details})
+
+    phase("optimizer_step_start")
+    for micro_step in range(max(1, int(getattr(args, 'grad_accum', 1)))):
         if batch_iter is None:
             raise ValueError("batch_iter is required for train_one_optimizer_step")
+        phase("data_load_start", micro_step=micro_step)
         chunks, is_doc_end, actual_lengths = next(batch_iter)
         chunks = chunks.to(device)
         actual_lengths = actual_lengths.to(device)
+        phase("data_load_end", micro_step=micro_step,
+              tokens=int(actual_lengths.sum().item()))
         if args.tbptt and hidden_state is not None:
             reset_mask = is_doc_end.to(device).view(-1, 1)
             hidden_state = [h * (~reset_mask) if h is not None else None for h in hidden_state]
+        phase("forward_start", micro_step=micro_step)
         loss, next_hidden = compute_training_loss(
             model, chunks, args, prev_hiddens=hidden_state)
+        phase("forward_end", micro_step=micro_step)
         if not torch.isfinite(loss):
             raise FloatingPointError(f"non-finite training loss at step {step}: {loss.item()}")
+        phase("backward_start", micro_step=micro_step)
         (loss / max(1, int(getattr(args, 'grad_accum', 1)))).backward()
+        phase("backward_end", micro_step=micro_step)
         if args.tbptt and next_hidden is not None:
             hidden_state = [h.detach() if h is not None else None for h in next_hidden]
-        total_loss += float(loss.item())
+        phase("loss_sync_start", micro_step=micro_step)
+        loss_value = float(loss.item())
+        phase("loss_sync_end", micro_step=micro_step, loss=loss_value)
+        total_loss += loss_value
         tokens_processed += int(actual_lengths.sum().item())
 
     if getattr(args, 'grad_clip', 0) > 0:
@@ -1483,10 +1498,12 @@ def train_one_optimizer_step(model, optimizer, args, *, batch_iter=None, device=
     else:
         lr = args.lr
 
+    phase("optimizer_update_start")
     optimizer.step()
+    phase("optimizer_update_end")
     optimizer.zero_grad()
     grad_value = grad_norm.item() if hasattr(grad_norm, 'item') else float(grad_norm)
-    return {
+    result = {
         'step': step + 1,
         'loss': total_loss / max(1, int(getattr(args, 'grad_accum', 1))),
         'grad_norm': grad_value,
@@ -1494,6 +1511,8 @@ def train_one_optimizer_step(model, optimizer, args, *, batch_iter=None, device=
         'tokens_processed': tokens_processed,
         'hidden_state': hidden_state,
     }
+    phase("optimizer_step_end", loss=result['loss'], tokens=tokens_processed)
+    return result
 
 
 def _clone_param_list_like(params, source=None, fill_zeros=False):

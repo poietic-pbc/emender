@@ -18,7 +18,7 @@ import socket
 import struct
 import threading
 import time
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import torch
 
@@ -1013,6 +1013,9 @@ def _run_real_worker(
     synthetic_vocab_size: int,
     optimizer_state_dict: Mapping[str, Any] | None = None,
     consume_optimizer_state: bool = False,
+    progress_callback: Callable[[int, Mapping[str, Any]], None] | None = None,
+    delta_consumer: Callable[[Mapping[str, torch.Tensor], torch.nn.Module, int], None] | None = None,
+    phase_callback: Callable[[str, Mapping[str, Any]], None] | None = None,
 ) -> RealAsyncWorkerReport:
     del run_id
     start_s = time.monotonic()
@@ -1025,17 +1028,27 @@ def _run_real_worker(
         args = _copy_train_args(train_args)
         torch.manual_seed(int(getattr(args, "seed", 42)) + int(spec.seed_offset))
         device = torch.device(spec.device)
+        def bootstrap_phase(name: str) -> None:
+            if phase_callback is not None:
+                phase_callback(name, {"step": int(generation) * max(1, int(spec.local_steps))})
+
+        bootstrap_phase("model_build_start")
         model = train.build_training_model(args).to(device)
+        bootstrap_phase("model_device_ready")
         model.load_state_dict(base_state, strict=False)
+        bootstrap_phase("model_state_loaded")
         if bool(getattr(args, "bf16", False)):
             model = model.bfloat16()
+        bootstrap_phase("model_dtype_ready")
         optimizer = train.build_training_optimizer(model, args)
+        bootstrap_phase("optimizer_built")
         if optimizer_state_dict is not None:
             optimizer.load_state_dict(optimizer_state_dict)
             if consume_optimizer_state:
                 _release_consumed_optimizer_state(optimizer_state_dict)
             for param_group in optimizer.param_groups:
                 param_group["lr"] = args.lr
+        bootstrap_phase("optimizer_state_loaded")
         batch_iter = _build_batch_iter(
             args,
             rank=spec.seed_offset,
@@ -1043,6 +1056,7 @@ def _run_real_worker(
             synthetic=synthetic_token_stream,
             synthetic_vocab_size=synthetic_vocab_size,
         )
+        bootstrap_phase("data_iterator_ready")
         losses: list[float] = []
         tokens = 0
         hidden_state = None
@@ -1055,11 +1069,21 @@ def _run_real_worker(
                 device=device,
                 step=int(generation) * max(1, int(spec.local_steps)) + step,
                 hidden_state=hidden_state,
+                phase_callback=phase_callback,
             )
             hidden_state = metrics.get("hidden_state")
             losses.append(float(metrics["loss"]))
             tokens += int(metrics["tokens_processed"])
-        worker_delta = _floating_delta_from_model(base_state, model)
+            if progress_callback is not None:
+                progress_callback(step + 1, metrics)
+        if delta_consumer is None:
+            worker_delta = _floating_delta_from_model(base_state, model)
+        else:
+            # The live split-role path streams directly from the trained model
+            # into its bounded node-local spool.  Do not first materialize a
+            # second full CPU model-sized delta merely to serialize it.
+            delta_consumer(base_state, model, tokens)
+            worker_delta = {}
         base_generation = generation if spec.stale_generation is None else int(spec.stale_generation)
         update = AsyncDiLoCoUpdate(
             worker_id=spec.worker_id,

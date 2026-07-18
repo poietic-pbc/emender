@@ -11,16 +11,56 @@ import sys
 import threading
 import time
 
-import torch
-
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+
+def _role_import_heartbeat() -> tuple[threading.Event, threading.Thread] | None:
+    """Publish liveness, but no generation progress, during heavy imports."""
+    if len(sys.argv) < 2 or sys.argv[1] not in {"manager", "trainer"}:
+        return None
+    run_id = os.environ.get("RESILIENT_E97_RUN_ID")
+    bulk_root = os.environ.get("RESILIENT_E97_BULK_ROOT")
+    node_rank = os.environ.get("RESILIENT_E97_NODE_RANK", "0")
+    if not run_id or not bulk_root:
+        return None
+    role = sys.argv[1]
+    local_rank = os.environ.get("RESILIENT_E97_LOCAL_RANK")
+    if role == "trainer" and local_rank is None:
+        return None
+    identity = (f"node-{node_rank}-manager" if role == "manager"
+                else f"node-{node_rank}-trainer-{local_rank}")
+    state = (Path(bulk_root) / run_id / f"node-{node_rank}" / "supervision" /
+             f"{identity}.json")
+    stop = threading.Event()
+
+    def publish() -> None:
+        state.parent.mkdir(parents=True, exist_ok=True)
+        while not stop.is_set():
+            now = time.time()
+            temporary = state.with_suffix(f".{os.getpid()}.tmp")
+            temporary.write_text(json.dumps({
+                "identity": identity, "heartbeat_time": now, "progress_time": now,
+                "generation": 0, "step": 0, "loss": None,
+                "stage": "runtime_import", "bootstrap_pid": os.getpid(),
+            }, sort_keys=True))
+            os.replace(temporary, state)
+            stop.wait(5)
+
+    thread = threading.Thread(target=publish, name=f"{role}-import-heartbeat", daemon=True)
+    thread.start()
+    return stop, thread
+
+
+_IMPORT_HEARTBEAT = _role_import_heartbeat()
+
+import torch
+
 from ndm.resilient_e97_roles import LocalFence, LocalTrainerSpool
 from ndm.resilient_e97_runtime import (SplitManagerLoop, apply_delta, atomic_json,
                                        PINNED_STEP_1525000_SHA256, assert_node_local_path,
-                                       finalize_checkpoint, flatten_delta, heartbeat,
+                                       finalize_checkpoint, flatten_tensors, heartbeat,
                                        outer_state_migration)
 from ndm.resilient_node_quorum import GenerationFence
 from ndm.resilient_node_transport import (DiskBucketSpool, NodeManagerClient,
@@ -82,11 +122,28 @@ def _publish_role_recovery(control: Path, identity: str, args, generation: int,
         "coordinator_epoch": args.coordinator_epoch, "generation": generation, **extra})
 
 
+def _liveness_heartbeat(bulk: Path, identity: str, interval_s: float = 5.0):
+    """Refresh liveness without disguising stalled generation progress."""
+    state = bulk / "supervision" / f"{identity}.liveness.json"
+    stop = threading.Event()
+
+    def publish() -> None:
+        while not stop.wait(interval_s):
+            atomic_json(state, {"identity": identity, "heartbeat_time": time.time()})
+
+    thread = threading.Thread(target=publish, name=f"{identity}-heartbeat", daemon=True)
+    thread.start()
+    return stop, thread
+
+
 def manager(args) -> int:
     run = Path(args.run_dir); node = int(os.environ.get("RESILIENT_E97_NODE_RANK", "0"))
     identity = f"node-{node}-manager"
     bulk = Path(args.bulk_root) / args.run_id / f"node-{node}"
     bulk = assert_node_local_path(bulk, run)
+    if _IMPORT_HEARTBEAT is not None:
+        stop, thread = _IMPORT_HEARTBEAT
+        stop.set(); thread.join(10)
     spool = LocalTrainerSpool(bulk / "mailbox", args.max_spool_bytes)
     loop = SplitManagerLoop(spool, quorum=args.local_quorum, source_id=args.source_id,
                             aggregation_deadline_s=args.deadline_s)
@@ -102,6 +159,7 @@ def manager(args) -> int:
     control = bulk / "control"
     target_generation = args.initial_generation + args.generations
     start_generation = _latest_role_generation(control, identity, args)
+    liveness_stop, liveness_thread = _liveness_heartbeat(bulk, identity)
     try:
         for generation in range(start_generation, target_generation):
             fence = _fence(args, generation)
@@ -167,6 +225,7 @@ def manager(args) -> int:
                 outer_update_state=value["outer_update_state"], migration=value["migration"])
             proposal.unlink()
     finally:
+        liveness_stop.set(); liveness_thread.join(10)
         if server is not None:
             server.shutdown(); server.server_close()
         if thread is not None: thread.join(2)
@@ -203,6 +262,13 @@ def trainer(args) -> int:
     rank = int(os.environ.get("RESILIENT_E97_LOCAL_RANK", "0")); identity = f"node-{node}-trainer-{rank}"
     bulk = Path(args.bulk_root) / args.run_id / f"node-{node}"
     bulk = assert_node_local_path(bulk, run)
+    # Loading and cloning the real E97 checkpoint can exceed the steady-state
+    # heartbeat deadline when all eight local trainers start together. Keep
+    # liveness independent from generation progress throughout bootstrap.
+    _liveness_heartbeat(bulk, identity)
+    if _IMPORT_HEARTBEAT is not None:
+        stop, thread = _IMPORT_HEARTBEAT
+        stop.set(); thread.join(10)
     spool = LocalTrainerSpool(bulk / "mailbox", args.max_spool_bytes)
     control = bulk / "control"
     target_generation = args.initial_generation + args.generations
@@ -257,35 +323,98 @@ def trainer(args) -> int:
     for generation in range(start_generation, target_generation):
         if stop["requested"]:
             break
-        before = {name: value.clone() for name, value in state.items()}
+        # One deadline covers the complete generation, including real local
+        # training, publication, quorum aggregation, and apply.  Starting a
+        # fresh timeout only after the expensive 40-step train can let a live
+        # but too-slow generation run until Slurm TERM without ever failing the
+        # configured generation bound.
+        generation_deadline = time.monotonic() + args.deadline_s
         if args.control:
             loss = 1.0 / (step + args.local_steps + rank + 1)
-            after = {"weight": state["weight"] + float(rank + 1)}
+            delta = {"weight": torch.full_like(state["weight"], float(rank + 1))}
             tokens = rank + 1
         else:
             from ndm.async_diloco_real import RealAsyncWorkerSpec, _run_real_worker
+
+            fence = _fence(args, generation)
+
+            phase_log = bulk / "telemetry" / f"{identity}.jsonl"
+            phase_log.parent.mkdir(parents=True, exist_ok=True)
+
+            def training_phase(phase, details):
+                record = {
+                    "timestamp": time.time(), "monotonic_s": time.monotonic(),
+                    "identity": identity, "generation": generation,
+                    "phase": phase, **details,
+                }
+                with phase_log.open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(record, sort_keys=True) + "\n")
+                    stream.flush()
+                heartbeat(
+                    bulk, identity, generation=generation,
+                    step=int(details.get("step", step)),
+                    loss=details.get("loss"), stage=phase)
+
+            def publish_trained_delta(base_state, model, tokens):
+                heartbeat(bulk, identity, generation=generation, step=step, loss=None,
+                          stage="streaming_delta")
+                worker_state = model.state_dict()
+
+                def shards():
+                    chunk_elements = max(1, args.bulk_chunk_bytes // 8)
+                    for name, base_tensor in sorted(base_state.items()):
+                        worker_tensor = worker_state[name].detach().reshape(-1)
+                        base_flat = base_tensor.detach().reshape(-1)
+                        if worker_tensor.numel() != base_flat.numel():
+                            raise ValueError(f"trainer state layout changed for {name}")
+                        for offset in range(0, worker_tensor.numel(), chunk_elements):
+                            end = min(offset + chunk_elements, worker_tensor.numel())
+                            worker_chunk = worker_tensor[offset:end].to(
+                                device="cpu", dtype=base_tensor.dtype)
+                            yield worker_chunk.sub(base_flat[offset:end])
+
+                spool.publish(fence, rank, shards(), weight=tokens,
+                              source_id=args.source_id)
+
+            def training_progress(local_step, metrics):
+                if time.monotonic() >= generation_deadline:
+                    raise TimeoutError(
+                        f"generation {generation} deadline exceeded during local training "
+                        f"at step {local_step}/{args.local_steps}")
+                heartbeat(
+                    bulk, identity, generation=generation,
+                    step=step + local_step, loss=float(metrics["loss"]),
+                    stage="training")
+
             report = _run_real_worker(
                 run_id=args.run_id, generation=generation, base_state=state,
                 train_args=train_args,
                 spec=RealAsyncWorkerSpec(identity, f"node-{node}", args.device,
                                          args.local_steps, rank),
                 synthetic_token_stream=False, synthetic_vocab_size=256,
-                optimizer_state_dict=optimizer_state, consume_optimizer_state=True)
+                optimizer_state_dict=optimizer_state, consume_optimizer_state=True,
+                progress_callback=training_progress,
+                delta_consumer=publish_trained_delta,
+                phase_callback=training_phase)
             if report.update is None:
                 raise RuntimeError(report.error or "real E97 trainer produced no update")
-            after = {name: before[name] + report.update.delta[name] for name in before}
+            delta = report.update.delta
             optimizer_state = report.optimizer_state_dict or {}
             tokens, loss = report.tokens, float(report.losses[-1])
         fence = _fence(args, generation)
-        spool.publish(fence, rank, flatten_delta(
-            before, after, chunk_elements=max(1, args.bulk_chunk_bytes // 8)), weight=tokens,
-                      source_id=args.source_id)
+        if args.control:
+            heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
+                      stage="streaming_delta")
+            spool.publish(fence, rank, flatten_tensors(
+                delta, chunk_elements=max(1, args.bulk_chunk_bytes // 8)), weight=tokens,
+                          source_id=args.source_id)
+        del delta
         heartbeat(bulk, identity, generation=generation, step=step, loss=loss, stage="submitted")
         manifest, aggregate = spool.wait_aggregate(
-            fence, deadline=time.monotonic() + args.deadline_s,
+            fence, deadline=generation_deadline,
             expected_source_id=args.source_id)
         spool.release_trainer(fence, rank)
-        state = apply_delta(before, aggregate, eta_outer=args.eta_outer)
+        state = apply_delta(state, aggregate, eta_outer=args.eta_outer)
         step += args.local_steps; losses.append(loss)
         completed = generation + 1
         recovery_checkpoint = bulk / "recovery" / identity / f"generation-{completed:08d}.pt"

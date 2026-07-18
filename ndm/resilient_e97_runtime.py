@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 import tempfile
 import time
-from typing import Mapping, Sequence
+from typing import Iterable, Iterator, Mapping, Sequence
 
 import torch
 
@@ -75,26 +75,63 @@ def flatten_delta(before: Mapping[str, torch.Tensor], after: Mapping[str, torch.
         raise ValueError("trainer state layout changed during local generation")
     if chunk_elements <= 0:
         raise ValueError("chunk_elements must be positive")
-    flat = torch.cat(tuple((after[name].detach().cpu().to(torch.float64) -
-                            before[name].detach().cpu().to(torch.float64)).reshape(-1)
-                           for name in sorted(before)))
-    return tuple(flat[offset:offset + chunk_elements].clone()
-                 for offset in range(0, flat.numel(), chunk_elements))
+    return flatten_tensors(
+        {name: after[name].detach() - before[name].detach() for name in before},
+        chunk_elements=chunk_elements)
+
+
+def flatten_tensors(tensors: Mapping[str, torch.Tensor], *,
+                    chunk_elements: int = 131072) -> Iterator[torch.Tensor]:
+    """Serialize a tensor mapping without a whole-model flatten/cat allocation.
+
+    Each returned model-precision CPU shard is independently bounded.  Parameter
+    boundaries are deliberately not encoded in the wire layout: ``apply_delta``
+    consumes the same deterministic sorted element stream.
+    """
+    if chunk_elements <= 0:
+        raise ValueError("chunk_elements must be positive")
+    pending = []
+    pending_elements = 0
+
+    for name in sorted(tensors):
+        flat = tensors[name].detach().reshape(-1)
+        offset = 0
+        while offset < flat.numel():
+            take = min(chunk_elements - pending_elements, flat.numel() - offset)
+            pending.append(flat[offset:offset + take].to(device="cpu").clone())
+            pending_elements += take
+            offset += take
+            if pending_elements == chunk_elements:
+                yield torch.cat(pending) if len(pending) > 1 else pending[0]
+                pending = []
+                pending_elements = 0
+    if pending:
+        yield torch.cat(pending) if len(pending) > 1 else pending[0]
 
 
 def apply_delta(base: Mapping[str, torch.Tensor], shards: Sequence[torch.Tensor], *,
                 eta_outer: float) -> dict[str, torch.Tensor]:
-    flat = torch.cat(tuple(shard.reshape(-1) for shard in shards)) if shards else torch.empty(0)
-    if flat.numel() != sum(value.numel() for value in base.values()):
+    if sum(shard.numel() for shard in shards) != sum(value.numel() for value in base.values()):
         raise ValueError("aggregate shard count does not match trainer state")
     result = {}
-    offset = 0
+    shard_index = shard_offset = 0
     for name, value in sorted(base.items()):
-        shard = flat[offset:offset + value.numel()]
-        if shard.numel() != value.numel() or not torch.isfinite(shard).all():
-            raise ValueError(f"aggregate shard layout invalid for {name}")
-        result[name] = value + shard.reshape(value.shape).to(value) * float(eta_outer)
-        offset += value.numel()
+        updated = value.clone().reshape(-1)
+        value_offset = 0
+        while value_offset < value.numel():
+            shard = shards[shard_index].reshape(-1)
+            take = min(value.numel() - value_offset, shard.numel() - shard_offset)
+            piece = shard[shard_offset:shard_offset + take]
+            if not torch.isfinite(piece).all():
+                raise ValueError(f"aggregate shard layout invalid for {name}")
+            updated[value_offset:value_offset + take].add_(
+                piece.to(updated), alpha=float(eta_outer))
+            value_offset += take
+            shard_offset += take
+            if shard_offset == shard.numel():
+                shard_index += 1
+                shard_offset = 0
+        result[name] = updated.reshape(value.shape)
     return result
 
 

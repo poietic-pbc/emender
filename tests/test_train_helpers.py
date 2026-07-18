@@ -108,3 +108,51 @@ def test_train_one_optimizer_step_runs_real_tiny_e97_path():
     assert math.isfinite(metrics["loss"])
     assert metrics["tokens_processed"] == args.batch_size * (args.chunk_size + 1)
     assert any(not torch.equal(a, b) for a, b in zip(before, after))
+
+
+def test_train_one_optimizer_step_reports_phase_timestamps_in_execution_order():
+    torch.manual_seed(1234)
+    args = _tiny_e97_args()
+    model = train.build_training_model(args)
+    optimizer = train.build_training_optimizer(model, args)
+    batch = torch.randint(0, 256, (args.batch_size, args.chunk_size + 1), dtype=torch.long)
+    phases = []
+
+    train.train_one_optimizer_step(
+        model, optimizer, args, batch_iter=_fixed_batches(batch), step=7,
+        phase_callback=lambda name, details: phases.append((name, details)),
+    )
+
+    assert [name for name, _ in phases] == [
+        "optimizer_step_start", "data_load_start", "data_load_end",
+        "forward_start", "forward_end", "backward_start", "backward_end",
+        "loss_sync_start", "loss_sync_end", "optimizer_update_start",
+        "optimizer_update_end", "optimizer_step_end",
+    ]
+    assert all(details["step"] == 7 for _, details in phases)
+    assert phases[-1][1]["tokens"] == args.batch_size * (args.chunk_size + 1)
+
+
+def test_real_worker_reports_bootstrap_phases_before_training(monkeypatch):
+    import ndm.async_diloco_real as real
+
+    phases = []
+    monkeypatch.setattr(real.train, "build_training_model", lambda args: torch.nn.Linear(1, 1))
+    monkeypatch.setattr(real.train, "build_training_optimizer",
+                        lambda model, args: torch.optim.SGD(model.parameters(), lr=0.1))
+    monkeypatch.setattr(real, "_build_batch_iter", lambda *args, **kwargs: iter(()))
+    monkeypatch.setattr(real.train, "train_one_optimizer_step", lambda *args, **kwargs: {
+        "loss": 1.0, "tokens_processed": 1, "hidden_state": None})
+    args = Namespace(seed=1, bf16=False, lr=0.1)
+    model = torch.nn.Linear(1, 1)
+    report = real._run_real_worker(
+        run_id="run", generation=0, base_state=model.state_dict(), train_args=args,
+        spec=real.RealAsyncWorkerSpec("trainer", "node-0", "cpu", 1, 0),
+        synthetic_token_stream=False, synthetic_vocab_size=16,
+        phase_callback=lambda name, details: phases.append((name, details)))
+    assert report.error is None
+    assert [name for name, _ in phases[:7]] == [
+        "model_build_start", "model_device_ready", "model_state_loaded",
+        "model_dtype_ready", "optimizer_built", "optimizer_state_loaded",
+        "data_iterator_ready",
+    ]

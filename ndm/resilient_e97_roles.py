@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 import tempfile
 import time
-from typing import Mapping, Sequence
+from typing import Iterable, Mapping, Sequence
 
 import torch
 
@@ -77,7 +77,7 @@ class LocalTrainerSpool:
                 continue
         return total
 
-    def publish(self, fence: LocalFence, trainer_id: int, shards: Sequence[torch.Tensor],
+    def publish(self, fence: LocalFence, trainer_id: int, shards: Iterable[torch.Tensor],
                 *, weight: int, source_id: str) -> Path:
         if not 0 <= trainer_id < 8:
             raise ValueError("trainer_id must identify one of eight real trainers")
@@ -86,23 +86,34 @@ class LocalTrainerSpool:
         directory = self.root / fence.key / f"trainer-{trainer_id}"
         if (directory / "manifest.json").exists():
             raise ValueError("duplicate trainer contribution")
-        records, encoded = [], []
+        records, written = [], []
+        initial_bytes = self.bytes_used
         for index, tensor in enumerate(shards):
             value = tensor.detach().cpu().contiguous()
             if not value.is_floating_point() or not torch.isfinite(value).all():
                 raise ValueError("trainer shard must be finite floating-point data")
-            raw = value.to(torch.float64).numpy().tobytes()
+            # Trainer deltas originate in model precision.  Preserve those exact
+            # bytes on the bounded spool; the model-free manager promotes each
+            # shard to float64 only while accumulating it.
+            dtype = "float64" if value.dtype == torch.float64 else "float32"
+            encoded_value = value.to(torch.float64 if dtype == "float64" else torch.float32)
+            raw = encoded_value.numpy().tobytes()
             records.append({"index": index, "elements": value.numel(),
-                            "sha256": hashlib.sha256(raw).hexdigest()})
-            encoded.append(raw)
+                            "dtype": dtype, "sha256": hashlib.sha256(raw).hexdigest()})
+            if initial_bytes + sum(path.stat().st_size for path in written) + len(raw) > self.max_bytes:
+                for path in written:
+                    path.unlink(missing_ok=True)
+                raise BufferError("local trainer spool byte limit exceeded")
+            path = directory / f"shard-{index:05d}.bin"
+            _atomic(path, raw)
+            written.append(path)
         manifest = {"schema": SCHEMA, "fence": fence.__dict__, "trainer_id": trainer_id,
                     "weight": weight, "source_id": source_id, "shards": records}
         manifest_bytes = (json.dumps(manifest, sort_keys=True) + "\n").encode()
-        needed = sum(map(len, encoded)) + len(manifest_bytes)
-        if self.bytes_used + needed > self.max_bytes:
+        if self.bytes_used + len(manifest_bytes) > self.max_bytes:
+            for path in written:
+                path.unlink(missing_ok=True)
             raise BufferError("local trainer spool byte limit exceeded")
-        for record, raw in zip(records, encoded):
-            _atomic(directory / f"shard-{record['index']:05d}.f64", raw)
         _atomic(directory / "manifest.json", manifest_bytes)
         self.high_water_bytes = max(self.high_water_bytes, self.bytes_used)
         return directory / "manifest.json"
@@ -223,10 +234,11 @@ class CpuNodeManager:
             weighted = None
             for trainer_id, weight, manifest_path, manifest in accepted:
                 record = manifest["shards"][shard_index]
-                raw = (manifest_path.parent / f"shard-{record['index']:05d}.f64").read_bytes()
+                raw = (manifest_path.parent / f"shard-{record['index']:05d}.bin").read_bytes()
                 if hashlib.sha256(raw).hexdigest() != record["sha256"]:
                     raise ValueError("corrupt trainer shard")
-                tensor = torch.frombuffer(bytearray(raw), dtype=torch.float64).clone()
+                dtype = torch.float64 if record.get("dtype") == "float64" else torch.float32
+                tensor = torch.frombuffer(bytearray(raw), dtype=dtype).to(torch.float64)
                 if tensor.numel() != record["elements"] or not torch.isfinite(tensor).all():
                     raise ValueError("invalid trainer shard")
                 weighted = tensor * weight if weighted is None else weighted.add_(tensor, alpha=weight)
@@ -246,8 +258,9 @@ class CpuNodeManager:
             if manifest.get("source_id") != source_id:
                 raise ValueError("trainer payload/source identity mismatch")
             for record in manifest["shards"]:
-                shard_path = manifest_path.parent / f"shard-{record['index']:05d}.f64"
-                if not shard_path.is_file() or shard_path.stat().st_size != record["elements"] * 8:
+                shard_path = manifest_path.parent / f"shard-{record['index']:05d}.bin"
+                width = 8 if record.get("dtype") == "float64" else 4
+                if not shard_path.is_file() or shard_path.stat().st_size != record["elements"] * width:
                     raise ValueError("corrupt trainer shard descriptor")
             values.append((int(manifest["trainer_id"]), int(manifest["weight"]),
                            manifest_path, manifest))

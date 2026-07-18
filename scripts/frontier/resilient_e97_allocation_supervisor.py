@@ -84,8 +84,34 @@ class AllocationSupervisor:
             role_values.update({"RESILIENT_E97_LOCAL_RANK": str(child.local_rank),
                                 "ASYNC_LOCAL_STEPS": "40",
                                 "ROCR_VISIBLE_DEVICES": str(child.local_rank)})
+            # Eight cold E97 trainers sharing the default home-directory
+            # kernel caches serialize on Triton/Inductor locks. On Frontier
+            # that kept every trainer inside its first optimizer step until the
+            # bounded generation deadline. Match the established production
+            # launchers: isolate caches per local trainer and keep kernel-build
+            # traffic on node-local storage.
+            cache_root = Path(os.environ.get(
+                "RESILIENT_E97_KERNEL_CACHE_ROOT", "/tmp/resilient-e97-kernel-cache"))
+            cache_identity = (
+                f"{os.environ.get('RESILIENT_E97_RUN_ID', 'unknown')}-rank-{child.local_rank}")
+            triton_cache = cache_root / cache_identity / "triton"
+            inductor_cache = cache_root / cache_identity / "inductor"
+            triton_cache.mkdir(parents=True, exist_ok=True)
+            inductor_cache.mkdir(parents=True, exist_ok=True)
+            role_values.update({"TRITON_CACHE_DIR": str(triton_cache),
+                                "TORCHINDUCTOR_CACHE_DIR": str(inductor_cache)})
+            role_env.extend([f"TRITON_CACHE_DIR={triton_cache}",
+                             f"TORCHINDUCTOR_CACHE_DIR={inductor_cache}"])
         else:
-            resources = ["-c64", "--gpus-per-task=8"]
+            # The batch allocation already owns all eight GCDs on each node.
+            # Frontier GRES cannot be allocated again to overlapping steps:
+            # doing so leaves both node-supervisor steps pending with
+            # "Requested nodes are busy".  Reuse the allocation's device
+            # cgroup; direct children bind ROCR_VISIBLE_DEVICES=0..7.
+            # Frontier exposes 56 allocatable CPU cores per node to Slurm.
+            # A 64-CPU step is unsatisfiable and remains pending as
+            # "Requested nodes are busy" until the allocation expires.
+            resources = ["-c56"]
         if self.launch_backend == "node-local-child":
             env = os.environ.copy(); env.update(role_values)
             argv = shlex.split(child.command)
@@ -121,6 +147,13 @@ class AllocationSupervisor:
                 return "startup_deadline"
             return None
         state = json.loads(state_path.read_text())
+        liveness_path = state_path.with_name(f"{child.identity}.liveness.json")
+        if liveness_path.exists():
+            liveness = json.loads(liveness_path.read_text())
+            if liveness.get("identity") == child.identity:
+                state["heartbeat_time"] = max(
+                    float(state.get("heartbeat_time", 0)),
+                    float(liveness.get("heartbeat_time", 0)))
         injection_variable = {
             "trainer": "RESILIENT_E97_INJECT_TRAINER",
             "manager": "RESILIENT_E97_INJECT_MANAGER",
@@ -190,7 +223,13 @@ class AllocationSupervisor:
 
 def _node_local_main() -> int:
     run_dir = Path(os.environ["RUN_DIR"])
-    node_rank = int(os.environ["RESILIENT_E97_NODE_RANK"])
+    # The one-task-per-node srun supplies SLURM_NODEID.  The explicit role
+    # variable is present only when this entrypoint is launched as a Child by
+    # an outer supervisor, so do not require it in the default live mode.
+    node_rank_text = os.environ.get("RESILIENT_E97_NODE_RANK")
+    if node_rank_text is None:
+        node_rank_text = os.environ["SLURM_NODEID"]
+    node_rank = int(node_rank_text)
     node = os.environ.get("SLURMD_NODENAME", os.uname().nodename)
     manager = os.environ["RESILIENT_E97_MANAGER_COMMAND"]
     trainer = os.environ["RESILIENT_E97_TRAINER_COMMAND"]
@@ -220,14 +259,20 @@ def main() -> int:
     manager = os.environ["RESILIENT_E97_MANAGER_COMMAND"]
     trainer = os.environ["RESILIENT_E97_TRAINER_COMMAND"]
     children: list[Child] = []
-    # Frontier does not permit the node-local supervisor's child sruns to
-    # overlap their parent step reliably.  Independent allocation-level steps
-    # preserve the same role identities while avoiding nested srun deadlock.
-    launch_mode = os.environ.get("RESILIENT_E97_LAUNCH_MODE", "independent-step")
+    # The supervision state is deliberately node-local.  Keep its reader on
+    # the same physical node as its writers and launch role processes directly
+    # beneath one allocation step per node.  The children are subprocesses,
+    # not nested sruns, so this does not depend on nested-step scheduling.
+    launch_mode = os.environ.get("RESILIENT_E97_LAUNCH_MODE", "node-local")
     if launch_mode == "node-local":
-        command = f"{shlex.quote(sys.executable)} {shlex.quote(__file__)} --node-local"
-        children.extend(Child("node-supervisor", node_rank, node, None, command)
-                        for node_rank, node in enumerate(nodes))
+        # The batch allocation already owns all eight GPUs on each node.  A
+        # single two-node step inherits that device cgroup; asking Slurm for
+        # ``--gpus-per-node`` again attempts a second GRES allocation and
+        # leaves the step pending with "Requested nodes are busy".
+        argv = ["srun", "--overlap", "--no-kill", "--exact", "-N2", "-n2",
+                "--ntasks-per-node=1", "-c56",
+                sys.executable, __file__, "--node-local"]
+        return subprocess.call(argv)
     elif launch_mode == "independent-step":
         for node_rank, node in enumerate(nodes):
             children.append(Child("manager", node_rank, node, None, manager))

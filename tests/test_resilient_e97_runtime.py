@@ -11,10 +11,20 @@ import torch
 
 from ndm.resilient_e97_roles import LocalFence, LocalTrainerSpool
 from ndm.resilient_e97_runtime import (apply_delta, finalize_checkpoint,
-                                       assert_node_local_path, outer_state_migration)
+                                       assert_node_local_path, flatten_tensors,
+                                       outer_state_migration)
 
 
 ROLE = Path(__file__).parents[1] / "scripts/frontier/resilient_e97_role.py"
+
+
+def test_manager_publishes_heartbeat_before_heavy_runtime_imports():
+    text = ROLE.read_text()
+    bootstrap = text.index("_IMPORT_HEARTBEAT = _role_import_heartbeat()")
+    assert bootstrap < text.index("import torch")
+    assert bootstrap < text.index("from ndm.resilient_e97_runtime import")
+    assert '"stage": "runtime_import"' in text
+    assert "os.replace(temporary, state)" in text
 
 
 def _control_processes(run, bulk, *, run_id, generations, initial=0, resume=""):
@@ -150,6 +160,18 @@ def test_apply_identity_deadline_and_corruption_fail_closed(tmp_path):
         apply_delta({"x": torch.ones(1)}, (), eta_outer=1)
     with pytest.raises(ValueError, match="shared run"):
         assert_node_local_path(tmp_path / "live", tmp_path)
+
+
+def test_delta_publication_and_apply_are_bounded_across_parameter_boundaries():
+    delta = {"z": torch.arange(11, dtype=torch.float32),
+             "a": torch.arange(5, dtype=torch.float32) + 20}
+    shards = tuple(flatten_tensors(delta, chunk_elements=6))
+    assert [shard.numel() for shard in shards] == [6, 6, 4]
+    assert all(shard.dtype == torch.float32 and shard.device.type == "cpu" for shard in shards)
+    base = {name: torch.zeros_like(value) for name, value in delta.items()}
+    applied = apply_delta(base, shards, eta_outer=.5)
+    for name in delta:
+        assert torch.equal(applied[name], delta[name] * .5)
 
 
 def test_pinned_cold_start_outer_policy_and_immutable_reloadable_handoff(tmp_path):

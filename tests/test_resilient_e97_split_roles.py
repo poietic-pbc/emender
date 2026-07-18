@@ -40,7 +40,7 @@ def test_manager_rejects_corrupt_stale_nonfinite_duplicate_and_overflow(tmp_path
         spool.publish(fence(), 0, [torch.tensor([1.])], weight=1, source_id="source")
     with pytest.raises(ValueError, match="finite"):
         spool.publish(fence(), 1, [torch.tensor([float("nan")])], weight=1, source_id="source")
-    shard = next(tmp_path.rglob("*.f64")); shard.write_bytes(b"bad")
+    shard = next(tmp_path.rglob("*.bin")); shard.write_bytes(b"bad")
     with pytest.raises(ValueError, match="corrupt"):
         CpuNodeManager(spool, quorum=1).collect(
             fence(), deadline=time.monotonic() + 1, expected_source_id="source")
