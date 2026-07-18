@@ -872,9 +872,14 @@ The focused r9 change adds a `peer_apply` heartbeat immediately after complete
 aggregate visibility and assigns that explicit stage the unchanged 180-second
 exchange/commit bound. Its regression first failed against the r8 tree and the
 focused aggregate-visibility, leader-first, and stage-bound slice now passes
-3/3 in 15.54 seconds. No r9 command will be rendered until the exact local gate
-passes and this evidence/fix is committed, pushed, fetched, and present on
-authoritative `origin/main`.
+3/3 in 15.54 seconds. The exact pinned lifecycle, weighted-math,
+membership/quorum, reducer, owner, bounded-transport, fencing/restart,
+launcher, production-trainer, and helper suite passes all 134 tests in 113.99
+seconds. Approved-Python `compileall`, JSON validation, `git diff --check`, the
+live-path dense-packing/collective/MPI scan, the r8 evidence checksum, and the
+empty Frontier queue gate also pass. No r9 command will be rendered until this
+focused fix is committed, pushed, fetched, and present on authoritative
+`origin/main`.
 
 ## Authoritative integration and queue gate
 

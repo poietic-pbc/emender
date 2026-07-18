@@ -680,6 +680,17 @@ def test_multinode_manager_publishes_only_final_global_aggregate_and_leader_appl
     assert '"leader_apply_wait": EXCHANGE_COMMIT_HARD_S' in supervisor
 
 
+def test_all_peers_get_fresh_supervised_apply_window_after_aggregate_visibility():
+    role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    trainer = role[role.index("def trainer(args)"):]
+    aggregate_visible = trainer.index("manifest, aggregate = spool.stream_aggregate(")
+    fresh_progress = trainer.index('stage="peer_apply"', aggregate_visible)
+    apply = trainer.index("state = apply_delta(", aggregate_visible)
+    assert aggregate_visible < fresh_progress < apply
+    supervisor = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
+    assert '"peer_apply": EXCHANGE_COMMIT_HARD_S' in supervisor
+
+
 def test_node_local_exit_retains_only_small_control_evidence(tmp_path):
     from scripts.frontier import resilient_e97_allocation_supervisor as supervisor
 

@@ -765,6 +765,12 @@ def trainer(args) -> int:
         manifest, aggregate = spool.stream_aggregate(
             fence, deadline=exchange_deadline,
             expected_source_id=args.source_id)
+        # Waiting for distributed ownership (and, on node 0 peers, the leader
+        # checkpoint marker) has its own bounded window.  Once the complete
+        # node-local aggregate is visible, begin a fresh supervised apply
+        # window for every trainer; liveness alone must not disguise progress.
+        heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
+                  stage="peer_apply")
         spool.release_trainer(fence, rank)
         state = apply_delta(state, aggregate, eta_outer=args.eta_outer, in_place=True)
         accepted_token_clock += int(manifest["weight"])
