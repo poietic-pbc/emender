@@ -70,7 +70,12 @@
         "network_chunk_bytes": 1048576,
         "payload_id": "2c337a8-20260718T152955Z-pool-v1-startup-r2-2n20m-k40-local64m-ledger64g",
         "role_restarts": 0,
-        "status": "local validation passed; retained, not submitted",
+        "job_id": 5028347,
+        "submit_utc": "2026-07-18T15:32:41Z",
+        "allocation_start_utc": "2026-07-18T15:33:25Z",
+        "queue_seconds": 44,
+        "nodes": ["frontier06911", "frontier08316"],
+        "status": "submitted once; running startup rung",
         "submit_script": "reports/frontier/validate-resilient-pool-v1-2n-startup-r2-submit-20260718T152955Z.sh",
         "submit_script_sha256": "6aab23241a0fb67359dbbbc917fbc1a609b73aadfee44bb6000c1de93008b3ca"
     }

@@ -19,8 +19,11 @@ both managers eventually reported local-quorum timeout, and the first-atomic-
 generation deadline ended the job before Slurm TERM. There was no publication,
 checkpoint, handoff, or production mutation.
 
-The ladder therefore remains stopped at rung 1. No resilience or fresh-restart
-job has been rendered or submitted. A focused changed payload uses bounded
+The ladder remains on rung 1. Changed startup payload r2 was submitted once as
+job `5028347` after its immutable code and payload were pushed and fetched; it
+entered RUNNING on exactly two Frontier nodes at `2026-07-18T15:33:25Z`. No
+resilience or fresh-restart job has been rendered or submitted. The focused
+changed payload uses bounded
 64 MiB local spool records rather than the failed 1 MiB local records, retains
 the network owner-frame bound at 1 MiB, raises the hard node-local ledger from
 an insufficient 32 GiB to a bounded 64 GiB, and automatically retains only
@@ -142,6 +145,17 @@ and node quorum 2 with no injection or resume handoff. It sets a bounded 64 GiB
 node-local spool, 64 MiB local spool records, and unchanged 1 MiB network
 frames. Startup retries are zero: a new stage failure ends the allocation
 without repeating the unchanged role payload.
+
+The retained command passed its authoritative-origin, empty-queue, absent-run-
+directory, and exact-hash gates and returned job ID `5028347`. Slurm recorded
+submit/eligible time `2026-07-18T15:32:41Z`, start time
+`2026-07-18T15:33:25Z`, queue time 44 seconds, debug QoS, `00:20:00`, exactly
+two nodes (`frontier06911,frontier08316`), and 16 allocated GPUs. Runtime
+identity was attested at allocation start. At the +180-second READY boundary,
+the allocation and its two-node role step remained RUNNING with no startup
+deadline, eviction, or restart event. Exact node-local READY and subsequent
+stage telemetry will be retained after role shutdown; this paragraph records
+an in-flight observation, not a success verdict.
 
 ## Authoritative integration and queue gate
 
