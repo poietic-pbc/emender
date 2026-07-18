@@ -9,7 +9,8 @@ requirements R01–R16 in `docs/RESILIENT_DILOCO_GAP_MATRIX.md`.
 
 ## Status
 
-The startup rung has failed closed eight times without an unchanged retry. Job
+The startup rung has not yet been accepted after nine changed payloads; no
+payload was resubmitted unchanged. Job
 `5028225` failed at the post-K40 local-delta streaming stage. Changed payload
 r2 job `5028347` then proved the 64 MiB/two-file local spool fix: both managers
 were READY within 61 seconds of allocation start, all 16 real trainers finished
@@ -94,13 +95,24 @@ reset after aggregate visibility, but the supervisor evicted them using the
 older `submitted`/`leader_apply_wait` timestamps. This is a clean-completion
 failure, so r8 is not accepted as the startup rung.
 
+Changed payload r9 job `5029220` was interrupted by an operator-side live
+evidence error, not by its runtime. The shared SQLite store correctly contained
+only durable lease/publication metadata, while READY and role stages remained
+node local by R10 design and manager stdout was buffered. The live decision
+incorrectly treated the absence of shared READY output as failure and sent TERM
+at allocation +272 seconds. Retained node-local evidence proves both managers
+were READY at +55.624/+59.026 seconds, trainers were launched only afterward,
+and all 16 completed real K=40 in 131.223--134.967 seconds from child start
+(+189.894--191.802 from allocation start). They were in bounded local delta
+streaming when interrupted. The shared fence remained valid and there was no
+publication. This run is neither a pass nor evidence of a runtime stage
+failure. The focused follow-up exports one compact manager-READY attestation
+and one record per role/generation stage transition to the retained shared
+event stream; node-local heartbeats and all tensor bytes remain off Lustre.
+
 The ladder therefore remains on rung 1. No resilience or fresh-restart job has
-been rendered or submitted. The focused changed follow-up publishes a
-`peer_apply` heartbeat immediately after each trainer observes its complete
-aggregate and gives that explicit stage the existing 180-second bound. It does
-not extend any budget or change training, exact math, ownership, checkpoint, or
-publication semantics. Payload r8 was submitted exactly once and will not be
-resubmitted unchanged.
+been rendered or submitted. Payloads r8 and r9 were each submitted exactly
+once and will not be resubmitted unchanged.
 
 No production allocation, normal-QoS allocation, 4+ node allocation, or
 two-hour allocation is authorized by this report.
@@ -911,6 +923,58 @@ authoritative `origin/main`, it was executed exactly once and returned job
 two requested nodes, debug QoS, `00:20:00`, 16 requested GPUs, no dependency,
 no requeue, and zero restarts. Its initial state was `PENDING (Priority)` as
 the only user job; queue time remains separate from runtime.
+
+### Startup r9 interrupted result and changed observability fix
+
+Job `5029220` started at `2026-07-18T19:41:21Z` after 244 seconds of queue
+time on `frontier06193` and `frontier06194`. Runtime/topology attestation
+proved the pinned Python 3.12.13, torch 2.10.0 ROCm 7.1, Triton 3.6 stack, two
+model-free managers, 16 real GPU trainers, K=40, and no collective. The
+retained manager telemetry records fenced pool READY at Unix timestamps
+`1784403736.6237228` and `1784403740.026129`, allocation +55.624 and +59.026
+seconds. Supervisor start events prove the trainers were admitted only after
+that gate, at allocation +56.041 through +59.500 seconds.
+
+All 16 trainers reached the post-K40 `streaming_delta` stage at allocation
++189.894 through +191.802 seconds, or 131.223--134.967 seconds from their
+individual child starts. Their final step-39 losses were finite, ranging from
+2.187364 to 3.105892. At `2026-07-18T19:45:53Z`, allocation +272 seconds, an
+operator incorrectly sent TERM because neither the durable publication store
+nor buffered manager stdout exposed the node-local READY records live. This
+stopped the job while local delta files were still streaming, before local
+reduction/freeze. Both node supervisors completed the bounded parallel TERM
+handoff at +290.733/+291.302 seconds; all role restarts remained zero. The
+batch ended at `2026-07-18T19:46:13Z` after 292 seconds. Slurm records the
+TERM-trapping batch as `COMPLETED 0:0`, with `TotalCPU=04:13:00`, raw energy
+`543943`, role-step `MaxRSS=77792204K`, `MaxDiskRead=72546.86M`, and
+`MaxDiskWrite=24948.54M`; the step stderr independently records the TERM.
+
+The fenced SQLite store contains lease epoch 1 and zero publications. No
+checkpoint, handoff, atomic commit, duplicate application, production
+mutation, or resilience/restart submission occurred. This is an interrupted
+run, not an unchanged payload retry and not a runtime failure. Its compact
+evidence is `reports/frontier/evidence/job-5029220`: 100 files comprising the
+runtime identity, full small logs, node-local supervision/telemetry snapshots,
+fenced control database, Slurm accounting, and checksum manifest. It excludes
+all local tensor/spool/cache payloads. The `SHA256SUMS` digest is
+`c233acdf886e514855e96718ebe8bd1ac1fe389ff6ccd60369527be8c2340874`, and
+`sha256sum -c` passes.
+
+The focused changed follow-up keeps node-local heartbeats, membership, and all
+tensor bytes off Lustre. Each node supervisor instead appends one compact
+`manager_ready` record before trainer admission, plus one `role_stage` record
+per `(restart, generation, stage)` transition. Repeated polls and heartbeat or
+step changes cannot create more records. This supplies the bounded live
+READY/K40/freeze/apply evidence required by R02, R10, and R14 without turning
+the shared event stream into a hot path. The READY regression failed before
+the fix and passes afterward; a second TDD regression proves repeated state
+polls emit exactly one record per protocol stage. Both focused tests pass in
+16.99 seconds. The exact approved-Python lifecycle, membership, quorum,
+weighted-reducer, distributed-owner, bounded-transport, fencing/restart,
+launcher, production-trainer, and helper suite passes all 135 tests in 116.72
+seconds. Approved-Python `compileall`, metrics JSON parsing, `git diff --check`,
+the live-path dense-packing/collective/MPI scan, the 100-file r9 evidence
+checksum/tensor-exclusion gate, and an empty Frontier queue also pass.
 
 ## Authoritative integration and queue gate
 

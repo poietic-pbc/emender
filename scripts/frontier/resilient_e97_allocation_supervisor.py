@@ -202,6 +202,7 @@ class AllocationSupervisor:
         self.launch_backend = launch_backend
         self.stopping = False
         self.injected: set[str] = set()
+        self._last_shared_stage: dict[str, tuple[int, int, str]] = {}
         (run_dir / "supervision").mkdir(parents=True, exist_ok=True)
         (run_dir / "logs").mkdir(parents=True, exist_ok=True)
 
@@ -360,6 +361,32 @@ class AllocationSupervisor:
         return (state.get("identity") == child.identity
                 and str(state.get("stage", "runtime_import")) != "runtime_import")
 
+    def _share_stage_transition(self, child: Child) -> None:
+        """Retain one small shared record per role/generation stage.
+
+        Heartbeats and tensor traffic stay node local.  This deliberately
+        excludes step and heartbeat changes so the live SLO surface is bounded
+        by protocol transitions rather than polling frequency or tensor count.
+        """
+        try:
+            state = json.loads(self._state_path(child).read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            return
+        if state.get("identity") != child.identity:
+            return
+        stage = str(state.get("stage", "unknown"))
+        generation = int(state.get("generation", 0))
+        transition = (child.restarts, generation, stage)
+        if self._last_shared_stage.get(child.identity) == transition:
+            return
+        self._last_shared_stage[child.identity] = transition
+        self._event(
+            "role_stage", child, restart=child.restarts, stage=stage,
+            generation=generation,
+            progress_time=float(state.get("progress_time", 0)),
+            heartbeat_time=float(state.get("heartbeat_time", 0)),
+        )
+
     def stop_children(self, children: list[Child], reason: str, *,
                       grace_s: float = 15.0, kill_grace_s: float = 2.0) -> None:
         """Stop every role under one shared grace bound, independent of count."""
@@ -402,6 +429,8 @@ class AllocationSupervisor:
             for child in managers:
                 self.start(child)
             while not self.stopping:
+                for child in managers:
+                    self._share_stage_transition(child)
                 if all(self._manager_ready_for_trainers(child) for child in managers):
                     break
                 now = time.time()
@@ -421,6 +450,21 @@ class AllocationSupervisor:
             if self.stopping:
                 self.stop_children(managers, "allocation_term_handoff")
                 return 0
+            # Node-local role heartbeats deliberately stay off Lustre's hot
+            # path.  Publish one compact shared attestation after every local
+            # manager has crossed fenced pool READY and before cold trainers
+            # are admitted.  Operators can then enforce the allocation-wide
+            # READY SLO without probing compute-node /tmp or inferring it from
+            # buffered role stdout.
+            for child in managers:
+                state = json.loads(self._state_path(child).read_text())
+                self._event(
+                    "manager_ready", child,
+                    stage=str(state.get("stage", "unknown")),
+                    generation=int(state.get("generation", 0)),
+                    ready_progress_time=float(state.get("progress_time", 0)),
+                    ready_heartbeat_time=float(state.get("heartbeat_time", 0)),
+                )
             for child in deferred:
                 self.start(child)
         else:
@@ -432,6 +476,7 @@ class AllocationSupervisor:
             for child in self.children:
                 if child.identity in completed:
                     continue
+                self._share_stage_transition(child)
                 reason = self._deadline_reason(child, now)
                 if reason is None:
                     continue

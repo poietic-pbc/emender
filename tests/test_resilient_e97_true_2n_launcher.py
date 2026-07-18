@@ -304,8 +304,15 @@ def test_node_local_supervisor_waits_for_manager_ready_before_cold_trainers(
         max_restarts=0, startup_s=1, poll_s=.001,
         launch_backend="node-local-child")
     state = tmp_path / "supervision/node-0-manager.json"
+    shared_events = tmp_path / "supervision/events.jsonl"
     starts = []
     trainer_started_before_ready = []
+
+    def manager_ready_is_shared():
+        if not shared_events.exists():
+            return False
+        return any(json.loads(line).get("event") == "manager_ready"
+                   for line in shared_events.read_text().splitlines())
 
     class Process:
         returncode = None
@@ -330,12 +337,39 @@ def test_node_local_supervisor_waits_for_manager_ready_before_cold_trainers(
                     "stage": "collecting"}))
             threading.Thread(target=publish_ready, daemon=True).start()
         else:
-            trainer_started_before_ready.append(not state.exists())
+            trainer_started_before_ready.append(not manager_ready_is_shared())
 
     monkeypatch.setattr(supervisor, "start", fake_start)
     assert supervisor.run() == 0
     assert starts == [manager.identity, *(item.identity for item in trainers)]
     assert trainer_started_before_ready == [False, False]
+    ready_events = [json.loads(line) for line in shared_events.read_text().splitlines()
+                    if json.loads(line).get("event") == "manager_ready"]
+    assert [event["identity"] for event in ready_events] == [manager.identity]
+    assert ready_events[0]["stage"] == "collecting"
+
+
+def test_node_local_supervisor_shares_only_bounded_role_stage_transitions(tmp_path):
+    child = Child("trainer", 0, "node000", 0, "trainer")
+    supervisor = AllocationSupervisor(
+        tmp_path, [child], heartbeat_s=2, progress_s=3,
+        max_restarts=0, poll_s=.001, launch_backend="node-local-child")
+    state = tmp_path / "supervision/node-0-trainer-0.json"
+    state.parent.mkdir(parents=True, exist_ok=True)
+
+    for stage in ("runtime_import", "runtime_import", "training", "training",
+                  "streaming_delta", "streaming_delta"):
+        state.write_text(json.dumps({
+            "identity": child.identity, "heartbeat_time": time.time(),
+            "progress_time": time.time(), "generation": 0, "stage": stage,
+        }))
+        supervisor._share_stage_transition(child)
+
+    events = [json.loads(line) for line in
+              (tmp_path / "supervision/events.jsonl").read_text().splitlines()]
+    assert [event["stage"] for event in events] == [
+        "runtime_import", "training", "streaming_delta"]
+    assert all(event["event"] == "role_stage" for event in events)
 
 
 def test_allocation_term_uses_one_shared_grace_for_all_role_groups(tmp_path, monkeypatch):

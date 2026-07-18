@@ -672,7 +672,7 @@
         }
     },
     "startup_r9_payload": {
-        "status": "submitted exactly once; pending startup result",
+        "status": "interrupted by operator during local delta streaming; live runtime READY and K40 passed, no runtime failure inferred",
         "job_id": 5029220,
         "submit_utc": "2026-07-18T19:37:17Z",
         "initial_state": "PENDING (Priority)",
@@ -706,6 +706,70 @@
         "network_chunk_bytes": 67108864,
         "max_spool_bytes": 68719476736,
         "peer_apply_hard_seconds": 180,
-        "empty_queue_before_render": true
+        "empty_queue_before_render": true,
+        "start_utc": "2026-07-18T19:41:21Z",
+        "end_utc": "2026-07-18T19:46:13Z",
+        "queue_seconds": 244,
+        "runtime_seconds": 292,
+        "nodes_allocated": [
+            "frontier06193",
+            "frontier06194"
+        ],
+        "manager_ready_seconds_from_allocation_start": [
+            55.6237228,
+            59.026129
+        ],
+        "trainer_start_seconds_from_allocation_start": [
+            56.0410676,
+            59.499902
+        ],
+        "k40_seconds_from_trainer_start": [
+            131.22340846061707,
+            134.96732473373413
+        ],
+        "k40_seconds_from_allocation_start": [
+            189.89448475837708,
+            191.80215167999268
+        ],
+        "finite_final_loss_range": [
+            2.187364101409912,
+            3.1058921813964844
+        ],
+        "operator_term_utc": "2026-07-18T19:45:53Z",
+        "operator_term_seconds_from_allocation_start": 272,
+        "terminal_runtime_stage": "streaming_delta",
+        "runtime_failure": false,
+        "operator_evidence_error": "node-local READY was incorrectly inferred absent from durable publication SQLite and buffered stdout",
+        "parallel_term_handoff_seconds_from_allocation_start": [
+            290.7333505,
+            291.30209
+        ],
+        "slurm_state": "COMPLETED",
+        "slurm_exit_code": "0:0",
+        "slurm_total_cpu": "04:13:00",
+        "slurm_energy_raw": 543943,
+        "step_max_rss": "77792204K",
+        "step_max_disk_read": "72546.86M",
+        "step_max_disk_write": "24948.54M",
+        "publication_count": 0,
+        "checkpoint_count": 0,
+        "evidence_files": 100,
+        "evidence_manifest_sha256": "c233acdf886e514855e96718ebe8bd1ac1fe389ff6ccd60369527be8c2340874",
+        "next_change": {
+            "shared_manager_ready_attestation": true,
+            "bounded_role_stage_transitions": true,
+            "node_local_heartbeat_hot_path_unchanged": true,
+            "tensor_hot_path_unchanged": true,
+            "requirement_ids": [
+                "R02",
+                "R10",
+                "R14"
+            ],
+            "ready_tdd_failed_before_fix": 1,
+            "ready_tdd_passed_after_fix": 1,
+            "stage_transition_tdd_failed_before_fix": 1,
+            "stage_transition_tdd_passed_after_fix": 1,
+            "implemented": true
+        }
     }
 }
