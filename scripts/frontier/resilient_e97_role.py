@@ -336,6 +336,29 @@ def trainer(args) -> int:
         else:
             from ndm.async_diloco_real import RealAsyncWorkerSpec, _run_real_worker
 
+            fence = _fence(args, generation)
+
+            def publish_trained_delta(base_state, model, tokens):
+                heartbeat(bulk, identity, generation=generation, step=step, loss=None,
+                          stage="streaming_delta")
+                worker_state = model.state_dict()
+
+                def shards():
+                    chunk_elements = max(1, args.bulk_chunk_bytes // 8)
+                    for name, base_tensor in sorted(base_state.items()):
+                        worker_tensor = worker_state[name].detach().reshape(-1)
+                        base_flat = base_tensor.detach().reshape(-1)
+                        if worker_tensor.numel() != base_flat.numel():
+                            raise ValueError(f"trainer state layout changed for {name}")
+                        for offset in range(0, worker_tensor.numel(), chunk_elements):
+                            end = min(offset + chunk_elements, worker_tensor.numel())
+                            worker_chunk = worker_tensor[offset:end].to(
+                                device="cpu", dtype=base_tensor.dtype)
+                            yield worker_chunk.sub(base_flat[offset:end])
+
+                spool.publish(fence, rank, shards(), weight=tokens,
+                              source_id=args.source_id)
+
             def training_progress(local_step, metrics):
                 if time.monotonic() >= generation_deadline:
                     raise TimeoutError(
@@ -353,18 +376,20 @@ def trainer(args) -> int:
                                          args.local_steps, rank),
                 synthetic_token_stream=False, synthetic_vocab_size=256,
                 optimizer_state_dict=optimizer_state, consume_optimizer_state=True,
-                progress_callback=training_progress)
+                progress_callback=training_progress,
+                delta_consumer=publish_trained_delta)
             if report.update is None:
                 raise RuntimeError(report.error or "real E97 trainer produced no update")
             delta = report.update.delta
             optimizer_state = report.optimizer_state_dict or {}
             tokens, loss = report.tokens, float(report.losses[-1])
         fence = _fence(args, generation)
-        heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
-                  stage="streaming_delta")
-        spool.publish(fence, rank, flatten_tensors(
-            delta, chunk_elements=max(1, args.bulk_chunk_bytes // 8)), weight=tokens,
-                      source_id=args.source_id)
+        if args.control:
+            heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
+                      stage="streaming_delta")
+            spool.publish(fence, rank, flatten_tensors(
+                delta, chunk_elements=max(1, args.bulk_chunk_bytes // 8)), weight=tokens,
+                          source_id=args.source_id)
         del delta
         heartbeat(bulk, identity, generation=generation, step=step, loss=loss, stage="submitted")
         manifest, aggregate = spool.wait_aggregate(

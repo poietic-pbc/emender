@@ -1014,6 +1014,7 @@ def _run_real_worker(
     optimizer_state_dict: Mapping[str, Any] | None = None,
     consume_optimizer_state: bool = False,
     progress_callback: Callable[[int, Mapping[str, Any]], None] | None = None,
+    delta_consumer: Callable[[Mapping[str, torch.Tensor], torch.nn.Module, int], None] | None = None,
 ) -> RealAsyncWorkerReport:
     del run_id
     start_s = time.monotonic()
@@ -1062,7 +1063,14 @@ def _run_real_worker(
             tokens += int(metrics["tokens_processed"])
             if progress_callback is not None:
                 progress_callback(step + 1, metrics)
-        worker_delta = _floating_delta_from_model(base_state, model)
+        if delta_consumer is None:
+            worker_delta = _floating_delta_from_model(base_state, model)
+        else:
+            # The live split-role path streams directly from the trained model
+            # into its bounded node-local spool.  Do not first materialize a
+            # second full CPU model-sized delta merely to serialize it.
+            delta_consumer(base_state, model, tokens)
+            worker_delta = {}
         base_generation = generation if spec.stale_generation is None else int(spec.stale_generation)
         update = AsyncDiLoCoUpdate(
             worker_id=spec.worker_id,

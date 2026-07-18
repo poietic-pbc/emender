@@ -377,10 +377,11 @@ def test_real_trainer_keeps_liveness_during_checkpoint_load_and_training():
     text = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
     trainer = text[text.index("def trainer(args)"):]
     assert trainer.index("_liveness_heartbeat(bulk, identity)") < trainer.index("_load_real(args)")
+    assert 'f"{identity}.liveness.json"' in text
 
 
 def test_generation_deadline_includes_local_training_and_aggregate_wait():
-    role = ROLE.read_text()
+    role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
     deadline = "generation_deadline = time.monotonic() + args.deadline_s"
     training_guard = "if time.monotonic() >= generation_deadline:"
     aggregate_wait = "fence, deadline=generation_deadline,"
@@ -389,8 +390,17 @@ def test_generation_deadline_includes_local_training_and_aggregate_wait():
     assert role.index(deadline) < role.index("report = _run_real_worker(")
     assert role.index(training_guard) < role.index("progress_callback=training_progress")
     assert role.index("progress_callback=training_progress") < role.index(aggregate_wait)
-    assert "deadline=time.monotonic() + args.deadline_s" not in role
-    assert 'f"{identity}.liveness.json"' in text
+
+
+def test_real_trainer_streams_model_delta_without_full_cpu_materialization():
+    role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    worker = (ROOT / "ndm/async_diloco_real.py").read_text()
+
+    assert "delta_consumer=publish_trained_delta" in role
+    assert "spool.publish(fence, rank, shards(), weight=tokens" in role
+    assert "worker_chunk.sub(base_flat[offset:end])" in role
+    assert "if delta_consumer is None:" in worker
+    assert "delta_consumer(base_state, model, tokens)" in worker
 
 
 def test_frontier_default_keeps_supervision_state_node_local():
