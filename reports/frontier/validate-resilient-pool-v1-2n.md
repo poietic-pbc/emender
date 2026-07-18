@@ -881,6 +881,32 @@ empty Frontier queue gate also pass. No r9 command will be rendered until this
 focused fix is committed, pushed, fetched, and present on authoritative
 `origin/main`.
 
+### Changed startup payload r9
+
+The focused runtime commit is
+`1379df52175425015c746b9afe81fc8681fa8776`. It was pushed to the task
+branch and authoritative `origin/main`, fetched, and verified equal before the
+command was rendered. The exact changed command is:
+
+```bash
+bash reports/frontier/validate-resilient-pool-v1-2n-startup-r9-submit-20260718T193507Z.sh
+```
+
+Its SHA-256 is
+`d7321e1dc0a4e4adbd68a216c2a29f865edfea9525ecef5cbcf56f77be755233`.
+The run identity is
+`validate-resilient-pool-v1-2n-startup-r9-20260718T193507Z-1379df5` and the
+payload identity is
+`1379df5-20260718T193507Z-pool-v1-startup-r9-2n20m-k40-peerapply`.
+The r8/r9 diff changes only those immutable identities, the two focused source
+hashes, and the job label. Payload r9 remains exactly two nodes, debug QoS,
+`00:20:00`, two model-free managers, 16 real trainers, batch size 4, K=40, one
+generation, quorum two, bounded 64 MiB local/network records and 64 GiB ledger,
+no injection, no handoff, and zero role restarts. It retains the exact
+180/420/180/720 stage bounds and refuses a changed runtime tree, absent
+integrated-v1 ancestry, an existing run directory, or any active/pending user
+job. The command is rendered but has not been executed.
+
 ## Authoritative integration and queue gate
 
 - Integrated v1 commit `ae2e6f26046fb7a6b348e845fb4615092a7c37e0` is an

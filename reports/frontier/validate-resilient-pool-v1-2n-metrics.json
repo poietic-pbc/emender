@@ -670,5 +670,37 @@
             "empty_queue": true,
             "implemented": true
         }
+    },
+    "startup_r9_payload": {
+        "status": "rendered, not submitted",
+        "code_commit": "1379df52175425015c746b9afe81fc8681fa8776",
+        "run_id": "validate-resilient-pool-v1-2n-startup-r9-20260718T193507Z-1379df5",
+        "payload_id": "1379df5-20260718T193507Z-pool-v1-startup-r9-2n20m-k40-peerapply",
+        "submit_script": "reports/frontier/validate-resilient-pool-v1-2n-startup-r9-submit-20260718T193507Z.sh",
+        "submit_script_sha256": "d7321e1dc0a4e4adbd68a216c2a29f865edfea9525ecef5cbcf56f77be755233",
+        "launcher_sha256": "6bad3f77e6a20834a13452c04de35299bd53f1d4304e4ab089a3524f3596d6ec",
+        "supervisor_sha256": "d4ed7876dbc3050f384bf0822ded49de09e3ae87b309ac14f5dc3639de2e6379",
+        "role_sha256": "ef6c04f051c8eb065f55d055c55a8f5e45fc8c1ffb16435138901d781bbd6b80",
+        "pool_runtime_sha256": "37de7776e5aee7d66e5e7b5737e6849dc5cd344cc283166beb88876a5f52264f",
+        "node_transport_sha256": "e322c4c82c9f63c3528dc7a30fece9537d243ea07560ea4d272f446ddcd1cb70",
+        "split_roles_sha256": "f32a87c0777932b10e8d24063d89701a60b547d9a209758b1b20c405b9464752",
+        "fenced_runtime_sha256": "30e46a04478d30fc2ab4a27afbc1866535f96e2acb39a5f36b0148593a846988",
+        "train_config_sha256": "afc2a65fd8c73499e74e21cb9531c978206c3a9c898e42d18cc58bb93eb9fe9c",
+        "nodes": 2,
+        "qos": "debug",
+        "walltime": "00:20:00",
+        "model_free_managers": 2,
+        "gpu_trainers": 16,
+        "batch_size": 4,
+        "local_steps": 40,
+        "generations": 1,
+        "role_restarts": 0,
+        "failure_injection": null,
+        "resume_handoff": null,
+        "local_spool_chunk_bytes": 67108864,
+        "network_chunk_bytes": 67108864,
+        "max_spool_bytes": 68719476736,
+        "peer_apply_hard_seconds": 180,
+        "empty_queue_before_render": true
     }
 }
