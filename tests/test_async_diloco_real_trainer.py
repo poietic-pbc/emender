@@ -433,6 +433,7 @@ def test_real_async_two_hop_chain_uses_run_local_latest_pt_with_optimizer_state(
 
 def test_real_async_worker_converts_model_to_bf16_before_training(monkeypatch):
     observed = {}
+    progress = []
 
     class OneParamModel(torch.nn.Module):
         def __init__(self):
@@ -473,12 +474,14 @@ def test_real_async_worker_converts_model_to_bf16_before_training(monkeypatch):
         spec=RealAsyncWorkerSpec(worker_id="worker-0", local_steps=1),
         synthetic_token_stream=True,
         synthetic_vocab_size=8,
+        progress_callback=lambda step, metrics: progress.append((step, metrics["loss"])),
     )
 
     assert observed["dtype"] is torch.bfloat16
     assert report.update is not None
     assert report.update.delta["weight"].dtype is torch.float32
     assert report.losses == (2.0,)
+    assert progress == [(1, 2.0)]
 
 
 def test_real_async_trainer_checkpoint_cadence_records_recovery_and_finalization(tmp_path):

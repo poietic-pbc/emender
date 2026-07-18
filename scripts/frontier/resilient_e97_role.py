@@ -336,7 +336,11 @@ def trainer(args) -> int:
                 spec=RealAsyncWorkerSpec(identity, f"node-{node}", args.device,
                                          args.local_steps, rank),
                 synthetic_token_stream=False, synthetic_vocab_size=256,
-                optimizer_state_dict=optimizer_state, consume_optimizer_state=True)
+                optimizer_state_dict=optimizer_state, consume_optimizer_state=True,
+                progress_callback=lambda local_step, metrics: heartbeat(
+                    bulk, identity, generation=generation,
+                    step=step + local_step, loss=float(metrics["loss"]),
+                    stage="training"))
             if report.update is None:
                 raise RuntimeError(report.error or "real E97 trainer produced no update")
             after = {name: before[name] + report.update.delta[name] for name in before}

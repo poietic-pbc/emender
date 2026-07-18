@@ -18,3 +18,22 @@ exactly `02:00:00`. Focused launcher validation passed 22 tests pre-submit.
 
 Conformance checked against architecture version 1 and R02, R03, R04, R06,
 R08, R09, R10, R14, R16. No generation pass is claimed yet.
+
+## Terminal result
+
+Job 5024821 started at `2026-07-17T20:31:03-04:00` after 8m43s queued and
+ended at `2026-07-17T21:05:56-04:00` after 34m53s runtime. Slurm reported
+`FAILED`, `RaisedSignal:15(Terminated)`, exit `0:15`; TERM@300 therefore
+arrived at the expected 35-minute boundary. All two managers and sixteen real
+trainers started. Their logs show the real HIP E97 split-edit Triton path and
+real `train.py` optimizer work, but no trainer completed all 40 local steps and
+no generation/checkpoint was finalized. This is a failed startup smoke, not
+acceptance evidence.
+
+The preserved supervision stream records all 18 role identities and the
+allocation termination evictions. The immutable command and role logs remain
+under `/lustre/orion/bif148/proj-shared/emender/runs/run-resilient-e97-2-smoke-20260718T002156Z-52da7b1`.
+The next payload adds per-optimizer-step committed progress heartbeats and uses
+a 50-minute short smoke (45 minutes before TERM) so the observed generation
+duration is measurable and one finalized generation remains mandatory before
+any full gate submission.

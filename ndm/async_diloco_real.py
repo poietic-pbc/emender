@@ -18,7 +18,7 @@ import socket
 import struct
 import threading
 import time
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import torch
 
@@ -1013,6 +1013,7 @@ def _run_real_worker(
     synthetic_vocab_size: int,
     optimizer_state_dict: Mapping[str, Any] | None = None,
     consume_optimizer_state: bool = False,
+    progress_callback: Callable[[int, Mapping[str, Any]], None] | None = None,
 ) -> RealAsyncWorkerReport:
     del run_id
     start_s = time.monotonic()
@@ -1059,6 +1060,8 @@ def _run_real_worker(
             hidden_state = metrics.get("hidden_state")
             losses.append(float(metrics["loss"]))
             tokens += int(metrics["tokens_processed"])
+            if progress_callback is not None:
+                progress_callback(step + 1, metrics)
         worker_delta = _floating_delta_from_model(base_state, model)
         base_generation = generation if spec.stale_generation is None else int(spec.stale_generation)
         update = AsyncDiLoCoUpdate(
