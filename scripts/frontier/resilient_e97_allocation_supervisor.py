@@ -98,6 +98,8 @@ def _allocation_admission(run_dir: Path) -> AllocationLeaseGuard | None | bool:
         "code": os.environ.get("RESILIENT_E97_CODE_ID", "unknown"),
         "manager": os.environ.get("RESILIENT_E97_MANAGER_COMMAND", ""),
         "trainer": os.environ.get("RESILIENT_E97_TRAINER_COMMAND", ""),
+        "dataplane_backend": os.environ.get("DILOCO_DATAPLANE", "python-tcp-debug"),
+        "native_launch_attestation": os.environ.get("NDP_LAUNCH_ATTESTATION", ""),
     }
     config_id = hashlib.sha256(json.dumps(
         config_material, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

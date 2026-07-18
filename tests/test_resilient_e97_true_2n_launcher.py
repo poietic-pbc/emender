@@ -77,6 +77,9 @@ def test_launcher_omits_empty_resume_argument(tmp_path):
     supervisor.write_text(
         "import os\nprint(os.environ['RESILIENT_E97_TRAINER_COMMAND'])\n"
     )
+    (repo / "scripts/frontier/attest_native_dataplane.py").write_text(
+        "import json,sys\nprint(json.dumps({'status':'attested'}))\n"
+    )
     (repo / "scripts/frontier/frontier_runtime_env.sh").write_text(
         "frontier_load_default_modules() { :; }\n"
         "frontier_activate_emender_conda_env() { :; }\n"
@@ -110,6 +113,8 @@ def test_launcher_omits_empty_resume_argument(tmp_path):
         "RESILIENT_E97_DATA": "/data",
         "RESILIENT_E97_TIKTOKEN_CACHE_FILE": str(tokenizer_cache),
         "RESILIENT_E97_TIKTOKEN_SHA256": hashlib.sha256(tokenizer_cache.read_bytes()).hexdigest(),
+        "NDP_BUILD_MANIFEST": str(tmp_path / "native-artifacts.json"),
+        "NDP_FULL_LAYOUT_GATE_JSON": str(tmp_path / "full-layout-gate.json"),
     }
     result = subprocess.run(
         ["bash", str(ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch")],
@@ -127,6 +132,20 @@ def test_startup_smoke_is_short_one_generation_and_forbids_injection():
     assert "startup smoke requires exactly one finalized generation" in text
     assert "startup smoke forbids failure injection" in text
     assert "RESILIENT_E97_REQUESTED_WALLTIME" in text
+
+
+def test_full_layout_launcher_requires_native_cxi_and_exact_artifact_gate_before_roles():
+    text = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
+    attestation = text.index("attest_native_dataplane.py")
+    roles = text.index("RESILIENT_E97_MANAGER_COMMAND=")
+    assert "DILOCO_DATAPLANE=${DILOCO_DATAPLANE:-native-cxi}" in text
+    assert "full-layout Frontier launcher requires DILOCO_DATAPLANE=native-cxi" in text
+    assert "FI_PROVIDER=${FI_PROVIDER:-cxi}" in text
+    assert "--production --full-layout" in text
+    assert "NDP_BUILD_MANIFEST" in text
+    assert "NDP_FULL_LAYOUT_GATE_JSON" in text
+    assert attestation < roles
+    assert "python-tcp-debug" not in text
 
 
 def test_launcher_activates_approved_frontier_python_before_any_role():

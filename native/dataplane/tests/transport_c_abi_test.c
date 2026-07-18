@@ -55,8 +55,22 @@ int main(void) {
   memset(&endpoint, 0, sizeof(endpoint));
   endpoint.struct_size = (uint32_t)sizeof(endpoint);
   endpoint.abi_version = NDP_TRANSPORT_ABI_V1;
+  if (ndp_transport_endpoint_v1(transport, &endpoint) != NDP_T_ESTATE) return 25;
+  struct ndp_transport_identity_v1 identity;
+  memset(&identity, 0, sizeof(identity));
+  identity.struct_size = (uint32_t)sizeof(identity);
+  identity.abi_version = NDP_TRANSPORT_ABI_V1;
+  memset(identity.run_key, 9, sizeof(identity.run_key));
+  identity.fence_epoch = 7;
+  memset(identity.worker_key, 1, sizeof(identity.worker_key));
+  memset(identity.incarnation, 2, sizeof(identity.incarnation));
+  identity.endpoint_epoch = 1;
+  identity.expires_unix_ns = open.operation_deadline_unix_ns;
+  if (ndp_transport_bind_identity_v1(transport, &identity) != NDP_T_OK) return 26;
   if (ndp_transport_endpoint_v1(transport, &endpoint) != NDP_T_OK ||
       endpoint.record_bytes == 0 || endpoint.record_bytes > NDP_TRANSPORT_ENDPOINT_MAX) return 5;
+  struct ndp_transport_endpoint_v1 first_endpoint;
+  memcpy(&first_endpoint, &endpoint, sizeof(endpoint));
 
   struct ndp_transport_peer_v1 peer;
   uint64_t peer_id = 0, same_id = 0, rejoined_id = 0;
@@ -73,11 +87,24 @@ int main(void) {
       peer_id == 0) return 11;
   if (ndp_transport_peer_upsert_v1(transport, &peer, &same_id) != NDP_T_OK ||
       same_id != peer_id) return 12;
-  peer.endpoint_epoch = 2;
-  memset(peer.incarnation, 3, sizeof(peer.incarnation));
+  ndp_transport_t peer_transport = 0;
+  if (ndp_transport_open_v1(&open, &peer_transport) != NDP_T_OK ||
+      peer_transport == 0) return 27;
+  identity.endpoint_epoch = 2;
+  memset(identity.incarnation, 3, sizeof(identity.incarnation));
+  if (ndp_transport_bind_identity_v1(peer_transport, &identity) != NDP_T_OK) return 28;
+  if (ndp_transport_endpoint_v1(peer_transport, &endpoint) != NDP_T_OK) return 29;
+  peer.endpoint_epoch = identity.endpoint_epoch;
+  peer.expires_unix_ns = identity.expires_unix_ns;
+  memcpy(peer.incarnation, identity.incarnation, sizeof(peer.incarnation));
+  peer.endpoint_name_bytes = endpoint.record_bytes;
+  memcpy(peer.endpoint_name, endpoint.record, endpoint.record_bytes);
   if (ndp_transport_peer_upsert_v1(transport, &peer, &rejoined_id) != NDP_T_OK ||
       rejoined_id == 0 || rejoined_id == peer_id) return 13;
   peer.endpoint_epoch = 1;
+  memset(peer.incarnation, 2, sizeof(peer.incarnation));
+  peer.endpoint_name_bytes = first_endpoint.record_bytes;
+  memcpy(peer.endpoint_name, first_endpoint.record, first_endpoint.record_bytes);
   if (ndp_transport_peer_upsert_v1(transport, &peer, &same_id) != NDP_T_ESTALE) return 14;
 
   struct ndp_transport_event_v1 event;
@@ -128,6 +155,7 @@ int main(void) {
   }
 
   if (ndp_transport_peer_remove_v1(transport, rejoined_id) != NDP_T_OK) return 15;
+  if (ndp_transport_close_v1(peer_transport) != NDP_T_OK) return 30;
 
   if (ndp_transport_close_v1(transport) != NDP_T_OK) return 8;
   if (ndp_transport_close_v1(transport) != NDP_T_ESTALE) return 9;

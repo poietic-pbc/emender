@@ -91,6 +91,25 @@ struct ndp_transport_open_v1 {
   uint8_t bind_node[NDP_TRANSPORT_DOMAIN_MAX];
 };
 
+/*
+ * The provider endpoint exists before Python admits this service to leased
+ * membership.  Binding is therefore a distinct, additive ABI operation: the
+ * allocation holder supplies the fenced identity only after acquiring the
+ * run lease, and only then may the service publish a routable endpoint
+ * record.  This keeps provider setup out of the Python dense path while
+ * preventing an unfenced raw libfabric address from becoming READY.
+ */
+struct ndp_transport_identity_v1 {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint8_t run_key[16];
+  uint64_t fence_epoch;
+  uint8_t worker_key[16];
+  uint8_t incarnation[16];
+  uint64_t endpoint_epoch;
+  uint64_t expires_unix_ns;
+};
+
 struct ndp_transport_endpoint_v1 {
   uint32_t struct_size;
   uint32_t abi_version;
@@ -161,6 +180,9 @@ NDP_TRANSPORT_API uint32_t ndp_transport_abi_version(void);
 NDP_TRANSPORT_API const char *ndp_transport_error_string(int code);
 NDP_TRANSPORT_API int ndp_transport_open_v1(
     const struct ndp_transport_open_v1 *config, ndp_transport_t *out);
+NDP_TRANSPORT_API int ndp_transport_bind_identity_v1(
+    ndp_transport_t transport,
+    const struct ndp_transport_identity_v1 *identity);
 NDP_TRANSPORT_API int ndp_transport_endpoint_v1(
     ndp_transport_t transport, struct ndp_transport_endpoint_v1 *out);
 NDP_TRANSPORT_API int ndp_transport_peer_upsert_v1(
@@ -193,6 +215,7 @@ NDP_TRANSPORT_API int ndp_transport_close_v1(ndp_transport_t transport);
 #endif
 
 NDP_TRANSPORT_STATIC_ASSERT(struct ndp_transport_open_v1, 592);
+NDP_TRANSPORT_STATIC_ASSERT(struct ndp_transport_identity_v1, 80);
 NDP_TRANSPORT_STATIC_ASSERT(struct ndp_transport_endpoint_v1, 4112);
 NDP_TRANSPORT_STATIC_ASSERT(struct ndp_transport_peer_v1, 4160);
 NDP_TRANSPORT_STATIC_ASSERT(struct ndp_transport_event_v1, 96);

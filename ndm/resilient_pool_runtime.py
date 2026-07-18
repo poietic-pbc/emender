@@ -20,6 +20,10 @@ import threading
 import time
 from typing import Mapping, Sequence
 
+from ndm.native_artifacts import (
+    NATIVE_CXI, NATIVE_TEST, PYTHON_TCP_DEBUG, validate_backend,
+)
+from ndm.native_transport import decode_endpoint_record
 from ndm.resilient_e97_reducer import (
     ExactWeightedShardReducer, ShardChunk, TensorLayout,
 )
@@ -93,10 +97,43 @@ class OwnerEndpoint:
     incarnation: str
     host: str
     port: int
+    backend: str = PYTHON_TCP_DEBUG
+    endpoint_record: str = ""
+    provider: str = ""
+    endpoint_epoch: int = 0
+    expires_unix_ns: int = 0
+    artifact_bundle_sha256: str = ""
 
     def __post_init__(self) -> None:
-        if not self.worker_id or not self.incarnation or not self.host or not 0 < self.port < 65536:
+        if not self.worker_id or not self.incarnation or not self.host:
             raise ValueError("owner endpoint identity/address is invalid")
+        validate_backend(self.backend, production=self.backend == NATIVE_CXI,
+                         full_layout=False)
+        if self.backend == PYTHON_TCP_DEBUG:
+            if not 0 < self.port < 65536 or any((
+                    self.endpoint_record, self.provider, self.endpoint_epoch,
+                    self.expires_unix_ns, self.artifact_bundle_sha256)):
+                raise ValueError("Python TCP debug endpoint must not claim native evidence")
+            return
+        if self.port != 0 or not self.endpoint_record or not self.provider:
+            raise ValueError("native endpoint requires an opaque record and no TCP port")
+        try:
+            decoded = decode_endpoint_record(bytes.fromhex(self.endpoint_record))
+        except (ValueError, TypeError) as error:
+            raise ValueError("native endpoint record is invalid") from error
+        expected_worker = hashlib.sha256(self.worker_id.encode()).digest()[:16]
+        expected_incarnation = hashlib.sha256(self.incarnation.encode()).digest()[:16]
+        if (decoded.worker_key != expected_worker
+                or decoded.incarnation != expected_incarnation
+                or decoded.endpoint_epoch != self.endpoint_epoch
+                or decoded.expires_unix_ns != self.expires_unix_ns
+                or decoded.provider != self.provider
+                or decoded.expires_unix_ns <= time.time_ns()):
+            raise ValueError("native endpoint record identity/provider/expiry mismatch")
+        if self.backend == NATIVE_CXI and self.provider != "cxi":
+            raise ValueError("production endpoint did not attest exact provider cxi")
+        if len(self.artifact_bundle_sha256) != 64:
+            raise ValueError("native endpoint must bind the compiled artifact bundle")
 
 
 @dataclass(frozen=True)
@@ -111,13 +148,24 @@ class PoolControlConfig:
     layout_digest: str
     code_digest: str
     slo: PoolStageSLO
+    dataplane_backend: str = PYTHON_TCP_DEBUG
+    production: bool = False
+    full_layout: bool = False
+    artifact_bundle_sha256: str = ""
 
     def __post_init__(self) -> None:
         GenerationClosePolicy(self.q_min, self.t_min, self.ready_fraction)
+        validate_backend(self.dataplane_backend, production=self.production,
+                         full_layout=self.full_layout)
         if self.fence <= 0 or not all((self.run_id, self.base_digest,
                                       self.policy_digest, self.layout_digest,
                                       self.code_digest)):
             raise ValueError("complete fenced control identity is required")
+        if self.dataplane_backend != PYTHON_TCP_DEBUG:
+            if len(self.artifact_bundle_sha256) != 64:
+                raise ValueError("native pool requires an attested artifact bundle digest")
+        elif self.artifact_bundle_sha256:
+            raise ValueError("Python TCP debug pool cannot claim a native artifact bundle")
 
 
 class _ControlHandler(socketserver.StreamRequestHandler):
@@ -176,7 +224,23 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
     def _ready(self, request: Mapping[str, object]) -> dict[str, object]:
         endpoint = OwnerEndpoint(
             str(request["worker_id"]), str(request["incarnation"]),
-            str(request["host"]), int(request["port"]))
+            str(request["host"]), int(request["port"]),
+            str(request.get("backend", PYTHON_TCP_DEBUG)),
+            str(request.get("endpoint_record", "")),
+            str(request.get("provider", "")),
+            int(request.get("endpoint_epoch", 0)),
+            int(request.get("expires_unix_ns", 0)),
+            str(request.get("artifact_bundle_sha256", "")))
+        if endpoint.backend != self.config.dataplane_backend:
+            raise ValueError("READY endpoint backend differs from pool policy")
+        if endpoint.backend != PYTHON_TCP_DEBUG:
+            decoded = decode_endpoint_record(bytes.fromhex(endpoint.endpoint_record))
+            expected_run = hashlib.sha256(self.config.run_id.encode()).digest()[:16]
+            if (decoded.run_key != expected_run
+                    or decoded.fence_epoch != self.config.fence
+                    or endpoint.artifact_bundle_sha256
+                    != self.config.artifact_bundle_sha256):
+                raise ValueError("READY native endpoint run/fence/artifact mismatch")
         generation = int(request["generation"])
         current = self.membership.records.get(endpoint.worker_id)
         if (current is not None and current.incarnation == endpoint.incarnation
@@ -334,9 +398,7 @@ class PoolControlClient:
             self.fence = int(fence)
         if self.fence is None:
             raise ValueError("pool control client must bind the allocation fence")
-        return self._rpc("ready", worker_id=endpoint.worker_id,
-                         incarnation=endpoint.incarnation, host=endpoint.host,
-                         port=endpoint.port, generation=generation)
+        return self._rpc("ready", **asdict(endpoint), generation=generation)
 
     def open_generation(self, generation: int, attempt: int, *,
                         deadline: float) -> dict[str, object]:

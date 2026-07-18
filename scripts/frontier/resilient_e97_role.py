@@ -62,6 +62,9 @@ _IMPORT_HEARTBEAT = _role_import_heartbeat()
 import torch
 
 from ndm.resilient_e97_roles import LocalFence, LocalTrainerSpool
+from ndm.native_artifacts import (
+    NATIVE_CXI, NATIVE_TEST, PYTHON_TCP_DEBUG, attest_launch, validate_backend,
+)
 from ndm.resilient_e97_reducer import TensorLayout
 from ndm.fenced_admission import AllocationLease, SQLiteFencedControlStore
 from ndm.resilient_e97_runtime import (SplitManagerLoop, apply_delta, atomic_json,
@@ -106,7 +109,34 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--resume-handoff", default="")
     value.add_argument("--bulk-chunk-bytes", type=int, default=64 << 20)
     value.add_argument("--local-spool-chunk-bytes", type=int, default=64 << 20)
+    value.add_argument("--dataplane-backend", default=os.environ.get("DILOCO_DATAPLANE", ""))
+    value.add_argument("--native-build-manifest", default=os.environ.get("NDP_BUILD_MANIFEST", ""))
+    value.add_argument("--native-gate-json", default=os.environ.get("NDP_FULL_LAYOUT_GATE_JSON", ""))
     return value
+
+
+def _dataplane_policy(args) -> tuple[str, bool, bool]:
+    """Resolve once before model load; Frontier/real E97 defaults native."""
+    backend = getattr(args, "dataplane_backend", "") or os.environ.get(
+        "DILOCO_DATAPLANE", "")
+    production = bool(os.environ.get("SLURM_JOB_ID")) or not bool(args.control)
+    full_layout = not bool(args.control)
+    if not backend:
+        backend = NATIVE_CXI if production or full_layout else PYTHON_TCP_DEBUG
+    validate_backend(backend, production=production, full_layout=full_layout)
+    if backend == PYTHON_TCP_DEBUG and (not args.control or args.node_count > 2):
+        raise ValueError("Python TCP is restricted to the explicit <=2-node control fixture")
+    return backend, production, full_layout
+
+
+def _attest_dataplane(args) -> dict[str, object]:
+    backend, production, full_layout = _dataplane_policy(args)
+    return attest_launch(
+        backend=backend, production=production, full_layout=full_layout,
+        build_manifest=getattr(args, "native_build_manifest", "") or None,
+        gate_json=getattr(args, "native_gate_json", "") or None,
+        source_root=ROOT if backend != PYTHON_TCP_DEBUG else None,
+    )
 
 
 def _fence(args, generation: int) -> LocalFence:
@@ -866,6 +896,7 @@ def main() -> int:
         raise ValueError("local spool chunk bound must be positive and within the byte ledger")
     if not 0 < args.bulk_chunk_bytes <= args.max_spool_bytes:
         raise ValueError("owner transport chunk bound must be positive and within the byte ledger")
+    _attest_dataplane(args)  # hard gate before trainer calls ``_load_real``
     return manager(args) if args.role == "manager" else trainer(args)
 
 

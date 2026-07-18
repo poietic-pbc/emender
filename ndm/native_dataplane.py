@@ -442,6 +442,8 @@ class NativeLibrary:
         candidates.extend([
             repository / "build/native-dataplane/libemender_ndp.so",
             repository / "build/native-dataplane-portable/libemender_ndp.so",
+            repository / "build/native-resilient-dataplane/lib/libemender_ndp.so.1",
+            repository / "build/native-resilient-dataplane/lib64/libemender_ndp.so.1",
         ])
         discovered = ctypes.util.find_library("emender_ndp")
         if discovered:
@@ -451,7 +453,7 @@ class NativeLibrary:
                 return candidate.resolve()
         raise FileNotFoundError(
             "libemender_ndp.so.1 was not found; set EMENDER_NDP_LIBRARY or run "
-            "scripts/frontier/build_native_local_dataplane.sh"
+            "scripts/frontier/build_native_resilient_dataplane.sh"
         )
 
     def check(self, code: int, operation: str) -> None:

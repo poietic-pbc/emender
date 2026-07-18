@@ -2,7 +2,8 @@
 # True resilient E97 two-node gate: 2 CPU managers + 16 real GPU trainers.
 # Managers and trainers are separate srun steps; --overlap and --no-kill keep a
 # failed step from cancelling healthy siblings. There are no sentinel ranks;
-# every GPU step is a real trainer. This file is debug-only.
+# every GPU step is a real trainer. The debug QoS bounds this G3 admission
+# rung; it does not permit a Python dense transport or an unattested binary.
 #SBATCH -A bif148
 #SBATCH -J resilient-e97-true-2n
 #SBATCH -p batch
@@ -54,6 +55,31 @@ PY
 printf 'resilient_e97_runtime_identity=%s\n' "$RUNTIME_IDENTITY"
 mkdir -p "${RUN_DIR:?set immutable run directory}"
 printf '%s\n' "$RUNTIME_IDENTITY" > "$RUN_DIR/runtime-identity.json"
+
+# The full-layout real-model launcher has no Python-TCP escape hatch.  Bind the
+# exact local library, transport library, and service binary to the retained
+# exact-code G2 artifact before the supervisor may acquire a lease or admit a
+# model-bearing trainer.
+DILOCO_DATAPLANE=${DILOCO_DATAPLANE:-native-cxi}
+[[ $DILOCO_DATAPLANE == native-cxi ]] || {
+  echo "full-layout Frontier launcher requires DILOCO_DATAPLANE=native-cxi; Python TCP is debug-fixture only" >&2
+  exit 64
+}
+FI_PROVIDER=${FI_PROVIDER:-cxi}
+[[ $FI_PROVIDER == cxi ]] || {
+  echo "native-cxi production requires exact FI_PROVIDER=cxi" >&2
+  exit 64
+}
+: "${NDP_BUILD_MANIFEST:?set exact installed native build manifest}"
+: "${NDP_FULL_LAYOUT_GATE_JSON:?set retained exact-code G2 full-layout gate}"
+NDP_LAUNCH_ATTESTATION="$RUN_DIR/native-dataplane-launch-attestation.json"
+"$TRAIN_PYTHON_BIN" "$REPO/scripts/frontier/attest_native_dataplane.py" verify \
+  --backend "$DILOCO_DATAPLANE" --production --full-layout \
+  --build-manifest "$NDP_BUILD_MANIFEST" \
+  --gate-json "$NDP_FULL_LAYOUT_GATE_JSON" --source-root "$REPO" \
+  --output "$NDP_LAUNCH_ATTESTATION"
+export DILOCO_DATAPLANE FI_PROVIDER NDP_BUILD_MANIFEST \
+  NDP_FULL_LAYOUT_GATE_JSON NDP_LAUNCH_ATTESTATION
 
 [[ ${SLURM_JOB_NUM_NODES:?} == 2 ]] || { echo "requires exactly two nodes" >&2; exit 64; }
 [[ ${SLURM_JOB_QOS:?} == debug ]] || { echo "requires debug QoS" >&2; exit 64; }
@@ -112,7 +138,7 @@ srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task=1 --gpus-per-task=
   bash "$RESILIENT_E97_NODE_TIKTOKEN_CACHE" "$RESILIENT_E97_TIKTOKEN_CACHE_FILE" "$RESILIENT_E97_TIKTOKEN_SHA256"
 export TIKTOKEN_CACHE_DIR=$RESILIENT_E97_NODE_TIKTOKEN_CACHE
 ROLE="$REPO/scripts/frontier/resilient_e97_role.py"
-COMMON="--run-dir $RUN_DIR --run-id $RESILIENT_E97_RUN_ID --generations ${RESILIENT_E97_GENERATIONS:-1} --initial-generation $RESILIENT_E97_INITIAL_GENERATION --local-steps 40 --node-count 2 --global-quorum ${RESILIENT_E97_GLOBAL_QUORUM:-2} --coordinator-host $RESILIENT_E97_COORDINATOR_HOST --coordinator-port ${RESILIENT_E97_COORDINATOR_PORT:-29571} --deadline-s ${RESILIENT_E97_GENERATION_DEADLINE_S:-600} --source-id $RESILIENT_E97_SOURCE_ID --payload-id $RESILIENT_E97_PAYLOAD_ID --code-id ${RESILIENT_E97_CODE_ID:-unknown} --coordinator-epoch ${RESILIENT_E97_COORDINATOR_EPOCH:-1} --bulk-root ${RESILIENT_E97_BULK_ROOT:-/tmp/resilient-e97} --max-spool-bytes ${RESILIENT_E97_MAX_SPOOL_BYTES:-68719476736} --bulk-chunk-bytes ${RESILIENT_E97_BULK_CHUNK_BYTES:-67108864} --local-spool-chunk-bytes ${RESILIENT_E97_LOCAL_SPOOL_CHUNK_BYTES:-67108864}"
+COMMON="--run-dir $RUN_DIR --run-id $RESILIENT_E97_RUN_ID --generations ${RESILIENT_E97_GENERATIONS:-1} --initial-generation $RESILIENT_E97_INITIAL_GENERATION --local-steps 40 --node-count 2 --global-quorum ${RESILIENT_E97_GLOBAL_QUORUM:-2} --coordinator-host $RESILIENT_E97_COORDINATOR_HOST --coordinator-port ${RESILIENT_E97_COORDINATOR_PORT:-29571} --deadline-s ${RESILIENT_E97_GENERATION_DEADLINE_S:-600} --source-id $RESILIENT_E97_SOURCE_ID --payload-id $RESILIENT_E97_PAYLOAD_ID --code-id ${RESILIENT_E97_CODE_ID:-unknown} --coordinator-epoch ${RESILIENT_E97_COORDINATOR_EPOCH:-1} --bulk-root ${RESILIENT_E97_BULK_ROOT:-/tmp/resilient-e97} --max-spool-bytes ${RESILIENT_E97_MAX_SPOOL_BYTES:-68719476736} --bulk-chunk-bytes ${RESILIENT_E97_BULK_CHUNK_BYTES:-67108864} --local-spool-chunk-bytes ${RESILIENT_E97_LOCAL_SPOOL_CHUNK_BYTES:-67108864} --dataplane-backend $DILOCO_DATAPLANE --native-build-manifest $NDP_BUILD_MANIFEST --native-gate-json $NDP_FULL_LAYOUT_GATE_JSON"
 export RESILIENT_E97_MANAGER_COMMAND="$TRAIN_PYTHON_BIN $ROLE manager $COMMON --local-quorum 6"
 RESUME_ARGS=()
 [[ -z $RESILIENT_E97_RESUME_HANDOFF ]] || RESUME_ARGS=(--resume-handoff "$RESILIENT_E97_RESUME_HANDOFF")

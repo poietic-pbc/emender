@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,7 @@ struct TransportInstance {
   std::shared_ptr<FabricEndpoint> endpoint;
   std::uint64_t payload_max{0};
   std::mutex binding_mutex;
+  std::optional<EndpointRecord> identity;
   std::map<std::string, PeerBinding> bindings;
   std::map<std::uint64_t, std::string> ids;
 };
@@ -61,6 +63,12 @@ std::string key_string(const std::uint8_t *key) {
 bool nonzero_key(const std::uint8_t *key) {
   for (std::size_t i = 0; i != 16; ++i) if (key[i] != 0) return true;
   return false;
+}
+
+template <std::size_t N>
+bool same_bytes(const std::array<std::uint8_t, N> &left,
+                const std::uint8_t *right) {
+  return std::equal(left.begin(), left.end(), right);
 }
 
 }  // namespace
@@ -139,17 +147,66 @@ int ndp_transport_open_v1(const struct ndp_transport_open_v1 *config,
   }
 }
 
+int ndp_transport_bind_identity_v1(
+    ndp_transport_t transport,
+    const struct ndp_transport_identity_v1 *identity) {
+  using namespace emender::ndp;
+  if (!valid_prefix(identity)) return NDP_T_EVERSION;
+  if (!nonzero_key(identity->run_key) || !nonzero_key(identity->worker_key) ||
+      !nonzero_key(identity->incarnation) || identity->fence_epoch == 0 ||
+      identity->endpoint_epoch == 0 ||
+      identity->expires_unix_ns <= unix_time_ns()) {
+    return NDP_T_EINVAL;
+  }
+  const auto instance = lookup(transport);
+  if (instance == nullptr) return NDP_T_ESTALE;
+  const FabricFacts facts = instance->endpoint->facts();
+  EndpointRecord record{};
+  std::copy_n(identity->run_key, 16, record.run_key.begin());
+  record.fence_epoch = identity->fence_epoch;
+  std::copy_n(identity->worker_key, 16, record.worker_key.begin());
+  std::copy_n(identity->incarnation, 16, record.incarnation.begin());
+  record.endpoint_epoch = identity->endpoint_epoch;
+  record.expires_unix_ns = identity->expires_unix_ns;
+  record.provider_name = facts.provider;
+  record.fabric_name = facts.fabric;
+  record.domain_name = facts.domain;
+  record.addr_format = facts.addr_format;
+  record.endpoint_name = facts.endpoint_name;
+  std::lock_guard<std::mutex> lock(instance->binding_mutex);
+  if (instance->identity.has_value()) {
+    const auto &current = *instance->identity;
+    if (!same_bytes(current.run_key, identity->run_key) ||
+        current.fence_epoch != identity->fence_epoch ||
+        !same_bytes(current.worker_key, identity->worker_key) ||
+        !same_bytes(current.incarnation, identity->incarnation) ||
+        current.endpoint_epoch != identity->endpoint_epoch ||
+        current.expires_unix_ns != identity->expires_unix_ns) {
+      return NDP_T_ECONFLICT;
+    }
+    return NDP_T_OK;
+  }
+  instance->identity = std::move(record);
+  return NDP_T_OK;
+}
+
 int ndp_transport_endpoint_v1(ndp_transport_t transport,
                               struct ndp_transport_endpoint_v1 *out) {
   using namespace emender::ndp;
   if (!valid_prefix(out)) return NDP_T_EVERSION;
   const auto instance = lookup(transport);
   if (instance == nullptr) return NDP_T_ESTALE;
-  const FabricFacts facts = instance->endpoint->facts();
-  if (facts.endpoint_name.size() > sizeof(out->record)) return NDP_T_EBOUNDS;
+  std::vector<std::uint8_t> encoded;
+  {
+    std::lock_guard<std::mutex> lock(instance->binding_mutex);
+    if (!instance->identity.has_value()) return NDP_T_ESTATE;
+    const int rc = encode_endpoint_record(*instance->identity, &encoded);
+    if (rc != NDP_T_OK) return rc;
+  }
+  if (encoded.size() > sizeof(out->record)) return NDP_T_EBOUNDS;
   std::memset(out->record, 0, sizeof(out->record));
-  std::copy(facts.endpoint_name.begin(), facts.endpoint_name.end(), out->record);
-  out->record_bytes = static_cast<std::uint32_t>(facts.endpoint_name.size());
+  std::copy(encoded.begin(), encoded.end(), out->record);
+  out->record_bytes = static_cast<std::uint32_t>(encoded.size());
   out->reserved0 = 0;
   return NDP_T_OK;
 }
@@ -167,8 +224,26 @@ int ndp_transport_peer_upsert_v1(ndp_transport_t transport,
   }
   const auto instance = lookup(transport);
   if (instance == nullptr) return NDP_T_ESTALE;
-  std::vector<std::uint8_t> name(peer->endpoint_name,
-                                 peer->endpoint_name + peer->endpoint_name_bytes);
+  EndpointRecord record{};
+  const int decoded = decode_endpoint_record(
+      peer->endpoint_name, peer->endpoint_name_bytes, &record);
+  if (decoded != NDP_T_OK) return decoded;
+  {
+    std::lock_guard<std::mutex> lock(instance->binding_mutex);
+    if (!instance->identity.has_value()) return NDP_T_ESTATE;
+    const auto &local = *instance->identity;
+    if (!same_bytes(record.run_key, local.run_key.data()) ||
+        record.fence_epoch != local.fence_epoch ||
+        !same_bytes(record.worker_key, peer->worker_key) ||
+        !same_bytes(record.incarnation, peer->incarnation) ||
+        record.endpoint_epoch != peer->endpoint_epoch ||
+        record.expires_unix_ns != peer->expires_unix_ns ||
+        record.expires_unix_ns <= unix_time_ns() ||
+        record.provider_name != local.provider_name) {
+      return NDP_T_ECONFLICT;
+    }
+  }
+  std::vector<std::uint8_t> name = record.endpoint_name;
   const std::string worker = key_string(peer->worker_key);
   const Digest endpoint_digest = sha256(name.data(), name.size());
   std::lock_guard<std::mutex> lock(instance->binding_mutex);
