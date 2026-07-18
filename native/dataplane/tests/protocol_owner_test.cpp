@@ -240,16 +240,39 @@ void test_replay_and_redistribution_bounds() {
   CHECK(replay.metrics().retained_bytes == 0);
   CHECK(replay.metrics().released_bytes == 800);
 
-  ResultAssembler assembler(32, 16, 2, deadline);
-  FrameHeader h{}; h.type = MessageType::result_data; h.deadline_unix_ns = deadline;
+  auto result_plan = plan();
+  result_plan.layout_bytes = 32;
+  result_plan.payload_max = 16;
+  result_plan.shard_count = 2;
+  result_plan.assigned_bytes = 32;
+  result_plan.assigned_shards = {0, 1};
+  ResultAssembler assembler(result_plan);
+  FrameHeader h{}; h.type = MessageType::result_data;
+  h.run_key = result_plan.run_key; h.fence_epoch = result_plan.fence_epoch;
+  h.generation = result_plan.generation; h.attempt = result_plan.attempt;
+  h.owner_epoch = result_plan.owner_epoch;
+  h.layout_digest = result_plan.layout_digest; h.base_digest = result_plan.base_digest;
+  h.weight = 8; h.deadline_unix_ns = deadline;
   h.chunk_count = 2; h.shard_bytes = 16; h.payload_bytes = 16;
   auto second_payload = doubles({3.0, 4.0});
   h.shard_id = 1; h.chunk_index = 1; h.payload_offset = 16;
   h.payload_digest = sha256(second_payload.data(), second_payload.size());
+  auto stale = h;
+  --stale.fence_epoch;
+  CHECK(assembler.accept(DecodedFrame{stale, doubles({30.0, 40.0})}, unix_time_ns()) ==
+        NDP_T_EFENCE);
+  CHECK(!assembler.complete());
   CHECK(assembler.accept(DecodedFrame{h, second_payload}, unix_time_ns()) == NDP_T_OK);
   auto first_payload = doubles({1.0, 2.0});
   h.shard_id = 0; h.chunk_index = 0; h.payload_offset = 0;
   h.payload_digest = sha256(first_payload.data(), first_payload.size());
+  stale = h;
+  ++stale.owner_epoch;
+  CHECK(assembler.accept(DecodedFrame{stale, first_payload}, unix_time_ns()) == NDP_T_ESTALE);
+  stale = h;
+  stale.weight = 9;
+  CHECK(assembler.accept(DecodedFrame{stale, first_payload}, unix_time_ns()) ==
+        NDP_T_ECONFLICT);
   CHECK(assembler.accept(DecodedFrame{h, first_payload}, unix_time_ns()) == NDP_T_OK);
   CHECK(assembler.complete());
   CHECK(std::equal(first_payload.begin(), first_payload.end(), assembler.aggregate().begin()));

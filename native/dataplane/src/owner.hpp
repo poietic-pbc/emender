@@ -158,8 +158,7 @@ class ReplayBuffer {
 
 class ResultAssembler {
  public:
-  ResultAssembler(std::uint64_t layout_bytes, std::uint64_t payload_max,
-                  std::uint32_t shard_count, std::uint64_t deadline_unix_ns);
+  explicit ResultAssembler(GenerationPlan plan);
   int accept(const DecodedFrame &frame, std::uint64_t now_unix_ns);
   bool complete() const noexcept;
   const std::vector<std::uint8_t> &aggregate() const noexcept { return aggregate_; }
@@ -167,6 +166,8 @@ class ResultAssembler {
   void release();
 
  private:
+  GenerationPlan plan_;
+  std::uint64_t global_weight_{0};
   std::uint64_t payload_max_;
   std::uint64_t deadline_unix_ns_;
   std::vector<std::uint8_t> aggregate_;

@@ -125,8 +125,10 @@ int FabricEndpoint::validate_config(const FabricConfig &config, std::string *why
 int FabricEndpoint::resolve_provider() {
   fi_info *hints = fi_allocinfo();
   if (hints == nullptr) return NDP_T_ENOMEM;
-  hints->caps = FI_MSG;
-  if (!config_.production) hints->caps |= FI_SOURCE;
+  // Every accepted RDM frame must be attributable to the installed AV route.
+  // Without FI_SOURCE, fi_cq_readfrom may return FI_ADDR_NOTAVAIL and the
+  // upper layer cannot authenticate the frame's claimed worker identity.
+  hints->caps = FI_MSG | FI_SOURCE;
   hints->mode = FI_CONTEXT;
   hints->ep_attr->type = FI_EP_RDM;
   hints->domain_attr->threading = FI_THREAD_SAFE;
@@ -413,6 +415,7 @@ int FabricEndpoint::drain_cq_error(fid_cq *cq, bool receive) {
   event.kind = NDP_T_EVENT_CQ_ERROR; event.status = NDP_T_EROUTE;
   event.provider_errno = error.prov_errno == 0 ? error.err : error.prov_errno;
   event.reason = static_cast<std::uint32_t>(WireReason::provider);
+  Slot *repost = nullptr;
   if (error.op_context != nullptr) {
     auto *slot = reinterpret_cast<Slot *>(error.op_context);
     event.peer_id = slot->peer_id; event.message_seq = slot->message_seq;
@@ -423,12 +426,17 @@ int FabricEndpoint::drain_cq_error(fid_cq *cq, bool receive) {
       counters_.released_bytes += slot->used;
     }
     slot->active = false;
+    if (receive) repost = slot;
   }
   {
     std::lock_guard<std::mutex> lock(mutex_);
     ++counters_.cq_errors;
   }
   emit_event(std::move(event));
+  if (repost != nullptr && !shutting_down_.load()) {
+    const int posted = post_receive(repost);
+    if (posted != NDP_T_OK && posted != NDP_T_ECREDIT) return posted;
+  }
   return NDP_T_OK;
 }
 
@@ -448,6 +456,7 @@ int FabricEndpoint::drain_cq(fid_cq *cq, bool receive) {
     FabricEvent event{};
     event.kind = receive ? NDP_T_EVENT_RECEIVED : NDP_T_EVENT_SENT;
     event.peer_id = slot->peer_id; event.message_seq = slot->message_seq;
+    bool accept_receive = !receive;
     if (receive) {
       std::lock_guard<std::mutex> lock(mutex_);
       const auto peer = std::find_if(peers_.begin(), peers_.end(), [&](const auto &candidate) {
@@ -460,15 +469,23 @@ int FabricEndpoint::drain_cq(fid_cq *cq, bool receive) {
         ++counters_.route_errors;
       } else {
         event.peer_id = peer->first;
+        accept_receive = true;
       }
     }
     const std::size_t completed_bytes = receive
         ? entries[static_cast<std::size_t>(i)].len : slot->used;
+    if (completed_bytes > slot->capacity) {
+      accept_receive = false;
+      event.status = NDP_T_EBOUNDS;
+      event.reason = static_cast<std::uint32_t>(WireReason::byte_bounds);
+      std::lock_guard<std::mutex> lock(mutex_);
+      ++counters_.route_errors;
+    }
     event.wire_bytes = completed_bytes;
-    event.useful_bytes = completed_bytes >= kHeaderBytes
+    event.useful_bytes = accept_receive && completed_bytes >= kHeaderBytes
         ? body_bytes(static_cast<const std::uint8_t *>(slot->buffer),
                      completed_bytes) : 0;
-    if (receive) {
+    if (receive && accept_receive) {
       event.detail = sha256(static_cast<const std::uint8_t *>(slot->buffer),
                             completed_bytes);
     }
@@ -489,7 +506,7 @@ int FabricEndpoint::drain_cq(fid_cq *cq, bool receive) {
       counters_.last_progress_unix_ns = unix_time_ns();
       slot->active = false;
     }
-    if (receive) {
+    if (receive && accept_receive) {
       {
         std::lock_guard<std::mutex> lock(mutex_);
         counters_.retained_bytes += completed_bytes;
@@ -498,6 +515,11 @@ int FabricEndpoint::drain_cq(fid_cq *cq, bool receive) {
         received_.push_back(ReceivedFrame{slot, completed_bytes, event.peer_id,
                                           event.detail});
       }
+    } else if (receive && !shutting_down_.load()) {
+      // Unknown, expired, truncated, or otherwise unauthenticated sources are
+      // observable metadata events only. They never enter the receive queue.
+      const int posted = post_receive(slot);
+      if (posted != NDP_T_OK && posted != NDP_T_ECREDIT) return posted;
     }
     emit_event(std::move(event));
   }
@@ -512,7 +534,13 @@ int FabricEndpoint::progress_once() {
 
 void FabricEndpoint::progress_loop() {
   while (running_.load()) {
-    if (progress_once() != NDP_T_OK) {
+    int progress = NDP_T_EIO;
+    try {
+      progress = progress_once();
+    } catch (...) {
+      progress = NDP_T_EIO;
+    }
+    if (progress != NDP_T_OK) {
       FabricEvent event{}; event.kind = NDP_T_EVENT_CQ_ERROR;
       event.status = NDP_T_EROUTE; event.reason = static_cast<std::uint32_t>(WireReason::provider);
       {
@@ -524,7 +552,11 @@ void FabricEndpoint::progress_loop() {
     std::this_thread::sleep_for(std::chrono::microseconds(50));
   }
   for (unsigned i = 0; i != 100; ++i) {
-    if (progress_once() != NDP_T_OK) break;
+    try {
+      if (progress_once() != NDP_T_OK) break;
+    } catch (...) {
+      break;
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     if (counters_.in_flight_bytes == 0) break;
   }
@@ -704,7 +736,14 @@ void FabricEndpoint::telemetry(std::string_view event, const FabricEvent *detail
   out << "}\n";
   const std::string line = out.str();
   std::lock_guard<std::mutex> lock(telemetry_mutex_);
-  (void)::write(config_.telemetry_fd, line.data(), line.size());
+  std::size_t written = 0;
+  while (written != line.size()) {
+    const ssize_t result = ::write(config_.telemetry_fd, line.data() + written,
+                                   line.size() - written);
+    if (result < 0 && errno == EINTR) continue;
+    if (result <= 0) break;
+    written += static_cast<std::size_t>(result);
+  }
 }
 
 void FabricEndpoint::close_fid(fid *object) {
@@ -716,18 +755,33 @@ void FabricEndpoint::shutdown() {
   if (shutting_down_.exchange(true)) return;
   running_.store(false);
   event_cv_.notify_all();
-  if (progress_thread_.joinable()) progress_thread_.join();
+  // Cancel while the endpoint and registered storage are still live. Closing
+  // or freeing an MR after an ignored FI_EBUSY would permit provider access to
+  // released memory, so endpoint close is the hard ownership handoff below.
   if (endpoint_ != nullptr) {
+    std::lock_guard<std::mutex> lock(mutex_);
     for (auto &slot : tx_slots_) if (slot->active) (void)fi_cancel(&endpoint_->fid, &slot->context);
     for (auto &slot : rx_slots_) if (slot->active) (void)fi_cancel(&endpoint_->fid, &slot->context);
   }
+  if (progress_thread_.joinable()) progress_thread_.join();
   for (unsigned i = 0; i != 100; ++i) {
-    if (tx_cq_ != nullptr) (void)drain_cq(tx_cq_, false);
-    if (rx_cq_ != nullptr) (void)drain_cq(rx_cq_, true);
+    try {
+      if (tx_cq_ != nullptr) (void)drain_cq(tx_cq_, false);
+      if (rx_cq_ != nullptr) (void)drain_cq(rx_cq_, true);
+    } catch (...) {
+      break;
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     if (counters_.in_flight_bytes == 0) break;
   }
-  close_fid(endpoint_ == nullptr ? nullptr : &endpoint_->fid); endpoint_ = nullptr;
+  if (endpoint_ != nullptr && fi_close(&endpoint_->fid) != 0) {
+    // Leak provider-owned objects and their backing buffers rather than
+    // freeing memory that may still be DMA-visible. Process supervision owns
+    // the final bounded kill if a provider cannot close locally.
+    telemetry("shutdown_endpoint_busy");
+    return;
+  }
+  endpoint_ = nullptr;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     for (const auto &event : received_) {

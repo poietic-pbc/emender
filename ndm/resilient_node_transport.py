@@ -366,17 +366,25 @@ class _RequestHandler(socketserver.StreamRequestHandler):
                         if remaining <= 0:
                             raise TimeoutError("node quorum lost before generation deadline")
                         state.condition.wait(remaining)
+                    # Delivery acknowledgement from another bucket connection
+                    # may clear the shared aggregate map at any point after we
+                    # release this lock. Retain immutable byte references and
+                    # derive bucket_count from the same snapshot so a client
+                    # never observes a commit header followed by fewer frames.
+                    accepted = tuple(state.accepted)
+                    accepted_tokens = state.accepted_tokens
+                    aggregates = tuple(sorted(state.aggregates.items()))
                 send_frame(self.wfile, {
-                    "op": "commit", "accepted_nodes": list(state.accepted),
-                    "accepted_tokens": state.accepted_tokens,
-                    "bucket_count": len(state.aggregates),
+                    "op": "commit", "accepted_nodes": list(accepted),
+                    "accepted_tokens": accepted_tokens,
+                    "bucket_count": len(aggregates),
                     "generation": state.fence.generation,
                     "attempt": state.fence.attempt,
                     "coordinator_epoch": state.fence.coordinator_epoch,
                 })
-                for bucket in sorted(state.aggregates):
+                for bucket, aggregate in aggregates:
                     send_frame(self.wfile, {"op": "aggregate", "bucket": bucket},
-                               state.aggregates[bucket])
+                               aggregate)
                 self.server.acknowledge_delivery(state, str(header["node_id"]))
             except EOFError:
                 return

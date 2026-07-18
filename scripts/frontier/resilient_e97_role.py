@@ -131,12 +131,28 @@ def _dataplane_policy(args) -> tuple[str, bool, bool]:
 
 def _attest_dataplane(args) -> dict[str, object]:
     backend, production, full_layout = _dataplane_policy(args)
-    return attest_launch(
+    attestation = attest_launch(
         backend=backend, production=production, full_layout=full_layout,
         build_manifest=getattr(args, "native_build_manifest", "") or None,
         gate_json=getattr(args, "native_gate_json", "") or None,
         source_root=ROOT if backend != PYTHON_TCP_DEBUG else None,
     )
+    _require_wired_dense_runtime(backend)
+    return attestation
+
+
+def _require_wired_dense_runtime(backend: str) -> None:
+    """Prevent component-only native artifacts from promoting the Python path.
+
+    The split-role trainer and manager below still use ``LocalTrainerSpool`` and
+    ``DistributedOwnerServer``.  Until they call ``NativeManagerSession`` and
+    move dense bytes through its native local/fabric ABIs, accepting a native
+    backend here would only relabel the Python TCP/file implementation.
+    """
+    if backend != PYTHON_TCP_DEBUG:
+        raise RuntimeError(
+            "native backend is not wired into the split-role dense path; "
+            "component G0 artifacts cannot authorize a live native role")
 
 
 def _fence(args, generation: int) -> LocalFence:

@@ -51,10 +51,23 @@ def test_native_manager_binds_both_abis_before_ready_installs_routes_and_drains(
             tmp_path / "checkpoint-proposal.json", result,
             publisher="node-0-trainer-0", metadata={"accepted": ["node-0"]})
         assert json.loads(proposal.read_text())["global_weight"] == 17
+        original_fence = result.fence_epoch
+        result.fence_epoch -= 1
+        with pytest.raises(RuntimeError, match="result identity/fence"):
+            session.checkpoint_proposal(
+                tmp_path / "stale-checkpoint-proposal.json", result,
+                publisher="node-0-trainer-0")
+        result.fence_epoch = original_fence
         publication = tmp_path / "generation-00000004-fence-00000019.json"
         publication.write_text(json.dumps({
             "finalized": True, "run_id": "run", "generation": 4,
             "fence": {"coordinator_epoch": 19},
+            "attempt": result.attempt,
+            "layout_digest": result.layout_digest.hex(),
+            "base_digest": result.base_digest.hex(),
+            "result_root": result.result_root.hex(),
+            "global_weight": result.global_weight,
+            "result_bytes": result.length,
         }, sort_keys=True) + "\n")
         publication_digest = __import__("hashlib").sha256(
             publication.read_bytes()).hexdigest()
@@ -62,6 +75,20 @@ def test_native_manager_binds_both_abis_before_ready_installs_routes_and_drains(
             session.commit(
                 publication_manifest=publication,
                 authoritative_latest={"generation": 4, "fence": 18}, deadline_s=10)
+        mismatched_publication = tmp_path / "mismatched-result.json"
+        mismatched = json.loads(publication.read_text())
+        mismatched["result_root"] = "00" * 32
+        mismatched_publication.write_text(json.dumps(mismatched, sort_keys=True) + "\n")
+        mismatched_digest = __import__("hashlib").sha256(
+            mismatched_publication.read_bytes()).hexdigest()
+        with pytest.raises(RuntimeError, match="result identity"):
+            session.commit(
+                publication_manifest=mismatched_publication,
+                authoritative_latest={
+                    "generation": 4, "fence": 19,
+                    "manifest": str(mismatched_publication.resolve()),
+                    "manifest_sha256": mismatched_digest,
+                }, deadline_s=10)
         session.commit(
             publication_manifest=publication,
             authoritative_latest={

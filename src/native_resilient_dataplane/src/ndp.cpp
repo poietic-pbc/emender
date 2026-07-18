@@ -754,6 +754,10 @@ int Service::buffer_register(ndp_client_t handle, const ndp_buffer_v1* input,
     if (input->kind == NDP_BUFFER_MEMFD) {
         if (input->fd < 0 || input->address_or_segid != 0 || input->offset != 0)
             return NDP_EINVAL;
+        struct stat status{};
+        if (::fstat(input->fd, &status) != 0 || status.st_size < 0
+            || static_cast<std::uint64_t>(status.st_size) != input->length)
+            return NDP_EBOUNDS;
         const int seals = ::fcntl(input->fd, F_GET_SEALS);
         if (seals < 0 || (seals & (F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_WRITE))
                 != (F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_WRITE)) return NDP_EINVAL;
@@ -761,7 +765,11 @@ int Service::buffer_register(ndp_client_t handle, const ndp_buffer_v1* input,
         if (buffer->fd < 0) return NDP_EIO;
     } else if (input->kind == NDP_BUFFER_XPMEM_ADDRESS) {
 #if defined(NDP_ENABLE_XPMEM) && NDP_ENABLE_XPMEM
-        if (input->address_or_segid == 0 || input->fd != -1) return NDP_EINVAL;
+        if (input->address_or_segid == 0 || input->fd != -1
+            || input->offset > std::numeric_limits<std::uintptr_t>::max()
+                - input->address_or_segid
+            || input->length > std::numeric_limits<std::uintptr_t>::max()
+                - (input->address_or_segid + input->offset)) return NDP_EBOUNDS;
         buffer->address = reinterpret_cast<const void*>(input->address_or_segid + input->offset);
 #else
         return NDP_EPROVIDER;
@@ -1319,6 +1327,10 @@ int Service::poll(ndp_client_t handle, ndp_event_v1* events,
     }
     std::uint64_t ignored;
     while (::read(client->event_fd, &ignored, sizeof(ignored)) > 0) {}
+    if (!client->events.empty()) {
+        const std::uint64_t one = 1;
+        (void)::write(client->event_fd, &one, sizeof(one));
+    }
     return NDP_OK;
 }
 

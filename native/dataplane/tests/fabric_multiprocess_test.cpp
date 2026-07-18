@@ -130,20 +130,55 @@ int endpoint_process(int fd, bool child) {
   std::uint64_t peer = 0;
   if (endpoint.add_peer(remote, deadline, &peer) != NDP_T_OK) return 13;
 
-  // Cross sends exercise one persistent RDM endpoint, one AV route, fixed
-  // pools, distinct completion queues, and the native progress thread in two
-  // OS processes. The delivered sequence injects reordering, duplicate replay,
-  // stale fencing, and receiver-side corruption into the real provider path.
   const GenerationPlan plan = owner_plan(deadline);
-  OwnerEngine owner(plan);
-  if (owner.freeze() != NDP_T_OK) return 14;
-  FrameHeader credit{};
-  if (owner.grant_next(0, 1, &credit) != NDP_T_OK) return 15;
   const auto order = contribution_order(plan, 0);
   const auto payload_for = [&](const Contribution &c) {
     return constant_time_equal(c.contribution_digest, plan.accepted[0].contribution_digest)
         ? doubles(6.0, 12.0) : doubles(20.0, 28.0);
   };
+
+  // An uninstalled RDM source must not be able to impersonate the worker key
+  // carried in a valid frame. The route error is observable, but the fixed RX
+  // slot is reposted without making the bytes consumable.
+  FabricEndpoint rogue(config);
+  if (rogue.start() != NDP_T_OK) return 37;
+  std::uint64_t victim = 0;
+  if (rogue.add_peer(facts.endpoint_name, deadline, &victim) != NDP_T_OK) return 38;
+  const auto impersonation = contribution_frame(
+      plan, order[0], payload_for(order[0]), 777);
+  if (rogue.send(victim, impersonation.data(), impersonation.size(), deadline) !=
+      NDP_T_ACCEPTED) return 39;
+  bool rogue_sent = false, source_rejected = false;
+  while (unix_time_ns() < deadline && (!rogue_sent || !source_rejected)) {
+    std::vector<FabricEvent> rogue_events, receiver_events;
+    if (rogue.poll(&rogue_events, 4, 10) != NDP_T_OK ||
+        endpoint.poll(&receiver_events, 4, 10) != NDP_T_OK) return 40;
+    for (const auto &event : rogue_events) {
+      if (event.kind == NDP_T_EVENT_SENT) rogue_sent = true;
+    }
+    for (const auto &event : receiver_events) {
+      if (event.kind == NDP_T_EVENT_RECEIVED && event.status == NDP_T_EROUTE &&
+          event.peer_id == 0) source_rejected = true;
+    }
+  }
+  std::vector<std::uint8_t> rejected_frame;
+  std::uint64_t rejected_peer = 0;
+  if (!rogue_sent || !source_rejected ||
+      endpoint.receive(&rejected_frame, &rejected_peer) != NDP_T_ECREDIT) return 41;
+  rogue.shutdown();
+  const std::uint8_t rogue_done = 1;
+  std::uint8_t remote_rogue_done = 0;
+  if (!write_fragmented(fd, &rogue_done, 1) ||
+      !read_exact(fd, &remote_rogue_done, 1) || remote_rogue_done != 1) return 42;
+
+  // Cross sends exercise one persistent RDM endpoint, one AV route, fixed
+  // pools, distinct completion queues, and the native progress thread in two
+  // OS processes. The delivered sequence injects reordering, duplicate replay,
+  // stale fencing, and receiver-side corruption into the real provider path.
+  OwnerEngine owner(plan);
+  if (owner.freeze() != NDP_T_OK) return 14;
+  FrameHeader credit{};
+  if (owner.grant_next(0, 1, &credit) != NDP_T_OK) return 15;
   std::vector<std::vector<std::uint8_t>> frames;
   frames.push_back(contribution_frame(plan, order[1], payload_for(order[1]), 20));
   frames.push_back(contribution_frame(plan, order[0], payload_for(order[0]), 10));

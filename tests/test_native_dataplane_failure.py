@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import ctypes
 import os
 
 import numpy as np
 import pytest
 
 from ndm.native_dataplane import (
-    BoundsError, ChecksumError, Client, Command, DType, NativeDataplaneError,
-    NonfiniteError, StaleFenceError,
+    ABI_V1, BoundsError, BufferV1, ChecksumError, Client, Command, DType,
+    NativeDataplaneError, NonfiniteError, StaleFenceError,
 )
 from tests.native_dataplane_test_support import key, library, open_client
 
@@ -102,6 +103,25 @@ def test_buffer_slot_and_shared_byte_exhaustion_are_bounded(monkeypatch):
         with pytest.raises(BoundsError):
             client.allocate(bytes_count=32)
         assert client.metrics.buffer_exhaustions == 1
+
+
+def test_registered_memfd_cannot_claim_bytes_beyond_its_sealed_extent():
+    with open_client(153) as client:
+        client.install_flat_layout(2, source_dtype=DType.F32, payload_max=64)
+        with client.allocate(bytes_count=4) as short:
+            short.seal()
+            request = BufferV1()
+            request.struct_size = ctypes.sizeof(request)
+            request.abi_version = ABI_V1
+            request.kind = 2
+            request.flags = 1
+            request.length = 8
+            request.fd = short.fd
+            request.layout_digest[:] = client.layout_digest
+            handle = ctypes.c_uint64()
+            assert client.native.library.ndp_buffer_register_v1(
+                client.handle, ctypes.byref(request), ctypes.byref(handle)) == -9
+            assert handle.value == 0
 
 
 def test_optional_fallback_materializes_only_one_reduced_numerator(monkeypatch, tmp_path):

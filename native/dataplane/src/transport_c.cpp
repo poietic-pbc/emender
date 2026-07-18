@@ -65,6 +65,17 @@ bool nonzero_key(const std::uint8_t *key) {
   return false;
 }
 
+template <typename Callable>
+int guarded_transport_call(Callable &&callable) noexcept {
+  try {
+    return callable();
+  } catch (const std::bad_alloc &) {
+    return NDP_T_ENOMEM;
+  } catch (...) {
+    return NDP_T_EIO;
+  }
+}
+
 template <std::size_t N>
 bool same_bytes(const std::array<std::uint8_t, N> &left,
                 const std::uint8_t *right) {
@@ -102,10 +113,11 @@ const char *ndp_transport_error_string(int code) {
   }
 }
 
-int ndp_transport_open_v1(const struct ndp_transport_open_v1 *config,
-                          ndp_transport_t *out) {
+static int ndp_transport_open_v1_impl(const struct ndp_transport_open_v1 *config,
+                                     ndp_transport_t *out) {
   using namespace emender::ndp;
   if (!valid_prefix(config) || out == nullptr) return NDP_T_EVERSION;
+  *out = 0;
   if (config->reserved0 != 0 || config->reserved1 != 0) return NDP_T_EINVAL;
   if ((config->provider_len != 0 && config->provider_len > NDP_TRANSPORT_PROVIDER_MAX) ||
       config->require_provider_len > NDP_TRANSPORT_PROVIDER_MAX ||
@@ -147,7 +159,7 @@ int ndp_transport_open_v1(const struct ndp_transport_open_v1 *config,
   }
 }
 
-int ndp_transport_bind_identity_v1(
+static int ndp_transport_bind_identity_v1_impl(
     ndp_transport_t transport,
     const struct ndp_transport_identity_v1 *identity) {
   using namespace emender::ndp;
@@ -190,8 +202,8 @@ int ndp_transport_bind_identity_v1(
   return NDP_T_OK;
 }
 
-int ndp_transport_endpoint_v1(ndp_transport_t transport,
-                              struct ndp_transport_endpoint_v1 *out) {
+static int ndp_transport_endpoint_v1_impl(
+    ndp_transport_t transport, struct ndp_transport_endpoint_v1 *out) {
   using namespace emender::ndp;
   if (!valid_prefix(out)) return NDP_T_EVERSION;
   const auto instance = lookup(transport);
@@ -211,11 +223,12 @@ int ndp_transport_endpoint_v1(ndp_transport_t transport,
   return NDP_T_OK;
 }
 
-int ndp_transport_peer_upsert_v1(ndp_transport_t transport,
-                                 const struct ndp_transport_peer_v1 *peer,
-                                 uint64_t *peer_id) {
+static int ndp_transport_peer_upsert_v1_impl(
+    ndp_transport_t transport, const struct ndp_transport_peer_v1 *peer,
+    uint64_t *peer_id) {
   using namespace emender::ndp;
   if (!valid_prefix(peer) || peer_id == nullptr) return NDP_T_EVERSION;
+  *peer_id = 0;
   if (peer->endpoint_name_bytes == 0 ||
       peer->endpoint_name_bytes > NDP_TRANSPORT_ENDPOINT_MAX || peer->reserved0 != 0 ||
       peer->endpoint_epoch == 0 || !nonzero_key(peer->worker_key) ||
@@ -281,7 +294,8 @@ int ndp_transport_peer_upsert_v1(ndp_transport_t transport,
   return NDP_T_OK;
 }
 
-int ndp_transport_peer_remove_v1(ndp_transport_t transport, uint64_t peer_id) {
+static int ndp_transport_peer_remove_v1_impl(
+    ndp_transport_t transport, uint64_t peer_id) {
   using namespace emender::ndp;
   const auto instance = lookup(transport);
   if (instance == nullptr) return NDP_T_ESTALE;
@@ -295,9 +309,9 @@ int ndp_transport_peer_remove_v1(ndp_transport_t transport, uint64_t peer_id) {
   return instance->endpoint->remove_peer(peer_id);
 }
 
-int ndp_transport_send_v1(ndp_transport_t transport, uint64_t peer_id,
-                          const uint8_t *frame, uint64_t frame_bytes,
-                          uint64_t deadline_unix_ns) {
+static int ndp_transport_send_v1_impl(
+    ndp_transport_t transport, uint64_t peer_id, const uint8_t *frame,
+    uint64_t frame_bytes, uint64_t deadline_unix_ns) {
   using namespace emender::ndp;
   if (frame_bytes > std::numeric_limits<std::size_t>::max()) return NDP_T_EBOUNDS;
   const auto instance = lookup(transport);
@@ -305,13 +319,14 @@ int ndp_transport_send_v1(ndp_transport_t transport, uint64_t peer_id,
       peer_id, frame, static_cast<std::size_t>(frame_bytes), deadline_unix_ns);
 }
 
-int ndp_transport_poll_v1(ndp_transport_t transport,
-                          struct ndp_transport_event_v1 *events,
-                          uint32_t capacity, uint32_t *count, int timeout_ms) {
+static int ndp_transport_poll_v1_impl(
+    ndp_transport_t transport, struct ndp_transport_event_v1 *events,
+    uint32_t capacity, uint32_t *count, int timeout_ms) {
   using namespace emender::ndp;
   if (events == nullptr || count == nullptr || capacity == 0 || timeout_ms < 0) {
     return NDP_T_EINVAL;
   }
+  *count = 0;
   for (std::uint32_t i = 0; i != capacity; ++i) {
     if (!valid_prefix(&events[i])) return NDP_T_EVERSION;
   }
@@ -333,12 +348,14 @@ int ndp_transport_poll_v1(ndp_transport_t transport,
   return NDP_T_OK;
 }
 
-int ndp_transport_receive_v1(ndp_transport_t transport, uint8_t *frame,
-                             uint64_t capacity, uint64_t *frame_bytes,
-                             uint64_t *peer_id) {
+static int ndp_transport_receive_v1_impl(
+    ndp_transport_t transport, uint8_t *frame, uint64_t capacity,
+    uint64_t *frame_bytes, uint64_t *peer_id) {
   using namespace emender::ndp;
   if (frame == nullptr || frame_bytes == nullptr || peer_id == nullptr ||
       capacity > std::numeric_limits<std::size_t>::max()) return NDP_T_EBOUNDS;
+  *frame_bytes = 0;
+  *peer_id = 0;
   const auto instance = lookup(transport);
   if (instance == nullptr) return NDP_T_ESTALE;
   std::size_t native_bytes = 0;
@@ -362,14 +379,14 @@ int ndp_transport_receive_v1(ndp_transport_t transport, uint8_t *frame,
     if (binding == instance->bindings.end() ||
         !std::equal(binding->second.incarnation.begin(), binding->second.incarnation.end(),
                     decoded.incarnation.begin()) ||
-        (source_peer != 0 && source_peer != binding->second.peer_id)) return NDP_T_EROUTE;
+        source_peer == 0 || source_peer != binding->second.peer_id) return NDP_T_EROUTE;
     *peer_id = binding->second.peer_id;
   }
   return NDP_T_OK;
 }
 
-int ndp_transport_metrics_v1(ndp_transport_t transport,
-                             struct ndp_transport_metrics_v1 *out) {
+static int ndp_transport_metrics_v1_impl(
+    ndp_transport_t transport, struct ndp_transport_metrics_v1 *out) {
   using namespace emender::ndp;
   if (!valid_prefix(out)) return NDP_T_EVERSION;
   const auto instance = lookup(transport);
@@ -402,13 +419,14 @@ int ndp_transport_metrics_v1(ndp_transport_t transport,
   return NDP_T_OK;
 }
 
-int ndp_transport_cancel_v1(ndp_transport_t transport, uint64_t peer_id) {
+static int ndp_transport_cancel_v1_impl(
+    ndp_transport_t transport, uint64_t peer_id) {
   using namespace emender::ndp;
   const auto instance = lookup(transport);
   return instance == nullptr ? NDP_T_ESTALE : instance->endpoint->cancel(peer_id);
 }
 
-int ndp_transport_close_v1(ndp_transport_t transport) {
+static int ndp_transport_close_v1_impl(ndp_transport_t transport) {
   using namespace emender::ndp;
   std::shared_ptr<TransportInstance> instance;
   {
@@ -419,6 +437,80 @@ int ndp_transport_close_v1(ndp_transport_t transport) {
   }
   instance->endpoint->shutdown();
   return NDP_T_OK;
+}
+
+int ndp_transport_open_v1(const struct ndp_transport_open_v1 *config,
+                          ndp_transport_t *out) {
+  return emender::ndp::guarded_transport_call(
+      [&] { return ndp_transport_open_v1_impl(config, out); });
+}
+
+int ndp_transport_bind_identity_v1(
+    ndp_transport_t transport,
+    const struct ndp_transport_identity_v1 *identity) {
+  return emender::ndp::guarded_transport_call(
+      [&] { return ndp_transport_bind_identity_v1_impl(transport, identity); });
+}
+
+int ndp_transport_endpoint_v1(ndp_transport_t transport,
+                              struct ndp_transport_endpoint_v1 *out) {
+  return emender::ndp::guarded_transport_call(
+      [&] { return ndp_transport_endpoint_v1_impl(transport, out); });
+}
+
+int ndp_transport_peer_upsert_v1(
+    ndp_transport_t transport, const struct ndp_transport_peer_v1 *peer,
+    uint64_t *peer_id) {
+  return emender::ndp::guarded_transport_call(
+      [&] { return ndp_transport_peer_upsert_v1_impl(transport, peer, peer_id); });
+}
+
+int ndp_transport_peer_remove_v1(ndp_transport_t transport, uint64_t peer_id) {
+  return emender::ndp::guarded_transport_call(
+      [&] { return ndp_transport_peer_remove_v1_impl(transport, peer_id); });
+}
+
+int ndp_transport_send_v1(ndp_transport_t transport, uint64_t peer_id,
+                          const uint8_t *frame, uint64_t frame_bytes,
+                          uint64_t deadline_unix_ns) {
+  return emender::ndp::guarded_transport_call([&] {
+    return ndp_transport_send_v1_impl(
+        transport, peer_id, frame, frame_bytes, deadline_unix_ns);
+  });
+}
+
+int ndp_transport_poll_v1(ndp_transport_t transport,
+                          struct ndp_transport_event_v1 *events,
+                          uint32_t capacity, uint32_t *count, int timeout_ms) {
+  return emender::ndp::guarded_transport_call([&] {
+    return ndp_transport_poll_v1_impl(
+        transport, events, capacity, count, timeout_ms);
+  });
+}
+
+int ndp_transport_receive_v1(ndp_transport_t transport, uint8_t *frame,
+                             uint64_t capacity, uint64_t *frame_bytes,
+                             uint64_t *peer_id) {
+  return emender::ndp::guarded_transport_call([&] {
+    return ndp_transport_receive_v1_impl(
+        transport, frame, capacity, frame_bytes, peer_id);
+  });
+}
+
+int ndp_transport_metrics_v1(ndp_transport_t transport,
+                             struct ndp_transport_metrics_v1 *out) {
+  return emender::ndp::guarded_transport_call(
+      [&] { return ndp_transport_metrics_v1_impl(transport, out); });
+}
+
+int ndp_transport_cancel_v1(ndp_transport_t transport, uint64_t peer_id) {
+  return emender::ndp::guarded_transport_call(
+      [&] { return ndp_transport_cancel_v1_impl(transport, peer_id); });
+}
+
+int ndp_transport_close_v1(ndp_transport_t transport) {
+  return emender::ndp::guarded_transport_call(
+      [&] { return ndp_transport_close_v1_impl(transport); });
 }
 
 }  // extern "C"

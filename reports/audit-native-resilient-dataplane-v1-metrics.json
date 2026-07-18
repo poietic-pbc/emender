@@ -1,0 +1,97 @@
+{
+  "schema": "emender-native-dataplane-audit-v1",
+  "task_id": "audit-native-resilient-dataplane-v1",
+  "captured_utc": "2026-07-18T23:46:49Z",
+  "decision": {
+    "native_live_testing": "hold",
+    "production_admission": "fail-closed-until-live-split-native-wiring",
+    "followup_task": "implement-live-split",
+    "slurm_submitted": false
+  },
+  "authority": {
+    "compute_pool": "docs/RESILIENT_DILOCO_COMPUTE_POOL.md version 1",
+    "native_dataplane": "docs/NATIVE_RESILIENT_DILOCO_DATAPLANE.md version 1",
+    "compute_requirement_ids": [
+      "R01", "R02", "R03", "R04", "R05", "R06", "R07", "R08",
+      "R09", "R10", "R11", "R12", "R13", "R14", "R15", "R16"
+    ],
+    "native_requirement_ids": [
+      "NDP01", "NDP02", "NDP03", "NDP04", "NDP05", "NDP06",
+      "NDP07", "NDP08", "NDP09", "NDP10", "NDP11", "NDP12",
+      "NDP13", "NDP14", "NDP15", "NDP16", "NDP17"
+    ]
+  },
+  "findings": {
+    "critical": 2,
+    "high": 6,
+    "medium": 2,
+    "admitted_unfixed_critical_or_high": 0,
+    "release_blocking_live_integration_gap": true
+  },
+  "tests": {
+    "unified_native": {"collected": 8, "passed": 8, "failed": 0},
+    "asan_ubsan_native": {"collected": 8, "passed": 8, "failed": 0},
+    "focused_python": {"collected": 105, "passed": 105, "failed": 0},
+    "rogue_provider_source_rejected": true,
+    "stale_result_fence_rejected_before_mutation": true,
+    "mismatched_result_root_rejected_before_commit": true,
+    "stale_allocation_produces_no_handoff_or_latest": true,
+    "full_suite_initial_failures_fixed": [
+      "gap-matrix evidence checksum",
+      "shared-login ephemeral port selection",
+      "aggregate delivery snapshot race"
+    ]
+  },
+  "tooling": {
+    "compiler": "CrayClang 18.0.1",
+    "libfabric": "2.3.1",
+    "openssl": "3.2.3",
+    "asan": "passed",
+    "ubsan": "passed",
+    "leak_detection": true,
+    "clang_tidy_available": false,
+    "cppcheck_available": false,
+    "scan_build_available": false
+  },
+  "e97_256_node_accounting": {
+    "elements": 688346312,
+    "layout_bytes": 5506770496,
+    "payload_max_bytes": 67108864,
+    "frame_header_bytes": 320,
+    "shards": 83,
+    "nodes": 256,
+    "logical_contribution_bytes": 1409733246976,
+    "logical_redistribution_bytes": 1409733246976,
+    "total_logical_dense_bytes": 2819466493952,
+    "data_frames_per_direction": 21248,
+    "total_data_frames": 42496,
+    "header_bytes_per_direction": 6799360,
+    "total_header_bytes": 13598720,
+    "routes_per_service": 255,
+    "directed_routes_cluster": 65280,
+    "receipt_ledger_bytes": 2719744,
+    "eight_fixed_slot_pool_bytes": 536873472,
+    "resident_base_before_assigned_owner_bytes": 11620243072,
+    "resident_bound_two_owners_bytes": 14440737184,
+    "resident_bound_256_owners_bytes": 11708862759,
+    "trainer_f32_lane_bytes": 2753385248,
+    "six_trainer_lane_bytes": 16520311488,
+    "eight_trainer_lane_bytes": 22027081984,
+    "native_local_default_limit_bytes": 17179869184,
+    "eight_lanes_fit_local_default": false
+  },
+  "complexity": {
+    "per_service_routes": "O(N)",
+    "cluster_directed_route_state": "O(N^2)",
+    "data_transfers": "O(N*S)",
+    "deterministic_contribution_order": "O(S*N*log(N))",
+    "receipt_ledger_memory": "O(S*N)",
+    "central_full_model_broker": false,
+    "failure_sensitive_all_rank_collective": false
+  },
+  "publication": {
+    "force_push": false,
+    "authoritative_origin_main_required": true,
+    "exact_tip_clean_build_manifest_required": true
+  }
+}

@@ -532,32 +532,50 @@ void ReplayBuffer::cancel() {
   frames_.clear();
 }
 
-ResultAssembler::ResultAssembler(std::uint64_t layout_bytes, std::uint64_t payload_max,
-                                 std::uint32_t shard_count, std::uint64_t deadline_unix_ns)
-    : payload_max_(payload_max), deadline_unix_ns_(deadline_unix_ns) {
-  if (layout_bytes == 0 || layout_bytes > std::numeric_limits<std::size_t>::max() ||
-      payload_max == 0 || payload_max > NDP_TRANSPORT_MAX_PAYLOAD ||
-      shard_count == 0 || shard_count > NDP_TRANSPORT_MAX_SHARDS ||
-      (layout_bytes + payload_max - 1) / payload_max != shard_count) {
+ResultAssembler::ResultAssembler(GenerationPlan plan)
+    : plan_(std::move(plan)), payload_max_(plan_.payload_max),
+      deadline_unix_ns_(plan_.deadline_unix_ns) {
+  std::uint64_t required_bytes = 0;
+  if (validate_plan_bounds(plan_, &required_bytes) != NDP_T_OK ||
+      plan_.layout_bytes > std::numeric_limits<std::size_t>::max()) {
     throw std::invalid_argument("invalid result assembler bounds");
   }
-  aggregate_.resize(static_cast<std::size_t>(layout_bytes));
-  received_.resize(shard_count, false);
-  digests_.resize(shard_count);
+  for (const auto &contribution : plan_.accepted) {
+    if (contribution.weight == 0 ||
+        !add_checked(global_weight_, contribution.weight, &global_weight_) ||
+        global_weight_ >= (UINT64_C(1) << 63U)) {
+      throw std::invalid_argument("invalid result assembler global weight");
+    }
+  }
+  aggregate_.resize(static_cast<std::size_t>(plan_.layout_bytes));
+  received_.resize(plan_.shard_count, false);
+  digests_.resize(plan_.shard_count);
 }
 
 int ResultAssembler::accept(const DecodedFrame &frame, std::uint64_t now_unix_ns) {
   const auto &h = frame.header;
-  if (h.type != MessageType::result_data || now_unix_ns >= deadline_unix_ns_ ||
-      now_unix_ns >= h.deadline_unix_ns) return NDP_T_EDEADLINE;
+  if (h.type != MessageType::result_data) return NDP_T_EINVAL;
+  if (now_unix_ns >= deadline_unix_ns_ || now_unix_ns >= h.deadline_unix_ns) {
+    return NDP_T_EDEADLINE;
+  }
+  if (!same_key(h.run_key, plan_.run_key) || h.fence_epoch != plan_.fence_epoch) {
+    return NDP_T_EFENCE;
+  }
+  if (h.generation != plan_.generation || h.attempt != plan_.attempt ||
+      h.owner_epoch != plan_.owner_epoch ||
+      !constant_time_equal(h.layout_digest, plan_.layout_digest) ||
+      !constant_time_equal(h.base_digest, plan_.base_digest)) {
+    return NDP_T_ESTALE;
+  }
+  if (h.weight != global_weight_) return NDP_T_ECONFLICT;
   if (h.shard_id >= received_.size()) return NDP_T_EBOUNDS;
   const std::uint64_t offset = static_cast<std::uint64_t>(h.shard_id) * payload_max_;
   const std::uint64_t bytes = std::min(payload_max_, aggregate_.size() - offset);
-  if (h.payload_offset != offset || h.payload_bytes != bytes ||
-      frame.payload.size() != bytes ||
-      !constant_time_equal(sha256(frame.payload.data(), frame.payload.size()), h.payload_digest)) {
-    return NDP_T_ECHECKSUM;
-  }
+  if (h.chunk_index != h.shard_id || h.chunk_count != plan_.shard_count ||
+      h.payload_offset != offset || h.payload_bytes != bytes ||
+      h.shard_bytes != bytes || frame.payload.size() != bytes) return NDP_T_EBOUNDS;
+  if (!constant_time_equal(sha256(frame.payload.data(), frame.payload.size()),
+                           h.payload_digest)) return NDP_T_ECHECKSUM;
   if (received_[h.shard_id]) {
     return constant_time_equal(digests_[h.shard_id], h.payload_digest)
         ? NDP_T_OK : NDP_T_ECONFLICT;

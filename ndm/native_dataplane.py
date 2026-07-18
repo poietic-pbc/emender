@@ -404,6 +404,9 @@ class NativeLibrary:
                                                ctypes.POINTER(ctypes.c_uint64),
                                                ctypes.POINTER(ctypes.c_int)]
         lib.ndp_buffer_allocate_v1.restype = ctypes.c_int
+        lib.ndp_buffer_register_v1.argtypes = [ctypes.c_uint64, ctypes.POINTER(BufferV1),
+                                               ctypes.POINTER(ctypes.c_uint64)]
+        lib.ndp_buffer_register_v1.restype = ctypes.c_int
         lib.ndp_buffer_seal_v1.argtypes = [ctypes.c_uint64, ctypes.c_uint64]
         lib.ndp_buffer_seal_v1.restype = ctypes.c_int
         lib.ndp_buffer_release_v1.argtypes = [ctypes.c_uint64, ctypes.c_uint64]

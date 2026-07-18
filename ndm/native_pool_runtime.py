@@ -1,11 +1,12 @@
-"""Native service lifecycle bound to the resilient Python control plane.
+"""Component native-service lifecycle for control-plane integration tests.
 
 The allocation holder continues to own leases, READY membership, generation
 freeze, checkpoint policy, and atomic publication.  This module owns the two
 compiled ABI handles as one manager-scoped resource: the local exact reducer
-and the libfabric endpoint start before READY, native routes are installed
-from leased endpoint records, and TERM/normal cleanup drains both without a
-peer rendezvous.
+and the libfabric endpoint start together, native routes are installed from
+leased endpoint records, and cleanup drains both without a peer rendezvous.
+The split-role launcher does not yet route its dense owner traffic through
+this class; production native selection therefore fails closed there.
 """
 
 from __future__ import annotations
@@ -69,6 +70,7 @@ class NativeManagerSession:
         self._generation_installed = False
         self._frozen = False
         self._checkpoint_proposed = False
+        self._checkpoint_identity: dict[str, object] | None = None
         self.closed = False
 
     @classmethod
@@ -217,6 +219,17 @@ class NativeManagerSession:
         """Emit metadata only; Python remains the checkpoint/publication owner."""
         if not self._frozen or not publisher:
             raise RuntimeError("checkpoint proposal requires a frozen native result")
+        expected_run = self.local.run_key
+        if (result.client is not self.local or result.closed
+                or result.run_key != expected_run
+                or result.fence_epoch != self.fence_epoch
+                or result.generation != self.local.generation
+                or result.attempt != self.local.attempt
+                or result.layout_digest != self.local.layout_digest
+                or result.base_digest != self.local.base_digest
+                or result.global_weight <= 0
+                or result.result_root == bytes(32)):
+            raise RuntimeError("native checkpoint result identity/fence mismatch")
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         value = {
@@ -235,13 +248,21 @@ class NativeManagerSession:
         os.replace(temporary, target)
         self._checkpoint_proposed = True
         self._proposal_generation = result.generation
+        self._checkpoint_identity = {
+            "attempt": result.attempt,
+            "layout_digest": result.layout_digest.hex(),
+            "base_digest": result.base_digest.hex(),
+            "result_root": result.result_root.hex(),
+            "global_weight": result.global_weight,
+            "result_bytes": result.length,
+        }
         return target
 
     def commit(self, *, publication_manifest: str | Path,
                authoritative_latest: Mapping[str, object],
                deadline_s: float = 30.0) -> None:
         """Release native state only after Python supplies fenced CAS evidence."""
-        if not self._checkpoint_proposed:
+        if not self._checkpoint_proposed or self._checkpoint_identity is None:
             raise RuntimeError("native commit requires durable Python publication approval")
         publication_path = Path(publication_manifest).resolve()
         publication_bytes = publication_path.read_bytes()
@@ -262,13 +283,18 @@ class NativeManagerSession:
                 or int(publication.get("generation", -1)) != self._proposal_generation
                 or int(fence.get("coordinator_epoch", -1)) != self.fence_epoch):
             raise RuntimeError("native commit publication identity/fence mismatch")
+        if any(publication.get(key) != value
+               for key, value in self._checkpoint_identity.items()):
+            raise RuntimeError("native commit publication result identity mismatch")
         self.local.control(Command.COMMIT, deadline_s=deadline_s).close()
         self._generation_installed = self._frozen = self._checkpoint_proposed = False
+        self._checkpoint_identity = None
 
     def abort(self, *, deadline_s: float = 1.0) -> None:
         if self._generation_installed:
             self.local.control(Command.ABORT, deadline_s=deadline_s).close()
         self._generation_installed = self._frozen = self._checkpoint_proposed = False
+        self._checkpoint_identity = None
 
     def telemetry(self, terminal_reason: str = "running") -> NativeServiceTelemetry:
         local = asdict(self.local.metrics)

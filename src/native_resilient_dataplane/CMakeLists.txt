@@ -6,6 +6,7 @@ include(CTest)
 find_package(Threads REQUIRED)
 
 option(NDP_ENABLE_XPMEM "Enable same-process XPMEM-address ABI registration hook" OFF)
+option(NDP_ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
 
 add_library(emender_ndp SHARED src/ndp.cpp)
 add_library(Emender::ndp ALIAS emender_ndp)
@@ -29,6 +30,10 @@ target_compile_options(emender_ndp PRIVATE
     -Wall -Wextra -Wpedantic
     -fno-fast-math -ffp-contract=off -frounding-math
 )
+if(NDP_ENABLE_SANITIZERS)
+    target_compile_options(emender_ndp PRIVATE -fsanitize=address,undefined)
+    target_link_options(emender_ndp PUBLIC -fsanitize=address,undefined)
+endif()
 if(NDP_ENABLE_XPMEM)
     target_compile_definitions(emender_ndp PRIVATE NDP_ENABLE_XPMEM=1)
 else()
@@ -45,6 +50,9 @@ install(FILES include/emender/ndp.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/emen
 if(BUILD_TESTING)
     add_executable(ndp_local_abi_test tests/abi_test.c)
     target_link_libraries(ndp_local_abi_test PRIVATE emender_ndp)
-    set_target_properties(ndp_local_abi_test PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
+    # The C ABI test still needs the C++ sanitizer runtime when the shared
+    # implementation is instrumented.
+    set_target_properties(ndp_local_abi_test PROPERTIES
+        C_STANDARD 11 C_EXTENSIONS OFF LINKER_LANGUAGE CXX)
     add_test(NAME ndp_local_abi_test COMMAND ndp_local_abi_test)
 endif()

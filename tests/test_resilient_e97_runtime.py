@@ -28,6 +28,16 @@ def test_manager_publishes_heartbeat_before_heavy_runtime_imports():
     assert "os.replace(temporary, state)" in text
 
 
+def test_live_native_selection_fails_closed_until_dense_runtime_is_wired():
+    from ndm.native_artifacts import NATIVE_CXI, NATIVE_TEST, PYTHON_TCP_DEBUG
+    from scripts.frontier import resilient_e97_role as role
+
+    role._require_wired_dense_runtime(PYTHON_TCP_DEBUG)
+    for backend in (NATIVE_TEST, NATIVE_CXI):
+        with pytest.raises(RuntimeError, match="not wired into the split-role dense path"):
+            role._require_wired_dense_runtime(backend)
+
+
 def test_import_liveness_does_not_refresh_runtime_import_progress_deadline():
     text = ROLE.read_text()
     bootstrap = text[text.index("def _role_import_heartbeat"):
@@ -106,15 +116,18 @@ def test_two_model_free_managers_exchange_without_collective(tmp_path):
     # healthy manager can fail before READY because either adjacent port is in
     # use. Verify the complete local fixture block before launching processes.
     port = None
-    for _ in range(256):
+    # Do not allocate the fixture from Linux's ephemeral client-port range.
+    # Closing a port-0 probe lets any of the many concurrent subprocesses on a
+    # shared login node immediately reuse it for an outbound connection before
+    # the manager binds. A PID-distributed scan below 32768 avoids that kernel
+    # allocator race while retaining the complete three-port probe.
+    for attempt in range(256):
         probes = []
         try:
+            candidate = 20_000 + ((os.getpid() * 3 + attempt * 3) % 10_000)
             first = socket.socket()
-            first.bind(("127.0.0.1", 0))
-            candidate = first.getsockname()[1]
+            first.bind(("127.0.0.1", candidate))
             probes.append(first)
-            if candidate > 65532:
-                continue
             for offset in (1, 2):
                 probe = socket.socket()
                 probe.bind(("127.0.0.1", candidate + offset))
