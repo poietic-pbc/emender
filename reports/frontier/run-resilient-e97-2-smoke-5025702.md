@@ -60,3 +60,38 @@ conversion, but had not reached the first optimizer-step callback. This is
 process-liveness evidence only and is not counted as a successful smoke
 generation. The allocation remains subject to its finite 2,700-second
 whole-generation deadline and was neither cancelled nor duplicated.
+
+## Terminal outcome
+
+Slurm delivered the configured pre-walltime termination signal at
+`2026-07-18T00:29:12-04:00`.  Accounting records `FAILED`, `ExitCode=0:15`,
+`Submit=2026-07-17T23:44:04`, `Start=2026-07-17T23:44:17`,
+`End=2026-07-18T00:29:13`, and `Elapsed=00:44:56`; queue time was 13 seconds and
+allocation runtime was 44 minutes 56 seconds.  The supervisor recorded both
+managers exiting on `allocation_term_handoff` and terminated trainer children
+without publishing a partial generation.
+
+The terminal immutable run directory contains no update spool object,
+finalized-generation manifest, or checkpoint.  All sixteen real HIP trainers
+reached the first real forward/backward computation and remained live, but none
+reached the first optimizer-step progress callback before TERM.  Thus this is a
+preserved pre-generation smoke failure, not a successful gate and not a restart
+point.  Peak RSS for the two-node trainer step was 92,370,224 KiB; no bulk
+update, aggregate, heartbeat, membership, quorum, or redistribution payload was
+written through Lustre.
+
+The finite 2,700-second generation deadline was longer than the usable runtime:
+Slurm's five-minute TERM lead reduced a 50-minute request to roughly 45 minutes.
+The next payload must therefore be unique, committed, pushed, and fetched, and
+must remain a no-injection startup smoke.  Because 50 minutes was empirically
+insufficient for the cold compiled first optimizer step, its requested runtime
+must provide the full bounded generation window plus TERM margin.  No full
+failure-injection allocation is authorized until that changed smoke finalizes
+one immutable generation.
+
+Conformance check against *Resilient DiLoCo Compute Pool*, version 1: this run
+exercised bounded waits and shutdown (R06, R14), the model-free-manager and
+trainer split (R09), node-local/network-only hot-path configuration (R08, R10),
+and the mandatory two-node rung (R16).  It did not satisfy committed-generation
+evidence (R07), failure/rejoin (R11), fresh-allocation outer-state restoration
+(R12), or the complete R16 gate, so none of those requirements is claimed.
