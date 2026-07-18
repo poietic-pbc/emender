@@ -48,3 +48,36 @@ or a retry trigger: the configured generation deadline is 900 seconds. The
 next inspection must check finalized generation/checkpoint artifacts and the
 manager/network events, not process presence alone. Job 5025325 must not be
 cancelled or duplicated merely because it is still within that deadline.
+
+## Terminal result — 2026-07-17T23:11:21-04:00
+
+The changed-payload smoke failed before its first finalized generation.  It was
+not cancelled by the runner and no duplicate was submitted.  Slurm delivered
+the configured pre-walltime TERM at runtime `00:44:44`; the job reached
+`FAILED (0:15)`, its batch step reached `CANCELLED (0:15)`, and the surviving
+node step was reaped at `00:45:09`.  Queue time was 31 seconds and allocation
+runtime was 44 minutes 44 seconds, recorded separately.
+
+The retained evidence proves that both model-free managers and all sixteen real
+GPU trainers started.  Every trainer loaded the pinned real E97 HIP/Triton path,
+entered `train.py`, and emitted repeated per-step E97 runtime lines.  The node
+step's peak resident memory was `98,641,276 KiB`.  No trainer reached the
+`streaming_delta` or `submitted` stage, no manager accepted an update, and no
+generation manifest or immutable checkpoint exists.  The supervisor recorded
+both managers' fenced `allocation_term_handoff` eviction; there was therefore
+no partial or unfenced commit to select.
+
+This run exposes a bounded-deadline defect rather than a transport failure:
+per-step progress refreshed the progress deadline while the mandatory 40-step
+generation exceeded the smoke allocation.  The nominal 900-second generation
+deadline currently bounds only aggregate waiting after local training, not the
+whole generation from admission through publication.  That violates the
+version-1 authority's bounded-generation requirement (R06/R14) and makes this
+payload ineligible for an unchanged retry.  A successor payload must first add
+and test a whole-generation deadline/fail-fast path, then pass another unique
+2-node startup smoke before any full `02:00:00` resilience allocation.
+
+Conformance result against *Resilient DiLoCo Compute Pool* version 1:
+R03/R09 topology and role ownership were observed; R10 had no Lustre bulk
+update because no update was produced; R05/R08 aggregation and release were not
+reached; R06/R14 bounded generation progress failed; and R16 remains closed.
