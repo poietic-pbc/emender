@@ -338,6 +338,23 @@ def trainer(args) -> int:
 
             fence = _fence(args, generation)
 
+            phase_log = bulk / "telemetry" / f"{identity}.jsonl"
+            phase_log.parent.mkdir(parents=True, exist_ok=True)
+
+            def training_phase(phase, details):
+                record = {
+                    "timestamp": time.time(), "monotonic_s": time.monotonic(),
+                    "identity": identity, "generation": generation,
+                    "phase": phase, **details,
+                }
+                with phase_log.open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(record, sort_keys=True) + "\n")
+                    stream.flush()
+                heartbeat(
+                    bulk, identity, generation=generation,
+                    step=int(details.get("step", step)),
+                    loss=details.get("loss"), stage=phase)
+
             def publish_trained_delta(base_state, model, tokens):
                 heartbeat(bulk, identity, generation=generation, step=step, loss=None,
                           stage="streaming_delta")
@@ -377,7 +394,8 @@ def trainer(args) -> int:
                 synthetic_token_stream=False, synthetic_vocab_size=256,
                 optimizer_state_dict=optimizer_state, consume_optimizer_state=True,
                 progress_callback=training_progress,
-                delta_consumer=publish_trained_delta)
+                delta_consumer=publish_trained_delta,
+                phase_callback=training_phase)
             if report.update is None:
                 raise RuntimeError(report.error or "real E97 trainer produced no update")
             delta = report.update.delta

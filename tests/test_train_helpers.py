@@ -108,3 +108,26 @@ def test_train_one_optimizer_step_runs_real_tiny_e97_path():
     assert math.isfinite(metrics["loss"])
     assert metrics["tokens_processed"] == args.batch_size * (args.chunk_size + 1)
     assert any(not torch.equal(a, b) for a, b in zip(before, after))
+
+
+def test_train_one_optimizer_step_reports_phase_timestamps_in_execution_order():
+    torch.manual_seed(1234)
+    args = _tiny_e97_args()
+    model = train.build_training_model(args)
+    optimizer = train.build_training_optimizer(model, args)
+    batch = torch.randint(0, 256, (args.batch_size, args.chunk_size + 1), dtype=torch.long)
+    phases = []
+
+    train.train_one_optimizer_step(
+        model, optimizer, args, batch_iter=_fixed_batches(batch), step=7,
+        phase_callback=lambda name, details: phases.append((name, details)),
+    )
+
+    assert [name for name, _ in phases] == [
+        "optimizer_step_start", "data_load_start", "data_load_end",
+        "forward_start", "forward_end", "backward_start", "backward_end",
+        "loss_sync_start", "loss_sync_end", "optimizer_update_start",
+        "optimizer_update_end", "optimizer_step_end",
+    ]
+    assert all(details["step"] == 7 for _, details in phases)
+    assert phases[-1][1]["tokens"] == args.batch_size * (args.chunk_size + 1)

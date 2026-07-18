@@ -22,7 +22,7 @@
   "use_chunked_e97": 0,
   "e97_chunk_size": 32,
   "checkpoint_interval": 16,
-  "gradient_checkpointing": true,
+  "gradient_checkpointing": false,
   "lr": 0.001007,
   "optimizer": "schedulefree",
   "weight_decay": 0.01,
@@ -30,7 +30,7 @@
   "grad_accum": 1,
   "grad_clip": 1.0,
   "bf16": true,
-  "batch_size": 1,
+  "batch_size": 4,
   "chunk_size": 2048,
   "tokenizer": "p50k_base"
 }

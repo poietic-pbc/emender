@@ -65,3 +65,33 @@ the first manager reached its local-quorum wait at approximately `05:40:39Z`,
 putting the configured 2,700-second fail-fast near `06:25:39Z`. The job is being
 left to enforce that bounded deadline. This checkpoint is live evidence only,
 not a successful smoke or R16 claim.
+
+## Terminal result and root-cause correction
+
+Slurm records job `5026498` as `CANCELLED by 19032` after `00:50:54` of
+runtime (`2026-07-18T01:36:28` through `02:27:22` in Slurm accounting). The
+role step was cancelled after both managers reached `progress_deadline`, local
+trainer quorum disappeared, and zero updates or finalized generations had been
+published. This is a fundamental pre-generation failure, not acceptable
+cold-start behavior. The 2,700-second experimental deadline is rejected; the
+checked-in launcher default remains 900 seconds and no retry is permitted until
+a changed payload restores minutes-scale progress.
+
+An exact comparison with the retained working production command in
+`logs/frontier/trainpy_async_quorum/async-b4k40-ladder-256n-4979526.out`
+found two unintended training-flag differences in the resilient flat config:
+the failed payload used `batch_size=1` and `gradient_checkpointing=true`, while
+the working pinned E97 path used `--batch-size 4` and did not enable gradient
+checkpointing. The corrected config restores batch size 4 and disables
+gradient checkpointing. Model dimensions, ScheduleFree parameters, pinned seed,
+CommaPile data, bf16, Triton split-edit path, chunk size 2048, and K=40 remain
+identical.
+
+The changed payload also records node-local per-trainer JSONL timestamps around
+data load, forward, backward, scalar loss/item synchronization, optimizer
+update, optimizer-step completion, and delta streaming. Each phase refreshes a
+stage-specific heartbeat without treating liveness as completed-generation
+progress. This makes a subsequent startup smoke diagnose the exact stalled
+phase while the unchanged 900-second generation/progress fail-fast remains
+bounded. Applicable authority requirements are R03, R06, R09, R10, R14, and
+R16; no R16 success is claimed.

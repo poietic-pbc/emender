@@ -1015,6 +1015,7 @@ def _run_real_worker(
     consume_optimizer_state: bool = False,
     progress_callback: Callable[[int, Mapping[str, Any]], None] | None = None,
     delta_consumer: Callable[[Mapping[str, torch.Tensor], torch.nn.Module, int], None] | None = None,
+    phase_callback: Callable[[str, Mapping[str, Any]], None] | None = None,
 ) -> RealAsyncWorkerReport:
     del run_id
     start_s = time.monotonic()
@@ -1057,6 +1058,7 @@ def _run_real_worker(
                 device=device,
                 step=int(generation) * max(1, int(spec.local_steps)) + step,
                 hidden_state=hidden_state,
+                phase_callback=phase_callback,
             )
             hidden_state = metrics.get("hidden_state")
             losses.append(float(metrics["loss"]))

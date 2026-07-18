@@ -188,7 +188,8 @@ def test_approved_training_arguments_are_flat_overrides():
     assert value["dim"] == 1792 and value["depth"] == 11 and value["lr"] == 0.001007
     assert value["n_groups"] == 32 and value["n_slots"] == 64
     assert value["mlp_ratio"] == 2.2623 and value["mlp_multiple"] == 64
-    assert value["batch_size"] == 1 and value["chunk_size"] == 2048
+    assert value["batch_size"] == 4 and value["chunk_size"] == 2048
+    assert value["gradient_checkpointing"] is False
     assert value["use_chunked_e97"] == 0 and value["e97_chunk_size"] == 32
     assert value["use_triton"] == 1 and value["use_split_edit"] == 1
     assert value["linear_state"] == 0 and value["e88_raw_write"] == 0
