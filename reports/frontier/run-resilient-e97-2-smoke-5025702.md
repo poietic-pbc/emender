@@ -48,3 +48,15 @@ process presence was therefore not counted as progress. Trainer logs had last
 advanced during model startup between 23:46 and 23:50, still inside the
 explicit 2,700-second whole-generation deadline. The job was not cancelled and
 no duplicate or follow-on allocation was submitted.
+
+At `2026-07-18T00:25:50-04:00` (approximately 40 minutes after the node-local
+roles started), a live `srun --jobid=5025702 --overlap` inspection confirmed
+that both managers and all sixteen trainer processes remained alive. Each
+trainer held approximately 6.3 GiB RSS. Node-local liveness files continued
+to advance on both nodes, but there was still no bulk update spool object,
+finalized-generation manifest, or immutable checkpoint. The retained trainer
+output had reached the real HIP E97 forward/backward path and its first loss
+conversion, but had not reached the first optimizer-step callback. This is
+process-liveness evidence only and is not counted as a successful smoke
+generation. The allocation remains subject to its finite 2,700-second
+whole-generation deadline and was neither cancelled nor duplicated.
