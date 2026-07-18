@@ -203,6 +203,39 @@ the live-path
 `.tolist()`/collective/MPI ban, and the job-5028347 evidence manifest check also
 passed. The user Frontier queue was empty after the gates.
 
+### Changed startup payload r3
+
+Focused code/evidence commit
+`a63e456ac2ffc58d78055e6983471e7b0284bf74` was pushed to the task branch
+and authoritative `origin/main`, fetched, and verified equal before rendering.
+The exact retained command is:
+
+```bash
+bash reports/frontier/validate-resilient-pool-v1-2n-startup-r3-submit-20260718T161234Z.sh
+```
+
+The script SHA-256 is
+`c3bb021d38d452fc80d11ed139126a13145e3933091319893e47ca77f76e696c`.
+Its payload identity is
+`a63e456-20260718T161234Z-pool-v1-startup-r3-2n20m-k40-windowed-owner64m-ledger64g`
+and run identity is
+`validate-resilient-pool-v1-2n-startup-r3-20260718T161234Z-a63e456`.
+Changed live-file hashes are:
+
+| Artifact | SHA-256 |
+|---|---|
+| two-node sbatch launcher | `6bad3f77e6a20834a13452c04de35299bd53f1d4304e4ab089a3524f3596d6ec` |
+| allocation supervisor | `1893cdef5413945a0c49e6bc219dc0e9227eb5e510679429416851637b4c122e` |
+| live role entrypoint | `c82025213f74ba85e6e4b1bf95f3f1a85cb0444ae921dda3fc37273366516833` |
+
+Payload r3 remains exactly two nodes, debug QoS, `00:20:00`, two model-free
+managers, 16 real GPU trainers, batch size 4, K=40, one generation, and node
+quorum two. It has no injection or resume handoff, uses a 64 GiB hard spool
+ledger with separate 64 MiB local and owner-network records, and configures
+zero role restarts. The script refuses a nonempty user queue, existing run
+directory, non-authoritative origin, changed live tree, or absent integrated-v1
+ancestry. This is a retained changed payload; it has not yet been submitted.
+
 ## Authoritative integration and queue gate
 
 - Integrated v1 commit `ae2e6f26046fb7a6b348e845fb4615092a7c37e0` is an
