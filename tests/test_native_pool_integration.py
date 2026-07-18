@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 import time
 
+import numpy as np
+import pytest
+
 from ndm.native_artifacts import NATIVE_TEST
 from ndm.native_pool_runtime import NativeManagerSession
 from ndm.native_transport import NativeTransport, NativeTransportLibrary
@@ -26,6 +29,49 @@ def test_native_manager_binds_both_abis_before_ready_installs_routes_and_drains(
         telemetry_path=tmp_path / "native.jsonl", payload_max=4096,
         resident_limit_bytes=1 << 20,
     )
+    session.install_generation(
+        total_elements=8, generation=4, payload_max=64, deadline_s=10)
+    with session.allocate_trainer_buffer(deadline_s=10) as buffer:
+        with buffer.mapped("float32", write=True) as target:
+            target[:] = np.arange(8, dtype=np.float32)
+        buffer.seal()
+        submission = session.submit_local(
+            buffer, trainer_key="trainer-0", trainer_incarnation="trainer-0-boot",
+            submission_seq=1, weight=17, deadline_s=10)
+    freeze = session.freeze(deadline_s=10)
+    result_operation, result = session.finalize_redistribution(deadline_s=10)
+    with result:
+        with result.mapped("float32") as actual:
+            assert np.array_equal(actual, np.arange(8, dtype=np.float32))
+        with pytest.raises(RuntimeError, match="durable Python publication"):
+            session.commit(
+                publication_manifest=tmp_path / "missing.json",
+                authoritative_latest={}, deadline_s=10)
+        proposal = session.checkpoint_proposal(
+            tmp_path / "checkpoint-proposal.json", result,
+            publisher="node-0-trainer-0", metadata={"accepted": ["node-0"]})
+        assert json.loads(proposal.read_text())["global_weight"] == 17
+        publication = tmp_path / "generation-00000004-fence-00000019.json"
+        publication.write_text(json.dumps({
+            "finalized": True, "run_id": "run", "generation": 4,
+            "fence": {"coordinator_epoch": 19},
+        }, sort_keys=True) + "\n")
+        publication_digest = __import__("hashlib").sha256(
+            publication.read_bytes()).hexdigest()
+        with pytest.raises(RuntimeError, match="authoritative latest CAS"):
+            session.commit(
+                publication_manifest=publication,
+                authoritative_latest={"generation": 4, "fence": 18}, deadline_s=10)
+        session.commit(
+            publication_manifest=publication,
+            authoritative_latest={
+                "generation": 4, "fence": 19,
+                "manifest": str(publication.resolve()),
+                "manifest_sha256": publication_digest,
+            }, deadline_s=10)
+    result_operation.close()
+    freeze.close()
+    submission.close()
     expiry = time.time_ns() + 10_000_000_000
     with NativeTransport.open(
             library=NativeTransportLibrary(transport_library),
@@ -58,4 +104,3 @@ def test_native_manager_binds_both_abis_before_ready_installs_routes_and_drains(
     assert final.local["shared_bytes_current"] == 0
     assert final.transport["in_flight_bytes"] == 0
     assert final.transport["retained_bytes"] == 0
-

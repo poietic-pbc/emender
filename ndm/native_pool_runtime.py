@@ -21,7 +21,9 @@ from typing import Mapping, Sequence
 from ndm.native_artifacts import (
     NATIVE_CXI, NATIVE_TEST, PYTHON_TCP_DEBUG, attest_launch,
 )
-from ndm.native_dataplane import Client, Command, NativeLibrary, Role
+from ndm.native_dataplane import (
+    Buffer, Client, Command, DType, NativeLibrary, Operation, ResultView, Role,
+)
 from ndm.native_transport import (
     NativeTransport, NativeTransportLibrary, decode_endpoint_record,
 )
@@ -58,11 +60,15 @@ class NativeManagerSession:
     def __init__(self, *, backend: str, attestation: Mapping[str, object],
                  local: Client, transport: NativeTransport,
                  endpoint: OwnerEndpoint, telemetry_path: Path | None,
-                 telemetry_fd: int):
+                 telemetry_fd: int, run_id: str, fence_epoch: int):
         self.backend, self.attestation = backend, dict(attestation)
+        self.run_id, self.fence_epoch = run_id, fence_epoch
         self.local, self.transport, self.owner_endpoint = local, transport, endpoint
         self.telemetry_path, self.telemetry_fd = telemetry_path, telemetry_fd
         self.routes: dict[str, int] = {}
+        self._generation_installed = False
+        self._frozen = False
+        self._checkpoint_proposed = False
         self.closed = False
 
     @classmethod
@@ -124,6 +130,7 @@ class NativeManagerSession:
                 backend=backend, attestation=attestation, local=local,
                 transport=transport, endpoint=endpoint,
                 telemetry_path=telemetry, telemetry_fd=telemetry_fd,
+                run_id=run_id, fence_epoch=fence_epoch,
             )
         except BaseException:
             if transport is not None:
@@ -151,6 +158,117 @@ class NativeManagerSession:
                 self.transport.remove(peer_id)
         self.routes = desired
         return dict(self.routes)
+
+    def install_generation(self, *, total_elements: int, generation: int,
+                           attempt: int = 1, owner_epoch: int = 1,
+                           source_dtype: DType = DType.F32,
+                           payload_max: int = 64 << 20,
+                           base_digest: bytes | None = None,
+                           plan_digest: bytes | None = None,
+                           deadline_s: float = 30.0) -> bytes:
+        """Install a bounded native local generation after Python opens it."""
+        if self._generation_installed:
+            raise RuntimeError("native generation is already installed")
+        digest = self.local.install_flat_layout(
+            total_elements, source_dtype=source_dtype, payload_max=payload_max)
+        self.local.install_generation(
+            generation, attempt=attempt, owner_epoch=owner_epoch,
+            base_digest=base_digest, plan_digest=plan_digest,
+            deadline_s=deadline_s).close()
+        self._generation_installed = True
+        self._frozen = self._checkpoint_proposed = False
+        return digest
+
+    def allocate_trainer_buffer(self, *, deadline_s: float = 30.0) -> Buffer:
+        if not self._generation_installed or self._frozen:
+            raise RuntimeError("trainer buffer admission is outside LOCAL_COLLECT")
+        return self.local.allocate(deadline_s=deadline_s)
+
+    def submit_local(self, buffer: Buffer, *, trainer_key: bytes | str,
+                     trainer_incarnation: bytes | str, submission_seq: int,
+                     weight: int, deadline_s: float = 30.0) -> Operation:
+        if not self._generation_installed or self._frozen:
+            raise RuntimeError("local contribution is outside LOCAL_COLLECT")
+        return self.local.submit(
+            buffer, trainer_key=trainer_key,
+            trainer_incarnation=trainer_incarnation,
+            submission_seq=submission_seq, weight=weight,
+            deadline_s=deadline_s)
+
+    def freeze(self, *, deadline_s: float = 30.0) -> Operation:
+        """Execute Python's immutable accepted-set decision in native memory."""
+        if not self._generation_installed or self._frozen:
+            raise RuntimeError("native contribution set cannot be frozen")
+        operation = self.local.control(Command.FREEZE, deadline_s=deadline_s)
+        self._frozen = True
+        return operation
+
+    def finalize_redistribution(self, *, deadline_s: float = 30.0
+                                ) -> tuple[Operation, ResultView]:
+        """Expose the one shared read-only trainer-apply view after owner readiness."""
+        if not self._frozen:
+            raise RuntimeError("native owners cannot finalize before freeze")
+        operation = self.local.control(Command.FINALIZE_OWNERS, deadline_s=deadline_s)
+        return operation, self.local.result_view(operation)
+
+    def checkpoint_proposal(self, path: str | Path, result: ResultView,
+                            *, publisher: str,
+                            metadata: Mapping[str, object] | None = None) -> Path:
+        """Emit metadata only; Python remains the checkpoint/publication owner."""
+        if not self._frozen or not publisher:
+            raise RuntimeError("checkpoint proposal requires a frozen native result")
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        value = {
+            "schema": "emender-native-checkpoint-proposal-v1",
+            "publisher": publisher, "run_key": result.run_key.hex(),
+            "fence_epoch": result.fence_epoch, "generation": result.generation,
+            "attempt": result.attempt, "layout_digest": result.layout_digest.hex(),
+            "base_digest": result.base_digest.hex(),
+            "result_root": result.result_root.hex(),
+            "global_weight": result.global_weight,
+            "result_bytes": result.length,
+            "metadata": dict(metadata or {}),
+        }
+        temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(temporary, target)
+        self._checkpoint_proposed = True
+        self._proposal_generation = result.generation
+        return target
+
+    def commit(self, *, publication_manifest: str | Path,
+               authoritative_latest: Mapping[str, object],
+               deadline_s: float = 30.0) -> None:
+        """Release native state only after Python supplies fenced CAS evidence."""
+        if not self._checkpoint_proposed:
+            raise RuntimeError("native commit requires durable Python publication approval")
+        publication_path = Path(publication_manifest).resolve()
+        publication_bytes = publication_path.read_bytes()
+        publication = json.loads(publication_bytes)
+        digest = hashlib.sha256(publication_bytes).hexdigest()
+        expected = {
+            "generation": self._proposal_generation,
+            "fence": self.fence_epoch,
+            "manifest": str(publication_path),
+            "manifest_sha256": digest,
+        }
+        if any(authoritative_latest.get(key) != value
+               for key, value in expected.items()):
+            raise RuntimeError("native commit lacks matching authoritative latest CAS")
+        fence = publication.get("fence", {})
+        if (publication.get("finalized") is not True
+                or publication.get("run_id") != self.run_id
+                or int(publication.get("generation", -1)) != self._proposal_generation
+                or int(fence.get("coordinator_epoch", -1)) != self.fence_epoch):
+            raise RuntimeError("native commit publication identity/fence mismatch")
+        self.local.control(Command.COMMIT, deadline_s=deadline_s).close()
+        self._generation_installed = self._frozen = self._checkpoint_proposed = False
+
+    def abort(self, *, deadline_s: float = 1.0) -> None:
+        if self._generation_installed:
+            self.local.control(Command.ABORT, deadline_s=deadline_s).close()
+        self._generation_installed = self._frozen = self._checkpoint_proposed = False
 
     def telemetry(self, terminal_reason: str = "running") -> NativeServiceTelemetry:
         local = asdict(self.local.metrics)

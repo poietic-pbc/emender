@@ -7,7 +7,7 @@ WG task: `qualify-compiled-frontier-transport-v1`
 Machine-readable companion:
 [`native-dataplane-reference-v1.json`](native-dataplane-reference-v1.json),
 SHA-256
-`187a53a23d67c54f80a8f45fc402f7ed79b0d2cedea9e8302b67c4556aa6edf0`.
+`6b224a94058a2e73d0ae9d9ba52e78c97edbe066194c1de786d1bb2be1afd5ce`.
 
 ## Result
 

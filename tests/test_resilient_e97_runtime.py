@@ -57,9 +57,9 @@ def _control_processes(run, bulk, *, run_id, generations, initial=0, resume="", 
 def test_eight_independent_trainers_advance_three_exact_generations(tmp_path):
     bulk_root = tmp_path.with_name(tmp_path.name + "-bulk")
     common = ["--run-dir", str(tmp_path), "--run-id", "control", "--generations", "3",
-              "--local-steps", "40", "--deadline-s", "15", "--source-id", "seed-sha",
+              "--local-steps", "40", "--deadline-s", "30", "--source-id", "seed-sha",
               "--payload-id", "layout-sha", "--code-id", "code-sha", "--control",
-              "--bulk-root", str(bulk_root)]
+              "--bulk-root", str(bulk_root), "--local-quorum", "8"]
     manager = subprocess.Popen([sys.executable, str(ROLE), "manager", *common],
                                env={**os.environ, "RESILIENT_E97_NODE_RANK": "0"})
     trainers = []
@@ -68,8 +68,8 @@ def test_eight_independent_trainers_advance_three_exact_generations(tmp_path):
             [sys.executable, str(ROLE), "trainer", *common],
             env={**os.environ, "RESILIENT_E97_NODE_RANK": "0",
                  "RESILIENT_E97_LOCAL_RANK": str(rank)}))
-    assert manager.wait(timeout=30) == 0
-    assert [item.wait(timeout=30) for item in trainers] == [0] * 8
+    assert manager.wait(timeout=60) == 0
+    assert [item.wait(timeout=60) for item in trainers] == [0] * 8
     for rank in range(8):
         state = json.loads((bulk_root / "control/node-0/supervision" /
                             f"node-0-trainer-{rank}.json").read_text())

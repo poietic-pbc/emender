@@ -199,6 +199,9 @@ def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tm
     approved_args = repo / "configs/frontier/e97_resilient_split_role_flat.json"
     approved_args.write_text((ROOT / "configs/frontier/e97_resilient_split_role_flat.json").read_text())
     (repo / "scripts/frontier/resilient_e97_allocation_supervisor.py").write_text("pass\n")
+    (repo / "scripts/frontier/attest_native_dataplane.py").write_text(
+        "import json,sys\nprint(json.dumps({'status':'attested'}))\n"
+    )
     (repo / "scripts/frontier/frontier_runtime_env.sh").write_text(
         "frontier_load_default_modules() { :; }\n"
         "frontier_activate_emender_conda_env() { :; }\n"
@@ -235,6 +238,8 @@ def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tm
         "RESILIENT_E97_DATA": "/data",
         "RESILIENT_E97_TIKTOKEN_CACHE_FILE": str(tokenizer_cache),
         "RESILIENT_E97_TIKTOKEN_SHA256": hashlib.sha256(tokenizer_cache.read_bytes()).hexdigest(),
+        "NDP_BUILD_MANIFEST": str(tmp_path / "native-artifacts.json"),
+        "NDP_FULL_LAYOUT_GATE_JSON": str(tmp_path / "full-layout-gate.json"),
     }
     subprocess.run(["bash", str(ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch")],
                    env=env, text=True, capture_output=True, check=True)
