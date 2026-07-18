@@ -685,8 +685,12 @@ transport size from r6 specifically to isolate the aggregate-storage and
 application fix. It refuses source drift, an existing run directory, missing
 integrated-v1 ancestry, or any active/pending user job. `bash -n`, exact
 r6/r7 command diff review, `git diff --check`, and the external empty-queue
-check passed. The command is retained before submission and has not yet been
-executed.
+check passed. After the immutable command record was committed, pushed,
+fetched, and verified, it was executed exactly once and returned Frontier job
+`5029077`. Slurm recorded submit/eligible time `2026-07-18T18:41:05Z`, exactly
+two requested nodes, debug QoS, `00:20:00`, 16 requested GPUs, no dependency,
+no requeue, and zero restarts. Its first state was `PENDING (Priority)` as the
+only user job. Queue time is recorded separately from runtime.
 
 ## Authoritative integration and queue gate
 
