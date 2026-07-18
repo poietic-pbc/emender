@@ -9,7 +9,7 @@ requirements R01–R16 in `docs/RESILIENT_DILOCO_GAP_MATRIX.md`.
 
 ## Status
 
-The startup rung has failed closed four times without an unchanged retry. Job
+The startup rung has failed closed five times without an unchanged retry. Job
 `5028225` failed at the post-K40 local-delta streaming stage. Changed payload
 r2 job `5028347` then proved the 64 MiB/two-file local spool fix: both managers
 were READY within 61 seconds of allocation start, all 16 real trainers finished
@@ -44,15 +44,27 @@ whose raw `write()` may legally accept only part of a large byte string;
 after a truncated payload. This is a framing correctness bug, not evidence for
 an unbounded timeout increase. The fenced store still has zero publications.
 
+Changed payload r5 job `5028767` proved the exact-write fix and completed the
+entire distributed owner plane: 11,013,540,992 bytes sent plus the same amount
+redistributed in 98.961 seconds (222.6 MB/s), with two owners, zero replay,
+11,013,540,992-byte high-water, and full sender release. It then failed closed
+at checkpoint proposal. Node 0's designated trainer was still writing and
+hashing a redundant node-local 7.7 GB recovery checkpoint before beginning the
+authoritative checkpoint/proposal; node 0's manager exhausted the unchanged
+180-second exchange/commit deadline while waiting. The focused follow-up moves
+the one complete leader checkpoint and proposal ahead of disposable local
+recovery and reuses that immutable file for leader recovery. No deadline is
+extended and no second full leader serialization is needed.
+
 The ladder therefore remains on rung 1. No resilience or fresh-restart job has
-been rendered or submitted. Changed startup payload r5 retains the one-second
+been rendered or submitted. Changed startup payload r5 retained the one-second
 connection bound, bounded 64 MiB frames, and unchanged 180-second overall
 exchange deadline, but makes every framed segment write exact by advancing a
 memoryview until all accepted bytes are sent. A regression using a deliberately
 partial raw writer failed on the r4 tree and passes with the focused fix. It is
-not an unchanged retry; its immutable command is retained below and was not yet
-submitted when the payload itself was committed. The exact command has since
-been executed once as job `5028767`.
+not an unchanged retry. The next payload will differ by the checkpoint-critical
+path ordering described above and will not be rendered until the full pinned
+gate passes.
 
 No production allocation, normal-QoS allocation, 4+ node allocation, or
 two-hour allocation is authorized by this report.
@@ -442,9 +454,73 @@ shape, model, optimizer, quorum, or deadline value changed.
 The retained command was executed exactly once and returned job ID `5028767`.
 Slurm recorded submit/eligible time `2026-07-18T17:18:18Z`, exactly two nodes,
 debug QoS, `00:20:00`, 16 requested GPUs, no dependency, no requeue, and zero
-restarts. Its initial state was `PENDING (Priority)` as the sole user job.
-Queue time is separate from runtime; no resilience or restart job was
-submitted.
+restarts. Its initial state was `PENDING (Priority)` as the sole user job. It
+started at `2026-07-18T17:19:00Z` after 42 seconds of queue time on exactly
+`frontier05858` and `frontier05859`, then failed closed at
+`2026-07-18T17:28:55Z` after 595 runtime seconds. The allocation exit was
+`137:0` and the role-step exit was `1:0`. Queue time is separate from runtime;
+no resilience or restart job was submitted.
+
+### Startup r5 result and checkpoint-first fix
+
+Runtime identity and the required two-manager/16-real-trainer topology were
+attested before model load. Node 0 retained the following complete critical
+path; the peer node step was terminated before it copied its node-local
+snapshot, but its role logs and the global supervisor records are retained:
+
+| Stage | Job 5028767 observation |
+|---|---|
+| manager READY | both roles READY; node 0 at allocation +58.352 seconds |
+| node-0 trainer K40 | all eight at allocation +174.403–176.262 seconds |
+| node-0 two-file local spool | 5,506,770,496 bytes per trainer in 140.228–143.897 seconds; complete by allocation +319.370 seconds |
+| exact local reduce | node 0 accepted six trainers and 1,967,040 tokens at allocation +375.467 seconds |
+| deterministic global freeze | two complete node contributions and 3,934,080 tokens at allocation +395.578 seconds |
+| owner transport and redistribution | 11,013,540,992 bytes each in 98.961 seconds, 222,582,520.49 bytes/s, two owners, zero replay, 11,013,540,992-byte high-water, and full release; complete at allocation +494.541 seconds |
+| terminal checkpoint stage | node 0 manager reached `checkpoint_commit`, then expired the fixed proposal deadline; zero publications and no configured role retry |
+
+The node-0 ownership ledger reports a 55,068,090,151-byte overall local
+high-water below its 68,719,476,736-byte hard cap, 22,027,198,003 bytes after
+release, 11,013,540,992 bytes written, 33,040,622,976 bytes read, exactly two
+published aggregate files, and `shared_run_dir_is_bulk_path=false`. The frozen
+generation record has two owners, zero replay, the exact accepted peer set,
+and `central_full_model_broker=false`. The fenced database remains at fence 1
+with zero publication rows, so the failed attempt cannot be mistaken for a
+committed generation.
+
+Slurm accounting records `TotalCPU=08:11:15`, raw energy `839538`, and role
+step `MaxRSS=151239508K`, `MaxDiskRead=144016.86M`, and
+`MaxDiskWrite=54899.40M`. The retained tree at
+`reports/frontier/evidence/job-5028767` contains 81 files; its `SHA256SUMS`
+digest is `07b96b59379bc335f5bcfb7ccb691009ec68d9c9c9e7071041335932370eb09a`
+and `sha256sum -c` passes. Top-level stdout, stderr, fenced SQLite, and
+supervisor-event hashes are respectively
+`c7b8c2ee0144f9781b534f2e62186979c2c3a8bf2fd7dec165609e23d1788edb`,
+`5955617aaaf81e185f8d2921e493047f3a5586cec828fb77c4843ae7bf62f966`,
+`4210f5843322a5db6e74d8c6c6509acdcb8aee4b0705b66a4872ab037e5048fd`,
+and `1388de0089780a2c907cd7a997d69a5ec1f489a7ffd84fc85ce3dbb3e5f46852`.
+
+The designated trainer previously serialized and hashed a separate 7.7 GB
+node-local recovery checkpoint before it created the complete authoritative
+checkpoint and proposal. That ordering placed disposable recovery ahead of the
+only durable operation needed for atomic commit. The focused change writes one
+complete fence-specific authoritative checkpoint immediately after aggregate
+application, asserts the lease, publishes its proposal, and reuses the same
+immutable file as leader recovery. Non-leaders retain bounded node-local
+recovery, but it no longer gates the manager. The exchange/commit deadline
+remains 180 seconds. The new
+`test_checkpoint_leader_proposes_before_disposable_local_recovery` first failed
+against the r5 tree (`proposal` followed local recovery) and passes after the
+reordering; the independent fresh-process restart proof now also verifies that
+leader recovery names and reloads the authoritative checkpoint without a
+duplicate local serialization.
+
+The final changed-tree pre-submit gate passed in the pinned environment: all
+127 lifecycle, exact-math, membership/quorum, bounded transport, owner replay,
+fencing/restart, launcher, real-trainer, and helper tests passed in 123.05
+seconds. Approved-Python `compileall`, metrics `json.tool`, `git diff --check`,
+the forbidden dense-packing/collective/MPI live-path scan, the r5 retained
+evidence checksum, and the empty Frontier queue check also passed. This is the
+only code change permitted in the next startup payload.
 
 ## Authoritative integration and queue gate
 

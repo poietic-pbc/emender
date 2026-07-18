@@ -602,6 +602,7 @@ def trainer(args) -> int:
     stop = {"requested": False}
     signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__("requested", True))
     completed = start_generation
+    leader_checkpoint: Path | None = None
     for generation in range(start_generation, target_generation):
         if stop["requested"]:
             break
@@ -729,20 +730,73 @@ def trainer(args) -> int:
         accepted_token_clock += int(manifest["weight"])
         step += args.local_steps; losses.append(loss)
         completed = generation + 1
-        recovery_checkpoint = bulk / "recovery" / identity / f"generation-{completed:08d}.pt"
-        recovery_checkpoint.parent.mkdir(parents=True, exist_ok=True)
-        temporary = recovery_checkpoint.with_suffix(".tmp")
-        torch.save({"identity": identity, "model_state_dict": state,
-                    "optimizer_state_dict": optimizer_state, "migration": migration,
-                    "outer_update_state": migration.get("state", {}), "step": step,
-                    "generation": completed, "run_id": args.run_id,
-                    "source_id": args.source_id, "payload_id": args.payload_id,
-                    "coordinator_epoch": _fence_epoch(args),
-                    "membership": manifest["members"], "fence": fence.__dict__,
-                    "accepted_peers": manifest.get("accepted_peers", []),
-                    "accepted_tokens": accepted_token_clock,
-                    "async_chain": async_chain}, temporary)
-        os.replace(temporary, recovery_checkpoint)
+        heartbeat(bulk, identity, generation=completed, step=step, loss=loss,
+                  stage="checkpoint_commit" if node == 0 and rank == 0
+                  else "redistribution")
+
+        # The authoritative leader proposal is on the first-commit critical
+        # path. Job 5028767 proved that writing and hashing a separate 7.7 GB
+        # node-local recovery checkpoint before this block can consume the
+        # remainder of the fixed 180s exchange/commit window even after owner
+        # transport succeeds. Publish one complete leader checkpoint and its
+        # proposal first; the same immutable file is also valid leader recovery
+        # state, so do not serialize the model twice.
+        if node == 0 and rank == 0 and completed == target_generation:
+            if fenced is not None:
+                fenced[0].assert_current(fenced[1])
+            checkpoint_name = f"generation-{completed:08d}"
+            if fenced is not None:
+                checkpoint_name += f"-fence-{fenced[1].fence:08d}"
+            leader_checkpoint = run / "checkpoints" / f"{checkpoint_name}.pt"
+            leader_checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            temporary = leader_checkpoint.with_suffix(".tmp")
+            torch.save({"identity": identity, "model_state_dict": state,
+                        "optimizer_state_dict": optimizer_state,
+                        "outer_update_state": migration.get("state", {}),
+                        "migration": migration, "step": step,
+                        "generation": completed, "run_id": args.run_id,
+                        "source_id": args.source_id, "payload_id": args.payload_id,
+                        "coordinator_epoch": _fence_epoch(args),
+                        "membership": manifest["members"], "fence": fence.__dict__,
+                        "accepted_peers": manifest.get("accepted_peers", []),
+                        "accepted_tokens": accepted_token_clock,
+                        "async_chain": async_chain, "loss": losses[-1]}, temporary)
+            os.replace(temporary, leader_checkpoint)
+            if fenced is not None:
+                fenced[0].assert_current(fenced[1])
+            atomic_json(bulk / "control" / "trainer-proposal.json", {
+                "checkpoint": str(leader_checkpoint.resolve()),
+                "generation": completed, "step": step,
+                "async_chain": async_chain,
+                "membership": manifest.get("accepted_peers") or manifest["members"],
+                "accepted_tokens": accepted_token_clock,
+                "generation_identity": {**fence.__dict__,
+                                        "result_generation": completed},
+                "digests": {"source_id": args.source_id,
+                            "payload_id": args.payload_id,
+                            "code_id": args.code_id},
+                "fence": fence.__dict__,
+                "outer_update_state": migration.get("state", {}),
+                "migration": migration})
+
+        if leader_checkpoint is None:
+            recovery_checkpoint = (bulk / "recovery" / identity /
+                                   f"generation-{completed:08d}.pt")
+            recovery_checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            temporary = recovery_checkpoint.with_suffix(".tmp")
+            torch.save({"identity": identity, "model_state_dict": state,
+                        "optimizer_state_dict": optimizer_state, "migration": migration,
+                        "outer_update_state": migration.get("state", {}), "step": step,
+                        "generation": completed, "run_id": args.run_id,
+                        "source_id": args.source_id, "payload_id": args.payload_id,
+                        "coordinator_epoch": _fence_epoch(args),
+                        "membership": manifest["members"], "fence": fence.__dict__,
+                        "accepted_peers": manifest.get("accepted_peers", []),
+                        "accepted_tokens": accepted_token_clock,
+                        "async_chain": async_chain}, temporary)
+            os.replace(temporary, recovery_checkpoint)
+        else:
+            recovery_checkpoint = leader_checkpoint
         _publish_role_recovery(
             control, identity, args, completed, step=step,
             checkpoint=str(recovery_checkpoint),
@@ -751,37 +805,6 @@ def trainer(args) -> int:
             membership=manifest["members"], fence=fence.__dict__,
             accepted_tokens=accepted_token_clock)
         heartbeat(bulk, identity, generation=generation + 1, step=step, loss=loss, stage="applied")
-    if node == 0 and rank == 0 and completed > start_generation:
-        if fenced is not None:
-            fenced[0].assert_current(fenced[1])
-        checkpoint_name = f"generation-{completed:08d}"
-        if fenced is not None:
-            checkpoint_name += f"-fence-{fenced[1].fence:08d}"
-        checkpoint = run / "checkpoints" / f"{checkpoint_name}.pt"
-        checkpoint.parent.mkdir(parents=True, exist_ok=True)
-        temporary = checkpoint.with_suffix(".tmp")
-        torch.save({"model_state_dict": state, "optimizer_state_dict": optimizer_state,
-                    "outer_update_state": migration.get("state", {}), "step": step,
-                    "generation": completed, "run_id": args.run_id,
-                    "source_id": args.source_id, "payload_id": args.payload_id,
-                    "coordinator_epoch": _fence_epoch(args),
-                    "accepted_tokens": accepted_token_clock,
-                    "loss": losses[-1]}, temporary); os.replace(temporary, checkpoint)
-        if fenced is not None:
-            fenced[0].assert_current(fenced[1])
-        fence = _fence(args, completed - 1)
-        aggregate_manifest, _ = spool.wait_aggregate(
-            fence, deadline=time.monotonic() + args.deadline_s, expected_source_id=args.source_id)
-        atomic_json(bulk / "control" / "trainer-proposal.json", {
-            "checkpoint": str(checkpoint.resolve()), "generation": completed, "step": step,
-            "async_chain": async_chain,
-            "membership": aggregate_manifest.get("accepted_peers") or aggregate_manifest["members"],
-            "accepted_tokens": accepted_token_clock,
-            "generation_identity": {**fence.__dict__, "result_generation": completed},
-            "digests": {"source_id": args.source_id, "payload_id": args.payload_id,
-                        "code_id": args.code_id},
-            "fence": fence.__dict__, "outer_update_state": migration.get("state", {}),
-            "migration": migration})
     return 0
 
 

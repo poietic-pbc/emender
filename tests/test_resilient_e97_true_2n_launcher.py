@@ -560,6 +560,17 @@ def test_trainer_exchange_window_waits_for_manager_local_reduce(tmp_path):
         "exchange_deadline = time.monotonic() + min(args.deadline_s, 180.0)")
 
 
+def test_checkpoint_leader_proposes_before_disposable_local_recovery():
+    trainer = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    trainer = trainer[trainer.index("def trainer(args)"):]
+
+    proposal = trainer.index(
+        'atomic_json(bulk / "control" / "trainer-proposal.json"')
+    local_recovery = trainer.index("recovery_checkpoint =")
+    assert proposal < local_recovery
+    assert "completed == target_generation" in trainer[:local_recovery]
+
+
 def test_node_local_exit_retains_only_small_control_evidence(tmp_path):
     from scripts.frontier import resilient_e97_allocation_supervisor as supervisor
 

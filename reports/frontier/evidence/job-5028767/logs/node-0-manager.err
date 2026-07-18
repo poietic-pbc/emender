@@ -1,0 +1,13 @@
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/scripts/frontier/resilient_e97_role.py", line 800, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/scripts/frontier/resilient_e97_role.py", line 796, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/scripts/frontier/resilient_e97_role.py", line 468, in manager
+    raise TimeoutError("checkpoint proposal deadline expired")
+TimeoutError: checkpoint proposal deadline expired

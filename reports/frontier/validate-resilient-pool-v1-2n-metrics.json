@@ -214,9 +214,20 @@
         }
     },
     "startup_r5_payload": {
-        "status": "submitted exactly once; pending for Priority",
+        "status": "failed closed at checkpoint proposal after successful owner transport; focused checkpoint-first payload required",
         "job_id": 5028767,
         "submit_utc": "2026-07-18T17:18:18Z",
+        "allocation_start_utc": "2026-07-18T17:19:00Z",
+        "end_utc": "2026-07-18T17:28:55Z",
+        "queue_seconds": 42,
+        "runtime_seconds": 595,
+        "state": "FAILED",
+        "allocation_exit_code": "137:0",
+        "step_exit_code": "1:0",
+        "allocated_nodes": [
+            "frontier05858",
+            "frontier05859"
+        ],
         "code_commit": "bfc2050b3f2e922f4c965aa3f3bd02688eaaeb92",
         "run_id": "validate-resilient-pool-v1-2n-startup-r5-20260718T171539Z-bfc2050",
         "payload_id": "bfc2050-20260718T171539Z-pool-v1-startup-r5-2n20m-k40-owner64m-exactwrite",
@@ -245,6 +256,55 @@
         "overall_exchange_commit_seconds": 180,
         "exact_segment_writes": true,
         "local_gate_passed": 126,
-        "local_gate_seconds": 117.86
+        "local_gate_seconds": 117.86,
+        "node0_manager_ready_seconds_from_allocation_start": 58.352,
+        "node0_k40_seconds_from_allocation_start": {
+            "min": 174.403,
+            "max": 176.262
+        },
+        "node0_local_spool_seconds": {
+            "min": 140.228,
+            "max": 143.897
+        },
+        "local_spool_bytes_per_trainer": 5506770496,
+        "local_spool_files_per_trainer": 2,
+        "node0_local_reduce_seconds_from_allocation_start": 375.467,
+        "freeze_seconds_from_allocation_start": 395.578,
+        "accepted_node_contributions": 2,
+        "accepted_tokens": 3934080,
+        "owner_complete_seconds_from_allocation_start": 494.541,
+        "owner_elapsed_seconds": 98.961446568,
+        "p2p_bytes_sent": 11013540992,
+        "redistribution_bytes": 11013540992,
+        "owner_bytes_per_second": 222582520.49,
+        "owner_high_water_bytes": 11013540992,
+        "owner_released_bytes": 11013540992,
+        "owner_count": 2,
+        "replay_bytes": 0,
+        "local_ledger_high_water_bytes": 55068090151,
+        "local_ledger_post_release_bytes": 22027198003,
+        "atomic_publications": 0,
+        "terminal_stage": "checkpoint_commit/checkpoint proposal deadline",
+        "slurm_total_cpu": "08:11:15",
+        "slurm_energy": 839538,
+        "step_max_rss_kib": 151239508,
+        "evidence_files": 81,
+        "evidence_manifest_sha256": "07b96b59379bc335f5bcfb7ccb691009ec68d9c9c9e7071041335932370eb09a",
+        "next_change": {
+            "authoritative_checkpoint_before_local_recovery": true,
+            "leader_single_serialization": true,
+            "leader_recovery_reuses_authoritative_checkpoint": true,
+            "overall_exchange_commit_seconds": 180,
+            "tdd_reproducer": "test_checkpoint_leader_proposes_before_disposable_local_recovery",
+            "focused_tests_passed": 2,
+            "focused_tests_seconds": 67.33,
+            "local_gate_passed": 127,
+            "local_gate_seconds": 123.05,
+            "compileall": "passed",
+            "json_tool": "passed",
+            "forbidden_live_path_scan": "passed",
+            "evidence_checksum": "passed",
+            "empty_queue": true
+        }
     }
 }
