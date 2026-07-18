@@ -1,0 +1,37 @@
+{
+  "architecture": "RESILIENT_DILOCO_COMPUTE_POOL.md version 1",
+  "code_commit": "87355275976184898fc3fb1975473ce69952f49f",
+  "integrated_v1_commit": "ae2e6f26046fb7a6b348e845fb4615092a7c37e0",
+  "local_gate": {
+    "approved_python": "3.12.13",
+    "exact_suite_passed": 120,
+    "exact_suite_seconds": 220.14,
+    "torch": "2.10.0+rocm7.1",
+    "torch_hip": "7.1.25424",
+    "triton": "3.6.0"
+  },
+  "payload_id": "8735527-20260718T143538Z-pool-v1-startup-2n20m-k40",
+  "payload_submit_sha256": "f73a8c7246c305770fab5397700af5f6e3097cdf5e11a248974277f271ee845c",
+  "requirements": [
+    "R01", "R02", "R03", "R04", "R05", "R06", "R07", "R08",
+    "R09", "R10", "R11", "R12", "R13", "R14", "R15", "R16"
+  ],
+  "run_id": "validate-resilient-pool-v1-2n-startup-20260718T143538Z-8735527",
+  "shape": {
+    "batch_size": 4,
+    "generations": 1,
+    "gpu_trainers": 16,
+    "local_steps": 40,
+    "model_free_managers": 2,
+    "nodes": 2,
+    "qos": "debug",
+    "walltime": "00:20:00"
+  },
+  "stage_hard_seconds": {
+    "exchange_commit": 180,
+    "first_atomic_generation": 720,
+    "local_k40": 420,
+    "ready": 180
+  },
+  "startup_job": null
+}
