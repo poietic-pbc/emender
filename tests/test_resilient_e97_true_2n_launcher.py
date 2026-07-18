@@ -377,6 +377,19 @@ def test_real_trainer_keeps_liveness_during_checkpoint_load_and_training():
     text = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
     trainer = text[text.index("def trainer(args)"):]
     assert trainer.index("_liveness_heartbeat(bulk, identity)") < trainer.index("_load_real(args)")
+
+
+def test_generation_deadline_includes_local_training_and_aggregate_wait():
+    role = ROLE.read_text()
+    deadline = "generation_deadline = time.monotonic() + args.deadline_s"
+    training_guard = "if time.monotonic() >= generation_deadline:"
+    aggregate_wait = "fence, deadline=generation_deadline,"
+
+    assert role.count(deadline) == 1
+    assert role.index(deadline) < role.index("report = _run_real_worker(")
+    assert role.index(training_guard) < role.index("progress_callback=training_progress")
+    assert role.index("progress_callback=training_progress") < role.index(aggregate_wait)
+    assert "deadline=time.monotonic() + args.deadline_s" not in role
     assert 'f"{identity}.liveness.json"' in text
 
 

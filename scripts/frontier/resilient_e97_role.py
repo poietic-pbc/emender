@@ -323,12 +323,29 @@ def trainer(args) -> int:
     for generation in range(start_generation, target_generation):
         if stop["requested"]:
             break
+        # One deadline covers the complete generation, including real local
+        # training, publication, quorum aggregation, and apply.  Starting a
+        # fresh timeout only after the expensive 40-step train can let a live
+        # but too-slow generation run until Slurm TERM without ever failing the
+        # configured generation bound.
+        generation_deadline = time.monotonic() + args.deadline_s
         if args.control:
             loss = 1.0 / (step + args.local_steps + rank + 1)
             delta = {"weight": torch.full_like(state["weight"], float(rank + 1))}
             tokens = rank + 1
         else:
             from ndm.async_diloco_real import RealAsyncWorkerSpec, _run_real_worker
+
+            def training_progress(local_step, metrics):
+                if time.monotonic() >= generation_deadline:
+                    raise TimeoutError(
+                        f"generation {generation} deadline exceeded during local training "
+                        f"at step {local_step}/{args.local_steps}")
+                heartbeat(
+                    bulk, identity, generation=generation,
+                    step=step + local_step, loss=float(metrics["loss"]),
+                    stage="training")
+
             report = _run_real_worker(
                 run_id=args.run_id, generation=generation, base_state=state,
                 train_args=train_args,
@@ -336,10 +353,7 @@ def trainer(args) -> int:
                                          args.local_steps, rank),
                 synthetic_token_stream=False, synthetic_vocab_size=256,
                 optimizer_state_dict=optimizer_state, consume_optimizer_state=True,
-                progress_callback=lambda local_step, metrics: heartbeat(
-                    bulk, identity, generation=generation,
-                    step=step + local_step, loss=float(metrics["loss"]),
-                    stage="training"))
+                progress_callback=training_progress)
             if report.update is None:
                 raise RuntimeError(report.error or "real E97 trainer produced no update")
             delta = report.update.delta
@@ -354,7 +368,7 @@ def trainer(args) -> int:
         del delta
         heartbeat(bulk, identity, generation=generation, step=step, loss=loss, stage="submitted")
         manifest, aggregate = spool.wait_aggregate(
-            fence, deadline=time.monotonic() + args.deadline_s,
+            fence, deadline=generation_deadline,
             expected_source_id=args.source_id)
         spool.release_trainer(fence, rank)
         state = apply_delta(state, aggregate, eta_outer=args.eta_outer)
