@@ -1,7 +1,7 @@
 # Resilient DiLoCo Compute Pool
 
 **Status:** Architecture decision and design authority (version 1, 2026-07-17).
-**Authority:** Changes to resilient training behavior MUST conform to this document. Detailed implementation evidence and gaps live in [the companion matrix](RESILIENT_DILOCO_GAP_MATRIX.md). Existing experiments may finish; this document does not authorize cancelling or mutating jobs.
+**Authority:** Changes to resilient training behavior MUST conform to this document. The normative compiled transport, local handoff, wire protocol, and Python/native ABI specialization is [Native resilient DiLoCo data plane v1](NATIVE_RESILIENT_DILOCO_DATAPLANE.md). Detailed implementation evidence and gaps live in [the companion matrix](RESILIENT_DILOCO_GAP_MATRIX.md). An implementation must satisfy both authorities; the native specialization cannot weaken the lease, membership, generation, weighting, fencing, atomicity, or recovery rules here. Existing experiments may finish; these documents do not authorize cancelling or mutating jobs.
 
 The practical Frontier MVP is one Slurm allocation of any supported size. It acquires an exclusive, expiring, fenced lease for a logical run. Peers inside that allocation become contributors only after synchronizing and advertising READY; they may appear late, disappear, and return without defining a fixed world size or imposing an all-rank barrier. The same protocol applies to a future very large, potentially system-scale, single allocation.
 
@@ -120,9 +120,36 @@ Scale admission is sequential: deterministic simulation/unit/reference math; the
 - Exercise the applicable failure/deadline and recovery path; state the minimum progress floor.
 - Report exact validation commands and committed-generation/checkpoint artifacts; scale tasks must pass every prior rung.
 
+## Native data-plane binding
+
+The production elastic dense path is bound to
+[`NATIVE_RESILIENT_DILOCO_DATAPLANE.md`](NATIVE_RESILIENT_DILOCO_DATAPLANE.md),
+version 1 (requirements NDP01–NDP17). Python remains the control plane for the
+allocation lease/fence, READY membership, generation admission and closure,
+owner reassignment policy, checkpoint policy/publication, and Slurm
+supervision. A persistent model-free C++17 service on every node owns local
+XPMEM/memfd handoff, exact native reduction, libfabric `FI_EP_RDM`/Frontier
+`cxi` payload movement, bounded replay, and redistribution. Python TCP and
+Python object serialization MUST NOT carry production dense contributions or
+aggregates.
+
+The native service is not a second committer and cannot infer membership or
+closure from transport reachability. Python freezes only locally complete,
+checksummed, retained contributions; native owners execute that immutable set.
+All fabric operations are bounded point-to-point operations. The elastic
+backend MUST NOT initialize MPI or require an all-rank collective, including
+during endpoint exchange, failure handling, redistribution, or shutdown.
+
+The compiled Cray-MPICH helper remains a numerical/performance reference and an
+explicit fixed-world fallback. Its launched-rank collectives do not satisfy the
+elastic failure-domain requirements. No real model or 4+ node native job is
+admissible until the exact-code full-layout two-node synthetic CXI artifact
+required by NDP17 has passed and been retained. This adds a gate; it does not
+replace the sequential lifecycle/failure/restart ladder above.
+
 ## Backend mapping and decision record
 
-Frontier/Slurm supplies a fixed allocation envelope; one model-free allocation holder acquires the run lease, launches independent node managers/trainers, maps shard owners deterministically among available peers, and reacts to Slurm shutdown signals. Slurm node count is capacity only. Hyperscale-local infrastructure maps a service lease, host agents, and local/NVMe/network transports to the same identities, lifecycle, generations, and commits. Other schedulers do likewise.
+Frontier/Slurm supplies a fixed allocation envelope; one model-free allocation holder acquires the run lease, launches independent node managers/trainers and one persistent native data service per node, maps shard owners deterministically among available peers, and reacts to Slurm shutdown signals. The native services select libfabric `FI_EP_RDM` with exact provider `cxi`; the Python holder exchanges their opaque endpoints through leased membership. Slurm node count is capacity only. Hyperscale-local infrastructure maps a service lease, host agents, and local/NVMe/network transports to the same identities, lifecycle, generations, and commits, using a separately qualified provider without changing the protocol. Other schedulers do likewise.
 
 **ADR-001:** The MVP chooses exactly one allocation write/commit lease for operational simplicity and safe continuation across queued jobs. Simultaneous independent allocations do not join one live run. A future federation may allow them to join through the same pool protocol, but requires a highly available lease/control service, cross-allocation discovery/authentication, shard-owner placement, and partition semantics. It MUST preserve all fences, membership, generation, weighting, and commit invariants; it is an extension, not the organizing design.
 
