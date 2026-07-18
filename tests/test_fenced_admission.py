@@ -93,6 +93,33 @@ def test_publications_are_immutable_idempotent_and_small(tmp_path):
         raise AssertionError("dense payload was admitted")
 
 
+def test_global_commit_checkpoint_and_latest_publish_in_one_fenced_transaction(tmp_path):
+    clock = Clock(); store = SQLiteFencedControlStore(tmp_path / "control.db", clock=clock)
+    stale = _acquire(store, "job-1")
+    clock.now = stale.expires_at
+    current = _acquire(store, "job-2", "boot-2")
+    bundle = (
+        ("commit", "generation-7", {"generation": 7, "accepted_tokens": 99}),
+        ("checkpoint", "generation-7", {"sha256": "abc", "outer": "sha"}),
+        ("latest", "authoritative", {"generation": 7, "fence": current.fence}),
+    )
+    with __import__("pytest").raises(FenceRejected, match="stale"):
+        store.publish_bundle(stale, bundle)
+    assert all(store.read_publication("run", kind, name) is None
+               for kind, name, _ in bundle)
+    store.publish_bundle(current, bundle)
+    assert store.read_publication("run", "latest", "authoritative")["generation"] == 7
+    store.publish_bundle(current, (
+        ("commit", "generation-8", {"generation": 8, "accepted_tokens": 109}),
+        ("checkpoint", "generation-8", {"sha256": "def", "outer": "sha2"}),
+        ("latest", "authoritative", {"generation": 8, "fence": current.fence}),
+    ))
+    assert store.read_publication("run", "latest", "authoritative")["generation"] == 8
+    with __import__("pytest").raises(FenceRejected, match="monotonically"):
+        store.publish(current, kind="latest", name="authoritative",
+                      payload={"generation": 7, "fence": current.fence})
+
+
 def test_release_preserves_monotonic_fence(tmp_path):
     store = SQLiteFencedControlStore(tmp_path / "control.db")
     first = _acquire(store, "job-1")
@@ -134,6 +161,8 @@ class FencedAdmissionTests(unittest.TestCase):
     def test_publication_fences(self): self.invoke(test_newer_fence_rejects_every_stale_publication)
     def test_publication_limits(self): self.invoke(test_publications_are_immutable_idempotent_and_small)
     def test_release(self): self.invoke(test_release_preserves_monotonic_fence)
+    def test_atomic_bundle(self): self.invoke(
+        test_global_commit_checkpoint_and_latest_publish_in_one_fenced_transaction)
     def test_expired_guard(self): self.invoke(test_expired_owner_cannot_release_or_pass_guard)
     def test_control_plane_only(self): self.invoke(test_store_contains_control_metadata_only_not_ready_or_rank_membership)
 

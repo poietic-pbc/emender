@@ -1,0 +1,44 @@
+{
+  "architecture": "RESILIENT_DILOCO_COMPUTE_POOL.md version 1",
+  "task": "integrate-resilient-pool-v1",
+  "trainer_config_sha256": "afc2a65fd8c73499e74e21cb9531c978206c3a9c898e42d18cc58bb93eb9fe9c",
+  "slo_seconds": {
+    "expected_k40_high": 215,
+    "ready_hard": 180,
+    "k40_hard": 420,
+    "freeze_hard": 15,
+    "transport_hard": 90,
+    "apply_hard": 60,
+    "exchange_commit_hard": 180,
+    "first_atomic_generation_hard": 720
+  },
+  "representative_distributed_gate": {
+    "ready_peers": 3,
+    "accepted_contributions": 2,
+    "q_min": 2,
+    "t_min": 10,
+    "accepted_tokens": 10,
+    "layout_elements": 16,
+    "shard_bytes_max": 16,
+    "contribution_bytes_each": 128,
+    "initial_p2p_bytes": 256,
+    "owner_loss_replay_bytes": 256,
+    "redistribution_bytes": 128,
+    "central_full_model_broker": false,
+    "lustre_hot_path": false
+  },
+  "large_local_stream_gate": {
+    "input_microchunks": 128,
+    "elements_per_microchunk": 4096,
+    "data_bytes": 2097152,
+    "published_files": 2,
+    "per_microchunk_files": 0,
+    "byte_cap_shared_across_spool_instances": true,
+    "released_bytes_after_generation": 0
+  },
+  "validation": {
+    "focused_and_broader_tests": 120,
+    "focused_slo_rerun_tests": 32
+  },
+  "slurm_actions": 0
+}

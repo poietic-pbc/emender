@@ -13,13 +13,13 @@ ROOT = Path(__file__).parents[1]
 APPROVED_ENV = Path("/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312")
 
 
-def test_true_launcher_is_exact_debug_two_hour_topology_without_sentinels():
+def test_true_launcher_is_exact_debug_twenty_minute_topology_without_sentinels():
     text = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
     supervisor = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
     assert "#SBATCH -q debug" in text
     assert "#SBATCH -N 2" in text
     assert "#SBATCH --gpus-per-node=8" in text
-    assert "#SBATCH -t 02:00:00" in text
+    assert "#SBATCH -t 00:20:00" in text
     assert "#SBATCH --signal=B:TERM@300" in text
     assert '"RESILIENT_E97_ROLE": child.role' in supervisor
     assert '"CUDA_VISIBLE_DEVICES="' in supervisor
@@ -93,7 +93,7 @@ def test_launcher_omits_empty_resume_argument(tmp_path):
         "EMENDER_CONDA_ENV": str(APPROVED_ENV),
         "SLURM_JOB_NUM_NODES": "2",
         "SLURM_JOB_QOS": "debug",
-        "SLURM_TIMELIMIT": "02:00:00",
+        "SLURM_TIMELIMIT": "00:20:00",
         "SLURM_JOB_NODELIST": "node[0-1]",
         "REPO": str(repo),
         "RUN_DIR": str(tmp_path / "run"),
@@ -118,7 +118,7 @@ def test_launcher_omits_empty_resume_argument(tmp_path):
 def test_startup_smoke_is_short_one_generation_and_forbids_injection():
     text = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
     assert "RESILIENT_E97_STARTUP_SMOKE" in text
-    assert "startup smoke requires exactly 00:50:00" in text
+    assert "startup smoke requires exactly 00:20:00" in text
     assert "startup smoke requires exactly one finalized generation" in text
     assert "startup smoke forbids failure injection" in text
     assert "RESILIENT_E97_REQUESTED_WALLTIME" in text
@@ -198,8 +198,8 @@ def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tm
         "SLURM_JOB_QOS": "debug",
         "SLURM_JOB_NODELIST": "node[0-1]",
         "RESILIENT_E97_STARTUP_SMOKE": "1",
-        "RESILIENT_E97_REQUESTED_WALLTIME": "02:00:00",
-        "SLURM_TIMELIMIT": "120",
+        "RESILIENT_E97_REQUESTED_WALLTIME": "00:20:00",
+        "SLURM_TIMELIMIT": "20",
         "RESILIENT_E97_GENERATIONS": "1",
         "REPO": str(repo),
         "RUN_DIR": str(tmp_path / "run"),
@@ -360,6 +360,49 @@ def test_node_local_entrypoint_uses_slurm_node_identity(monkeypatch, tmp_path):
     assert captured["ranks"] == {1}
 
 
+def test_allocation_fence_is_acquired_before_roles_and_loser_is_zero_work(
+        monkeypatch, tmp_path):
+    from scripts.frontier import resilient_e97_allocation_supervisor as module
+    monkeypatch.setenv("RESILIENT_E97_RUN_ID", "run")
+    monkeypatch.setenv("RESILIENT_E97_SOURCE_ID", "seed")
+    monkeypatch.setenv("RESILIENT_E97_PAYLOAD_ID", "layout")
+    monkeypatch.setenv("RESILIENT_E97_FENCE_DB", str(tmp_path / "pool.sqlite"))
+    monkeypatch.setenv("RESILIENT_E97_ALLOCATION_ID", "job-a")
+    monkeypatch.setenv("RESILIENT_E97_ALLOCATION_INCARNATION", "inc-a")
+    monkeypatch.setenv("RESILIENT_E97_LEASE_TTL_S", "10")
+    monkeypatch.setenv("RESILIENT_E97_LEASE_RENEW_S", "1")
+    first = module._allocation_admission(tmp_path)
+    try:
+        assert isinstance(first, module.AllocationLeaseGuard)
+        assert int(os.environ["RESILIENT_E97_FENCE_EPOCH"]) == first.lease.fence
+        telemetry = json.loads((tmp_path / "supervision/allocation-lease.json").read_text())
+        assert telemetry["stage"] == "admitted_before_model_load"
+        assert telemetry["ready_hard_s"] == 180
+        assert telemetry["k40_hard_s"] == 420
+        assert telemetry["exchange_commit_hard_s"] == 180
+        assert telemetry["first_commit_hard_s"] == 720
+        monkeypatch.setenv("RESILIENT_E97_ALLOCATION_ID", "job-b")
+        monkeypatch.setenv("RESILIENT_E97_ALLOCATION_INCARNATION", "inc-b")
+        assert module._allocation_admission(tmp_path) is False
+    finally:
+        first.close()
+
+
+def test_stage_specific_deadlines_replace_broad_900_second_silence(tmp_path, monkeypatch):
+    child = Child("trainer", 0, "node000", 0, "trainer")
+    supervisor = AllocationSupervisor(tmp_path, [child], heartbeat_s=700,
+                                      progress_s=600, max_restarts=0)
+    child.process = type("Process", (), {"poll": lambda self: None})()
+    state = tmp_path / "supervision/node-0-trainer-0.json"
+    state.write_text(json.dumps({"heartbeat_time": 500, "progress_time": 0,
+                                 "generation": 0, "stage": "training"}))
+    monkeypatch.setenv("RESILIENT_E97_ALLOCATION_ADMITTED_AT", "0")
+    monkeypatch.setenv("RESILIENT_E97_INITIAL_GENERATION", "0")
+    assert supervisor._deadline_reason(child, 421) == "progress_deadline"
+    source = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
+    assert 'RESILIENT_E97_PROGRESS_DEADLINE_S", "900"' not in source
+
+
 def test_rendered_debug_production_contract_has_only_approved_deltas():
     debug = json.loads((ROOT / "configs/frontier/e97_resilient_debug_rendered.json").read_text())
     production = json.loads((ROOT / "configs/frontier/e97_resilient_production_rendered.json").read_text())
@@ -428,14 +471,18 @@ def test_real_trainer_keeps_liveness_during_checkpoint_load_and_training():
 
 def test_generation_deadline_includes_local_training_and_aggregate_wait():
     role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
-    deadline = "generation_deadline = time.monotonic() + args.deadline_s"
+    deadline = "generation_deadline = time.monotonic() + min(args.deadline_s, 420.0)"
     training_guard = "if time.monotonic() >= generation_deadline:"
-    aggregate_wait = "fence, deadline=generation_deadline,"
+    aggregate_wait = "fence, deadline=exchange_deadline,"
 
     assert role.count(deadline) == 1
     assert role.index(deadline) < role.index("report = _run_real_worker(")
     assert role.index(training_guard) < role.index("progress_callback=training_progress")
     assert role.index("progress_callback=training_progress") < role.index(aggregate_wait)
+    assert "measured baseline 212-215s" in role
+    assert "exchange_deadline = time.monotonic() + min(args.deadline_s, 180.0)" in role
+    assert "aggregation_deadline_s=min(args.deadline_s, 420.0)" in role
+    assert "generation_started, pool_config.slo.training_hard_s" in role
 
 
 def test_real_trainer_streams_model_delta_without_full_cpu_materialization():
@@ -447,6 +494,32 @@ def test_real_trainer_streams_model_delta_without_full_cpu_materialization():
     assert "worker_chunk.sub(base_flat[offset:end])" in role
     assert "if delta_consumer is None:" in worker
     assert "delta_consumer(base_state, model, tokens)" in worker
+
+
+def test_pool_wiring_preserves_exact_e97_trainer_model_data_optimizer_and_k40():
+    """Freeze the known-good trainer call; only its post-training consumer may change."""
+    import hashlib
+    launcher = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
+    role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    config = ROOT / "configs/frontier/e97_resilient_split_role_flat.json"
+    assert hashlib.sha256(config.read_bytes()).hexdigest() \
+        == "afc2a65fd8c73499e74e21cb9531c978206c3a9c898e42d18cc58bb93eb9fe9c"
+    trainer_command = next(line for line in launcher.splitlines()
+                           if line.startswith("export RESILIENT_E97_TRAINER_COMMAND="))
+    assert "--local-steps 40" in launcher
+    assert "--seed $RESILIENT_E97_SEED" in trainer_command
+    assert "--train-args-json $RESILIENT_E97_TRAIN_ARGS_JSON" in trainer_command
+    assert "--data $RESILIENT_E97_DATA" in trainer_command
+    assert "--migration-policy initialize-from-approved-config" in trainer_command
+    assert 'overrides.update({"data": args.data, "optimizer": "schedulefree"})' in role
+    call = role[role.index("report = _run_real_worker("):role.index("if report.update is None:")]
+    assert "train_args=train_args" in call
+    assert "local_steps, rank" in call
+    assert "optimizer_state_dict=optimizer_state" in call
+    assert "consume_optimizer_state=True" in call
+    assert "synthetic_token_stream=False" in call
+    assert "delta_consumer=publish_trained_delta" in call
+    assert "RESILIENT_E97_GENERATION_DEADLINE_S:-900" not in launcher
 
 
 def test_frontier_default_keeps_supervision_state_node_local():

@@ -17,6 +17,7 @@ from typing import Iterable, Iterator, Mapping, Sequence
 import torch
 
 from ndm.resilient_e97_roles import CpuNodeManager, LocalFence, LocalTrainerSpool
+from ndm.fenced_admission import AllocationLease, SQLiteFencedControlStore
 
 PINNED_STEP_1525000_SHA256 = "1da27d2e09bc6c6f5ffc30e3e4476df1cebd807267431c8524de1a5b0dc5bca9"
 
@@ -148,7 +149,8 @@ class SplitManagerLoop:
             fence, deadline=time.monotonic() + self.aggregation_deadline_s,
             expected_source_id=self.source_id)
         path = self.spool.publish_aggregate(fence, members, shards, weight=weight,
-                                            source_id=self.source_id)
+                                            source_id=self.source_id,
+                                            accepted_peers=("node-0",))
         for trainer_id in members:
             self.spool.release_trainer(fence, trainer_id)
         return {"members": members, "weight": weight, "manifest": str(path)}
@@ -174,12 +176,23 @@ def outer_state_migration(seed: Mapping[str, object], *, policy: str,
 
 def finalize_checkpoint(run_dir: str | Path, checkpoint: str | Path, *,
                         run_id: str, generation: int, step: int,
-                        async_chain: Sequence[str], membership: Sequence[int],
+                        async_chain: Sequence[str], membership: Sequence[object],
                         fence: LocalFence, source_id: str, code_id: str,
                         outer_update_state: Mapping[str, object],
-                        migration: Mapping[str, object]) -> Path:
+                        migration: Mapping[str, object],
+                        accepted_tokens: int = 0,
+                        generation_identity: Mapping[str, object] | None = None,
+                        digests: Mapping[str, object] | None = None,
+                        control_store: SQLiteFencedControlStore | None = None,
+                        allocation_lease: AllocationLease | None = None) -> Path:
     """Validate a designated trainer checkpoint and immutably publish its manifest."""
     root, checkpoint = Path(run_dir), Path(checkpoint)
+    if (control_store is None) != (allocation_lease is None):
+        raise ValueError("fenced checkpoint publication requires store and lease together")
+    if control_store is not None:
+        if allocation_lease.run_id != run_id or allocation_lease.fence != fence.coordinator_epoch:
+            raise ValueError("checkpoint allocation lease differs from generation fence")
+        control_store.assert_current(allocation_lease)
     if not checkpoint.is_file() or checkpoint.stat().st_size <= 0:
         raise ValueError("trainer checkpoint is missing or empty")
     loaded = torch.load(checkpoint, map_location="cpu", mmap=True, weights_only=True)
@@ -194,20 +207,61 @@ def finalize_checkpoint(run_dir: str | Path, checkpoint: str | Path, *,
         raise ValueError("checkpoint complete-state/fencing validation failed")
     del loaded
     raw_sha = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
-    target = root / "handoff" / f"generation-{generation:08d}.json"
-    if target.exists():
-        raise FileExistsError("immutable handoff generation already exists")
+    target_name = f"generation-{generation:08d}"
+    if control_store is not None:
+        # A superseded writer may finish an already-open filesystem write. A
+        # fence-specific immutable name prevents that orphan from overwriting
+        # the current allocation's handoff before the authoritative CAS.
+        target_name += f"-fence-{allocation_lease.fence:08d}"
+    target = root / "handoff" / f"{target_name}.json"
+    outer_digest = hashlib.sha256(json.dumps(
+        dict(outer_update_state), sort_keys=True, separators=(",", ":"),
+        default=str).encode()).hexdigest()
     payload = {
         "schema": 1, "run_id": run_id, "generation": generation, "step": step,
         "checkpoint": str(checkpoint.resolve()), "checkpoint_bytes": checkpoint.stat().st_size,
         "checkpoint_sha256": raw_sha, "contains": ["model", "inner_optimizer"],
         "outer_update_state": dict(outer_update_state), "outer_state_migration": dict(migration),
-        "async_chain": list(async_chain), "membership": sorted(map(int, membership)),
+        "async_chain": list(async_chain),
+        "membership": sorted(membership, key=lambda item: json.dumps(item, sort_keys=True)),
         "fence": fence.__dict__, "source_id": source_id, "code_id": code_id,
         "payload_id": fence.payload_id, "finalized": True,
+        "accepted_tokens": int(accepted_tokens),
+        "generation_identity": dict(generation_identity or fence.__dict__),
+        "digests": {"checkpoint_sha256": raw_sha, "outer_state_sha256": outer_digest,
+                    **dict(digests or {})},
     }
-    atomic_json(target, payload)
-    atomic_json(root / "handoff" / "latest.json", {
+    if target.exists():
+        if json.loads(target.read_text()) != payload:
+            raise FileExistsError("immutable handoff generation already exists")
+    else:
+        atomic_json(target, payload)
+    manifest_sha = hashlib.sha256(target.read_bytes()).hexdigest()
+    latest = {
         "generation": generation, "manifest": str(target.resolve()),
-        "manifest_sha256": hashlib.sha256(target.read_bytes()).hexdigest()})
+        "manifest_sha256": manifest_sha, "fence": fence.coordinator_epoch,
+        "accepted_tokens": int(accepted_tokens),
+    }
+    if control_store is not None:
+        name = f"generation-{generation:08d}"
+        commit = {
+            "run_id": run_id, "generation": generation,
+            "generation_identity": payload["generation_identity"],
+            "membership": payload["membership"],
+            "accepted_tokens": int(accepted_tokens),
+            "outer_state_sha256": outer_digest,
+            "checkpoint_sha256": raw_sha, "manifest_sha256": manifest_sha,
+            "digests": payload["digests"], "fence": allocation_lease.fence,
+        }
+        control_store.publish_bundle(allocation_lease, (
+            ("commit", name, commit),
+            ("checkpoint", name, {"checkpoint_sha256": raw_sha,
+                                  "manifest_sha256": manifest_sha,
+                                  "generation": generation}),
+            ("latest", "authoritative", latest),
+        ))
+        control_store.assert_current(allocation_lease)
+    atomic_json(root / "handoff" / "latest.json", latest)
+    if control_store is not None:
+        control_store.assert_current(allocation_lease)
     return target

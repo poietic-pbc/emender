@@ -12,13 +12,13 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
-import struct
 from typing import Mapping, Sequence
 
+import numpy as np
 import torch
 
 
-_F64 = struct.Struct("!d")
+_F64_BYTES = 8
 SCHEMA = "resilient-e97-tensor-layout-v1"
 
 
@@ -58,7 +58,7 @@ class TensorLayout:
 
     @classmethod
     def from_state(cls, state: Mapping[str, torch.Tensor], *, max_chunk_bytes: int) -> "TensorLayout":
-        if max_chunk_bytes < _F64.size:
+        if max_chunk_bytes < _F64_BYTES:
             raise ValueError("max_chunk_bytes must hold a float64 element")
         records, offset = [], 0
         for name in sorted(state):
@@ -70,13 +70,26 @@ class TensorLayout:
             offset += tensor.numel()
         if not records:
             raise ValueError("E97 tensor layout cannot be empty")
-        chunk_elements = max_chunk_bytes // _F64.size
+        chunk_elements = max_chunk_bytes // _F64_BYTES
         identity = {
             "schema": SCHEMA,
             "chunk_elements": chunk_elements,
             "records": [record.__dict__ for record in records],
         }
         return cls(tuple(records), chunk_elements, offset, _digest(identity))
+
+    @classmethod
+    def from_flat_stream(cls, total_elements: int, *, max_chunk_bytes: int,
+                         dtype: str = "torch.float64") -> "TensorLayout":
+        """Bind the manager's deterministic flat shard stream without a full cat."""
+        if total_elements <= 0 or max_chunk_bytes < _F64_BYTES:
+            raise ValueError("flat stream needs elements and a float64-sized chunk")
+        chunk_elements = max_chunk_bytes // _F64_BYTES
+        records = (TensorRecord("flat", (int(total_elements),), dtype, 0,
+                                int(total_elements)),)
+        identity = {"schema": SCHEMA, "chunk_elements": chunk_elements,
+                    "records": [record.__dict__ for record in records]}
+        return cls(records, chunk_elements, int(total_elements), _digest(identity))
 
     @property
     def shard_count(self) -> int:
@@ -87,32 +100,98 @@ class TensorLayout:
         if not owners or shard_id not in range(self.shard_count):
             raise ValueError("valid shard and at least one owner are required")
         ordered = tuple(sorted(set(owners)))
-        key = f"{run_id}\0{generation}\0{attempt}\0{shard_id}".encode()
-        return ordered[int.from_bytes(hashlib.sha256(key).digest()[:8], "big") % len(ordered)]
+        # Hash the generation cohort once, then stripe consecutive full-layout
+        # shards across it. This is deterministic under reordered endpoint
+        # discovery and guarantees distribution whenever shards >= owners;
+        # independent per-shard hashing could accidentally centralize a small
+        # representative (or tail) layout on node 0.
+        key = f"{run_id}\0{generation}\0{attempt}".encode()
+        start = int.from_bytes(hashlib.sha256(key).digest()[:8], "big") % len(ordered)
+        return ordered[(start + shard_id) % len(ordered)]
 
     def pack(self, state: Mapping[str, torch.Tensor]) -> tuple[ShardChunk, ...]:
         self._validate_state(state)
-        flat = torch.cat([state[record.name].detach().cpu().to(torch.float64).reshape(-1)
-                          for record in self.records])
-        chunks = []
-        for shard_id, offset in enumerate(range(0, flat.numel(), self.chunk_elements)):
-            raw = b"".join(_F64.pack(float(value))
-                           for value in flat[offset:offset + self.chunk_elements].tolist())
-            chunks.append(ShardChunk(self.digest, shard_id, offset, len(raw) // _F64.size,
-                                     raw, hashlib.sha256(raw).hexdigest()))
+        # Stream deterministic tensor slices into bounded vectorized network-order
+        # buffers.  Never build a dense Python list or concatenate the full model.
+        chunks: list[ShardChunk] = []
+        pending = bytearray()
+        element_offset = 0
+        for record in self.records:
+            flat = state[record.name].detach().cpu().to(torch.float64).reshape(-1)
+            offset = 0
+            while offset < flat.numel():
+                room = self.chunk_elements - len(pending) // _F64_BYTES
+                take = min(room, flat.numel() - offset)
+                vector = flat[offset:offset + take].contiguous().numpy()
+                pending.extend(vector.astype(">f8", copy=False).tobytes())
+                offset += take
+                if len(pending) == self.chunk_elements * _F64_BYTES:
+                    raw = bytes(pending)
+                    shard_id = len(chunks)
+                    chunks.append(ShardChunk(self.digest, shard_id, element_offset,
+                                             len(raw) // _F64_BYTES, raw,
+                                             hashlib.sha256(raw).hexdigest()))
+                    element_offset += len(raw) // _F64_BYTES
+                    pending.clear()
+        if pending:
+            raw = bytes(pending)
+            chunks.append(ShardChunk(self.digest, len(chunks), element_offset,
+                                     len(raw) // _F64_BYTES, raw,
+                                     hashlib.sha256(raw).hexdigest()))
         return tuple(chunks)
+
+    def pack_flat_shards(self, shards: Sequence[torch.Tensor]) -> tuple[ShardChunk, ...]:
+        """Vectorize an already-bounded manager stream without full-model materialization."""
+        chunks, pending = [], torch.empty(0, dtype=torch.float64)
+        element_offset = 0
+        for shard in shards:
+            flat = shard.detach().cpu().to(torch.float64).reshape(-1)
+            if not torch.isfinite(flat).all():
+                raise ValueError("nonfinite flat E97 shard rejected")
+            offset = 0
+            while offset < flat.numel():
+                take = min(self.chunk_elements - pending.numel(), flat.numel() - offset)
+                piece = flat[offset:offset + take]
+                pending = torch.cat((pending, piece)) if pending.numel() else piece
+                offset += take
+                if pending.numel() == self.chunk_elements:
+                    raw = pending.contiguous().numpy().astype(">f8", copy=False).tobytes()
+                    chunks.append(ShardChunk(self.digest, len(chunks), element_offset,
+                                             pending.numel(), raw,
+                                             hashlib.sha256(raw).hexdigest()))
+                    element_offset += pending.numel()
+                    pending = torch.empty(0, dtype=torch.float64)
+        if pending.numel():
+            raw = pending.contiguous().numpy().astype(">f8", copy=False).tobytes()
+            chunks.append(ShardChunk(self.digest, len(chunks), element_offset,
+                                     pending.numel(), raw, hashlib.sha256(raw).hexdigest()))
+            element_offset += pending.numel()
+        if element_offset != self.total_elements:
+            raise ValueError("flat manager stream differs from bound E97 layout")
+        return tuple(chunks)
+
+    def unpack_flat_shards(self, chunks: Sequence[ShardChunk]) -> tuple[torch.Tensor, ...]:
+        """Decode each committed owner chunk separately for bounded redistribution."""
+        ordered = tuple(sorted(chunks, key=lambda item: item.shard_id))
+        if tuple(item.shard_id for item in ordered) != tuple(range(self.shard_count)):
+            raise ValueError("aggregate shard set is incomplete or duplicated")
+        result = []
+        for chunk in ordered:
+            _validate_chunk(self, chunk)
+            result.append(torch.from_numpy(
+                np.frombuffer(chunk.payload, dtype=">f8").astype(np.float64)).clone())
+        return tuple(result)
 
     def unpack(self, chunks: Sequence[ShardChunk]) -> dict[str, torch.Tensor]:
         ordered = sorted(chunks, key=lambda chunk: chunk.shard_id)
         if [chunk.shard_id for chunk in ordered] != list(range(self.shard_count)):
             raise ValueError("aggregate shard set is incomplete or duplicated")
-        values = []
+        flat = torch.empty(self.total_elements, dtype=torch.float64)
         for chunk in ordered:
             _validate_chunk(self, chunk)
-            values.extend(value[0] for value in struct.iter_unpack("!d", chunk.payload))
-        if len(values) != self.total_elements:
-            raise ValueError("aggregate element count differs from layout")
-        flat = torch.tensor(values, dtype=torch.float64)
+            values = np.frombuffer(chunk.payload, dtype=">f8").astype(np.float64)
+            flat[chunk.element_offset:chunk.element_offset + chunk.elements].copy_(
+                torch.from_numpy(values))
         result = {}
         for record in self.records:
             dtype = getattr(torch, record.dtype.removeprefix("torch."), None)
@@ -138,11 +217,11 @@ def _validate_chunk(layout: TensorLayout, chunk: ShardChunk) -> None:
     expected_offset = chunk.shard_id * layout.chunk_elements
     expected_elements = min(layout.chunk_elements, layout.total_elements - expected_offset)
     if (chunk.element_offset, chunk.elements, len(chunk.payload)) != (
-            expected_offset, expected_elements, expected_elements * _F64.size):
+            expected_offset, expected_elements, expected_elements * _F64_BYTES):
         raise ValueError("chunk byte bounds or offsets mismatch")
     if hashlib.sha256(chunk.payload).hexdigest() != chunk.checksum_sha256:
         raise ValueError("chunk checksum mismatch")
-    if any(not math.isfinite(value[0]) for value in struct.iter_unpack("!d", chunk.payload)):
+    if not np.isfinite(np.frombuffer(chunk.payload, dtype=">f8")).all():
         raise ValueError("nonfinite chunk rejected")
 
 
@@ -196,16 +275,17 @@ class ExactWeightedShardReducer:
         if missing:
             raise ValueError(f"accepted contribution missing shard: {missing}")
         total_weight = sum(self._pending[identity][0] for identity in accepted)
-        decoded = {
-            identity: tuple(value[0] for value in struct.iter_unpack(
-                "!d", self._pending[identity][1].payload)) for identity in accepted
-        }
-        width = len(next(iter(decoded.values())))
-        values = [math.fsum(self._pending[identity][0] * decoded[identity][element]
-                            for identity in accepted) / total_weight
-                  for element in range(width)]
-        payload = b"".join(_F64.pack(value) for value in values)
+        # Accumulate identity-sorted vectors in float64 so network arrival order
+        # cannot affect the committed bytes.  NumPy operates on large contiguous
+        # buffers; there is no per-element Python decode/pack loop.
         template = self._pending[accepted[0]][1]
+        weighted = np.zeros(template.elements, dtype=np.float64)
+        for identity in accepted:
+            weight, chunk = self._pending[identity]
+            values = np.frombuffer(chunk.payload, dtype=">f8")
+            np.add(weighted, values * weight, out=weighted)
+        weighted /= total_weight
+        payload = weighted.astype(">f8", copy=False).tobytes()
         self._pending.clear()  # prompt payload release after the frozen result exists
         return ShardChunk(self.layout.digest, self.shard_id, template.element_offset,
                           template.elements, payload, hashlib.sha256(payload).hexdigest())

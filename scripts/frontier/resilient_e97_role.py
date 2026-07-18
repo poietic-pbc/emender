@@ -7,9 +7,11 @@ import json
 import os
 from pathlib import Path
 import signal
+import subprocess
 import sys
 import threading
 import time
+import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -58,15 +60,17 @@ _IMPORT_HEARTBEAT = _role_import_heartbeat()
 import torch
 
 from ndm.resilient_e97_roles import LocalFence, LocalTrainerSpool
+from ndm.resilient_e97_reducer import TensorLayout
+from ndm.fenced_admission import AllocationLease, SQLiteFencedControlStore
 from ndm.resilient_e97_runtime import (SplitManagerLoop, apply_delta, atomic_json,
                                        PINNED_STEP_1525000_SHA256, assert_node_local_path,
                                        finalize_checkpoint, flatten_tensors, heartbeat,
                                        outer_state_migration)
-from ndm.resilient_node_quorum import GenerationFence
-from ndm.resilient_node_transport import (DiskBucketSpool, NodeManagerClient,
-                                           BoundedNodeManagerBulkStream,
-                                           QuorumTransportServer, TransportConfig,
-                                           decode_f64, encode_f64)
+from ndm.resilient_pool_runtime import (
+    DistributedOwnerServer, OwnerEndpoint, PoolControlClient, PoolControlConfig,
+    PoolControlServer, PoolStageSLO, chunk_manifest_digest, contribution_id,
+    fetch_owned_shards, live_owner_endpoints, submit_owned_shards,
+)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -78,6 +82,8 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--local-quorum", type=int, default=6)
     value.add_argument("--node-count", type=int, default=1)
     value.add_argument("--global-quorum", type=int, default=1)
+    value.add_argument("--global-token-min", type=int, default=1)
+    value.add_argument("--ready-fraction", type=float, default=None)
     value.add_argument("--coordinator-host", default="127.0.0.1")
     value.add_argument("--coordinator-port", type=int, default=29571)
     value.add_argument("--deadline-s", type=float, default=120.0)
@@ -98,7 +104,26 @@ def parser() -> argparse.ArgumentParser:
 
 
 def _fence(args, generation: int) -> LocalFence:
-    return LocalFence(args.run_id, generation, 0, args.coordinator_epoch, args.payload_id)
+    return LocalFence(args.run_id, generation, 0, _fence_epoch(args), args.payload_id)
+
+
+def _fence_epoch(args) -> int:
+    return int(os.environ.get("RESILIENT_E97_FENCE_EPOCH", args.coordinator_epoch))
+
+
+def _fenced_control(args) -> tuple[SQLiteFencedControlStore, AllocationLease] | None:
+    database = os.environ.get("RESILIENT_E97_FENCE_DB")
+    encoded = os.environ.get("RESILIENT_E97_ALLOCATION_LEASE")
+    if not database and not encoded:
+        return None  # direct local protocol fixtures do not own an allocation
+    if not database or not encoded:
+        raise ValueError("allocation fence database and lease must be supplied together")
+    lease = AllocationLease(**json.loads(encoded))
+    if lease.run_id != args.run_id or lease.fence != _fence_epoch(args):
+        raise ValueError("role allocation lease does not match run/fence")
+    store = SQLiteFencedControlStore(database)
+    store.assert_current(lease)
+    return store, lease
 
 
 def _latest_role_generation(control: Path, identity: str, args) -> int:
@@ -108,9 +133,13 @@ def _latest_role_generation(control: Path, identity: str, args) -> int:
     value = json.loads(path.read_text())
     if (value.get("identity") != identity or value.get("run_id") != args.run_id
             or value.get("payload_id") != args.payload_id
-            or value.get("source_id") != args.source_id
-            or int(value.get("coordinator_epoch", -1)) != args.coordinator_epoch):
+            or value.get("source_id") != args.source_id):
         raise ValueError("role recovery identity/fence mismatch")
+    prior_epoch = int(value.get("coordinator_epoch", -1))
+    if prior_epoch > _fence_epoch(args):
+        raise ValueError("role recovery was written by a newer allocation fence")
+    if prior_epoch < _fence_epoch(args):
+        return args.initial_generation  # old node-local work is disposable
     return max(args.initial_generation, int(value["generation"]))
 
 
@@ -119,7 +148,7 @@ def _publish_role_recovery(control: Path, identity: str, args, generation: int,
     atomic_json(control / "recovery" / f"{identity}.json", {
         "schema": 1, "identity": identity, "run_id": args.run_id,
         "payload_id": args.payload_id, "source_id": args.source_id,
-        "coordinator_epoch": args.coordinator_epoch, "generation": generation, **extra})
+        "coordinator_epoch": _fence_epoch(args), "generation": generation, **extra})
 
 
 def _liveness_heartbeat(bulk: Path, identity: str, interval_s: float = 5.0):
@@ -136,99 +165,306 @@ def _liveness_heartbeat(bulk: Path, identity: str, interval_s: float = 5.0):
     return stop, thread
 
 
+def _stage_telemetry(bulk: Path, identity: str, generation: int, stage: str,
+                     started: float, hard_s: float, **metrics: object) -> None:
+    elapsed = time.monotonic() - started
+    record = {"timestamp": time.time(), "identity": identity,
+              "generation": generation, "stage": stage,
+              "elapsed_s": elapsed, "hard_s": hard_s,
+              "within_slo": elapsed <= hard_s, **metrics}
+    path = bulk / "telemetry" / f"{identity}-pool.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(record, sort_keys=True) + "\n")
+        stream.flush()
+    if elapsed > hard_s:
+        raise TimeoutError(f"{stage} exceeded {hard_s}s stage SLO")
+
+
+def _pool_hosts(args) -> tuple[str, ...]:
+    configured = os.environ.get("RESILIENT_E97_PEER_HOSTS", "")
+    if configured:
+        hosts = tuple(item.strip() for item in configured.split(",") if item.strip())
+    elif os.environ.get("SLURM_JOB_NODELIST"):
+        hosts = tuple(subprocess.check_output(
+            ["scontrol", "show", "hostnames", os.environ["SLURM_JOB_NODELIST"]],
+            text=True).splitlines())
+    else:
+        # Deterministic local multi-process integration fixture.
+        hosts = tuple(args.coordinator_host for _ in range(args.node_count))
+    if len(hosts) != args.node_count:
+        raise ValueError("active manager host discovery differs from configured capacity")
+    return hosts
+
+
+def _pool_config(args) -> PoolControlConfig:
+    policy = __import__("hashlib").sha256(json.dumps({
+        "q_min": args.global_quorum, "t_min": args.global_token_min,
+        "ready_fraction": args.ready_fraction,
+    }, sort_keys=True).encode()).hexdigest()
+    return PoolControlConfig(
+        args.run_id, _fence_epoch(args), args.global_quorum, args.global_token_min,
+        args.ready_fraction, args.source_id, policy, args.payload_id, args.code_id,
+        PoolStageSLO.production())
+
+
 def manager(args) -> int:
     run = Path(args.run_dir); node = int(os.environ.get("RESILIENT_E97_NODE_RANK", "0"))
     identity = f"node-{node}-manager"
     bulk = Path(args.bulk_root) / args.run_id / f"node-{node}"
     bulk = assert_node_local_path(bulk, run)
+    fenced = _fenced_control(args)
     if _IMPORT_HEARTBEAT is not None:
         stop, thread = _IMPORT_HEARTBEAT
         stop.set(); thread.join(10)
     spool = LocalTrainerSpool(bulk / "mailbox", args.max_spool_bytes)
     loop = SplitManagerLoop(spool, quorum=args.local_quorum, source_id=args.source_id,
-                            aggregation_deadline_s=args.deadline_s)
-    server = thread = None
-    if args.node_count > 1 and node == 0:
-        server = QuorumTransportServer(
-            ("0.0.0.0", args.coordinator_port),
-            TransportConfig(args.run_id, args.global_quorum, 1, args.bulk_chunk_bytes,
-                            args.deadline_s,
-                            args.deadline_s, args.deadline_s),
-            run / "manager-network", args.coordinator_epoch)
-        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+                            aggregation_deadline_s=min(args.deadline_s, 420.0))
+    control_server = control_thread = owner_server = owner_thread = None
+    pool_client = endpoint = None
+    peer_incarnation = uuid.uuid4().hex
+    pool_config = _pool_config(args)
+    if args.node_count > 1:
+        hosts = _pool_hosts(args)
+        owner_server = DistributedOwnerServer(
+            ("0.0.0.0", args.coordinator_port + 1 + node), f"node-{node}",
+            max_owner_bytes=args.max_spool_bytes)
+        owner_thread = threading.Thread(target=owner_server.serve_forever, daemon=True)
+        owner_thread.start()
+        endpoint = OwnerEndpoint(f"node-{node}", peer_incarnation, hosts[node],
+                                 args.coordinator_port + 1 + node)
+        if node == 0:
+            control_server = PoolControlServer(
+                ("0.0.0.0", args.coordinator_port), pool_config,
+                evidence_root=run / "retained-evidence" / "pool-control")
+            control_thread = threading.Thread(target=control_server.serve_forever, daemon=True)
+            control_thread.start()
+        pool_client = PoolControlClient(
+            (args.coordinator_host, args.coordinator_port),
+            timeout_s=min(args.deadline_s, pool_config.slo.sync_s)).bind(
+                args.run_id, _fence_epoch(args))
     control = bulk / "control"
     target_generation = args.initial_generation + args.generations
     start_generation = _latest_role_generation(control, identity, args)
+    recovery_path = control / "recovery" / f"{identity}.json"
+    recovery_value = json.loads(recovery_path.read_text()) if recovery_path.exists() else {}
+    accepted_token_clock = (int(recovery_value.get("accepted_tokens", 0))
+                            if int(recovery_value.get("coordinator_epoch", -1))
+                            == _fence_epoch(args) else 0)
+    last_commit_deadline = None
+    if pool_client is not None:
+        ready_started = time.monotonic()
+        pool_client.ready(endpoint, start_generation, run_id=args.run_id,
+                          fence=_fence_epoch(args))
+        _stage_telemetry(bulk, identity, start_generation, "ready", ready_started,
+                         pool_config.slo.first_heartbeat_s)
     liveness_stop, liveness_thread = _liveness_heartbeat(bulk, identity)
     try:
         for generation in range(start_generation, target_generation):
+            if fenced is not None:
+                fenced[0].assert_current(fenced[1])
             fence = _fence(args, generation)
             heartbeat(bulk, identity, generation=generation, step=generation * args.local_steps,
                       loss=None, stage="collecting")
             if args.node_count == 1:
                 result = loop.generation(fence)
             else:
+                generation_started = time.monotonic()
+                snapshot = pool_client.open_generation(
+                    generation, 0,
+                    deadline=time.monotonic() + min(args.deadline_s, pool_config.slo.sync_s))
+                heartbeat(bulk, identity, generation=generation,
+                          step=generation * args.local_steps, loss=None,
+                          stage="training_wait")
                 members, local_weight, local_shards = loop.manager.collect(
-                    fence, deadline=time.monotonic() + args.deadline_s,
+                    fence, deadline=time.monotonic() + min(
+                        args.deadline_s, pool_config.slo.training_hard_s),
                     expected_source_id=args.source_id)
-                client = NodeManagerClient(args.coordinator_host, args.coordinator_port,
-                                           f"node-{node}", DiskBucketSpool(
-                                               bulk / "network-spool", args.max_spool_bytes),
-                                           timeout_s=args.deadline_s,
-                                           max_bucket_bytes=args.bulk_chunk_bytes)
-                stream = BoundedNodeManagerBulkStream(
-                    client, max_chunk_bytes=args.bulk_chunk_bytes)
-                header, aggregate = stream.exchange_chunks(
-                    GenerationFence(args.run_id, generation, 0, args.coordinator_epoch),
-                    tuple(encode_f64(shard.tolist()) for shard in local_shards),
-                    weight=local_weight)
-                global_shards = [torch.tensor(decode_f64(chunk), dtype=torch.float64)
-                                 for chunk in aggregate]
+                _stage_telemetry(bulk, identity, generation, "k40_and_local_reduce",
+                                 generation_started, pool_config.slo.training_hard_s,
+                                 local_members=len(members), local_tokens=local_weight)
+                last_commit_deadline = time.monotonic() + min(args.deadline_s, 180.0)
+                layout = TensorLayout.from_flat_stream(
+                    sum(shard.numel() for shard in local_shards),
+                    max_chunk_bytes=args.bulk_chunk_bytes)
+                chunks = layout.pack_flat_shards(local_shards)
+                retained_bytes = sum(chunk.nbytes for chunk in chunks)
+                if retained_bytes > args.max_spool_bytes:
+                    raise BufferError("sender replay retention exceeds node-local byte bound")
+                heartbeat(bulk, identity, generation=generation,
+                          step=generation * args.local_steps, loss=None, stage="freeze")
+                freeze_started = time.monotonic()
+                close = pool_client.contribute_and_freeze(
+                    generation=generation, attempt=0, worker_id=f"node-{node}",
+                    incarnation=peer_incarnation, contribution_seq=generation,
+                    accepted_tokens=local_weight,
+                    payload_digest=chunk_manifest_digest(chunks),
+                    deadline=min(last_commit_deadline, time.monotonic()
+                                 + min(args.deadline_s, pool_config.slo.freeze_s)))
+                if close.get("status") != "commit_ready":
+                    raise TimeoutError(f"global contribution floor did not commit: {close}")
+                _stage_telemetry(bulk, identity, generation, "freeze", freeze_started,
+                                 pool_config.slo.freeze_s,
+                                 accepted_tokens=int(close["accepted_tokens"]),
+                                 accepted_contributions=len(close["frozen_identities"]))
+                frozen = tuple(close["frozen_identities"])
+                accepted_ids = tuple(sorted(contribution_id(item) for item in frozen))
+                accepted_workers = {str(item["worker_id"]) for item in frozen}
+                frozen_endpoints = tuple(OwnerEndpoint(
+                    str(peer["worker_id"]), str(peer["incarnation"]),
+                    str(peer["host"]), int(peer["port"])) for peer in snapshot["peers"]
+                    if str(peer["worker_id"]) in accepted_workers)
+                endpoints = live_owner_endpoints(
+                    frozen_endpoints, deadline=min(last_commit_deadline,
+                        time.monotonic() + min(args.deadline_s, pool_config.slo.transport_s)))
+                if not endpoints:
+                    raise TimeoutError("frozen generation has no live distributed shard owners")
+                local_identity = f"node-{node}:{peer_incarnation}:{generation}"
+                transport_metrics = {"p2p_bytes_sent": 0, "peak_retained_bytes": 0,
+                                     "released_bytes": 0}
+                heartbeat(bulk, identity, generation=generation,
+                          step=generation * args.local_steps, loss=None,
+                          stage="owner_transport")
+                owner_started = time.monotonic()
+                last_error = None
+                for replay in range(2):
+                    endpoints = live_owner_endpoints(endpoints, deadline=min(
+                        last_commit_deadline, time.monotonic() + 5.0))
+                    if not endpoints:
+                        raise TimeoutError("owner loss left no replay target")
+                    owner_server.install(
+                        layout, run_id=args.run_id, fence=_fence_epoch(args),
+                        generation=generation, attempt=0, owners=endpoints,
+                        accepted_ids=accepted_ids)
+                    try:
+                        if local_identity in accepted_ids:
+                            transport_metrics = submit_owned_shards(
+                                layout=layout, chunks=chunks,
+                                contribution_id=local_identity, weight=local_weight,
+                                endpoints=endpoints, run_id=args.run_id,
+                                fence=_fence_epoch(args), generation=generation, attempt=0,
+                                deadline=last_commit_deadline)
+                            if replay:
+                                transport_metrics["replay_bytes_sent"] = \
+                                    transport_metrics["p2p_bytes_sent"]
+                        committed_chunks, redistribution = fetch_owned_shards(
+                            layout=layout, endpoints=endpoints, run_id=args.run_id,
+                            fence=_fence_epoch(args), generation=generation, attempt=0,
+                            deadline=last_commit_deadline)
+                        last_error = None
+                        break
+                    except (OSError, RuntimeError, TimeoutError) as error:
+                        last_error = error
+                        if time.monotonic() >= last_commit_deadline:
+                            break
+                if last_error is not None:
+                    raise TimeoutError(f"owner reassignment/replay failed: {last_error}")
+                owner_elapsed = max(time.monotonic() - owner_started, 1e-9)
+                _stage_telemetry(
+                    bulk, identity, generation, "owner_transport_redistribution",
+                    owner_started, pool_config.slo.transport_s + pool_config.slo.apply_s,
+                    p2p_bytes=int(transport_metrics["p2p_bytes_sent"]),
+                    replay_bytes=int(transport_metrics.get("replay_bytes_sent", 0)),
+                    redistribution_bytes=int(redistribution["redistribution_bytes"]),
+                    bytes_per_second=(int(transport_metrics["p2p_bytes_sent"])
+                                      + int(redistribution["redistribution_bytes"])) / owner_elapsed,
+                    high_water_bytes=max(transport_metrics["peak_retained_bytes"],
+                                         owner_server.high_water_bytes),
+                    released_bytes=int(transport_metrics["released_bytes"]),
+                    owner_count=len(endpoints))
+                global_shards = layout.unpack_flat_shards(committed_chunks)
                 spool.publish_aggregate(fence, members, global_shards,
-                                        weight=local_weight,
-                                        source_id=args.source_id)
+                                        weight=int(close["accepted_tokens"]),
+                                        source_id=args.source_id,
+                                        accepted_peers=tuple(sorted(accepted_workers)))
                 for trainer_id in members:
                     spool.release_trainer(fence, trainer_id)
-                result = {"members": members, "weight": local_weight,
-                          "accepted_nodes": header["accepted_nodes"],
-                          "network_high_water_bytes": stream.high_water_bytes}
+                result = {"members": members, "weight": int(close["accepted_tokens"]),
+                          "accepted_nodes": tuple(sorted(accepted_workers)),
+                          "network_high_water_bytes": max(
+                              transport_metrics["peak_retained_bytes"],
+                              owner_server.high_water_bytes),
+                          "p2p_bytes_sent": transport_metrics["p2p_bytes_sent"],
+                          "replay_bytes_sent": transport_metrics.get("replay_bytes_sent", 0),
+                          "redistribution_bytes": redistribution["redistribution_bytes"],
+                          "owner_count": len(endpoints), "layout_digest": layout.digest,
+                          "frozen_identities": frozen}
+                del chunks, committed_chunks, global_shards, local_shards
+            accepted_token_clock += int(result["weight"])
             atomic_json(bulk / "control" / f"node-{node}-bulk-ownership.json", {
                 "backend": "bounded-node-local-filesystem", "bulk_root": str(bulk),
                 "shared_run_dir_is_bulk_path": bulk.is_relative_to(run),
                 "max_bytes": args.max_spool_bytes,
                 "high_water_bytes": spool.high_water_bytes,
-                "post_release_bytes": spool.bytes_used})
+                "post_release_bytes": spool.bytes_used,
+                "bytes_written": spool.bytes_written, "bytes_read": spool.bytes_read,
+                "published_files": spool.files_published,
+                "transport_bytes": int(result.get("network_high_water_bytes", 0))})
             atomic_json(bulk / "control" / f"node-{node}-generation-{generation:08d}.json", {
                 "generation": generation, "members": list(result["members"]),
                 "weight": int(result["weight"]), "source_id": args.source_id,
-                "payload_id": args.payload_id})
+                "payload_id": args.payload_id,
+                "accepted_tokens": accepted_token_clock,
+                "accepted_peers": list(result.get("accepted_nodes", (f"node-{node}",))),
+                "p2p_bytes_sent": int(result.get("p2p_bytes_sent", 0)),
+                "replay_bytes_sent": int(result.get("replay_bytes_sent", 0)),
+                "redistribution_bytes": int(result.get("redistribution_bytes", 0)),
+                "owner_count": int(result.get("owner_count", 1)),
+                "central_full_model_broker": False,
+                "layout_digest": result.get("layout_digest", args.payload_id),
+                "frozen_identities": result.get("frozen_identities", [])})
             _publish_role_recovery(control, identity, args, generation + 1,
                                    step=(generation + 1) * args.local_steps,
-                                   membership=list(result["members"]))
+                                   membership=list(result["members"]),
+                                   accepted_tokens=accepted_token_clock)
             spool.prune_aggregates(keep_generations=2)
             heartbeat(bulk, identity, generation=generation + 1,
                       step=(generation + 1) * args.local_steps, loss=None, stage="published")
+            if pool_client is not None:
+                pool_client.ready(endpoint, generation + 1, run_id=args.run_id,
+                                  fence=_fence_epoch(args))
         if node == 0:
             proposal = bulk / "control" / "trainer-proposal.json"
-            deadline = time.monotonic() + args.deadline_s
+            deadline = (last_commit_deadline if last_commit_deadline is not None
+                        else time.monotonic() + min(args.deadline_s, 60.0))
             while time.monotonic() < deadline and not proposal.exists():
                 time.sleep(.02)
             if not proposal.exists():
                 raise TimeoutError("checkpoint proposal deadline expired")
             value = json.loads(proposal.read_text())
             proposal_fence = LocalFence(**value["fence"])
+            commit_started = time.monotonic()
+            heartbeat(bulk, identity, generation=int(value["generation"]),
+                      step=int(value["step"]), loss=None, stage="checkpoint_commit")
             finalize_checkpoint(
                 run, value["checkpoint"], run_id=args.run_id,
                 generation=int(value["generation"]), step=int(value["step"]),
                 async_chain=value["async_chain"], membership=value["membership"],
                 fence=proposal_fence, source_id=args.source_id, code_id=args.code_id,
-                outer_update_state=value["outer_update_state"], migration=value["migration"])
+                outer_update_state=value["outer_update_state"], migration=value["migration"],
+                accepted_tokens=int(value["accepted_tokens"]),
+                generation_identity=value["generation_identity"],
+                digests=value.get("digests", {}),
+                control_store=None if fenced is None else fenced[0],
+                allocation_lease=None if fenced is None else fenced[1])
+            _stage_telemetry(bulk, identity, int(value["generation"]),
+                             "fenced_atomic_commit", commit_started, 60.0,
+                             accepted_tokens=int(value["accepted_tokens"]),
+                             membership=len(value["membership"]))
             proposal.unlink()
     finally:
         liveness_stop.set(); liveness_thread.join(10)
-        if server is not None:
-            server.shutdown(); server.server_close()
-        if thread is not None: thread.join(2)
+        if pool_client is not None and endpoint is not None:
+            try:
+                pool_client.drain(endpoint.worker_id, endpoint.incarnation)
+            except Exception:
+                pass
+        if owner_server is not None:
+            owner_server.shutdown(); owner_server.server_close()
+        if owner_thread is not None: owner_thread.join(2)
+        if control_server is not None:
+            control_server.shutdown(); control_server.server_close()
+        if control_thread is not None: control_thread.join(2)
     return 0
 
 
@@ -262,6 +498,7 @@ def trainer(args) -> int:
     rank = int(os.environ.get("RESILIENT_E97_LOCAL_RANK", "0")); identity = f"node-{node}-trainer-{rank}"
     bulk = Path(args.bulk_root) / args.run_id / f"node-{node}"
     bulk = assert_node_local_path(bulk, run)
+    fenced = _fenced_control(args)
     # Loading and cloning the real E97 checkpoint can exceed the steady-state
     # heartbeat deadline when all eight local trainers start together. Keep
     # liveness independent from generation progress throughout bootstrap.
@@ -279,6 +516,7 @@ def trainer(args) -> int:
     else:
         train_args, state, optimizer_state, step, migration = _load_real(args)
     async_chain = [args.seed] if args.seed else []
+    accepted_token_clock = 0
     if args.resume_handoff:
         handoff = json.loads(Path(args.resume_handoff).read_text())
         checkpoint_path = Path(handoff["checkpoint"])
@@ -292,15 +530,23 @@ def trainer(args) -> int:
         optimizer_state, step = resumed["optimizer_state_dict"], int(resumed["step"])
         migration = {"status": "restored", "state": resumed["outer_update_state"],
                      "policy": "new-harness-handoff"}
+        accepted_token_clock = int(handoff.get("accepted_tokens", 0))
         async_chain = list(handoff.get("async_chain", ())) + [str(Path(args.resume_handoff).resolve())]
         if (handoff.get("run_id") != args.run_id or handoff.get("payload_id") != args.payload_id
                 or handoff.get("source_id") != args.source_id
-                or int(handoff["fence"]["coordinator_epoch"]) != args.coordinator_epoch
+                or int(handoff["fence"]["coordinator_epoch"]) > _fence_epoch(args)
                 or not handoff.get("finalized")):
             raise ValueError("resume handoff membership/identity/fence mismatch")
+        if fenced is not None:
+            latest = fenced[0].read_publication(args.run_id, "latest", "authoritative")
+            if (latest is None or int(latest["generation"]) != args.initial_generation
+                    or latest["manifest_sha256"] != __import__("hashlib").sha256(
+                        Path(args.resume_handoff).read_bytes()).hexdigest()):
+                raise ValueError("resume handoff is not the authoritative fenced latest")
     recovery_manifest = control / "recovery" / f"{identity}.json"
-    if recovery_manifest.exists():
-        recovery = json.loads(recovery_manifest.read_text())
+    recovery = json.loads(recovery_manifest.read_text()) if recovery_manifest.exists() else None
+    if (recovery is not None and int(recovery.get("coordinator_epoch", -1))
+            == _fence_epoch(args)):
         start_generation = _latest_role_generation(control, identity, args)
         checkpoint_path = Path(recovery["checkpoint"])
         if __import__("hashlib").sha256(checkpoint_path.read_bytes()).hexdigest() != recovery["checkpoint_sha256"]:
@@ -308,12 +554,13 @@ def trainer(args) -> int:
         saved = torch.load(checkpoint_path, map_location="cpu", mmap=True, weights_only=True)
         if (saved["identity"] != identity or saved["run_id"] != args.run_id
                 or saved["payload_id"] != args.payload_id
-                or int(saved["coordinator_epoch"]) != args.coordinator_epoch
+                or int(saved["coordinator_epoch"]) != _fence_epoch(args)
                 or int(saved["generation"]) != start_generation):
             raise ValueError("role recovery checkpoint fence mismatch")
         state = {name: value.clone() for name, value in saved["model_state_dict"].items()}
         optimizer_state, migration = saved["optimizer_state_dict"], saved["migration"]
         step, async_chain = int(saved["step"]), list(saved["async_chain"])
+        accepted_token_clock = int(saved.get("accepted_tokens", 0))
     else:
         start_generation = args.initial_generation
     losses = []
@@ -323,12 +570,17 @@ def trainer(args) -> int:
     for generation in range(start_generation, target_generation):
         if stop["requested"]:
             break
+        if fenced is not None:
+            fenced[0].assert_current(fenced[1])
         # One deadline covers the complete generation, including real local
         # training, publication, quorum aggregation, and apply.  Starting a
         # fresh timeout only after the expensive 40-step train can let a live
         # but too-slow generation run until Slurm TERM without ever failing the
         # configured generation bound.
-        generation_deadline = time.monotonic() + args.deadline_s
+        # Stage-specific downstream gate: K40 is bounded at 420s (known live
+        # evidence is ~2.5m; measured baseline 212-215s), then exchange and
+        # atomic commit receive a distinct <=180s bound. No 900s silent wait.
+        generation_deadline = time.monotonic() + min(args.deadline_s, 420.0)
         if args.control:
             loss = 1.0 / (step + args.local_steps + rank + 1)
             delta = {"weight": torch.full_like(state["weight"], float(rank + 1))}
@@ -410,11 +662,13 @@ def trainer(args) -> int:
                           source_id=args.source_id)
         del delta
         heartbeat(bulk, identity, generation=generation, step=step, loss=loss, stage="submitted")
+        exchange_deadline = time.monotonic() + min(args.deadline_s, 180.0)
         manifest, aggregate = spool.wait_aggregate(
-            fence, deadline=generation_deadline,
+            fence, deadline=exchange_deadline,
             expected_source_id=args.source_id)
         spool.release_trainer(fence, rank)
         state = apply_delta(state, aggregate, eta_outer=args.eta_outer)
+        accepted_token_clock += int(manifest["weight"])
         step += args.local_steps; losses.append(loss)
         completed = generation + 1
         recovery_checkpoint = bulk / "recovery" / identity / f"generation-{completed:08d}.pt"
@@ -425,8 +679,10 @@ def trainer(args) -> int:
                     "outer_update_state": migration.get("state", {}), "step": step,
                     "generation": completed, "run_id": args.run_id,
                     "source_id": args.source_id, "payload_id": args.payload_id,
-                    "coordinator_epoch": args.coordinator_epoch,
+                    "coordinator_epoch": _fence_epoch(args),
                     "membership": manifest["members"], "fence": fence.__dict__,
+                    "accepted_peers": manifest.get("accepted_peers", []),
+                    "accepted_tokens": accepted_token_clock,
                     "async_chain": async_chain}, temporary)
         os.replace(temporary, recovery_checkpoint)
         _publish_role_recovery(
@@ -434,26 +690,40 @@ def trainer(args) -> int:
             checkpoint=str(recovery_checkpoint),
             checkpoint_sha256=__import__("hashlib").sha256(
                 recovery_checkpoint.read_bytes()).hexdigest(),
-            membership=manifest["members"], fence=fence.__dict__)
+            membership=manifest["members"], fence=fence.__dict__,
+            accepted_tokens=accepted_token_clock)
         heartbeat(bulk, identity, generation=generation + 1, step=step, loss=loss, stage="applied")
     if node == 0 and rank == 0 and completed > start_generation:
-        checkpoint = run / "checkpoints" / f"generation-{completed:08d}.pt"
+        if fenced is not None:
+            fenced[0].assert_current(fenced[1])
+        checkpoint_name = f"generation-{completed:08d}"
+        if fenced is not None:
+            checkpoint_name += f"-fence-{fenced[1].fence:08d}"
+        checkpoint = run / "checkpoints" / f"{checkpoint_name}.pt"
         checkpoint.parent.mkdir(parents=True, exist_ok=True)
         temporary = checkpoint.with_suffix(".tmp")
         torch.save({"model_state_dict": state, "optimizer_state_dict": optimizer_state,
                     "outer_update_state": migration.get("state", {}), "step": step,
                     "generation": completed, "run_id": args.run_id,
                     "source_id": args.source_id, "payload_id": args.payload_id,
-                    "coordinator_epoch": args.coordinator_epoch,
+                    "coordinator_epoch": _fence_epoch(args),
+                    "accepted_tokens": accepted_token_clock,
                     "loss": losses[-1]}, temporary); os.replace(temporary, checkpoint)
+        if fenced is not None:
+            fenced[0].assert_current(fenced[1])
         fence = _fence(args, completed - 1)
         aggregate_manifest, _ = spool.wait_aggregate(
             fence, deadline=time.monotonic() + args.deadline_s, expected_source_id=args.source_id)
         atomic_json(bulk / "control" / "trainer-proposal.json", {
             "checkpoint": str(checkpoint.resolve()), "generation": completed, "step": step,
             "async_chain": async_chain,
-            "membership": aggregate_manifest["members"], "fence": fence.__dict__,
-            "outer_update_state": migration.get("state", {}), "migration": migration})
+            "membership": aggregate_manifest.get("accepted_peers") or aggregate_manifest["members"],
+            "accepted_tokens": accepted_token_clock,
+            "generation_identity": {**fence.__dict__, "result_generation": completed},
+            "digests": {"source_id": args.source_id, "payload_id": args.payload_id,
+                        "code_id": args.code_id},
+            "fence": fence.__dict__, "outer_update_state": migration.get("state", {}),
+            "migration": migration})
     return 0
 
 

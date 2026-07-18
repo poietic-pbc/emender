@@ -10,6 +10,7 @@ missing deadlines cause only that role's process group to be evicted.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -17,10 +18,118 @@ import shlex
 import signal
 import subprocess
 import sys
+import threading
 import time
+import uuid
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from ndm.fenced_admission import AllocationLease, FenceRejected, SQLiteFencedControlStore
 
 
 TRAINERS_PER_NODE = 8
+POOL_PROTOCOL_ID = "resilient-diloco-compute-pool-v1"
+GENERATION_BASELINE_S = (212.0, 215.0)
+READY_HARD_S = 180.0
+K40_HARD_S = 420.0
+EXCHANGE_COMMIT_HARD_S = 180.0
+FIRST_COMMIT_HARD_S = 720.0
+
+
+class AllocationLeaseGuard:
+    """Renew the sole allocation fence while roles run beneath this process."""
+
+    def __init__(self, store: SQLiteFencedControlStore, lease: AllocationLease, *,
+                 ttl_s: float, renew_s: float):
+        if not 0 < renew_s < ttl_s:
+            raise ValueError("lease renewal interval must be positive and below TTL")
+        self.store, self.lease = store, lease
+        self.ttl_s, self.renew_s = float(ttl_s), float(renew_s)
+        self.stop = threading.Event()
+        self.error: BaseException | None = None
+        self.thread = threading.Thread(target=self._renew, name="allocation-fence-renewal",
+                                       daemon=True)
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def _renew(self) -> None:
+        while not self.stop.wait(self.renew_s):
+            try:
+                self.lease = self.store.renew(self.lease, ttl_s=self.ttl_s)
+            except BaseException as error:
+                self.error = error
+                self.stop.set()
+                return
+
+    def close(self) -> None:
+        self.stop.set()
+        self.thread.join(self.renew_s + 1)
+        if self.error is None:
+            try:
+                self.store.release(self.lease)
+            except FenceRejected:
+                pass
+
+
+def _allocation_admission(run_dir: Path) -> AllocationLeaseGuard | None | bool:
+    """Acquire before any manager/trainer can load a model.
+
+    ``False`` means another live allocation owns the run and the caller must
+    exit successfully without spawning roles. ``None`` is retained for unit
+    fixtures that do not configure a logical run.
+    """
+    run_id = os.environ.get("RESILIENT_E97_RUN_ID")
+    if not run_id:
+        return None
+    database = Path(os.environ.get(
+        "RESILIENT_E97_FENCE_DB", str(run_dir / "control" / "pool-v1.sqlite3")))
+    store = SQLiteFencedControlStore(
+        database, timeout_s=float(os.environ.get("RESILIENT_E97_CONTROL_TIMEOUT_S", "5")))
+    allocation_id = os.environ.get(
+        "RESILIENT_E97_ALLOCATION_ID", os.environ.get("SLURM_JOB_ID", f"local-{os.getpid()}"))
+    incarnation = os.environ.get("RESILIENT_E97_ALLOCATION_INCARNATION", uuid.uuid4().hex)
+    config_material = {
+        "source": os.environ.get("RESILIENT_E97_SOURCE_ID", "unknown"),
+        "payload": os.environ.get("RESILIENT_E97_PAYLOAD_ID", "unknown"),
+        "code": os.environ.get("RESILIENT_E97_CODE_ID", "unknown"),
+        "manager": os.environ.get("RESILIENT_E97_MANAGER_COMMAND", ""),
+        "trainer": os.environ.get("RESILIENT_E97_TRAINER_COMMAND", ""),
+    }
+    config_id = hashlib.sha256(json.dumps(
+        config_material, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    ttl_s = float(os.environ.get("RESILIENT_E97_LEASE_TTL_S", "60"))
+    lease = store.acquire(
+        run_id=run_id, allocation_id=allocation_id, incarnation=incarnation,
+        protocol_id=POOL_PROTOCOL_ID, config_id=config_id, ttl_s=ttl_s)
+    if lease is None:
+        print(f"resilient_pool_admission=lost run_id={run_id}; exiting before model load")
+        return False
+    os.environ["RESILIENT_E97_FENCE_DB"] = str(database)
+    os.environ["RESILIENT_E97_ALLOCATION_LEASE"] = json.dumps(lease.__dict__, sort_keys=True)
+    os.environ["RESILIENT_E97_FENCE_EPOCH"] = str(lease.fence)
+    os.environ["RESILIENT_E97_ALLOCATION_ADMITTED_AT"] = str(lease.acquired_at)
+    telemetry = run_dir / "supervision" / "allocation-lease.json"
+    telemetry.parent.mkdir(parents=True, exist_ok=True)
+    temporary = telemetry.with_suffix(f".{os.getpid()}.tmp")
+    temporary.write_text(json.dumps({
+        "stage": "admitted_before_model_load", "run_id": run_id,
+        "allocation_id": allocation_id, "incarnation": incarnation,
+        "fence": lease.fence, "protocol": POOL_PROTOCOL_ID,
+        "generation_baseline_s": list(GENERATION_BASELINE_S),
+        "ready_hard_s": READY_HARD_S, "k40_hard_s": K40_HARD_S,
+        "exchange_commit_hard_s": EXCHANGE_COMMIT_HARD_S,
+        "first_commit_hard_s": FIRST_COMMIT_HARD_S,
+        "lease_ttl_s": ttl_s,
+    }, sort_keys=True) + "\n")
+    os.replace(temporary, telemetry)
+    guard = AllocationLeaseGuard(
+        store, lease, ttl_s=ttl_s,
+        renew_s=float(os.environ.get("RESILIENT_E97_LEASE_RENEW_S", "10")))
+    guard.start()
+    return guard
 
 
 @dataclass
@@ -175,8 +284,25 @@ class AllocationSupervisor:
                 return "injected_generation_gate"
         if now - float(state.get("heartbeat_time", 0)) > self.heartbeat_s:
             return "heartbeat_deadline"
-        if now - float(state.get("progress_time", 0)) > self.progress_s:
+        stage = str(state.get("stage", "unknown"))
+        stage_budget = {
+            "runtime_import": READY_HARD_S,
+            "collecting": K40_HARD_S + EXCHANGE_COMMIT_HARD_S,
+            "training": K40_HARD_S,
+            "streaming_delta": EXCHANGE_COMMIT_HARD_S,
+            "submitted": EXCHANGE_COMMIT_HARD_S,
+            "owner_transport": EXCHANGE_COMMIT_HARD_S,
+            "freeze": EXCHANGE_COMMIT_HARD_S,
+            "redistribution": EXCHANGE_COMMIT_HARD_S,
+            "checkpoint_commit": EXCHANGE_COMMIT_HARD_S,
+        }.get(stage, self.progress_s)
+        if now - float(state.get("progress_time", 0)) > min(self.progress_s, stage_budget):
             return "progress_deadline"
+        admitted_at = float(os.environ.get("RESILIENT_E97_ALLOCATION_ADMITTED_AT", now))
+        initial_generation = int(os.environ.get("RESILIENT_E97_INITIAL_GENERATION", "0"))
+        if (int(state.get("generation", initial_generation)) <= initial_generation
+                and now - admitted_at > FIRST_COMMIT_HARD_S):
+            return "first_atomic_generation_deadline"
         return None
 
     def stop_child(self, child: Child, reason: str) -> None:
@@ -239,7 +365,7 @@ def _node_local_main() -> int:
     supervisor = AllocationSupervisor(
         run_dir, children,
         heartbeat_s=float(os.environ.get("RESILIENT_E97_HEARTBEAT_DEADLINE_S", "60")),
-        progress_s=float(os.environ.get("RESILIENT_E97_PROGRESS_DEADLINE_S", "900")),
+        progress_s=float(os.environ.get("RESILIENT_E97_PROGRESS_DEADLINE_S", "600")),
         max_restarts=int(os.environ.get("RESILIENT_E97_MAX_RESTARTS", "2")),
         startup_s=float(os.environ.get("RESILIENT_E97_STARTUP_DEADLINE_S", "120")),
         launch_backend="node-local-child")
@@ -247,7 +373,7 @@ def _node_local_main() -> int:
     return supervisor.run()
 
 
-def main() -> int:
+def _allocation_main() -> int:
     if "--node-local" in sys.argv:
         return _node_local_main()
     run_dir = Path(os.environ["RUN_DIR"])
@@ -283,12 +409,29 @@ def main() -> int:
     supervisor = AllocationSupervisor(
         run_dir, children,
         heartbeat_s=float(os.environ.get("RESILIENT_E97_HEARTBEAT_DEADLINE_S", "60")),
-        progress_s=float(os.environ.get("RESILIENT_E97_PROGRESS_DEADLINE_S", "900")),
+        progress_s=float(os.environ.get("RESILIENT_E97_PROGRESS_DEADLINE_S", "600")),
         max_restarts=int(os.environ.get("RESILIENT_E97_MAX_RESTARTS", "2")),
         startup_s=float(os.environ.get("RESILIENT_E97_STARTUP_DEADLINE_S", "120")),
     )
     signal.signal(signal.SIGTERM, lambda *_: setattr(supervisor, "stopping", True))
     return supervisor.run()
+
+
+def main() -> int:
+    if "--node-local" in sys.argv:
+        return _node_local_main()
+    run_dir = Path(os.environ["RUN_DIR"])
+    admission = _allocation_admission(run_dir)
+    if admission is False:
+        return 0
+    try:
+        result = _allocation_main()
+        if isinstance(admission, AllocationLeaseGuard) and admission.error is not None:
+            raise FenceRejected(f"allocation lease renewal failed: {admission.error}")
+        return result
+    finally:
+        if isinstance(admission, AllocationLeaseGuard):
+            admission.close()
 
 
 if __name__ == "__main__":

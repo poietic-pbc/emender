@@ -24,6 +24,7 @@ import threading
 import time
 from typing import Callable, Mapping, Protocol, Sequence
 
+import numpy as np
 import torch
 
 from ndm.resilient_node_quorum import GenerationFence, MetadataCoordinator
@@ -59,13 +60,25 @@ def _atomic_bytes(path: Path, payload: bytes) -> None:
 
 
 def encode_f64(values: Sequence[float]) -> bytes:
-    return b"".join(_F64.pack(float(value)) for value in values)
+    if isinstance(values, torch.Tensor):
+        array = values.detach().cpu().to(torch.float64).contiguous().numpy()
+    else:
+        array = np.asarray(values, dtype=np.float64)
+    return array.astype(">f8", copy=False).tobytes()
 
 
 def decode_f64(payload: bytes) -> tuple[float, ...]:
     if len(payload) % _F64.size:
         raise ValueError("float64 bucket has a partial element")
-    return tuple(value[0] for value in struct.iter_unpack("!d", payload))
+    return tuple(np.frombuffer(payload, dtype=">f8").astype(np.float64))
+
+
+def decode_f64_tensor(payload: bytes) -> torch.Tensor:
+    """Vectorized dense decode for the live path (no Python scalar materialization)."""
+    if len(payload) % _F64.size:
+        raise ValueError("float64 bucket has a partial element")
+    return torch.from_numpy(
+        np.frombuffer(payload, dtype=">f8").astype(np.float64)).clone()
 
 
 def _recv_exact(stream, size: int) -> bytes:
@@ -170,6 +183,7 @@ class _Generation:
         self.updates: dict[str, dict[int, tuple[int, bytes]]] = {}
         self.receipts: dict[tuple[str, int], tuple[int, str]] = {}
         self.accepted: tuple[str, ...] | None = None
+        self.accepted_tokens = 0
         self.aggregates: dict[int, bytes] = {}
         self.condition = threading.Condition()
         self.last_heartbeat: dict[str, float] = {}
@@ -243,6 +257,8 @@ class QuorumTransportServer(socketserver.ThreadingTCPServer):
                         sum(vector[i] * item[0] for vector, item in zip(vectors, items)) / total
                         for i in range(len(vectors[0]))
                     ])
+                state.accepted_tokens = sum(state.updates[node][0][0]
+                                            for node in state.accepted)
                 self._publish_manifest(state)
                 state.updates.clear()  # retain only compact receipts after incremental reduction
                 state.condition.notify_all()
@@ -331,6 +347,7 @@ class _RequestHandler(socketserver.StreamRequestHandler):
                         state.condition.wait(remaining)
                 send_frame(self.wfile, {
                     "op": "commit", "accepted_nodes": list(state.accepted),
+                    "accepted_tokens": state.accepted_tokens,
                     "bucket_count": len(state.aggregates),
                     "generation": state.fence.generation,
                     "attempt": state.fence.attempt,
@@ -493,12 +510,23 @@ def pack_dense_delta(delta: Mapping[str, torch.Tensor], *, bucket_bytes: int
     tensors = [delta[name].detach().cpu() for name in names]
     if any(not tensor.is_floating_point() for tensor in tensors):
         raise ValueError("resilient dense transport accepts floating tensors only")
-    values: list[float] = []
-    for tensor in tensors:
-        values.extend(tensor.to(torch.float64).reshape(-1).tolist())
     elements = max(1, bucket_bytes // _F64.size)
-    buckets = tuple(encode_f64(values[offset:offset + elements])
-                    for offset in range(0, len(values), elements))
+    buckets = []
+    pending = torch.empty(0, dtype=torch.float64)
+    for tensor in tensors:
+        flat = tensor.to(torch.float64).reshape(-1)
+        offset = 0
+        while offset < flat.numel():
+            take = min(elements - pending.numel(), flat.numel() - offset)
+            piece = flat[offset:offset + take]
+            pending = torch.cat((pending, piece)) if pending.numel() else piece
+            offset += take
+            if pending.numel() == elements:
+                buckets.append(encode_f64(pending))
+                pending = torch.empty(0, dtype=torch.float64)
+    if pending.numel():
+        buckets.append(encode_f64(pending))
+    buckets = tuple(buckets)
     if not buckets:
         buckets = (b"",)
     return DenseBucketLayout(
@@ -512,8 +540,8 @@ def pack_dense_delta(delta: Mapping[str, torch.Tensor], *, bucket_bytes: int
 def apply_aggregate_delta(base_state: Mapping[str, torch.Tensor], layout: DenseBucketLayout,
                           buckets: Sequence[bytes], *, eta_outer: float = 1.0
                           ) -> dict[str, torch.Tensor]:
-    values = [value for payload in buckets for value in decode_f64(payload)]
-    if len(values) != sum(layout.counts):
+    total_values = sum(len(payload) // _F64.size for payload in buckets)
+    if total_values != sum(layout.counts):
         raise ValueError("aggregate tensor element count mismatch")
     result: dict[str, torch.Tensor] = {}
     offset = 0
@@ -523,7 +551,19 @@ def apply_aggregate_delta(base_state: Mapping[str, torch.Tensor], layout: DenseB
         base = base_state[name]
         if tuple(base.shape) != shape:
             raise ValueError(f"aggregate tensor {name!r} shape mismatch")
-        mean = torch.tensor(values[offset:offset + count], dtype=torch.float64).reshape(shape)
+        mean = torch.empty(count, dtype=torch.float64)
+        copied = 0
+        source_offset = offset
+        bucket_index = source_offset // layout.bucket_elements
+        bucket_offset = source_offset % layout.bucket_elements
+        while copied < count:
+            vector = decode_f64_tensor(buckets[bucket_index])
+            take = min(count - copied, vector.numel() - bucket_offset)
+            mean[copied:copied + take].copy_(vector[bucket_offset:bucket_offset + take])
+            copied += take
+            bucket_index += 1
+            bucket_offset = 0
+        mean = mean.reshape(shape)
         result[name] = base + mean.to(device=base.device, dtype=base.dtype) * float(eta_outer)
         offset += count
     missing = sorted(set(base_state) - set(layout.names))

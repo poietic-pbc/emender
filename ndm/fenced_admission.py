@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 import sqlite3
 import time
-from typing import Callable, Mapping, TypeVar
+from typing import Callable, Mapping, Sequence, TypeVar
 
 
 MAX_CONTROL_BYTES = 16 * 1024
@@ -185,25 +185,62 @@ class SQLiteFencedControlStore:
     def publish(self, lease: AllocationLease, *, kind: str, name: str,
                 payload: Mapping[str, object]) -> None:
         """Atomically guard a commit, checkpoint, or latest-pointer metadata write."""
-        if kind not in PUBLICATION_KINDS or not name:
-            raise ValueError("publication kind/name is invalid")
-        encoded, now = self._encoded(payload), self.clock()
+        self.publish_bundle(lease, ((kind, name, payload),))
+
+    def publish_bundle(self, lease: AllocationLease,
+                       publications: Sequence[tuple[str, str, Mapping[str, object]]]) -> None:
+        """Publish one all-or-none fenced global commit metadata bundle.
+
+        The immutable model/checkpoint bytes are made durable by the caller
+        before this transaction.  This method atomically records the commit,
+        checkpoint identity, and authoritative latest pointer under one live
+        allocation fence; a stale owner can record none of them.
+        """
+        if not publications:
+            raise ValueError("publication bundle cannot be empty")
+        encoded_items: list[tuple[str, str, str]] = []
+        keys: set[tuple[str, str]] = set()
+        for kind, name, payload in publications:
+            if kind not in PUBLICATION_KINDS or not name:
+                raise ValueError("publication kind/name is invalid")
+            if (kind, name) in keys:
+                raise ValueError("publication bundle contains a duplicate key")
+            keys.add((kind, name))
+            encoded_items.append((kind, name, self._encoded(payload)))
+        now = self.clock()
 
         def cas(db: sqlite3.Connection) -> None:
             row = db.execute("SELECT payload FROM leases WHERE run_id=?",
                              (lease.run_id,)).fetchone()
             current = self._lease(row[0]) if row else None
             if current is None or not self._same_owner(current, lease) or current.expires_at <= now:
-                raise FenceRejected(f"stale {kind} publication")
-            existing = db.execute(
-                "SELECT fence,payload FROM publications WHERE run_id=? AND kind=? AND name=?",
-                (lease.run_id, kind, name)).fetchone()
-            if existing is not None:
-                if existing == (lease.fence, encoded):
-                    return
-                raise FenceRejected("immutable publication already exists")
-            db.execute("INSERT INTO publications VALUES (?,?,?,?,?)",
-                       (lease.run_id, kind, name, lease.fence, encoded))
+                detail = (f"stale {encoded_items[0][0]} publication"
+                          if len(encoded_items) == 1 else "stale atomic publication bundle")
+                raise FenceRejected(detail)
+            pending = []
+            updates = []
+            for kind, name, encoded in encoded_items:
+                existing = db.execute(
+                    "SELECT fence,payload FROM publications "
+                    "WHERE run_id=? AND kind=? AND name=?",
+                    (lease.run_id, kind, name)).fetchone()
+                if existing is not None:
+                    if existing == (lease.fence, encoded):
+                        continue
+                    if kind != "latest":
+                        raise FenceRejected("immutable publication already exists")
+                    previous = json.loads(existing[1])
+                    proposed = json.loads(encoded)
+                    if ("generation" not in previous or "generation" not in proposed
+                            or int(proposed["generation"]) <= int(previous["generation"])):
+                        raise FenceRejected("latest publication must advance monotonically")
+                    updates.append((lease.fence, encoded, lease.run_id, kind, name))
+                    continue
+                pending.append((lease.run_id, kind, name, lease.fence, encoded))
+            db.executemany("INSERT INTO publications VALUES (?,?,?,?,?)", pending)
+            db.executemany(
+                "UPDATE publications SET fence=?,payload=? "
+                "WHERE run_id=? AND kind=? AND name=?", updates)
         self._transaction(cas)
 
     def read_publication(self, run_id: str, kind: str, name: str) -> dict[str, object] | None:

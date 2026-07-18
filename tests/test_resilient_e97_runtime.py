@@ -13,6 +13,7 @@ from ndm.resilient_e97_roles import LocalFence, LocalTrainerSpool
 from ndm.resilient_e97_runtime import (apply_delta, finalize_checkpoint,
                                        assert_node_local_path, flatten_tensors,
                                        outer_state_migration)
+from ndm.fenced_admission import FenceRejected, SQLiteFencedControlStore
 
 
 ROLE = Path(__file__).parents[1] / "scripts/frontier/resilient_e97_role.py"
@@ -27,11 +28,11 @@ def test_manager_publishes_heartbeat_before_heavy_runtime_imports():
     assert "os.replace(temporary, state)" in text
 
 
-def _control_processes(run, bulk, *, run_id, generations, initial=0, resume=""):
+def _control_processes(run, bulk, *, run_id, generations, initial=0, resume="", epoch=1):
     common = ["--run-dir", str(run), "--run-id", run_id, "--generations", str(generations),
               "--initial-generation", str(initial), "--local-steps", "40", "--deadline-s", "15",
               "--source-id", "seed", "--payload-id", "layout", "--code-id", "code",
-              "--control", "--bulk-root", str(bulk)]
+              "--coordinator-epoch", str(epoch), "--control", "--bulk-root", str(bulk)]
     if resume:
         common += ["--resume-handoff", str(resume)]
     processes = [subprocess.Popen([sys.executable, str(ROLE), "manager", *common],
@@ -75,7 +76,7 @@ def test_eight_independent_trainers_advance_three_exact_generations(tmp_path):
         reference += sum((rank + 1) ** 2 for rank in members) / sum(rank + 1 for rank in members)
     assert checkpoint["model_state_dict"]["weight"].item() == pytest.approx(reference)
     handoff = json.loads((tmp_path / "handoff/generation-00000003.json").read_text())
-    assert len(handoff["membership"]) == 6
+    assert handoff["membership"] == ["node-0"]
     assert handoff["checkpoint_sha256"] == hashlib.sha256(
         Path(handoff["checkpoint"]).read_bytes()).hexdigest()
     assert not list(mailbox.glob("control-g*/trainer-*"))
@@ -83,6 +84,7 @@ def test_eight_independent_trainers_advance_three_exact_generations(tmp_path):
     assert ownership["shared_run_dir_is_bulk_path"] is False
     assert 0 < ownership["high_water_bytes"] <= ownership["max_bytes"]
     assert ownership["post_release_bytes"] < ownership["high_water_bytes"]
+    assert ownership["published_files"] <= 2 * 3
     assert len(list((mailbox / "aggregates").glob("*/manifest.json"))) <= 2
     assert {path.relative_to(tmp_path).parts[0] for path in tmp_path.rglob("*") if path.is_file()} \
         <= {"checkpoints", "handoff"}
@@ -108,11 +110,32 @@ def test_two_model_free_managers_exchange_without_collective(tmp_path):
                 env={**os.environ, "RESILIENT_E97_NODE_RANK": str(node),
                      "RESILIENT_E97_LOCAL_RANK": str(rank)}))
     assert [item.wait(timeout=45) for item in processes] == [0] * len(processes)
-    manifests = list((tmp_path / "manager-network/network-generations").glob("*.json"))
+    manifests = list((tmp_path / "retained-evidence/pool-control").glob("*.jsonl"))
     assert len(manifests) == 1
-    assert json.loads(manifests[0].read_text())["accepted_nodes"] == ["node-0", "node-1"]
+    closes = [json.loads(line) for line in manifests[0].read_text().splitlines()]
+    assert {item["worker_id"] for item in closes[-1]["frozen_identities"]} \
+        == {"node-0", "node-1"}
     role_source = ROLE.read_text()
     assert all(word not in role_source for word in ("mpi4py", "TCPStore", "RCCL", "all_reduce"))
+    assert "QuorumTransportServer" not in role_source
+    assert "central_full_model_broker\": False" in role_source
+    for node in range(2):
+        generation = json.loads((bulk_root / f"network/node-{node}/control" /
+                                 f"node-{node}-generation-00000000.json").read_text())
+        assert generation["central_full_model_broker"] is False
+        assert generation["p2p_bytes_sent"] > 0
+        assert generation["redistribution_bytes"] > 0
+        telemetry = [json.loads(line) for line in (
+            bulk_root / f"network/node-{node}/telemetry/node-{node}-manager-pool.jsonl"
+        ).read_text().splitlines()]
+        stages = {item["stage"] for item in telemetry}
+        assert {"ready", "k40_and_local_reduce", "freeze",
+                "owner_transport_redistribution"} <= stages
+        transport = next(item for item in telemetry
+                         if item["stage"] == "owner_transport_redistribution")
+        assert transport["within_slo"] is True
+        assert transport["bytes_per_second"] > 0
+        assert transport["released_bytes"] > 0
 
 
 def test_fresh_process_restart_matches_uninterrupted_continuation(tmp_path):
@@ -127,7 +150,7 @@ def test_fresh_process_restart_matches_uninterrupted_continuation(tmp_path):
     assert loaded["generation"] == saved["generation"] == 2
     assert loaded["outer_update_state"] == saved["outer_update_state"]
     _control_processes(restarted, bulk_b, run_id="control-b", generations=1,
-                       initial=2, resume=resume)
+                       initial=2, resume=resume, epoch=2)
     expected = torch.load(uninterrupted / "checkpoints/generation-00000003.pt",
                           weights_only=True)
     actual = torch.load(restarted / "checkpoints/generation-00000003.pt", weights_only=True)
@@ -136,6 +159,7 @@ def test_fresh_process_restart_matches_uninterrupted_continuation(tmp_path):
     assert actual["optimizer_state_dict"] == expected["optimizer_state_dict"]
     assert actual["outer_update_state"] == expected["outer_update_state"]
     assert actual["step"] == expected["step"] == 120
+    assert actual["coordinator_epoch"] == 2
     recovery = torch.load(
         bulk_b / "control-b/node-0/recovery/node-0-trainer-0/generation-00000003.pt",
         weights_only=True)
@@ -153,7 +177,7 @@ def test_apply_identity_deadline_and_corruption_fail_closed(tmp_path):
     spool.publish_aggregate(fence, [0], [torch.tensor([2.])], weight=1, source_id="source")
     with pytest.raises(ValueError, match="identity"):
         spool.wait_aggregate(fence, deadline=1e20, expected_source_id="other")
-    shard = next((tmp_path / "aggregates").rglob("*.f64")); shard.write_bytes(b"bad")
+    shard = next((tmp_path / "aggregates").rglob("*.data")); shard.write_bytes(b"bad")
     with pytest.raises(ValueError, match="corrupt"):
         spool.wait_aggregate(fence, deadline=1e20, expected_source_id="source")
     with pytest.raises(ValueError, match="count"):
@@ -205,3 +229,78 @@ def test_pinned_cold_start_outer_policy_and_immutable_reloadable_handoff(tmp_pat
                             source_id="source", code_id="code",
                             outer_update_state=migration["state"],
                             migration=migration)
+
+
+def test_fenced_atomic_global_commit_and_newer_allocation_restart(tmp_path):
+    now = [100.0]
+    store = SQLiteFencedControlStore(tmp_path / "pool.sqlite", clock=lambda: now[0])
+    old = store.acquire(run_id="run", allocation_id="job-a", incarnation="a",
+                        protocol_id="pool-v1", config_id="cfg", ttl_s=10)
+    checkpoint = tmp_path / "generation-1.pt"
+    torch.save({"model_state_dict": {"x": torch.tensor([3.0])},
+                "optimizer_state_dict": {"state": {}},
+                "outer_update_state": {"algorithm": "weighted-mean"},
+                "step": 40, "generation": 1, "run_id": "run", "source_id": "seed",
+                "payload_id": "layout", "coordinator_epoch": old.fence,
+                "accepted_tokens": 17}, checkpoint)
+    manifest = finalize_checkpoint(
+        tmp_path, checkpoint, run_id="run", generation=1, step=40,
+        async_chain=["seed"], membership=["node-a:inc-a"],
+        fence=LocalFence("run", 0, 0, old.fence, "layout"), source_id="seed",
+        code_id="code", outer_update_state={"algorithm": "weighted-mean"},
+        migration={"status": "restored"}, accepted_tokens=17,
+        generation_identity={"run_id": "run", "generation": 0,
+                             "attempt": 0, "fence": old.fence},
+        digests={"layout": "layout", "code": "code"},
+        control_store=store, allocation_lease=old)
+    latest = store.read_publication("run", "latest", "authoritative")
+    assert latest["generation"] == 1 and latest["accepted_tokens"] == 17
+    assert manifest.name == "generation-00000001-fence-00000001.json"
+    assert json.loads(manifest.read_text())["membership"] == ["node-a:inc-a"]
+    assert finalize_checkpoint(
+        tmp_path, checkpoint, run_id="run", generation=1, step=40,
+        async_chain=["seed"], membership=["node-a:inc-a"],
+        fence=LocalFence("run", 0, 0, old.fence, "layout"), source_id="seed",
+        code_id="code", outer_update_state={"algorithm": "weighted-mean"},
+        migration={"status": "restored"}, accepted_tokens=17,
+        generation_identity={"run_id": "run", "generation": 0,
+                             "attempt": 0, "fence": old.fence},
+        digests={"layout": "layout", "code": "code"},
+        control_store=store, allocation_lease=old) == manifest
+
+    now[0] = old.expires_at
+    new = store.acquire(run_id="run", allocation_id="job-b", incarnation="b",
+                        protocol_id="pool-v1", config_id="cfg", ttl_s=10)
+    assert new.fence == old.fence + 1
+    loaded = torch.load(json.loads(manifest.read_text())["checkpoint"], weights_only=True)
+    assert loaded["accepted_tokens"] == 17
+    stale_checkpoint = tmp_path / "generation-2.pt"
+    torch.save({**loaded, "generation": 2, "step": 80}, stale_checkpoint)
+    with pytest.raises(FenceRejected):
+        finalize_checkpoint(
+            tmp_path, stale_checkpoint, run_id="run", generation=2, step=80,
+            async_chain=[], membership=[], fence=LocalFence("run", 1, 0, old.fence, "layout"),
+            source_id="seed", code_id="code",
+            outer_update_state={"algorithm": "weighted-mean"}, migration={},
+            accepted_tokens=17, control_store=store, allocation_lease=old)
+    assert not (tmp_path / "handoff/generation-00000002.json").exists()
+
+    fresh_checkpoint = tmp_path / "generation-2-fresh.pt"
+    torch.save({**loaded, "generation": 2, "step": 80,
+                "coordinator_epoch": new.fence, "accepted_tokens": 25},
+               fresh_checkpoint)
+    continued = finalize_checkpoint(
+        tmp_path, fresh_checkpoint, run_id="run", generation=2, step=80,
+        async_chain=[str(manifest)], membership=["node-a:inc-b"],
+        fence=LocalFence("run", 1, 0, new.fence, "layout"), source_id="seed",
+        code_id="code", outer_update_state={"algorithm": "weighted-mean"},
+        migration={"status": "restored"}, accepted_tokens=25,
+        generation_identity={"run_id": "run", "generation": 1,
+                             "attempt": 0, "fence": new.fence},
+        control_store=store, allocation_lease=new)
+    assert continued.name == "generation-00000002-fence-00000002.json"
+    assert store.read_publication("run", "latest", "authoritative") == {
+        "accepted_tokens": 25, "fence": new.fence, "generation": 2,
+        "manifest": str(continued.resolve()),
+        "manifest_sha256": hashlib.sha256(continued.read_bytes()).hexdigest(),
+    }

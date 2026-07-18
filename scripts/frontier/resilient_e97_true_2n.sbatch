@@ -9,7 +9,7 @@
 #SBATCH -q debug
 #SBATCH -N 2
 #SBATCH --gpus-per-node=8
-#SBATCH -t 02:00:00
+#SBATCH -t 00:20:00
 #SBATCH --signal=B:TERM@300
 #SBATCH -o logs/frontier/trainpy_async_quorum/%x-%j.out
 #SBATCH -e logs/frontier/trainpy_async_quorum/%x-%j.err
@@ -61,11 +61,10 @@ if [[ ${RESILIENT_E97_STARTUP_SMOKE:-0} == 1 ]]; then
   # Frontier does not consistently export SLURM_TIMELIMIT into batch jobs.
   # The submitter must therefore bind the requested value into the immutable
   # payload; when Slurm does expose its value, require the two to agree.
-  [[ ${RESILIENT_E97_REQUESTED_WALLTIME:-} == 00:50:00 || ${RESILIENT_E97_REQUESTED_WALLTIME:-} == 02:00:00 ]] || {
-    echo "startup smoke requires exactly 00:50:00 or 02:00:00" >&2; exit 64;
+  [[ ${RESILIENT_E97_REQUESTED_WALLTIME:-} == 00:20:00 ]] || {
+    echo "startup smoke requires exactly 00:20:00" >&2; exit 64;
   }
-  requested_minutes=50
-  [[ ${RESILIENT_E97_REQUESTED_WALLTIME} == 02:00:00 ]] && requested_minutes=120
+  requested_minutes=20
   [[ -z ${SLURM_TIMELIMIT:-} || ${SLURM_TIMELIMIT} == ${RESILIENT_E97_REQUESTED_WALLTIME} || ${SLURM_TIMELIMIT} == ${requested_minutes} ]] || {
     echo "startup smoke Slurm walltime disagrees with requested ${RESILIENT_E97_REQUESTED_WALLTIME}" >&2; exit 64;
   }
@@ -76,8 +75,8 @@ if [[ ${RESILIENT_E97_STARTUP_SMOKE:-0} == 1 ]]; then
     echo "startup smoke forbids failure injection" >&2; exit 64;
   }
 else
-  [[ ${SLURM_TIMELIMIT:-02:00:00} == 02:00:00 || ${SLURM_TIMELIMIT:-} == 120 ]] || {
-    echo "requires exactly 02:00:00" >&2; exit 64;
+  [[ ${SLURM_TIMELIMIT:-00:20:00} == 00:20:00 || ${SLURM_TIMELIMIT:-} == 20 || ${SLURM_TIMELIMIT:-} == 00:30:00 || ${SLURM_TIMELIMIT:-} == 30 ]] || {
+    echo "requires a bounded 00:20:00 restart/startup or 00:30:00 resilience gate" >&2; exit 64;
   }
 fi
 [[ ${ASYNC_LOCAL_STEPS:-40} == 40 ]] || { echo "E97 gate requires local_steps=40" >&2; exit 64; }
@@ -113,7 +112,7 @@ srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task=1 --gpus-per-task=
   bash "$RESILIENT_E97_NODE_TIKTOKEN_CACHE" "$RESILIENT_E97_TIKTOKEN_CACHE_FILE" "$RESILIENT_E97_TIKTOKEN_SHA256"
 export TIKTOKEN_CACHE_DIR=$RESILIENT_E97_NODE_TIKTOKEN_CACHE
 ROLE="$REPO/scripts/frontier/resilient_e97_role.py"
-COMMON="--run-dir $RUN_DIR --run-id $RESILIENT_E97_RUN_ID --generations ${RESILIENT_E97_GENERATIONS:-1} --initial-generation $RESILIENT_E97_INITIAL_GENERATION --local-steps 40 --node-count 2 --global-quorum ${RESILIENT_E97_GLOBAL_QUORUM:-2} --coordinator-host $RESILIENT_E97_COORDINATOR_HOST --coordinator-port ${RESILIENT_E97_COORDINATOR_PORT:-29571} --deadline-s ${RESILIENT_E97_GENERATION_DEADLINE_S:-900} --source-id $RESILIENT_E97_SOURCE_ID --payload-id $RESILIENT_E97_PAYLOAD_ID --code-id ${RESILIENT_E97_CODE_ID:-unknown} --coordinator-epoch ${RESILIENT_E97_COORDINATOR_EPOCH:-1} --bulk-root ${RESILIENT_E97_BULK_ROOT:-/tmp/resilient-e97} --max-spool-bytes ${RESILIENT_E97_MAX_SPOOL_BYTES:-34359738368} --bulk-chunk-bytes ${RESILIENT_E97_BULK_CHUNK_BYTES:-1048576}"
+COMMON="--run-dir $RUN_DIR --run-id $RESILIENT_E97_RUN_ID --generations ${RESILIENT_E97_GENERATIONS:-1} --initial-generation $RESILIENT_E97_INITIAL_GENERATION --local-steps 40 --node-count 2 --global-quorum ${RESILIENT_E97_GLOBAL_QUORUM:-2} --coordinator-host $RESILIENT_E97_COORDINATOR_HOST --coordinator-port ${RESILIENT_E97_COORDINATOR_PORT:-29571} --deadline-s ${RESILIENT_E97_GENERATION_DEADLINE_S:-600} --source-id $RESILIENT_E97_SOURCE_ID --payload-id $RESILIENT_E97_PAYLOAD_ID --code-id ${RESILIENT_E97_CODE_ID:-unknown} --coordinator-epoch ${RESILIENT_E97_COORDINATOR_EPOCH:-1} --bulk-root ${RESILIENT_E97_BULK_ROOT:-/tmp/resilient-e97} --max-spool-bytes ${RESILIENT_E97_MAX_SPOOL_BYTES:-34359738368} --bulk-chunk-bytes ${RESILIENT_E97_BULK_CHUNK_BYTES:-1048576}"
 export RESILIENT_E97_MANAGER_COMMAND="$TRAIN_PYTHON_BIN $ROLE manager $COMMON --local-quorum 6"
 RESUME_ARGS=()
 [[ -z $RESILIENT_E97_RESUME_HANDOFF ]] || RESUME_ARGS=(--resume-handoff "$RESILIENT_E97_RESUME_HANDOFF")

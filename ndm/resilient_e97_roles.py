@@ -13,6 +13,7 @@ import hashlib
 import json
 import math
 import os
+import fcntl
 from pathlib import Path
 import tempfile
 import time
@@ -53,29 +54,85 @@ class LocalFence:
 
 
 class LocalTrainerSpool:
-    """Bounded atomic trainer-to-manager spool.
+    """Bounded atomic trainer-to-manager stream spool.
 
-    A shard is a flat CPU tensor serialized without pickle.  Its manifest is
-    published last, so a manager never observes a partial contribution.
+    Every trainer contribution is one large sequential data file plus one small
+    manifest.  Shard offsets retain the bounded tensor-stream interface without
+    creating/fsyncing a file per microchunk.  The manifest is published last,
+    so a manager never observes a partial contribution.
     """
 
     def __init__(self, root: str | Path, max_bytes: int):
         self.root, self.max_bytes = Path(root), int(max_bytes)
         self.high_water_bytes = 0
+        self.bytes_written = 0
+        self.bytes_read = 0
+        self.files_published = 0
         self.root.mkdir(parents=True, exist_ok=True)
         if self.max_bytes <= 0:
             raise ValueError("max_bytes must be positive")
+        self._usage_lock = self.root / ".usage.lock"
+        with self._usage_lock.open("a+b") as stream:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+            stream.seek(0, os.SEEK_END)
+            if stream.tell() < 8:
+                actual = self._scan_payload_bytes()
+                stream.seek(0); stream.write(int(actual).to_bytes(8, "little"))
+                stream.truncate(8); stream.flush()
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+    def _scan_payload_bytes(self) -> int:
+        total = 0
+        for directory, _, names in os.walk(self.root):
+            for name in names:
+                path = Path(directory) / name
+                if path == self._usage_lock:
+                    continue
+                try:
+                    total += path.stat().st_size
+                except FileNotFoundError:
+                    pass
+        return total
+
+    def _reserve(self, delta: int) -> int:
+        """Atomically reserve/release bytes across all local role processes."""
+        with self._usage_lock.open("r+b", buffering=0) as stream:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+            current = int.from_bytes(stream.read(8), "little")
+            updated = current + int(delta)
+            if updated < 0:
+                updated = 0
+            if updated > self.max_bytes:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+                raise BufferError("local trainer spool byte limit exceeded")
+            stream.seek(0); stream.write(updated.to_bytes(8, "little"))
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        self.high_water_bytes = max(self.high_water_bytes, updated)
+        return updated
+
+    def _remove_payloads(self, paths: Iterable[Path]) -> None:
+        removed = 0
+        for path in paths:
+            try:
+                removed += path.stat().st_size
+                path.unlink()
+            except FileNotFoundError:
+                continue
+        if removed:
+            self._reserve(-removed)
 
     @property
     def bytes_used(self) -> int:
-        total = 0
-        for path in self.root.rglob("*"):
-            try:
-                if path.is_file():
-                    total += path.stat().st_size
-            except FileNotFoundError:  # another role completed an atomic rename/removal
-                continue
+        with self._usage_lock.open("rb") as stream:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_SH)
+            total = int.from_bytes(stream.read(8), "little")
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
         return total
+
+    @property
+    def file_count(self) -> int:
+        return sum(sum(name != ".usage.lock" for name in names)
+                   for _, _, names in os.walk(self.root))
 
     def publish(self, fence: LocalFence, trainer_id: int, shards: Iterable[torch.Tensor],
                 *, weight: int, source_id: str) -> Path:
@@ -86,58 +143,97 @@ class LocalTrainerSpool:
         directory = self.root / fence.key / f"trainer-{trainer_id}"
         if (directory / "manifest.json").exists():
             raise ValueError("duplicate trainer contribution")
-        records, written = [], []
-        initial_bytes = self.bytes_used
-        for index, tensor in enumerate(shards):
-            value = tensor.detach().cpu().contiguous()
-            if not value.is_floating_point() or not torch.isfinite(value).all():
-                raise ValueError("trainer shard must be finite floating-point data")
-            # Trainer deltas originate in model precision.  Preserve those exact
-            # bytes on the bounded spool; the model-free manager promotes each
-            # shard to float64 only while accumulating it.
-            dtype = "float64" if value.dtype == torch.float64 else "float32"
-            encoded_value = value.to(torch.float64 if dtype == "float64" else torch.float32)
-            raw = encoded_value.numpy().tobytes()
-            records.append({"index": index, "elements": value.numel(),
-                            "dtype": dtype, "sha256": hashlib.sha256(raw).hexdigest()})
-            if initial_bytes + sum(path.stat().st_size for path in written) + len(raw) > self.max_bytes:
-                for path in written:
-                    path.unlink(missing_ok=True)
-                raise BufferError("local trainer spool byte limit exceeded")
-            path = directory / f"shard-{index:05d}.bin"
-            _atomic(path, raw)
-            written.append(path)
+        records = []
+        directory.mkdir(parents=True, exist_ok=True)
+        data_path = directory / "contribution.data"
+        fd, temporary_name = tempfile.mkstemp(prefix=".contribution.", dir=directory)
+        temporary = Path(temporary_name)
+        written = 0
+        reserved = 0
+        try:
+            with os.fdopen(fd, "wb", buffering=8 << 20) as stream:
+                for index, tensor in enumerate(shards):
+                    value = tensor.detach().cpu().contiguous()
+                    if not value.is_floating_point() or not torch.isfinite(value).all():
+                        raise ValueError("trainer shard must be finite floating-point data")
+                    # Trainer deltas originate in model precision. Preserve their
+                    # established f32/f64 wire contract, but append into one stream.
+                    dtype = "float64" if value.dtype == torch.float64 else "float32"
+                    encoded_value = value.to(
+                        torch.float64 if dtype == "float64" else torch.float32)
+                    raw = encoded_value.numpy().tobytes()
+                    self._reserve(len(raw)); reserved += len(raw)
+                    stream.write(raw)
+                    records.append({"index": index, "offset": written,
+                                    "nbytes": len(raw), "elements": value.numel(),
+                                    "dtype": dtype,
+                                    "sha256": hashlib.sha256(raw).hexdigest()})
+                    written += len(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if not records:
+                raise ValueError("trainer contribution must contain at least one shard")
+            os.replace(temporary, data_path)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            data_path.unlink(missing_ok=True)
+            if reserved:
+                self._reserve(-reserved)
+            raise
         manifest = {"schema": SCHEMA, "fence": fence.__dict__, "trainer_id": trainer_id,
-                    "weight": weight, "source_id": source_id, "shards": records}
+                    "weight": weight, "source_id": source_id,
+                    "data_file": data_path.name, "data_bytes": written,
+                    "shards": records}
         manifest_bytes = (json.dumps(manifest, sort_keys=True) + "\n").encode()
-        if self.bytes_used + len(manifest_bytes) > self.max_bytes:
-            for path in written:
-                path.unlink(missing_ok=True)
-            raise BufferError("local trainer spool byte limit exceeded")
-        _atomic(directory / "manifest.json", manifest_bytes)
+        try:
+            self._reserve(len(manifest_bytes)); reserved += len(manifest_bytes)
+        except BufferError:
+            data_path.unlink(missing_ok=True)
+            self._reserve(-reserved)
+            raise
+        try:
+            _atomic(directory / "manifest.json", manifest_bytes)
+        except BaseException:
+            data_path.unlink(missing_ok=True)
+            self._reserve(-reserved)
+            raise
+        self.bytes_written += written
+        self.files_published += 2
         self.high_water_bytes = max(self.high_water_bytes, self.bytes_used)
         return directory / "manifest.json"
 
     def release_generation(self, fence: LocalFence) -> None:
         root = self.root / fence.key
         if root.exists():
-            for path in sorted(root.rglob("*"), reverse=True):
-                path.unlink() if path.is_file() else path.rmdir()
-            root.rmdir()
+            payloads = []
+            for directory, names, files in os.walk(root, topdown=False):
+                for name in files:
+                    payloads.append(Path(directory) / name)
+            self._remove_payloads(payloads)
+            for directory, names, _ in os.walk(root, topdown=False):
+                for name in names:
+                    try:
+                        (Path(directory) / name).rmdir()
+                    except FileNotFoundError:
+                        pass
+            try:
+                root.rmdir()
+            except FileNotFoundError:
+                pass
 
     def release_trainer(self, fence: LocalFence, trainer_id: int) -> None:
         directory = self.root / fence.key / f"trainer-{trainer_id}"
         if directory.exists():
             try:
-                for path in sorted(directory.iterdir()):
-                    path.unlink(missing_ok=True)
+                self._remove_payloads(tuple(directory.iterdir()))
                 directory.rmdir()
             except FileNotFoundError:
                 pass  # manager and owning trainer may release concurrently
 
     def publish_aggregate(self, fence: LocalFence, members: Sequence[int],
                           shards: Sequence[torch.Tensor], *, weight: int,
-                          source_id: str) -> Path:
+                          source_id: str,
+                          accepted_peers: Sequence[str] = ()) -> Path:
         """Atomically publish the manager result after every shard is durable."""
         if weight <= 0 or not members or not source_id:
             raise ValueError("aggregate membership, weight, and source are required")
@@ -148,25 +244,48 @@ class LocalTrainerSpool:
             if current.get("fence") == fence.__dict__:
                 return manifest_path
             raise ValueError("conflicting aggregate publication")
-        records, encoded = [], []
-        for index, tensor in enumerate(shards):
-            value = tensor.detach().cpu().to(torch.float64).contiguous()
-            if not torch.isfinite(value).all():
-                raise ValueError("nonfinite aggregate rejected")
-            raw = value.numpy().tobytes()
-            records.append({"index": index, "elements": value.numel(),
-                            "sha256": hashlib.sha256(raw).hexdigest()})
-            encoded.append(raw)
+        records = []
+        offset = 0
+        directory.mkdir(parents=True, exist_ok=True)
+        data_path = directory / "aggregate.data"
+        fd, temporary_name = tempfile.mkstemp(prefix=".aggregate.", dir=directory)
+        temporary = Path(temporary_name)
+        reserved = 0
+        try:
+            with os.fdopen(fd, "wb", buffering=8 << 20) as stream:
+                for index, tensor in enumerate(shards):
+                    value = tensor.detach().cpu().to(torch.float64).contiguous()
+                    if not torch.isfinite(value).all():
+                        raise ValueError("nonfinite aggregate rejected")
+                    raw = value.numpy().tobytes()
+                    self._reserve(len(raw)); reserved += len(raw)
+                    stream.write(raw)
+                    records.append({"index": index, "offset": offset, "nbytes": len(raw),
+                                    "elements": value.numel(),
+                                    "sha256": hashlib.sha256(raw).hexdigest()})
+                    offset += len(raw)
+                stream.flush(); os.fsync(stream.fileno())
+            os.replace(temporary, data_path)
+        except BaseException:
+            temporary.unlink(missing_ok=True); data_path.unlink(missing_ok=True)
+            if reserved: self._reserve(-reserved)
+            raise
         manifest = {"schema": SCHEMA, "fence": fence.__dict__,
                     "members": sorted(int(member) for member in members),
                     "weight": int(weight), "source_id": source_id,
+                    "accepted_peers": sorted(set(map(str, accepted_peers))),
+                    "data_file": "aggregate.data", "data_bytes": offset,
                     "shards": records}
         manifest_bytes = (json.dumps(manifest, sort_keys=True) + "\n").encode()
-        if self.bytes_used + sum(map(len, encoded)) + len(manifest_bytes) > self.max_bytes:
-            raise BufferError("local aggregate spool byte limit exceeded")
-        for record, raw in zip(records, encoded):
-            _atomic(directory / f"shard-{record['index']:05d}.f64", raw)
-        _atomic(manifest_path, manifest_bytes)
+        try:
+            self._reserve(len(manifest_bytes)); reserved += len(manifest_bytes)
+            _atomic(manifest_path, manifest_bytes)
+        except BaseException:
+            data_path.unlink(missing_ok=True); manifest_path.unlink(missing_ok=True)
+            self._reserve(-reserved)
+            raise
+        self.bytes_written += offset
+        self.files_published += 2
         self.high_water_bytes = max(self.high_water_bytes, self.bytes_used)
         return manifest_path
 
@@ -177,8 +296,7 @@ class LocalTrainerSpool:
         generations = sorted((path for path in root.glob("*") if path.is_dir()),
                              key=lambda path: path.stat().st_mtime_ns)
         for directory in generations[:-keep_generations]:
-            for path in directory.iterdir():
-                path.unlink()
+            self._remove_payloads(tuple(directory.iterdir()))
             directory.rmdir()
 
     def wait_aggregate(self, fence: LocalFence, *, deadline: float,
@@ -193,14 +311,20 @@ class LocalTrainerSpool:
                 or manifest.get("source_id") != expected_source_id):
             raise ValueError("aggregate identity/fence mismatch")
         shards = []
-        for record in manifest["shards"]:
-            raw = (path.parent / f"shard-{record['index']:05d}.f64").read_bytes()
-            if hashlib.sha256(raw).hexdigest() != record["sha256"]:
-                raise ValueError("corrupt aggregate shard")
-            value = torch.frombuffer(bytearray(raw), dtype=torch.float64).clone()
-            if value.numel() != record["elements"] or not torch.isfinite(value).all():
-                raise ValueError("invalid aggregate shard")
-            shards.append(value)
+        data_path = path.parent / str(manifest["data_file"])
+        if not data_path.is_file() or data_path.stat().st_size != int(manifest["data_bytes"]):
+            raise ValueError("corrupt aggregate data stream")
+        with data_path.open("rb", buffering=8 << 20) as stream:
+            for record in manifest["shards"]:
+                stream.seek(int(record["offset"]))
+                raw = stream.read(int(record["nbytes"]))
+                self.bytes_read += len(raw)
+                if hashlib.sha256(raw).hexdigest() != record["sha256"]:
+                    raise ValueError("corrupt aggregate shard")
+                value = torch.frombuffer(bytearray(raw), dtype=torch.float64).clone()
+                if value.numel() != record["elements"] or not torch.isfinite(value).all():
+                    raise ValueError("invalid aggregate shard")
+                shards.append(value)
         return manifest, tuple(shards)
 
 
@@ -230,23 +354,31 @@ class CpuNodeManager:
             raise ValueError("incompatible trainer shard layout")
         total_weight = sum(item[1] for item in accepted)
         aggregates = []
-        for shard_index in range(len(accepted[0][3]["shards"])):
-            weighted = None
-            for trainer_id, weight, manifest_path, manifest in accepted:
-                record = manifest["shards"][shard_index]
-                raw = (manifest_path.parent / f"shard-{record['index']:05d}.bin").read_bytes()
-                if hashlib.sha256(raw).hexdigest() != record["sha256"]:
-                    raise ValueError("corrupt trainer shard")
-                dtype = torch.float64 if record.get("dtype") == "float64" else torch.float32
-                tensor = torch.frombuffer(bytearray(raw), dtype=dtype).to(torch.float64)
-                if tensor.numel() != record["elements"] or not torch.isfinite(tensor).all():
-                    raise ValueError("invalid trainer shard")
-                weighted = tensor * weight if weighted is None else weighted.add_(tensor, alpha=weight)
-                del tensor, raw
-            aggregate = weighted / total_weight
-            if not torch.isfinite(aggregate).all():
-                raise ValueError("nonfinite aggregate rejected")
-            aggregates.append(aggregate)
+        streams = [((manifest_path.parent / str(manifest["data_file"])).open(
+                    "rb", buffering=8 << 20)) for _, _, manifest_path, manifest in accepted]
+        try:
+            for shard_index in range(len(accepted[0][3]["shards"])):
+                weighted = None
+                for stream, (_, weight, _, manifest) in zip(streams, accepted):
+                    record = manifest["shards"][shard_index]
+                    stream.seek(int(record["offset"]))
+                    raw = stream.read(int(record["nbytes"]))
+                    self.spool.bytes_read += len(raw)
+                    if hashlib.sha256(raw).hexdigest() != record["sha256"]:
+                        raise ValueError("corrupt trainer shard")
+                    dtype = torch.float64 if record.get("dtype") == "float64" else torch.float32
+                    tensor = torch.frombuffer(bytearray(raw), dtype=dtype).to(torch.float64)
+                    if tensor.numel() != record["elements"] or not torch.isfinite(tensor).all():
+                        raise ValueError("invalid trainer shard")
+                    weighted = (tensor.mul(weight) if weighted is None
+                                else weighted.add_(tensor, alpha=weight))
+                aggregate = weighted.div_(total_weight)
+                if not torch.isfinite(aggregate).all():
+                    raise ValueError("nonfinite aggregate rejected")
+                aggregates.append(aggregate)
+        finally:
+            for stream in streams:
+                stream.close()
         return tuple(item[0] for item in accepted), total_weight, tuple(aggregates)
 
     def _validated_manifests(self, fence: LocalFence, source_id: str):
@@ -257,11 +389,17 @@ class CpuNodeManager:
                 raise ValueError("stale or incompatible trainer fence")
             if manifest.get("source_id") != source_id:
                 raise ValueError("trainer payload/source identity mismatch")
+            data_path = manifest_path.parent / str(manifest.get("data_file", ""))
+            if not data_path.is_file() or data_path.stat().st_size != int(
+                    manifest.get("data_bytes", -1)):
+                raise ValueError("corrupt trainer data stream")
+            expected_offset = 0
             for record in manifest["shards"]:
-                shard_path = manifest_path.parent / f"shard-{record['index']:05d}.bin"
                 width = 8 if record.get("dtype") == "float64" else 4
-                if not shard_path.is_file() or shard_path.stat().st_size != record["elements"] * width:
+                if (int(record.get("offset", -1)) != expected_offset
+                        or int(record.get("nbytes", -1)) != record["elements"] * width):
                     raise ValueError("corrupt trainer shard descriptor")
+                expected_offset += int(record["nbytes"])
             values.append((int(manifest["trainer_id"]), int(manifest["weight"]),
                            manifest_path, manifest))
         return values
