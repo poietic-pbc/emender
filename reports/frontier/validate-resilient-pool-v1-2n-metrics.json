@@ -308,7 +308,9 @@
         }
     },
     "startup_r6_payload": {
-        "status": "rendered; awaiting immutable command commit before one submission",
+        "status": "submitted exactly once; pending for Priority",
+        "job_id": 5028835,
+        "submit_utc": "2026-07-18T17:50:11Z",
         "code_commit": "08d05419cb67ed5ec3546db27410756218a5e79b",
         "run_id": "validate-resilient-pool-v1-2n-startup-r6-20260718T174732Z-08d0541",
         "payload_id": "08d0541-20260718T174732Z-pool-v1-startup-r6-2n20m-k40-checkpointfirst",

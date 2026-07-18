@@ -58,7 +58,8 @@ extended and no second full leader serialization is needed.
 
 The ladder therefore remains on rung 1. No resilience or fresh-restart job has
 been rendered or submitted. The full pinned checkpoint-first gate passed, and
-changed startup payload r6 is retained but not yet submitted. It preserves the
+changed startup payload r6 was submitted exactly once as job `5028835`. It
+preserves the
 one-second connection bound, bounded 64 MiB frames, exact segment writes, and
 unchanged 180-second overall exchange deadline. Its only live-code difference
 from r5 is the checkpoint-critical-path ordering described above, so it is not
@@ -548,8 +549,14 @@ batch size 4, K=40, one generation, quorum two, 64 MiB local/network frames,
 64 GiB bounded node-local ledger, fixed stage bounds, no failure injection,
 no resume handoff, and zero role retries. It refuses drift, an existing run
 directory, a missing integrated-v1 ancestry, or any active/pending user job.
-It will be submitted once after this immutable command record is committed,
-pushed, fetched, and verified; it is not an unchanged retry.
+It is not an unchanged retry. After its immutable command record was committed,
+pushed, fetched, and verified, the exact command was executed once and returned
+job ID `5028835`. Slurm records submit/eligible time
+`2026-07-18T17:50:11Z`, exactly two requested nodes, debug QoS, `00:20:00`,
+16 requested GPUs, no dependency, no requeue, and zero restarts. The initial
+state was `PENDING (Priority)` as the only user job. Queue time is recorded
+separately from runtime; no resilience or fresh-restart payload has been
+rendered or submitted.
 
 ## Authoritative integration and queue gate
 
