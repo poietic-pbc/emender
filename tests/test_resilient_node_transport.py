@@ -1,5 +1,6 @@
 import json
 import hashlib
+import io
 import socket
 import sys
 import threading
@@ -19,7 +20,33 @@ from ndm.resilient_node_transport import (
     decode_f64,
     encode_f64,
     exchange_dense_delta,
+    recv_frame,
+    send_frame,
 )
+
+
+def test_send_frame_retries_partial_raw_writes():
+    class PartialRawWriter:
+        def __init__(self, maximum_write: int):
+            self.maximum_write = maximum_write
+            self.buffer = io.BytesIO()
+
+        def write(self, value):
+            piece = bytes(value[:self.maximum_write])
+            self.buffer.write(piece)
+            return len(piece)
+
+        def flush(self):
+            return None
+
+    writer = PartialRawWriter(maximum_write=7)
+    expected = bytes(range(256)) * 1024
+    send_frame(writer, {"op": "large-owner-frame"}, expected)
+
+    header, observed = recv_frame(
+        io.BytesIO(writer.buffer.getvalue()), max_payload_bytes=len(expected))
+    assert header["op"] == "large-owner-frame"
+    assert observed == expected
 
 
 def test_bulk_stream_separates_control_from_bounded_chunk_payloads(tmp_path):
@@ -42,7 +69,10 @@ def test_bulk_stream_separates_control_from_bounded_chunk_payloads(tmp_path):
     server.shutdown(); server.server_close(); thread.join(2)
 
 
-def _server(tmp_path, *, quorum=2, buckets=2, deadline=2.0):
+def _server(tmp_path, *, quorum=2, buckets=2, deadline=30.0):
+    # Healthy quorum tests exercise transport/math rather than scheduler
+    # latency on a shared login node. Deadline behavior has its own explicit
+    # 0.2-second test below, so retain a bounded but load-tolerant default here.
     server = QuorumTransportServer(
         ("127.0.0.1", 0),
         TransportConfig("run", quorum, buckets, 1024, deadline),

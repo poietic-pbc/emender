@@ -91,6 +91,27 @@ def _recv_exact(stream, size: int) -> bytes:
     return bytes(data)
 
 
+def _write_all(stream, payload: bytes) -> None:
+    """Write a complete frame segment through buffered or raw streams.
+
+    ``socket.makefile(..., buffering=0)`` exposes ``SocketIO.write``, whose
+    contract permits a successful partial write.  Dense owner frames are far
+    larger than a socket send buffer, so treating one ``write`` call as
+    complete truncates the frame and leaves the receiver waiting for bytes
+    that will never arrive.  Retain the bounded segment as a memoryview and
+    advance it until every byte has been accepted.
+    """
+    remaining = memoryview(payload)
+    while remaining:
+        written = stream.write(remaining)
+        if written is None or int(written) <= 0:
+            raise BrokenPipeError("framed transport write made no progress")
+        written = int(written)
+        if written > len(remaining):
+            raise OSError("framed transport write exceeded remaining payload")
+        remaining = remaining[written:]
+
+
 def send_frame(stream, header: Mapping[str, object], payload: bytes = b"") -> None:
     wire = dict(header)
     wire["payload_bytes"] = len(payload)
@@ -98,9 +119,9 @@ def send_frame(stream, header: Mapping[str, object], payload: bytes = b"") -> No
     encoded = json.dumps(wire, sort_keys=True, separators=(",", ":")).encode()
     if len(encoded) > MAX_HEADER_BYTES:
         raise ValueError("frame header too large")
-    stream.write(_U32.pack(len(encoded)))
-    stream.write(encoded)
-    stream.write(payload)
+    _write_all(stream, _U32.pack(len(encoded)))
+    _write_all(stream, encoded)
+    _write_all(stream, payload)
     stream.flush()
 
 

@@ -1,0 +1,603 @@
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+----------------------------------------
+Exception occurred during processing of request from ('10.128.16.16', 56494)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 384, in handle
+    header, payload = recv_frame(self.rfile,
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 115, in recv_frame
+    payload = _recv_exact(stream, payload_size)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 389, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 102, in send_frame
+    stream.write(encoded)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.16.16', 53006)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 384, in handle
+    header, payload = recv_frame(self.rfile,
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 115, in recv_frame
+    payload = _recv_exact(stream, payload_size)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 389, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 102, in send_frame
+    stream.write(encoded)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.16.16', 50850)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 384, in handle
+    header, payload = recv_frame(self.rfile,
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 115, in recv_frame
+    payload = _recv_exact(stream, payload_size)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 389, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 102, in send_frame
+    stream.write(encoded)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.16.16', 50854)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 384, in handle
+    header, payload = recv_frame(self.rfile,
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 115, in recv_frame
+    payload = _recv_exact(stream, payload_size)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 389, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 102, in send_frame
+    stream.write(encoded)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.16.16', 51810)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 384, in handle
+    header, payload = recv_frame(self.rfile,
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 115, in recv_frame
+    payload = _recv_exact(stream, payload_size)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 389, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 102, in send_frame
+    stream.write(encoded)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.16.16', 34732)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 384, in handle
+    header, payload = recv_frame(self.rfile,
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 115, in recv_frame
+    payload = _recv_exact(stream, payload_size)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 389, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 102, in send_frame
+    stream.write(encoded)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.16.16', 52784)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 384, in handle
+    header, payload = recv_frame(self.rfile,
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 115, in recv_frame
+    payload = _recv_exact(stream, payload_size)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 389, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 102, in send_frame
+    stream.write(encoded)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.16.16', 47074)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 384, in handle
+    header, payload = recv_frame(self.rfile,
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 115, in recv_frame
+    payload = _recv_exact(stream, payload_size)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 389, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 102, in send_frame
+    stream.write(encoded)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.16.16', 47082)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 384, in handle
+    header, payload = recv_frame(self.rfile,
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 115, in recv_frame
+    payload = _recv_exact(stream, payload_size)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 389, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 102, in send_frame
+    stream.write(encoded)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.16.16', 43186)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 384, in handle
+    header, payload = recv_frame(self.rfile,
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 115, in recv_frame
+    payload = _recv_exact(stream, payload_size)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 389, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 102, in send_frame
+    stream.write(encoded)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.16.16', 51028)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 384, in handle
+    header, payload = recv_frame(self.rfile,
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 115, in recv_frame
+    payload = _recv_exact(stream, payload_size)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 389, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 102, in send_frame
+    stream.write(encoded)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.16.16', 33306)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 384, in handle
+    header, payload = recv_frame(self.rfile,
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 115, in recv_frame
+    payload = _recv_exact(stream, payload_size)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 389, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 102, in send_frame
+    stream.write(encoded)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.16.16', 39750)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 384, in handle
+    header, payload = recv_frame(self.rfile,
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 115, in recv_frame
+    payload = _recv_exact(stream, payload_size)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 389, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 102, in send_frame
+    stream.write(encoded)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.16.16', 39766)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 384, in handle
+    header, payload = recv_frame(self.rfile,
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 115, in recv_frame
+    payload = _recv_exact(stream, payload_size)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 389, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 102, in send_frame
+    stream.write(encoded)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.16.16', 39970)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 384, in handle
+    header, payload = recv_frame(self.rfile,
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 115, in recv_frame
+    payload = _recv_exact(stream, payload_size)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 389, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 102, in send_frame
+    stream.write(encoded)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.16.16', 59160)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 384, in handle
+    header, payload = recv_frame(self.rfile,
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 115, in recv_frame
+    payload = _recv_exact(stream, payload_size)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 389, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 102, in send_frame
+    stream.write(encoded)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.16.16', 60138)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 384, in handle
+    header, payload = recv_frame(self.rfile,
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 115, in recv_frame
+    payload = _recv_exact(stream, payload_size)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 389, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 102, in send_frame
+    stream.write(encoded)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.16.16', 56208)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 384, in handle
+    header, payload = recv_frame(self.rfile,
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 115, in recv_frame
+    payload = _recv_exact(stream, payload_size)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 389, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 102, in send_frame
+    stream.write(encoded)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.16.16', 56216)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 384, in handle
+    header, payload = recv_frame(self.rfile,
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 115, in recv_frame
+    payload = _recv_exact(stream, payload_size)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 389, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 102, in send_frame
+    stream.write(encoded)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.16.16', 52350)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 384, in handle
+    header, payload = recv_frame(self.rfile,
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 115, in recv_frame
+    payload = _recv_exact(stream, payload_size)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_pool_runtime.py", line 389, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_node_transport.py", line 102, in send_frame
+    stream.write(encoded)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------

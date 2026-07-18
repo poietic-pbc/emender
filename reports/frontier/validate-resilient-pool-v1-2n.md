@@ -9,7 +9,7 @@ requirements R01–R16 in `docs/RESILIENT_DILOCO_GAP_MATRIX.md`.
 
 ## Status
 
-The startup rung has failed closed three times without an unchanged retry. Job
+The startup rung has failed closed four times without an unchanged retry. Job
 `5028225` failed at the post-K40 local-delta streaming stage. Changed payload
 r2 job `5028347` then proved the 64 MiB/two-file local spool fix: both managers
 were READY within 61 seconds of allocation start, all 16 real trainers finished
@@ -31,11 +31,26 @@ closed partway through transfer or receiver reduction; the owner observed
 repeated partial-frame EOFs and the idempotent sender exhausted the bounded
 180-second owner deadline. There was no atomic publication or checkpoint.
 
+Changed payload r4 job `5028638` proved that separating the established-stream
+timeout from the one-second connection bound was necessary but not sufficient.
+READY completed within 63 seconds of allocation start; all 16 real trainers
+finished K=40 within 132 seconds of child start and published exactly two local
+spool files each; both managers reduced six trainers and froze the same exact
+two-node/3,934,080-token set by allocation +395 seconds. The owner sender then
+again exhausted its bounded window, and the remote owner retained 20 partial
+64 MiB frames. The live client used an unbuffered `socket.makefile()` stream,
+whose raw `write()` may legally accept only part of a large byte string;
+`send_frame` ignored that returned byte count and started reading a receipt
+after a truncated payload. This is a framing correctness bug, not evidence for
+an unbounded timeout increase. The fenced store still has zero publications.
+
 The ladder therefore remains on rung 1. No resilience or fresh-restart job has
-been rendered or submitted. The next changed payload will keep one-second
-connection establishment, but established-stream I/O scales with the bounded
-frame at an 8 MiB/s floor, capped at 15 seconds per operation and by the
-unchanged 180-second overall exchange deadline. It is not an unchanged retry.
+been rendered or submitted. The next changed payload retains the one-second
+connection bound, bounded 64 MiB frames, and unchanged 180-second overall
+exchange deadline, but makes every framed segment write exact by advancing a
+memoryview until all accepted bytes are sent. A regression using a deliberately
+partial raw writer failed on the r4 tree and passes with the focused fix. It is
+not an unchanged retry.
 
 No production allocation, normal-QoS allocation, 4+ node allocation, or
 two-hour allocation is authorized by this report.
@@ -339,6 +354,58 @@ recorded submit/eligible time `2026-07-18T16:47:31Z`; the initial state was
 `PENDING (Resources)` as the sole user job, with exactly two requested nodes,
 debug QoS, `00:20:00`, 16 GPUs, no dependency, no requeue, and zero restarts.
 Queue time is recorded separately from runtime.
+
+### Startup r4 result and exact-write fix
+
+Slurm started job `5028638` at `2026-07-18T16:47:49Z` after 18 seconds of
+queue time on exactly `frontier00251` and `frontier01023`. It failed closed at
+`2026-07-18T16:57:27Z` after 578 seconds with allocation and node-step exit
+`1:0`; `TotalCPU=06:18:13`, raw energy was `847293`, and the role step reported
+`MaxRSS=113479508K`, `MaxDiskRead=104113.44M`, and
+`MaxDiskWrite=44396.08M`. Runtime identity and the two-manager/16-trainer,
+batch-size-4, K=40, no-collective topology were attested before role load.
+
+Observed bounded stages were:
+
+| Stage | Job 5028638 observation |
+|---|---|
+| manager READY | allocation +59.655 / +62.531 seconds |
+| all trainer K40 | 127.615–131.926 seconds from each child start; completed by allocation +178.369 seconds |
+| two-file local delta spool | 5,506,770,496 bytes per trainer in 123.815–143.323 seconds; all complete by allocation +319.715 seconds |
+| exact six-trainer local reduce | managers completed at allocation +373.068/+374.877 seconds; 1,967,040 tokens each |
+| deterministic global freeze | two complete node contributions and 3,934,080 tokens at allocation +394.752/+394.758 seconds |
+| terminal owner stage | node 0 exited at allocation +556.303 seconds after the remote owner retained 20 partial-frame EOFs; zero publications |
+
+The automatically retained evidence is
+`reports/frontier/evidence/job-5028638`: 114 files including only top-level
+logs/control records and node-local JSON/JSONL snapshots; tensor mailbox,
+`.data`, `.pt`, and kernel-cache payloads are excluded. Its `SHA256SUMS` digest
+is `910de4f3bacf28ced6de1480fda7cf6dfe5a8b1f079e0a3bd89ac1102f2dd965`
+and `sha256sum -c` passes. The stdout, stderr, fenced SQLite, and supervisor
+event hashes are respectively
+`c7b8c2ee0144f9781b534f2e62186979c2c3a8bf2fd7dec165609e23d1788edb`,
+`7465e33fa7befa1ac16d4781bdcd1fd19eb09f955c12a4880e97f0766c575af4`,
+`59caacc11da8934b74e52847dcb5fd2bd8bab5358351aa06090b405858d20f5f`,
+and `616ed62657056719aeaa5ae42595435cab8a922ffea8118f97ef46fb6bd8f51d`.
+The database has fence epoch 1 and zero publication rows.
+
+The repeated EOF was caused by `send_frame`, which issued one `write()` per
+segment and ignored its return value. That is incorrect for the raw
+`SocketIO` returned by `socket.makefile(..., buffering=0)`: a successful write
+may be partial. The focused change uses a bounded memoryview of the existing
+segment and advances it until every byte is accepted, failing on zero progress.
+It neither copies the whole model into a broker nor changes frame, spool,
+deadline, or retention bounds. The new
+`test_send_frame_retries_partial_raw_writes` first failed with the r4 code at
+`EOFError: peer closed framed transport` and then passed after this fix. The
+focused transport/pool slice passed 16 tests in 35.20 seconds. The first exact
+suite run had 125 passes and exposed one unrelated healthy-quorum fixture whose
+two-second server deadline was too narrow under shared-login scheduling load;
+its standalone rerun passed. That fixture now uses a bounded 30-second healthy
+allowance, while the independent 0.2-second quorum-deadline test remains
+unchanged. The final pinned exact suite passed all 126 tests in 117.86 seconds;
+approved-Python compileall, JSON validation, `git diff --check`, forbidden
+live-path scanning, r4 `sha256sum -c`, and the empty-queue gate also passed.
 
 ## Authoritative integration and queue gate
 

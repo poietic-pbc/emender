@@ -152,9 +152,16 @@
         }
     },
     "startup_r4_payload": {
-        "status": "submitted once; pending for Resources",
+        "status": "failed closed in bounded owner transport; focused exact-write payload required",
         "job_id": 5028638,
         "submit_utc": "2026-07-18T16:47:31Z",
+        "allocation_start_utc": "2026-07-18T16:47:49Z",
+        "end_utc": "2026-07-18T16:57:27Z",
+        "queue_seconds": 18,
+        "runtime_seconds": 578,
+        "state": "FAILED",
+        "exit_code": "1:0",
+        "nodes": ["frontier00251", "frontier01023"],
         "code_commit": "4b9def7cc9657d8648b67d1e385ea9bf161786fa",
         "run_id": "validate-resilient-pool-v1-2n-startup-r4-20260718T164450Z-4b9def7",
         "payload_id": "4b9def7-20260718T164450Z-pool-v1-startup-r4-2n20m-k40-owner64m-io8mps15s",
@@ -166,7 +173,6 @@
         "pool_runtime_sha256": "37de7776e5aee7d66e5e7b5737e6849dc5cd344cc283166beb88876a5f52264f",
         "local_gate_passed": 125,
         "local_gate_seconds": 114.42,
-        "nodes": 2,
         "qos": "debug",
         "walltime": "00:20:00",
         "model_free_managers": 2,
@@ -181,6 +187,30 @@
         "connection_timeout_seconds": 1,
         "minimum_owner_bytes_per_second": 8388608,
         "owner_io_timeout_cap_seconds": 15,
-        "overall_exchange_commit_seconds": 180
+        "overall_exchange_commit_seconds": 180,
+        "manager_ready_seconds_from_allocation_start": [59.654874324798584, 62.530569314956665],
+        "k40_seconds_from_trainer_start": {"min": 127.61485409736633, "max": 131.925537109375},
+        "k40_seconds_from_allocation_start": {"min": 172.76999855041504, "max": 178.36882209777832},
+        "local_spool_seconds": {"min": 123.81491906000883, "max": 143.3230705720198},
+        "local_spool_bytes_per_trainer": 5506770496,
+        "local_spool_files_per_trainer": 2,
+        "local_reduce_seconds_from_allocation_start": [373.06807947158813, 374.87742471694946],
+        "freeze_seconds_from_allocation_start": [394.7517292499542, 394.75815320014954],
+        "accepted_node_contributions": 2,
+        "accepted_tokens": 3934080,
+        "atomic_publications": 0,
+        "partial_owner_frames": 20,
+        "terminal_stage": "owner_transport/raw SocketIO partial write",
+        "evidence_files": 114,
+        "evidence_manifest_sha256": "910de4f3bacf28ced6de1480fda7cf6dfe5a8b1f079e0a3bd89ac1102f2dd965",
+        "next_change": {
+            "exact_segment_writes": true,
+            "bounded_memoryview": true,
+            "frame_bytes": 67108864,
+            "overall_exchange_commit_seconds": 180,
+            "tdd_reproducer": "test_send_frame_retries_partial_raw_writes",
+            "local_gate_passed": 126,
+            "local_gate_seconds": 117.86
+        }
     }
 }
