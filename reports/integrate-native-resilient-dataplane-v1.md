@@ -4,7 +4,7 @@ Date: 2026-07-18
 
 Task: `integrate-native-resilient-dataplane-v1`
 
-Design authority: [Resilient DiLoCo Compute Pool v1](../../docs/RESILIENT_DILOCO_COMPUTE_POOL.md) and [Native resilient DiLoCo data plane v1](../../docs/NATIVE_RESILIENT_DILOCO_DATAPLANE.md)
+Design authority: [Resilient DiLoCo Compute Pool v1](../docs/RESILIENT_DILOCO_COMPUTE_POOL.md) and [Native resilient DiLoCo data plane v1](../docs/NATIVE_RESILIENT_DILOCO_DATAPLANE.md)
 
 ## Result and admission scope
 
@@ -226,7 +226,7 @@ R01–R16 and the native checklist to NDP01–NDP17:
 
 Applicable matrix IDs: **R01–R16; NDP01–NDP17**. Detailed present/partial gate
 status is recorded in
-[`RESILIENT_DILOCO_GAP_MATRIX.md`](../../docs/RESILIENT_DILOCO_GAP_MATRIX.md).
+[`RESILIENT_DILOCO_GAP_MATRIX.md`](../docs/RESILIENT_DILOCO_GAP_MATRIX.md).
 
 Exact local commands executed (the Python path is the approved immutable
 Frontier runtime; no `sbatch` command was run):
@@ -262,7 +262,7 @@ EMENDER_NDP_TRANSPORT_LIBRARY="$PWD/build/native-resilient-dataplane/lib64/libem
   -m compileall -q ndm scripts/frontier
 bash -n scripts/frontier/build_native_resilient_dataplane.sh \
   scripts/frontier/resilient_e97_true_2n.sbatch
-jq empty reports/native-dataplane/integrate-native-resilient-dataplane-v1-metrics.json \
+jq empty reports/integrate-native-resilient-dataplane-v1-metrics.json \
   reports/frontier/native-dataplane-reference-v1.json
 nm -D --defined-only build/native-resilient-dataplane/lib64/libemender_ndp.so.1
 nm -D --defined-only build/native-resilient-dataplane/lib64/libemender_ndp_transport.so.1
