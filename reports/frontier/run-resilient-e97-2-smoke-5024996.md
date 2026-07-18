@@ -51,3 +51,38 @@ The active files observed by the diagnostic were exclusively below
 `/tmp/resilient-e97/<run-id>/node-{0,1}/supervision`.  The retained Lustre run
 directory contained only logs, the supervisor event record, and coordinator
 discovery metadata at this checkpoint; it contained no bulk update payload.
+
+## Terminal result and focused diagnosis
+
+At `2026-07-17T22:07:39-04:00` Slurm ended job 5024996 as `FAILED`
+(`ExitCode=0:15`) after `00:44:47` runtime.  The separately recorded queue time
+remains `00:07:16`.  No update, aggregate, finalized generation, immutable
+checkpoint, or loader result was produced, so this smoke **failed** and no full
+`02:00:00` resilience allocation is authorized from this payload.  There was no
+manual cancellation and no retry was submitted.
+
+The retained supervisor record accounts for all two managers and sixteen real
+trainers.  On allocation handoff both managers exited on SIGTERM and the two
+trainer leaders required SIGKILL; Slurm accounting reports a peak RSS of
+`294350988K` for the combined node-local Python step, about 287.5 GiB.  The
+trainers had completed optimizer step 1525040 by approximately 5m16s runtime,
+but remained in post-training update construction until TERM.  Node-local
+inventory immediately before termination contained only supervision/liveness
+records and no mailbox update.
+
+The focused code-path diagnosis is that the current trainer creates several
+full 1.3B-parameter CPU representations after the optimizer steps:
+
+1. `_floating_delta_from_model()` materializes a dense CPU delta;
+2. `trainer()` materializes `after = before + delta`; and
+3. `flatten_delta()` converts both full states to float64, subtracts them again,
+   concatenates the entire update, and then clones it into chunks.
+
+This is consistent with the high-water RSS, the absence of a first mailbox
+file, and the long post-step interval.  It is not evidence of a network or
+manager-quorum failure because no update reached either transport.  A next
+payload must remove the redundant `after` state and whole-update float64
+concatenation in favor of bounded streaming delta publication, add stage-level
+progress evidence around delta construction/publication, pass focused runtime
+and transport regressions, and then pass a new unique 2-node startup smoke
+before another full gate.  The failed payload must not be resubmitted unchanged.
