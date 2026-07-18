@@ -51,7 +51,8 @@ exchange deadline, but makes every framed segment write exact by advancing a
 memoryview until all accepted bytes are sent. A regression using a deliberately
 partial raw writer failed on the r4 tree and passes with the focused fix. It is
 not an unchanged retry; its immutable command is retained below and was not yet
-submitted when committed.
+submitted when the payload itself was committed. The exact command has since
+been executed once as job `5028767`.
 
 No production allocation, normal-QoS allocation, 4+ node allocation, or
 two-hour allocation is authorized by this report.
@@ -437,6 +438,13 @@ two, 64 MiB local/network frames, and a 64 GiB bounded node-local ledger. It
 has no failure injection, resume handoff, or role retry. Relative to r4 it uses
 the exact-write implementation and associated r4 evidence/tests; no walltime,
 shape, model, optimizer, quorum, or deadline value changed.
+
+The retained command was executed exactly once and returned job ID `5028767`.
+Slurm recorded submit/eligible time `2026-07-18T17:18:18Z`, exactly two nodes,
+debug QoS, `00:20:00`, 16 requested GPUs, no dependency, no requeue, and zero
+restarts. Its initial state was `PENDING (Priority)` as the sole user job.
+Queue time is separate from runtime; no resilience or restart job was
+submitted.
 
 ## Authoritative integration and queue gate
 
