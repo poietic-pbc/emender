@@ -31,6 +31,28 @@ from ndm.resilient_peer_membership import PeerMembership, PeerState, StageDeadli
 
 
 MAX_CONTROL_PAYLOAD = 64 * 1024
+_OWNER_CONNECT_TIMEOUT_S = 1.0
+_OWNER_MIN_IO_TIMEOUT_S = 1.0
+_OWNER_MAX_IO_TIMEOUT_S = 15.0
+_OWNER_MIN_BYTES_PER_SECOND = 8 * 1024 * 1024
+
+
+def _bounded_owner_io_timeout(payload_bytes: int, response_bytes: int, *,
+                              remaining_s: float) -> float:
+    """Bound one established owner stream operation by size and run deadline.
+
+    Connection establishment remains independently capped at one second.  A
+    dense owner frame needs enough time to cross the socket and be reduced by
+    the receiver, however: Frontier's approved 64 MiB frame cannot reliably do
+    that under the former one-second read/write timeout.  Budget at least an
+    8 MiB/s transfer rate, cap any individual stall at 15 seconds, and never
+    extend the caller's overall exchange/commit deadline.
+    """
+    frame_bytes = max(0, int(payload_bytes), int(response_bytes))
+    scaled_s = frame_bytes / _OWNER_MIN_BYTES_PER_SECOND
+    operation_s = min(_OWNER_MAX_IO_TIMEOUT_S,
+                      max(_OWNER_MIN_IO_TIMEOUT_S, scaled_s))
+    return max(.001, min(float(remaining_s), operation_s))
 
 
 @dataclass(frozen=True)
@@ -474,9 +496,14 @@ def _owner_rpc(endpoint: OwnerEndpoint, request: Mapping[str, object], payload: 
     last: BaseException | None = None
     while time.monotonic() < deadline:
         try:
-            timeout = min(1.0, max(.01, deadline - time.monotonic()))
-            sock = socket.create_connection((endpoint.host, endpoint.port), timeout=timeout)
-            sock.settimeout(timeout)
+            remaining_s = deadline - time.monotonic()
+            connect_timeout_s = min(_OWNER_CONNECT_TIMEOUT_S,
+                                    max(.01, remaining_s))
+            sock = socket.create_connection((endpoint.host, endpoint.port),
+                                            timeout=connect_timeout_s)
+            sock.settimeout(_bounded_owner_io_timeout(
+                len(payload), max_payload_bytes,
+                remaining_s=deadline - time.monotonic()))
             with sock, sock.makefile("rwb", buffering=0) as stream:
                 send_frame(stream, request, payload)
                 header, response = recv_frame(stream, max_payload_bytes=max_payload_bytes)

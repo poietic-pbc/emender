@@ -9,7 +9,7 @@ requirements R01–R16 in `docs/RESILIENT_DILOCO_GAP_MATRIX.md`.
 
 ## Status
 
-The startup rung has failed closed twice without an unchanged retry. Job
+The startup rung has failed closed three times without an unchanged retry. Job
 `5028225` failed at the post-K40 local-delta streaming stage. Changed payload
 r2 job `5028347` then proved the 64 MiB/two-file local spool fix: both managers
 were READY within 61 seconds of allocation start, all 16 real trainers finished
@@ -22,12 +22,20 @@ fenced exchange window. The remaining 1 MiB owner frame also required about
 40,000 short-lived request/response connections per E97 generation. No atomic
 publication, checkpoint, handoff, or production mutation occurred.
 
-The ladder remains on rung 1. Changed startup payload r3 was submitted once as
-job `5028483` and is pending for scheduler priority. No resilience or fresh-
-restart job has been rendered or submitted. The focused payload starts the trainer apply timer
-only after the node-local manager advertises its fenced exchange transition and
-uses independently bounded 64 MiB owner frames under the unchanged 64 GiB
-ledger. It is not an unchanged retry.
+Changed payload r3 job `5028483` proved the aligned trainer/manager exchange
+window: all 16 trainers remained live through K=40, two-file local publication,
+exact local reduction, and the two-node/3,934,080-token deterministic freeze.
+It failed closed during the first distributed owner transfer. The client kept
+the former one-second socket timeout after connecting, so each 64 MiB frame was
+closed partway through transfer or receiver reduction; the owner observed
+repeated partial-frame EOFs and the idempotent sender exhausted the bounded
+180-second owner deadline. There was no atomic publication or checkpoint.
+
+The ladder therefore remains on rung 1. No resilience or fresh-restart job has
+been rendered or submitted. The next changed payload will keep one-second
+connection establishment, but established-stream I/O scales with the bounded
+frame at an 8 MiB/s floor, capped at 15 seconds per operation and by the
+unchanged 180-second overall exchange deadline. It is not an unchanged retry.
 
 No production allocation, normal-QoS allocation, 4+ node allocation, or
 two-hour allocation is authorized by this report.
@@ -235,10 +243,61 @@ quorum two. It has no injection or resume handoff, uses a 64 GiB hard spool
 ledger with separate 64 MiB local and owner-network records, and configures
 zero role restarts. The script refuses a nonempty user queue, existing run
 directory, non-authoritative origin, changed live tree, or absent integrated-v1
-ancestry. The exact command returned job ID `5028483`; Slurm recorded
-submit/eligible time `2026-07-18T16:14:33Z`. At `2026-07-18T16:14:40Z` it was
-the sole user job, pending for `Priority`, with the requested two nodes, debug
-QoS, and `00:20:00` unchanged. Queue time is recorded separately from runtime.
+ancestry. The exact command returned job ID `5028483`. Slurm recorded
+submit/eligible time `2026-07-18T16:14:33Z`, start `2026-07-18T16:14:55Z`
+after 22 seconds of queue time, exactly two nodes
+(`frontier00639,frontier09084`), debug QoS, `00:20:00`, and 16 GPUs. It failed
+at `2026-07-18T16:24:40Z` after 585 runtime seconds with allocation/step exit
+`1:0`. Accounting reports `TotalCPU=06:19:17` and raw energy `848312`.
+
+Retained measurements are:
+
+| Stage | Job 5028483 observation |
+|---|---|
+| manager READY | +60.710 / +65.693 seconds from allocation start |
+| all trainer K40 | 131.999–134.442 seconds from child start; +177.607–182.986 seconds from allocation start |
+| two-file local delta spool | 5,506,770,496 bytes per trainer in 138.124–144.150 seconds; completion at +319.989–325.987 seconds |
+| exact six-trainer local reduce | managers completed at +378.265/+381.696 seconds; accepted 1,967,040 tokens each |
+| deterministic global freeze | two node peers and 3,934,080 tokens at +401.731 seconds; both managers within the 15-second freeze SLO |
+| terminal stage | owner transport; node-0 manager failed at +561.507 seconds after repeated partial-frame EOF/replay; zero atomic publications |
+
+The retained JSON/JSONL/control/log tree is
+`reports/frontier/evidence/job-5028483`: 114 files, path-bound SHA-256
+`aae31063e7a37c2085aa49dd0fc563a2c8a77f9f7a053076317429df56533372`.
+Its manifest SHA-256 is
+`7195225745a354eb1c3a35b8539b845a03d65fef7b6e549cc368e2a1da82cc72`;
+`sha256sum -c` passes. Top-level stdout, stderr, events, and fenced SQLite
+hashes are `c7b8c2ee0144f9781b534f2e62186979c2c3a8bf2fd7dec165609e23d1788edb`,
+`007de7a382f004be6561c8355c588bf64def491346f828e30c7ac8d029e27865`,
+`a49ce6e00ef5c535c72ee40a7437b0db9799254857e48293a1339f52617c32ac`,
+and `50e07a3637711062b16e9f47e18cabb20c85d470c234b7011f7bec4ce17d3455`.
+The SQLite publication count is zero and its last fence is one.
+
+### Focused established-stream timeout fix after job 5028483
+
+`ndm/resilient_pool_runtime.py::_owner_rpc` previously applied
+`min(1.0, remaining)` both to connection establishment and every established
+socket read/write. The owner logs prove that bound closed live peers in the
+middle of their approved 64 MiB frames: each server received a header and a
+payload prefix, then raised `EOFError: peer closed framed transport`; the
+client retried the idempotent contribution until its overall deadline and
+raised `shard owner transport deadline expired: timed out`.
+
+The focused fix leaves connection attempts at one second and computes a
+separate established-stream timeout from the larger of request and permitted
+response bytes. It budgets an 8 MiB/s minimum transfer rate, so a 64 MiB frame
+gets eight seconds, with a 15-second absolute per-operation ceiling and the
+caller-provided remaining deadline as the final ceiling. Small control/ping
+traffic remains at one second. The 180-second owner exchange deadline, 64 GiB
+retention ledger, checksummed frame maximum, deterministic owners, replay,
+prompt release, and fail-closed semantics are unchanged.
+
+The regression first failed at import against the r3 tree, then passed both
+the bound table and a real delayed TCP response that takes longer than the old
+one-second established-stream allowance. The complete pool-runtime file passed
+five tests. The full exact pre-submit suite then passed 125 tests in 114.42
+seconds; static gates are repeated immediately before rendering any r4
+payload.
 
 ## Authoritative integration and queue gate
 

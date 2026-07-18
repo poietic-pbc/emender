@@ -104,9 +104,16 @@
         }
     },
     "startup_r3_payload": {
-        "status": "submitted once; pending for Priority",
+        "status": "failed closed in bounded owner transport; focused changed stream-timeout payload required",
         "job_id": 5028483,
         "submit_utc": "2026-07-18T16:14:33Z",
+        "allocation_start_utc": "2026-07-18T16:14:55Z",
+        "end_utc": "2026-07-18T16:24:40Z",
+        "queue_seconds": 22,
+        "runtime_seconds": 585,
+        "state": "FAILED",
+        "exit_code": "1:0",
+        "nodes": ["frontier00639", "frontier09084"],
         "code_commit": "a63e456ac2ffc58d78055e6983471e7b0284bf74",
         "run_id": "validate-resilient-pool-v1-2n-startup-r3-20260718T161234Z-a63e456",
         "payload_id": "a63e456-20260718T161234Z-pool-v1-startup-r3-2n20m-k40-windowed-owner64m-ledger64g",
@@ -118,6 +125,30 @@
         "local_spool_chunk_bytes": 67108864,
         "network_chunk_bytes": 67108864,
         "max_spool_bytes": 68719476736,
-        "role_restarts": 0
+        "role_restarts": 0,
+        "manager_ready_seconds_from_allocation_start": [60.70982050895691, 65.6933491230011],
+        "k40_seconds_from_trainer_start": {"min": 131.9994285106659, "max": 134.44196271896362},
+        "k40_seconds_from_allocation_start": {"min": 177.60698056221008, "max": 182.9863085746765},
+        "local_spool_seconds": {"min": 138.12438526703045, "max": 144.15003805499873},
+        "local_spool_bytes_per_trainer": 5506770496,
+        "local_spool_files_per_trainer": 2,
+        "local_reduce_seconds_from_allocation_start": [378.26496624946594, 381.6958498954773],
+        "freeze_seconds_from_allocation_start": 401.73093032836914,
+        "accepted_node_contributions": 2,
+        "accepted_tokens": 3934080,
+        "atomic_publications": 0,
+        "terminal_stage": "owner_transport/established 64 MiB frame socket timeout",
+        "evidence_files": 114,
+        "evidence_tree_sha256": "aae31063e7a37c2085aa49dd0fc563a2c8a77f9f7a053076317429df56533372",
+        "evidence_manifest_sha256": "7195225745a354eb1c3a35b8539b845a03d65fef7b6e549cc368e2a1da82cc72",
+        "next_change": {
+            "connection_timeout_seconds": 1,
+            "minimum_owner_bytes_per_second": 8388608,
+            "owner_io_timeout_cap_seconds": 15,
+            "owner_io_timeout_64m_seconds": 8,
+            "overall_exchange_commit_seconds": 180,
+            "local_gate_passed": 125,
+            "local_gate_seconds": 114.42
+        }
     }
 }

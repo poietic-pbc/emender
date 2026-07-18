@@ -13,6 +13,8 @@ from ndm.resilient_pool_runtime import (
     PoolControlConfig,
     PoolControlServer,
     PoolStageSLO,
+    _bounded_owner_io_timeout,
+    _owner_rpc,
     fetch_owned_shards,
     submit_owned_shards,
 )
@@ -27,6 +29,37 @@ def _port():
 def _state(value):
     return {"flat": torch.arange(value, value + 16,
                                   dtype=torch.float32)}
+
+
+def test_owner_rpc_io_timeout_scales_with_bounded_frame_size():
+    assert _bounded_owner_io_timeout(0, 0, remaining_s=180) == 1.0
+    assert _bounded_owner_io_timeout(64 << 20, 0, remaining_s=180) == 8.0
+    assert _bounded_owner_io_timeout(0, 64 << 20, remaining_s=180) == 8.0
+    assert _bounded_owner_io_timeout(64 << 20, 0, remaining_s=3) == 3.0
+    assert _bounded_owner_io_timeout(1 << 40, 0, remaining_s=180) == 15.0
+
+
+def test_owner_rpc_large_frame_budget_applies_to_established_stream():
+    server = DistributedOwnerServer(("127.0.0.1", _port()), "n0",
+                                    max_owner_bytes=64 << 20)
+
+    def delayed_dispatch(_request, _payload):
+        time.sleep(1.1)
+        return {"status": "live", "worker_id": "n0"}, b""
+
+    server.dispatch = delayed_dispatch
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        endpoint = OwnerEndpoint("n0", "i0", "127.0.0.1",
+                                 server.server_address[1])
+        header, payload = _owner_rpc(
+            endpoint, {"op": "ping"}, b"", deadline=time.monotonic() + 3,
+            max_payload_bytes=64 << 20)
+        assert header["status"] == "live"
+        assert payload == b""
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_stage_slos_are_derived_from_measured_k40_baseline():
