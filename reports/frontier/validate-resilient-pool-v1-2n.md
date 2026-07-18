@@ -299,6 +299,41 @@ five tests. The full exact pre-submit suite then passed 125 tests in 114.42
 seconds; static gates are repeated immediately before rendering any r4
 payload.
 
+### Changed startup payload r4
+
+Focused code/evidence commit
+`4b9def7cc9657d8648b67d1e385ea9bf161786fa` was pushed to the task branch
+and authoritative `origin/main`, fetched, and verified equal before rendering.
+The exact retained command is:
+
+```bash
+bash reports/frontier/validate-resilient-pool-v1-2n-startup-r4-submit-20260718T164450Z.sh
+```
+
+The script SHA-256 is
+`f843058a58201bdc2017203b5976a4f3c213e3c6c05bed7ae7a142dd3ee6431f`.
+Its payload identity is
+`4b9def7-20260718T164450Z-pool-v1-startup-r4-2n20m-k40-owner64m-io8mps15s`
+and run identity is
+`validate-resilient-pool-v1-2n-startup-r4-20260718T164450Z-4b9def7`.
+Immutable live-file hashes are:
+
+| Artifact | SHA-256 |
+|---|---|
+| two-node sbatch launcher | `6bad3f77e6a20834a13452c04de35299bd53f1d4304e4ab089a3524f3596d6ec` |
+| allocation supervisor | `1893cdef5413945a0c49e6bc219dc0e9227eb5e510679429416851637b4c122e` |
+| live role entrypoint | `c82025213f74ba85e6e4b1bf95f3f1a85cb0444ae921dda3fc37273366516833` |
+| pool owner/control runtime | `37de7776e5aee7d66e5e7b5737e6849dc5cd344cc283166beb88876a5f52264f` |
+
+The script verifies those hashes itself before `sbatch`. Payload r4 remains
+exactly two nodes, debug QoS, `00:20:00`, two model-free managers, 16 real GPU
+trainers, batch size 4, K=40, one generation, node quorum two, 64 MiB local and
+owner frames, and a bounded 64 GiB node-local ledger. It has no injection,
+resume handoff, or configured role retry. It refuses a nonempty user queue,
+existing run directory, changed live tree, non-authoritative origin, or absent
+integrated-v1 ancestry. It differs from r3 only by the focused bounded
+established-stream timeout fix and its regression/evidence commit.
+
 ## Authoritative integration and queue gate
 
 - Integrated v1 commit `ae2e6f26046fb7a6b348e845fb4615092a7c37e0` is an
