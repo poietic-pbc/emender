@@ -334,6 +334,12 @@ existing run directory, changed live tree, non-authoritative origin, or absent
 integrated-v1 ancestry. It differs from r3 only by the focused bounded
 established-stream timeout fix and its regression/evidence commit.
 
+The exact command was executed once and returned job ID `5028638`. Slurm
+recorded submit/eligible time `2026-07-18T16:47:31Z`; the initial state was
+`PENDING (Resources)` as the sole user job, with exactly two requested nodes,
+debug QoS, `00:20:00`, 16 GPUs, no dependency, no requeue, and zero restarts.
+Queue time is recorded separately from runtime.
+
 ## Authoritative integration and queue gate
 
 - Integrated v1 commit `ae2e6f26046fb7a6b348e845fb4615092a7c37e0` is an
