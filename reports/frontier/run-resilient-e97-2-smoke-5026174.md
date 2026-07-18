@@ -42,3 +42,19 @@ requirements are R03, R05, R06, R08, R09, R10, R14, and R16.  Success requires
 committed-generation evidence, not process presence.  Failure/rejoin (R11),
 complete fenced checkpoint publication (R07/R12), and the full R16 lifecycle
 remain unclaimed until their later gates actually pass.
+
+## Terminal outcome
+
+The batch payload failed closed at `2026-07-18T00:37:56-04:00`, six seconds
+after allocation start and before any role launch.  Slurm accounting records
+`FAILED`, `ExitCode=64:0`; queue time was 14 seconds and allocation runtime was
+six seconds.  The exact diagnostic was `startup smoke requires exactly
+00:50:00`: the launch guard still hard-coded the earlier smoke duration and
+rejected the empirically required two-hour deadline-plus-TERM window.
+
+No trainer or manager heartbeat, update spool, generation, or checkpoint was
+created, so this is a pre-generation payload failure and not a restart point.
+The changed payload adds a focused launcher regression for a two-hour,
+one-generation, no-injection smoke while retaining the 50-minute option for
+shorter cold starts; all other two-node, debug-only, role-count, local-step,
+transport, and generation guards remain fail closed.

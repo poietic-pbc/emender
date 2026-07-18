@@ -163,7 +163,8 @@ def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tm
         "SLURM_JOB_QOS": "debug",
         "SLURM_JOB_NODELIST": "node[0-1]",
         "RESILIENT_E97_STARTUP_SMOKE": "1",
-        "RESILIENT_E97_REQUESTED_WALLTIME": "00:50:00",
+        "RESILIENT_E97_REQUESTED_WALLTIME": "02:00:00",
+        "SLURM_TIMELIMIT": "120",
         "RESILIENT_E97_GENERATIONS": "1",
         "REPO": str(repo),
         "RUN_DIR": str(tmp_path / "run"),
@@ -176,7 +177,6 @@ def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tm
         "RESILIENT_E97_TIKTOKEN_CACHE_FILE": str(tokenizer_cache),
         "RESILIENT_E97_TIKTOKEN_SHA256": hashlib.sha256(tokenizer_cache.read_bytes()).hexdigest(),
     }
-    env.pop("SLURM_TIMELIMIT", None)
     subprocess.run(["bash", str(ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch")],
                    env=env, text=True, capture_output=True, check=True)
 

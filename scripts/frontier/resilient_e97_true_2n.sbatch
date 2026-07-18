@@ -30,11 +30,13 @@ if [[ ${RESILIENT_E97_STARTUP_SMOKE:-0} == 1 ]]; then
   # Frontier does not consistently export SLURM_TIMELIMIT into batch jobs.
   # The submitter must therefore bind the requested value into the immutable
   # payload; when Slurm does expose its value, require the two to agree.
-  [[ ${RESILIENT_E97_REQUESTED_WALLTIME:-} == 00:50:00 ]] || {
-    echo "startup smoke requires exactly 00:50:00" >&2; exit 64;
+  [[ ${RESILIENT_E97_REQUESTED_WALLTIME:-} == 00:50:00 || ${RESILIENT_E97_REQUESTED_WALLTIME:-} == 02:00:00 ]] || {
+    echo "startup smoke requires exactly 00:50:00 or 02:00:00" >&2; exit 64;
   }
-  [[ -z ${SLURM_TIMELIMIT:-} || ${SLURM_TIMELIMIT} == 00:50:00 || ${SLURM_TIMELIMIT} == 50 ]] || {
-    echo "startup smoke Slurm walltime disagrees with requested 00:50:00" >&2; exit 64;
+  requested_minutes=50
+  [[ ${RESILIENT_E97_REQUESTED_WALLTIME} == 02:00:00 ]] && requested_minutes=120
+  [[ -z ${SLURM_TIMELIMIT:-} || ${SLURM_TIMELIMIT} == ${RESILIENT_E97_REQUESTED_WALLTIME} || ${SLURM_TIMELIMIT} == ${requested_minutes} ]] || {
+    echo "startup smoke Slurm walltime disagrees with requested ${RESILIENT_E97_REQUESTED_WALLTIME}" >&2; exit 64;
   }
   [[ ${RESILIENT_E97_GENERATIONS:-1} == 1 ]] || {
     echo "startup smoke requires exactly one finalized generation" >&2; exit 64;
