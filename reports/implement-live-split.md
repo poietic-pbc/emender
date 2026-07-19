@@ -5,6 +5,20 @@ Date: 2026-07-19
 Authority: Resilient DiLoCo Compute Pool v1. This pass checked R01-R16 and
 NDP01-NDP17. No Slurm job was submitted.
 
+## Retry-4 producer-direct process boundary
+
+`NativeTrainerHandoff` adds Unix `SOCK_SEQPACKET` metadata control with
+`SCM_RIGHTS` transfer of an exact-size, write/grow/shrink-sealed producer memfd.
+The manager validates run, fence, generation, trainer incarnation, sequence,
+weight, digest metadata, and received descriptor extent before admission. The
+regression reads the original dense bytes through the independently received
+descriptor; no dense socket payload or per-trainer spool is involved.
+
+This advances Compute Pool v1 R03/R05/R08/R10/R13-R14 and native
+NDP01/NDP04/NDP06/NDP08/NDP13-NDP14. The live role remains fail-closed until it
+is converted to this primitive, so full R01-R16/NDP01-NDP17 conformance is not
+claimed. No Slurm job was submitted.
+
 ## Retry-3 checkpoint publication regression
 
 The fenced checkpoint handoff now has an explicit once-only regression:
