@@ -59,6 +59,16 @@ Approved Python:
 `/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/bin/python`
 (Python 3.12.13).
 
+Retry validation on 2026-07-19 sourced the canonical activation script from
+`origin/main@92b37d4`. The first clean discovery run correctly failed one of
+143 tests because the installed native manifest identified the preceding
+source commit. Rebuilding with
+`scripts/frontier/build_native_resilient_dataplane.sh` at `413fff0` passed all
+8 CTests and refreshed that attestation. The subsequent clean discovery run
+over every current `tests/test_native*.py` and `tests/test_resilient*.py` file
+passed **143/143 in 204.57 seconds**. This retry did not submit Slurm work and
+does not change the architectural gaps or fail-closed conclusion below.
+
 * Unified normal build and CTest: `scripts/frontier/build_native_resilient_dataplane.sh build/native-resilient-dataplane` — 8/8 passed.
 * ASan/UBSan configure/build/CTest with `NDP_ENABLE_SANITIZERS=ON` — 8/8
   passed in the native Cray environment. Repeating under the full activated
