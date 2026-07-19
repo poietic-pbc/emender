@@ -5,6 +5,23 @@ Date: 2026-07-19
 Authority: Resilient DiLoCo Compute Pool v1. This pass checked R01-R16 and
 NDP01-NDP17. No Slurm job was submitted.
 
+## Retry-3 checkpoint publication regression
+
+The fenced checkpoint handoff now has an explicit once-only regression:
+`test_fenced_checkpoint_commit_releases_native_result_exactly_once`. It binds
+approval to the current run, fence, generation, attempt, layout digest, base
+digest, full nonzero result root, global weight, result byte count, and the
+authoritative manifest digest, then proves exactly one native `COMMIT`
+transition and complete replay/frozen-state release. This covers the NDP15
+publication edge of R01, R05, R07, R10, and R12 without weakening any item in
+the complete R01-R16 and NDP01-NDP17 conformance sets.
+
+Unified native CTest passed 8/8. Python 3.11 syntax compilation passed; the
+focused Python runner remains unavailable because that interpreter has no
+pytest module. The retained sanitizer directory from the prior attempt no
+longer has registered tests, so the prior attempt's sanitizer 8/8 result is
+the applicable evidence. No Slurm command or job was submitted.
+
 ## Implemented and validated in this pass
 
 - `NativeManagerSession` now transfers frozen owner frames only through

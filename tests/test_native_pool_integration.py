@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from ndm.native_artifacts import NATIVE_TEST
-from ndm.native_pool_runtime import NativeManagerSession
+from ndm.native_pool_runtime import NativeManagerSession, NativeTrainerHandoff
 from ndm.native_transport import NativeTransport, NativeTransportLibrary
 from ndm.resilient_pool_runtime import OwnerEndpoint
 
@@ -188,3 +188,79 @@ def test_frozen_owner_transfer_uses_native_fabric_and_bounds_replay(monkeypatch)
     session._frozen = False
     with pytest.raises(RuntimeError, match="frozen accepted set"):
         session.transfer_frozen_frame("node-1", b"late", result_root=root)
+
+
+def test_cross_process_trainer_handoff_passes_sealed_memfd_without_dense_socket(tmp_path):
+    import fcntl
+    import hashlib
+    import os
+    import threading
+
+    path = tmp_path / "manager.seqpacket"
+    identity = dict(run_id="run", fence_epoch=7, generation=11,
+                    expected_bytes=4096)
+    manager = NativeTrainerHandoff.listen(path, **identity)
+    received = []
+    thread = threading.Thread(target=lambda: received.append(manager.receive_memfd()))
+    thread.start()
+    trainer = NativeTrainerHandoff.connect(path, **identity)
+    fd = os.memfd_create("trainer-delta", os.MFD_ALLOW_SEALING)
+    payload = bytes(range(256)) * 16
+    os.write(fd, payload)
+    fcntl.fcntl(fd, fcntl.F_ADD_SEALS,
+                fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_WRITE)
+    trainer.send_memfd(fd, trainer_id="trainer-3", incarnation="boot-a",
+                       submission_seq=4, weight=99,
+                       sha256=hashlib.sha256(payload).hexdigest())
+    thread.join(5)
+    contribution = received.pop()
+    assert contribution.trainer_id == "trainer-3"
+    assert contribution.generation == 11 and contribution.weight == 99
+    assert os.pread(contribution.fd, len(payload), 0) == payload
+    contribution.close(); os.close(fd); trainer.close(); manager.close()
+
+
+def test_fenced_checkpoint_commit_releases_native_result_exactly_once(tmp_path):
+    """The fenced publication approval has one native state transition."""
+    import hashlib
+    from types import SimpleNamespace
+    from ndm.native_dataplane import Command
+
+    publication = tmp_path / "generation.json"
+    value = {
+        "finalized": True, "run_id": "live-split", "generation": 8,
+        "fence": {"coordinator_epoch": 19}, "attempt": 2,
+        "layout_digest": "11" * 32, "base_digest": "22" * 32,
+        "result_root": "33" * 32, "global_weight": 41,
+        "result_bytes": 128,
+    }
+    publication.write_text(json.dumps(value, sort_keys=True))
+    calls = []
+
+    class Operation:
+        def close(self):
+            calls.append("close")
+
+    session = object.__new__(NativeManagerSession)
+    session.run_id, session.fence_epoch = "live-split", 19
+    session.local = SimpleNamespace(control=lambda command, deadline_s: (
+        calls.append((command, deadline_s)) or Operation()))
+    session._checkpoint_proposed = True
+    session._proposal_generation = 8
+    session._checkpoint_identity = {
+        key: value[key] for key in (
+            "attempt", "layout_digest", "base_digest", "result_root",
+            "global_weight", "result_bytes")}
+    session._generation_installed = session._frozen = True
+    session._owner_replays = {("node-1", bytes.fromhex("33" * 32)): 2}
+
+    session.commit(
+        publication_manifest=publication,
+        authoritative_latest={
+            "generation": 8, "fence": 19, "manifest": str(publication.resolve()),
+            "manifest_sha256": hashlib.sha256(publication.read_bytes()).hexdigest(),
+        }, deadline_s=7.0)
+
+    assert calls == [(Command.COMMIT, 7.0), "close"]
+    assert not session._generation_installed and not session._frozen
+    assert session._checkpoint_identity is None and not session._owner_replays
