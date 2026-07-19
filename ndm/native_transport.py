@@ -292,6 +292,12 @@ class NativeTransportLibrary:
         lib.ndp_transport_peer_upsert_v1.argtypes = [
             ctypes.c_uint64, ctypes.POINTER(_PeerV1), ctypes.POINTER(ctypes.c_uint64)]
         lib.ndp_transport_peer_remove_v1.argtypes = [ctypes.c_uint64, ctypes.c_uint64]
+        lib.ndp_transport_send_v1.argtypes = [
+            ctypes.c_uint64, ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint8),
+            ctypes.c_uint64, ctypes.c_uint64]
+        lib.ndp_transport_receive_v1.argtypes = [
+            ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint64,
+            ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64)]
         lib.ndp_transport_poll_v1.argtypes = [
             ctypes.c_uint64, ctypes.POINTER(_EventV1), ctypes.c_uint32,
             ctypes.POINTER(ctypes.c_uint32), ctypes.c_int]
@@ -302,7 +308,8 @@ class NativeTransportLibrary:
         for name in (
             "ndp_transport_open_v1", "ndp_transport_bind_identity_v1",
             "ndp_transport_endpoint_v1", "ndp_transport_peer_upsert_v1",
-            "ndp_transport_peer_remove_v1", "ndp_transport_poll_v1",
+            "ndp_transport_peer_remove_v1", "ndp_transport_send_v1",
+            "ndp_transport_receive_v1", "ndp_transport_poll_v1",
             "ndp_transport_metrics_v1", "ndp_transport_cancel_v1",
             "ndp_transport_close_v1",
         ):
@@ -319,9 +326,10 @@ class NativeTransport:
     """Lifecycle-safe native endpoint and current-fence route table."""
 
     def __init__(self, library: NativeTransportLibrary, handle: int,
-                 deadline_unix_ns: int):
+                 deadline_unix_ns: int, payload_max: int):
         self.library, self.handle = library, int(handle)
         self.deadline_unix_ns = int(deadline_unix_ns)
+        self.payload_max = int(payload_max)
         self.closed = False
 
     @classmethod
@@ -352,7 +360,8 @@ class NativeTransport:
         handle = ctypes.c_uint64()
         native.check(native.lib.ndp_transport_open_v1(
             ctypes.byref(config), ctypes.byref(handle)), "transport_open")
-        return cls(native, handle.value, config.operation_deadline_unix_ns)
+        return cls(native, handle.value, config.operation_deadline_unix_ns,
+                   config.payload_max)
 
     def bind(self, *, run_key: bytes | str, fence_epoch: int,
              worker_key: bytes | str, incarnation: bytes | str,
@@ -391,6 +400,34 @@ class NativeTransport:
     def remove(self, peer_id: int) -> None:
         self.library.check(self.library.lib.ndp_transport_peer_remove_v1(
             self.handle, int(peer_id)), "transport_peer_remove")
+
+    def send(self, peer_id: int, frame: bytes, *, deadline_unix_ns: int) -> None:
+        """Send one already encoded native frame without a Python socket copy."""
+        payload = bytes(frame)
+        if not payload or len(payload) > NDP_TRANSPORT_ENDPOINT_MAX + self.payload_max:
+            raise ValueError("native transport frame byte bound violated")
+        if not 0 < deadline_unix_ns <= self.deadline_unix_ns:
+            raise ValueError("native transport send deadline exceeds service deadline")
+        storage = (ctypes.c_uint8 * len(payload)).from_buffer_copy(payload)
+        self.library.check(self.library.lib.ndp_transport_send_v1(
+            self.handle, int(peer_id), storage, len(payload), int(deadline_unix_ns)),
+            "transport_send")
+
+    def receive(self, *, capacity: int | None = None) -> tuple[int, bytes] | None:
+        """Take one authenticated native frame; ``None`` means no completed RX."""
+        bound = self.payload_max + 320 if capacity is None else int(capacity)
+        if not 320 <= bound <= self.payload_max + 320:
+            raise ValueError("native receive capacity exceeds the registered frame bound")
+        storage = (ctypes.c_uint8 * bound)()
+        frame_bytes, peer_id = ctypes.c_uint64(), ctypes.c_uint64()
+        code = int(self.library.lib.ndp_transport_receive_v1(
+            self.handle, storage, bound, ctypes.byref(frame_bytes), ctypes.byref(peer_id)))
+        if code == 1:
+            return None
+        self.library.check(code, "transport_receive")
+        if not 320 <= frame_bytes.value <= bound or peer_id.value == 0:
+            raise TransportError(-7, "transport_receive", "native returned invalid frame extent")
+        return int(peer_id.value), bytes(storage[:frame_bytes.value])
 
     def poll(self, timeout_ms: int = 0, capacity: int = 24) -> tuple[dict[str, object], ...]:
         if not 0 <= timeout_ms <= 30_000 or not 1 <= capacity <= 64:

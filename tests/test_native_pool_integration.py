@@ -131,3 +131,23 @@ def test_native_manager_binds_both_abis_before_ready_installs_routes_and_drains(
     assert final.local["shared_bytes_current"] == 0
     assert final.transport["in_flight_bytes"] == 0
     assert final.transport["retained_bytes"] == 0
+
+
+def test_transport_python_bridge_exposes_bounded_native_send_receive_abi():
+    """Regression: live wiring must not silently omit the dense frame ABI."""
+    manifest = json.loads(BUILD_MANIFEST.read_text())
+    transport_library = (
+        BUILD_MANIFEST.parent / manifest["artifacts"]["transport_library"]["path"])
+    library = NativeTransportLibrary(transport_library)
+    assert library.lib.ndp_transport_send_v1.argtypes is not None
+    assert library.lib.ndp_transport_receive_v1.argtypes is not None
+
+    # Bounds are rejected in Python before entering the provider.  This keeps
+    # malformed live-role input from becoming an unbounded ctypes allocation.
+    transport = object.__new__(NativeTransport)
+    transport.payload_max = 4096
+    transport.deadline_unix_ns = time.time_ns() + 1_000_000_000
+    with pytest.raises(ValueError, match="frame byte bound"):
+        transport.send(1, b"", deadline_unix_ns=time.time_ns() + 1)
+    with pytest.raises(ValueError, match="receive capacity"):
+        transport.receive(capacity=4096 + 321)
