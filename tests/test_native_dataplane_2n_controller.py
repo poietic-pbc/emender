@@ -75,3 +75,38 @@ def test_metadata_exchange_returns_only_the_other_validated_endpoint():
     for pair in pairs:
         pair[0].close()
         pair[1].close()
+
+
+def test_clock_attestation_measures_offset_not_staggered_launch_time():
+    module = _module()
+    records = {rank: decode_endpoint_record(_endpoint(rank)) for rank in (0, 1)}
+    result: dict[str, object] = {}
+    pairs = [socket.socketpair(), socket.socketpair()]
+    thread = threading.Thread(
+        target=lambda: result.update(
+            parsed=module._phase(
+                {0: pairs[0][0], 1: pairs[1][0]}, phase=0,
+                expected_provider="cxi", expected_run_key=None,
+                expected_fence=None,
+            )
+        )
+    )
+    thread.start()
+    for rank in (0, 1):
+        if rank == 1:
+            time.sleep(0.3)
+        request = module.REQUEST.pack(
+            module.MAGIC, 1, 0, rank, len(records[rank].encoded), time.time_ns()
+        ) + records[rank].encoded
+        pairs[rank][1].sendall(request)
+    for rank in (0, 1):
+        raw = module._recv_exact(pairs[rank][1], module.REPLY_PREFIX.size)
+        reply = module.REPLY_PREFIX.unpack(raw)
+        module._recv_exact(pairs[rank][1], reply[-1])
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    _, clock_offset_delta_ns = result["parsed"]
+    assert clock_offset_delta_ns < 50_000_000
+    for pair in pairs:
+        pair[0].close()
+        pair[1].close()

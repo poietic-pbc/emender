@@ -98,16 +98,18 @@ def _recv_exact(stream: socket.socket, size: int) -> bytes:
     return b"".join(chunks)
 
 
-def _read_request(stream: socket.socket, *, expected_phase: int) -> tuple[int, int, EndpointRecord]:
-    magic, version, phase, rank, record_bytes, client_unix_ns = REQUEST.unpack(
-        _recv_exact(stream, REQUEST.size)
-    )
+def _read_request(
+    stream: socket.socket, *, expected_phase: int
+) -> tuple[int, int, int, EndpointRecord]:
+    header = _recv_exact(stream, REQUEST.size)
+    controller_unix_ns = time.time_ns()
+    magic, version, phase, rank, record_bytes, client_unix_ns = REQUEST.unpack(header)
     if magic != MAGIC or version != 1 or phase != expected_phase:
         raise RuntimeError("native endpoint exchange protocol mismatch")
     if rank not in (0, 1) or not 0 < record_bytes <= 4096:
         raise RuntimeError("native endpoint exchange bounds violation")
     record = decode_endpoint_record(_recv_exact(stream, record_bytes))
-    return rank, client_unix_ns, record
+    return rank, client_unix_ns, controller_unix_ns, record
 
 
 def _send_peer(stream: socket.socket, rank: int, record: EndpointRecord) -> None:
@@ -143,9 +145,11 @@ def _phase(
     expected_fence: int | None,
 ) -> tuple[dict[int, EndpointRecord], int]:
     records: dict[int, EndpointRecord] = {}
-    clocks: dict[int, int] = {}
+    clock_offsets: dict[int, int] = {}
     for expected_rank in (0, 1):
-        rank, clock, record = _read_request(clients[expected_rank], expected_phase=phase)
+        rank, client_clock, controller_clock, record = _read_request(
+            clients[expected_rank], expected_phase=phase
+        )
         if rank != expected_rank or rank in records:
             raise RuntimeError("duplicate or misrouted native endpoint rank")
         if record.provider != expected_provider:
@@ -159,14 +163,14 @@ def _phase(
         if expected_fence is not None and record.fence_epoch != expected_fence:
             raise RuntimeError("native endpoint fence changed")
         records[rank] = record
-        clocks[rank] = clock
+        clock_offsets[rank] = client_clock - controller_clock
     if records[0].run_key != records[1].run_key or records[0].fence_epoch != records[1].fence_epoch:
         raise RuntimeError("native endpoints are not in one fenced run")
     if records[0].worker_key == records[1].worker_key:
         raise RuntimeError("native endpoint worker identities are not distinct")
     _send_peer(clients[0], 1, records[1])
     _send_peer(clients[1], 0, records[0])
-    return records, abs(clocks[0] - clocks[1])
+    return records, abs(clock_offsets[0] - clock_offsets[1])
 
 
 def main() -> int:
@@ -239,6 +243,7 @@ def main() -> int:
             "run_key": initial[0].run_key.hex(),
             "phase_count": len(phases),
             "two_endpoints": True,
+            "clock_attestation": "client_minus_controller_offset_delta",
             "max_clock_skew_ms": max(skews) / 1_000_000,
             "phases": [
                 {

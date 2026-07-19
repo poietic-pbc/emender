@@ -209,7 +209,11 @@ def validate_gate(
         raise ValueError("two-endpoint membership attestation failed")
     if membership.get("mode") != mode or membership.get("provider") != provider:
         raise ValueError("membership payload/provider mismatch")
-    if membership.get("two_endpoints") is not True or membership.get("max_clock_skew_ms", 1e9) > 250:
+    if (
+        membership.get("two_endpoints") is not True
+        or membership.get("clock_attestation") != "client_minus_controller_offset_delta"
+        or membership.get("max_clock_skew_ms", 1e9) > 250
+    ):
         raise ValueError("membership did not attest two current, clock-aligned endpoints")
     expected_phases = 2 if mode == "fault" else 1
     if membership.get("phase_count") != expected_phases:

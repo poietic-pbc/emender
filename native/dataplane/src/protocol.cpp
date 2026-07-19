@@ -242,9 +242,10 @@ int encode_frame_prehashed(const FrameHeader &header,
   return encode_frame_impl(header, payload, payload_bytes, out, false);
 }
 
-int decode_frame_view(const std::uint8_t *frame, std::size_t frame_bytes,
-                      std::uint64_t payload_max, FrameHeader *header,
-                      const std::uint8_t **payload, std::size_t *payload_bytes) {
+int decode_frame_view_impl(const std::uint8_t *frame, std::size_t frame_bytes,
+                           std::uint64_t payload_max, FrameHeader *header,
+                           const std::uint8_t **payload,
+                           std::size_t *payload_bytes, bool verify_payload) {
   if (frame == nullptr || header == nullptr || payload == nullptr ||
       payload_bytes == nullptr) return NDP_T_EINVAL;
   if (frame_bytes < kHeaderBytes || payload_max == 0 ||
@@ -286,7 +287,7 @@ int decode_frame_view(const std::uint8_t *frame, std::size_t frame_bytes,
       static_cast<std::size_t>(h.payload_bytes) : 0;
   if (body_bytes > std::numeric_limits<std::size_t>::max() - kHeaderBytes ||
       frame_bytes != kHeaderBytes + body_bytes) return NDP_T_EBOUNDS;
-  if (body_bytes != 0 &&
+  if (verify_payload && body_bytes != 0 &&
       !constant_time_equal(sha256(frame + kHeaderBytes, body_bytes), h.payload_digest)) {
     return NDP_T_ECHECKSUM;
   }
@@ -294,6 +295,23 @@ int decode_frame_view(const std::uint8_t *frame, std::size_t frame_bytes,
   *payload = frame + kHeaderBytes;
   *payload_bytes = body_bytes;
   return NDP_T_OK;
+}
+
+int decode_frame_view(const std::uint8_t *frame, std::size_t frame_bytes,
+                      std::uint64_t payload_max, FrameHeader *header,
+                      const std::uint8_t **payload, std::size_t *payload_bytes) {
+  return decode_frame_view_impl(frame, frame_bytes, payload_max, header,
+                                payload, payload_bytes, true);
+}
+
+int decode_frame_view_header_only(const std::uint8_t *frame,
+                                  std::size_t frame_bytes,
+                                  std::uint64_t payload_max,
+                                  FrameHeader *header,
+                                  const std::uint8_t **payload,
+                                  std::size_t *payload_bytes) {
+  return decode_frame_view_impl(frame, frame_bytes, payload_max, header,
+                                payload, payload_bytes, false);
 }
 
 int decode_frame(const std::uint8_t *frame, std::size_t frame_bytes,

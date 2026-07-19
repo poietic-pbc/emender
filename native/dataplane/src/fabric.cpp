@@ -358,8 +358,12 @@ int FabricEndpoint::send(std::uint64_t peer_id, const std::uint8_t *frame,
   FrameHeader decoded{};
   const std::uint8_t *payload = nullptr;
   std::size_t payload_bytes = 0;
-  const int decoded_rc = decode_frame_view(frame, frame_bytes, config_.payload_max,
-                                           &decoded, &payload, &payload_bytes);
+  // The remote decode is the authoritative payload-integrity boundary.  The
+  // sender transport boundary still authenticates the fixed header CRC, body
+  // shape, bounds, and message sequence without re-hashing a payload whose
+  // digest the native producer just computed.
+  const int decoded_rc = decode_frame_view_header_only(
+      frame, frame_bytes, config_.payload_max, &decoded, &payload, &payload_bytes);
   if (decoded_rc != NDP_T_OK) return decoded_rc;
   (void)payload;
   (void)payload_bytes;

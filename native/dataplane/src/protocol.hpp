@@ -128,6 +128,12 @@ int encode_frame_prehashed(const FrameHeader &header,
 int decode_frame_view(const std::uint8_t *frame, std::size_t frame_bytes,
                       std::uint64_t payload_max, FrameHeader *header,
                       const std::uint8_t **payload, std::size_t *payload_bytes);
+int decode_frame_view_header_only(const std::uint8_t *frame,
+                                  std::size_t frame_bytes,
+                                  std::uint64_t payload_max,
+                                  FrameHeader *header,
+                                  const std::uint8_t **payload,
+                                  std::size_t *payload_bytes);
 int decode_frame(const std::uint8_t *frame, std::size_t frame_bytes,
                  std::uint64_t payload_max, DecodedFrame *out);
 

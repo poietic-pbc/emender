@@ -110,5 +110,7 @@ def test_native_full_layout_uses_bounded_dense_pipeline_and_cached_validation():
     assert "poll_receive" in runner
     assert "pending_frames_.push_back" in runner
     assert "encode_frame_prehashed" in runner
+    assert "decode_frame_view_header_only" in protocol
+    assert "decode_frame_view_header_only" in fabric
     assert "payload_validated" in protocol
     assert "event.detail = sha256" not in fabric
