@@ -38,6 +38,23 @@ the universal WG guidance from `wg agent-guide`.
 **At the start of each session, run `wg quickstart` in your terminal to orient yourself.**
 Use `wg service start` to dispatch work — do not manually claim tasks.
 
+## Frontier development environment
+
+Before running Python, pytest, native builds, or Slurm submission preflight on
+Frontier, source the canonical project environment:
+
+```
+source scripts/frontier/activate_emender_frontier.sh
+```
+
+Do not use bare `python`, `python3`, or a guessed version such as `python3.11`
+before activation: Frontier's login-shell default is Python 3.6 and cannot parse
+this repository. After activation, invoke `"$EMENDER_PYTHON" -m pytest ...` and
+pass `PYTHON_BIN="$EMENDER_PYTHON"` to wrappers that accept an interpreter. The
+activation script is authoritative for the module stack and approved Python
+3.12 environment; task-specific scripts may add settings but must not duplicate
+or replace that setup.
+
 ## Resilient DiLoCo design authority
 
 Before changing, testing, running, or scaling resilient training behavior, read
