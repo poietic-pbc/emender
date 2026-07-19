@@ -125,10 +125,13 @@ int FabricEndpoint::validate_config(const FabricConfig &config, std::string *why
 int FabricEndpoint::resolve_provider() {
   fi_info *hints = fi_allocinfo();
   if (hints == nullptr) return NDP_T_ENOMEM;
-  // Every accepted RDM frame must be attributable to the installed AV route.
-  // Without FI_SOURCE, fi_cq_readfrom may return FI_ADDR_NOTAVAIL and the
-  // upper layer cannot authenticate the frame's claimed worker identity.
-  hints->caps = FI_MSG | FI_SOURCE;
+  // The layered test provider requires FI_SOURCE in its negotiated caps to
+  // make fi_cq_readfrom source authentication deterministic.  Native CXI does
+  // not advertise that optional cap, but still returns its native AV address
+  // with each readfrom completion.  Do not exclude CXI by asking it for a cap
+  // it does not advertise.
+  hints->caps = FI_MSG;
+  if (!config_.production) hints->caps |= FI_SOURCE;
   hints->mode = FI_CONTEXT;
   hints->ep_attr->type = FI_EP_RDM;
   hints->domain_attr->threading = FI_THREAD_SAFE;
@@ -246,6 +249,20 @@ int FabricEndpoint::allocate_slots(std::vector<std::unique_ptr<Slot>> *slots,
       if (rc != 0) {
         if (config_.production) return NDP_T_EPROVIDER;
         slot->mr = nullptr;
+      }
+      if (slot->mr != nullptr &&
+          (info_->domain_attr->mr_mode & FI_MR_ENDPOINT) != 0) {
+        // CXI advertises FI_MR_ENDPOINT: the region is disabled after
+        // fi_mr_reg and is unusable until it is bound to this endpoint and
+        // explicitly enabled.
+        if (fi_mr_bind(slot->mr, &endpoint_->fid, 0) != 0 ||
+            fi_mr_enable(slot->mr) != 0) {
+          (void)fi_close(&slot->mr->fid);
+          slot->mr = nullptr;
+          std::free(slot->buffer);
+          slot->buffer = nullptr;
+          return NDP_T_EPROVIDER;
+        }
       }
     }
     slots->push_back(std::move(slot));

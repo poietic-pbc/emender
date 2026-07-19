@@ -6,6 +6,7 @@
 #SBATCH -q debug
 #SBATCH -N 2
 #SBATCH -t 00:20:00
+#SBATCH --network=single_node_vni,job_vni
 #SBATCH --signal=B:TERM@120
 #SBATCH -o logs/frontier/native-dataplane/%x-%j.out
 #SBATCH -e logs/frontier/native-dataplane/%x-%j.err
@@ -24,6 +25,11 @@ REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
 [[ ${SLURM_JOB_PARTITION:?} == batch ]] || { echo "native gate requires batch partition" >&2; exit 64; }
 [[ ${NDP_REQUESTED_WALLTIME:-} == 00:20:00 ]] || { echo "native gate requires exact 20m payload" >&2; exit 64; }
 [[ ${NDP_GATE:-} == full-layout ]] || { echo "native gate requires full-layout identity" >&2; exit 64; }
+[[ ,${SLURM_NETWORK:-}, == *,single_node_vni,* &&
+   ,${SLURM_NETWORK:-}, == *,job_vni,* ]] || {
+  echo "native gate requires allocation-time single-node and job VNIs" >&2; exit 64;
+}
+: "${SLINGSHOT_VNIS:?Slurm did not provision a CXI VNI for the native gate}"
 [[ ${FI_PROVIDER:-} == cxi ]] || { echo "native Frontier gate requires exact FI_PROVIDER=cxi" >&2; exit 64; }
 [[ ${NDP_LAYOUT:-} == e97-f64-5506770496 ]] || { echo "native gate requires exact E97 f64 layout" >&2; exit 64; }
 [[ ${NDP_TRAINERS_PER_NODE:-} == 8 ]] || { echo "native gate requires eight local lanes" >&2; exit 64; }
@@ -78,6 +84,8 @@ value = {
     "nodes": int(os.environ["SLURM_JOB_NUM_NODES"]),
     "nodelist": os.environ["SLURM_JOB_NODELIST"],
     "requested_walltime": os.environ["NDP_REQUESTED_WALLTIME"],
+    "slurm_network": os.environ["SLURM_NETWORK"],
+    "slingshot_vnis": os.environ["SLINGSHOT_VNIS"],
     "submit_host": socket.gethostname(),
     "batch_started_unix_ns": time.time_ns(),
     "mode": os.environ["NDP_MODE"],

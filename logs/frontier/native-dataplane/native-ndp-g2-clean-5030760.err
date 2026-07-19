@@ -1,0 +1,19 @@
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+native_frontier_2n_gate=failed error=transport_open: provider policy/setup failure (-13)
+srun: error: frontier00055: task 0: Exited with exit code 1
+native_frontier_2n_gate=failed error=transport_open: provider policy/setup failure (-13)
+srun: error: frontier06640: task 1: Exited with exit code 1
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/scripts/frontier/native_dataplane_2n_controller.py", line 272, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/scripts/frontier/native_dataplane_2n_controller.py", line 192, in main
+    stream, _address = listener.accept()
+                       ^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socket.py", line 295, in accept
+    fd, addr = self._accept()
+               ^^^^^^^^^^^^^^
+TimeoutError: timed out
+srun: error: frontier00055: task 0: Exited with exit code 1
+srun: Terminating StepId=5030760.0
+native gate failed: data_step=1 controller_step=1
