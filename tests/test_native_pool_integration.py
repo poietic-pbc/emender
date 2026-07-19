@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import socket
+import struct
 import time
 
 import numpy as np
@@ -193,31 +195,107 @@ def test_frozen_owner_transfer_uses_native_fabric_and_bounds_replay(monkeypatch)
 def test_cross_process_trainer_handoff_passes_sealed_memfd_without_dense_socket(tmp_path):
     import fcntl
     import hashlib
+    import multiprocessing
     import os
-    import threading
+    from ndm.native_dataplane import _memfd_create
 
     path = tmp_path / "manager.seqpacket"
     identity = dict(run_id="run", fence_epoch=7, generation=11,
-                    expected_bytes=4096)
+                    attempt=2, expected_bytes=4096, layout_digest="ab" * 32,
+                    accepted_incarnations={"trainer-3": "boot-a"},
+                    replay_ledger=tmp_path / "admitted.json")
     manager = NativeTrainerHandoff.listen(path, **identity)
-    received = []
-    thread = threading.Thread(target=lambda: received.append(manager.receive_memfd()))
-    thread.start()
+    context = multiprocessing.get_context("fork")
+    received = context.Queue()
+
+    def manager_process():
+        contribution = manager.receive_memfd()
+        received.put({"trainer_id": contribution.trainer_id,
+                      "generation": contribution.generation,
+                      "attempt": contribution.attempt,
+                      "weight": contribution.weight,
+                      "layout_digest": contribution.layout_digest,
+                      "payload": os.pread(contribution.fd, contribution.length, 0)})
+        contribution.close()
+
+    process = context.Process(target=manager_process)
+    process.start()
     trainer = NativeTrainerHandoff.connect(path, **identity)
-    fd = os.memfd_create("trainer-delta", os.MFD_ALLOW_SEALING)
-    payload = bytes(range(256)) * 16
+    fd = _memfd_create("trainer-delta", getattr(os, "MFD_ALLOW_SEALING", 2))
+    payload = struct.pack("<1024f", *(float(index) for index in range(1024)))
     os.write(fd, payload)
-    fcntl.fcntl(fd, fcntl.F_ADD_SEALS,
-                fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_WRITE)
+    fcntl.fcntl(fd, getattr(fcntl, "F_ADD_SEALS", 1033), 0x0004 | 0x0002 | 0x0008)
     trainer.send_memfd(fd, trainer_id="trainer-3", incarnation="boot-a",
                        submission_seq=4, weight=99,
                        sha256=hashlib.sha256(payload).hexdigest())
-    thread.join(5)
-    contribution = received.pop()
-    assert contribution.trainer_id == "trainer-3"
-    assert contribution.generation == 11 and contribution.weight == 99
-    assert os.pread(contribution.fd, len(payload), 0) == payload
-    contribution.close(); os.close(fd); trainer.close(); manager.close()
+    process.join(5)
+    assert process.exitcode == 0
+    contribution = received.get(timeout=1)
+    assert contribution["trainer_id"] == "trainer-3"
+    assert contribution["generation"] == 11 and contribution["attempt"] == 2
+    assert contribution["weight"] == 99 and contribution["layout_digest"] == "ab" * 32
+    assert contribution["payload"] == payload
+    os.close(fd); trainer.close(); manager.close()
+
+
+def test_descriptor_admission_rejects_stale_corrupt_nonfinite_and_restart_replay(tmp_path):
+    import fcntl
+    import hashlib
+    import os
+    import threading
+    from ndm.native_dataplane import _memfd_create
+
+    path = tmp_path / "service.seqpacket"
+    ledger = tmp_path / "admitted.json"
+    identity = dict(run_id="run", fence_epoch=7, generation=11, attempt=2,
+                    expected_bytes=16, layout_digest="ab" * 32,
+                    accepted_incarnations={"trainer": "boot-a"},
+                    replay_ledger=ledger)
+
+    def attempt(client_identity, payload, *, incarnation="boot-a", sequence=1,
+                claimed=None, extent=None):
+        manager = NativeTrainerHandoff.listen(path, **identity)
+        outcome = []
+
+        def receive():
+            try:
+                contribution = manager.receive_memfd()
+                outcome.append(("accepted", contribution.sha256))
+                contribution.close()
+            except Exception as error:
+                outcome.append(("rejected", str(error)))
+
+        thread = threading.Thread(target=receive)
+        thread.start()
+        trainer = NativeTrainerHandoff.connect(path, **client_identity)
+        fd = _memfd_create("adversarial-delta", getattr(os, "MFD_ALLOW_SEALING", 2))
+        os.write(fd, payload if extent is None else payload[:extent])
+        fcntl.fcntl(fd, getattr(fcntl, "F_ADD_SEALS", 1033),
+                    0x0004 | 0x0002 | 0x0008)
+        try:
+            trainer.send_memfd(fd, trainer_id="trainer", incarnation=incarnation,
+                               submission_seq=sequence, weight=3,
+                               sha256=claimed or hashlib.sha256(payload).hexdigest())
+        except Exception as error:
+            outcome.append(("rejected", str(error)))
+            # No packet was sent, so release the blocked accept.
+            trainer.close()
+            socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET).connect(str(path))
+        thread.join(5)
+        os.close(fd); trainer.close(); manager.close()
+        return outcome[0]
+
+    finite = struct.pack("<4f", 1.0, 2.0, 3.0, 4.0)
+    assert attempt(identity, finite)[0] == "accepted"
+    # The persisted identity ledger is loaded by a fresh service instance.
+    assert "duplicate" in attempt(identity, finite)[1]
+    wrong_fence = dict(identity, fence_epoch=8, replay_ledger=None)
+    assert "identity" in attempt(wrong_fence, finite, sequence=2)[1]
+    assert "incarnation" in attempt(identity, finite, incarnation="boot-b", sequence=3)[1]
+    assert "digest" in attempt(identity, finite, sequence=4, claimed="00" * 32)[1]
+    nonfinite = struct.pack("<4f", 1.0, float("nan"), 3.0, 4.0)
+    assert "nonfinite" in attempt(identity, nonfinite, sequence=5)[1]
+    assert "extent" in attempt(identity, finite, sequence=6, extent=12)[1]
 
 
 def test_fenced_checkpoint_commit_releases_native_result_exactly_once(tmp_path):

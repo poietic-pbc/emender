@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import socket
@@ -53,8 +54,10 @@ class NativeTrainerContribution:
     incarnation: str
     submission_seq: int
     generation: int
+    attempt: int
     weight: int
     length: int
+    layout_digest: str
     sha256: str
     fd: int
 
@@ -67,12 +70,43 @@ class NativeTrainerHandoff:
     MAX_METADATA = 4096
 
     def __init__(self, sock: socket.socket, *, run_id: str, fence_epoch: int,
-                 generation: int, expected_bytes: int):
-        if expected_bytes <= 0:
-            raise ValueError("expected_bytes must be positive")
+                 generation: int, attempt: int, expected_bytes: int,
+                 layout_digest: str, accepted_incarnations: Mapping[str, str],
+                 replay_ledger: str | Path | None = None):
+        if expected_bytes <= 0 or expected_bytes % 4:
+            raise ValueError("expected_bytes must be positive f32 extent")
+        if attempt <= 0 or len(layout_digest) != 64:
+            raise ValueError("attempt/layout identity is invalid")
         self.sock, self.run_id = sock, run_id
-        self.fence_epoch, self.generation = fence_epoch, generation
+        self.fence_epoch, self.generation, self.attempt = fence_epoch, generation, attempt
         self.expected_bytes = expected_bytes
+        self.layout_digest = layout_digest.lower()
+        self.accepted_incarnations = dict(accepted_incarnations)
+        self.replay_ledger = Path(replay_ledger) if replay_ledger else None
+        self._seen: dict[str, str] = {}
+        if self.replay_ledger is not None and self.replay_ledger.exists():
+            value = json.loads(self.replay_ledger.read_text(encoding="utf-8"))
+            if value.get("identity") != self._ledger_identity():
+                raise ValueError("trainer replay ledger identity mismatch")
+            self._seen = dict(value.get("seen", {}))
+
+    def _ledger_identity(self) -> dict[str, object]:
+        return {"run_id": self.run_id, "fence_epoch": self.fence_epoch,
+                "generation": self.generation, "attempt": self.attempt,
+                "layout_digest": self.layout_digest,
+                "expected_bytes": self.expected_bytes}
+
+    def _record(self, key: str, digest: str) -> None:
+        self._seen[key] = digest
+        if self.replay_ledger is None:
+            return
+        self.replay_ledger.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.replay_ledger.with_name(
+            f".{self.replay_ledger.name}.{os.getpid()}.tmp")
+        temporary.write_text(json.dumps({"identity": self._ledger_identity(),
+                                         "seen": self._seen}, sort_keys=True) + "\n",
+                             encoding="utf-8")
+        os.replace(temporary, self.replay_ledger)
 
     @classmethod
     def listen(cls, path: str | Path, **identity) -> "NativeTrainerHandoff":
@@ -93,12 +127,14 @@ class NativeTrainerHandoff:
     def send_memfd(self, fd: int, *, trainer_id: str, incarnation: str,
                    submission_seq: int, weight: int, sha256: str) -> None:
         import fcntl
-        required = fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_WRITE
+        required = 0x0004 | 0x0002 | 0x0008  # F_SEAL_GROW|SHRINK|WRITE
         if (os.fstat(fd).st_size != self.expected_bytes
-                or fcntl.fcntl(fd, fcntl.F_GET_SEALS) & required != required):
+                or fcntl.fcntl(fd, getattr(fcntl, "F_GET_SEALS", 1034))
+                & required != required):
             raise ValueError("trainer memfd must have exact extent and immutable seals")
         value = {"run_id": self.run_id, "fence_epoch": self.fence_epoch,
-                 "generation": self.generation, "trainer_id": trainer_id,
+                 "generation": self.generation, "attempt": self.attempt,
+                 "layout_digest": self.layout_digest, "trainer_id": trainer_id,
                  "incarnation": incarnation, "submission_seq": submission_seq,
                  "weight": weight, "length": self.expected_bytes, "sha256": sha256}
         encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
@@ -127,14 +163,51 @@ class NativeTrainerHandoff:
                 if (value.get("run_id") != self.run_id
                         or int(value.get("fence_epoch", -1)) != self.fence_epoch
                         or int(value.get("generation", -1)) != self.generation
+                        or int(value.get("attempt", -1)) != self.attempt
+                        or value.get("layout_digest") != self.layout_digest
                         or int(value.get("length", -1)) != self.expected_bytes
                         or os.fstat(fd).st_size != self.expected_bytes
                         or int(value.get("weight", 0)) <= 0):
                     raise ValueError("trainer handoff identity/extent mismatch")
+                trainer_id = str(value.get("trainer_id", ""))
+                incarnation = str(value.get("incarnation", ""))
+                sequence = int(value.get("submission_seq", -1))
+                if self.accepted_incarnations.get(trainer_id) != incarnation:
+                    raise ValueError("trainer handoff incarnation mismatch")
+                import fcntl
+                required = 0x0004 | 0x0002 | 0x0008
+                if (fcntl.fcntl(fd, getattr(fcntl, "F_GET_SEALS", 1034))
+                        & required != required):
+                    raise ValueError("received trainer memfd is not immutable")
+                claimed = str(value.get("sha256", "")).lower()
+                actual_hash = hashlib.sha256()
+                finite = True
+                offset = 0
+                while offset < self.expected_bytes:
+                    chunk = os.pread(fd, min(1 << 20, self.expected_bytes - offset), offset)
+                    if not chunk:
+                        raise ValueError("trainer memfd ended before its admitted extent")
+                    actual_hash.update(chunk)
+                    if len(chunk) % 4:
+                        raise ValueError("trainer f32 extent is misaligned")
+                    finite = finite and all(math.isfinite(item[0]) for item in
+                        struct.iter_unpack("<f", chunk))
+                    offset += len(chunk)
+                actual = actual_hash.hexdigest()
+                if claimed != actual:
+                    raise ValueError("trainer handoff digest mismatch")
+                if not finite:
+                    raise ValueError("trainer handoff contains nonfinite input")
+                key = f"{trainer_id}\0{incarnation}\0{sequence}"
+                prior = self._seen.get(key)
+                if prior is not None:
+                    kind = "duplicate" if prior == actual else "conflicting"
+                    raise ValueError(f"{kind} trainer submission sequence")
+                self._record(key, actual)
                 return NativeTrainerContribution(
-                    str(value["trainer_id"]), str(value["incarnation"]),
-                    int(value["submission_seq"]), self.generation,
-                    int(value["weight"]), self.expected_bytes, str(value["sha256"]), fd)
+                    trainer_id, incarnation, sequence, self.generation, self.attempt,
+                    int(value["weight"]), self.expected_bytes, self.layout_digest,
+                    actual, fd)
             except BaseException:
                 os.close(fd); raise
         finally:
