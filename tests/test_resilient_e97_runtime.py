@@ -61,6 +61,20 @@ def test_live_native_selection_is_wired_and_python_debug_remains_explicit():
     assert "role recovery native runtime digest mismatch" in source
 
 
+def test_owner_endpoint_snapshot_filters_control_only_lease_metadata():
+    from scripts.frontier import resilient_e97_role as role
+
+    endpoint = role._owner_endpoint_from_snapshot({
+        "worker_id": "node-0", "incarnation": "node-0-boot",
+        "host": "127.0.0.1", "port": 29571,
+        "backend": "python-tcp-debug", "lease_expiry": 1234.5,
+    })
+
+    assert endpoint.worker_id == "node-0"
+    assert endpoint.incarnation == "node-0-boot"
+    assert not hasattr(endpoint, "lease_expiry")
+
+
 def test_import_liveness_does_not_refresh_runtime_import_progress_deadline():
     text = ROLE.read_text()
     bootstrap = text[text.index("def _role_import_heartbeat"):

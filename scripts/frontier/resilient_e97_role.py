@@ -86,6 +86,14 @@ from ndm.resilient_pool_runtime import (
 )
 
 
+def _owner_endpoint_from_snapshot(peer: dict[str, object]) -> OwnerEndpoint:
+    """Decode endpoint fields while excluding control-only snapshot metadata."""
+    endpoint_fields = OwnerEndpoint.__dataclass_fields__
+    return OwnerEndpoint(**{
+        name: peer[name] for name in endpoint_fields if name in peer
+    })
+
+
 def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser()
     value.add_argument("role", choices=("manager", "trainer"))
@@ -619,7 +627,8 @@ def _native_manager(args) -> int:
                 workers = sorted(str(item["worker_id"]) for item in frozen)
                 if len(workers) != 2 or f"node-{node}" not in workers:
                     raise RuntimeError("native two-node accepted set is incomplete")
-                endpoints = tuple(OwnerEndpoint(**peer) for peer in snapshot["peers"]
+                endpoints = tuple(_owner_endpoint_from_snapshot(peer)
+                                  for peer in snapshot["peers"]
                                   if str(peer["worker_id"]) in workers)
                 session.install_routes(endpoints)
                 peer_id = next(item for item in workers if item != f"node-{node}")
