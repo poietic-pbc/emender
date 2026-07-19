@@ -110,7 +110,6 @@ CONTROLLER_STEP_PID=$!
 
 set +e
 srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task=32 \
-  --network=single_node_vni,job_vni \
   --cpu-bind=cores --overlap --exact --kill-on-bad-exit=0 \
   bash -c 'if [[ $SLURM_PROCID == 0 ]]; then
       printf "native_step_network=%s slingshot_env_names=" "${SLURM_NETWORK:-unset}" >&2
