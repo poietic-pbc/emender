@@ -178,6 +178,8 @@ def test_node_local_topology_starts_persistent_service_before_model_free_manager
     assert "NDP_SERVICE_COMMAND" in launcher
     assert 'NDP_SERVICE_BINARY=${NDP_ARTIFACT_PATHS[0]}' in launcher
     assert "--provider cxi --require-provider cxi --production --serve" in launcher
+    assert "export EMENDER_NDP_MAX_SHARED_BYTES=" in launcher
+    assert "--resident-limit ${EMENDER_NDP_MAX_SHARED_BYTES}" in launcher
     assert "--local-quorum 8" in launcher
 
 

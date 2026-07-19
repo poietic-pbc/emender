@@ -40,8 +40,9 @@ bool parse_u64(const std::string &text, std::uint64_t *out) {
 void usage() {
   std::cerr << "usage: ndp_cxi_service --provider NAME [--require-provider NAME] "
                "(--production|--test-only) [--probe|--serve] "
-               "[--bind-node NODE] [--payload-max BYTES] [--tx-slots N] "
-               "[--rx-slots N] [--telemetry PATH] "
+               "[--bind-node NODE] [--payload-max BYTES] "
+               "[--resident-limit BYTES] [--tx-slots N] [--rx-slots N] "
+               "[--telemetry PATH] "
                "[--socket PATH (--admission-token-fd FD|"
                "--admission-token-hex HEX64)]\n";
 }
@@ -121,11 +122,13 @@ int main(int argc, char **argv) {
     else if (arg == "--test-only") { config.production = false; mode_set = true; }
     else if (arg == "--probe") { serve = false; }
     else if (arg == "--serve") { serve = true; }
-    else if (arg == "--payload-max" || arg == "--tx-slots" || arg == "--rx-slots") {
+    else if (arg == "--payload-max" || arg == "--resident-limit"
+             || arg == "--tx-slots" || arg == "--rx-slots") {
       std::string text;
       std::uint64_t number = 0;
       if (!value(&text) || !parse_u64(text, &number)) { usage(); return 2; }
       if (arg == "--payload-max") config.payload_max = number;
+      else if (arg == "--resident-limit") config.resident_limit_bytes = number;
       else if (arg == "--tx-slots" && number <= UINT32_MAX) config.tx_slots = static_cast<std::uint32_t>(number);
       else if (arg == "--rx-slots" && number <= UINT32_MAX) config.rx_slots = static_cast<std::uint32_t>(number);
       else { usage(); return 2; }

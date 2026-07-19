@@ -133,6 +133,12 @@ if(BUILD_TESTING AND NDP_BUILD_TESTS)
     COMMAND ndp_cxi_service --provider tcp\;ofi_rxm --test-only --probe --bind-node 127.0.0.1)
   set_tests_properties(ndp_test_provider_explicit PROPERTIES TIMEOUT 15)
 
+  add_test(NAME ndp_test_provider_explicit_resident_limit
+    COMMAND ndp_cxi_service --provider tcp\;ofi_rxm --test-only --probe
+      --bind-node 127.0.0.1 --payload-max 4096 --resident-limit 1048576
+      --tx-slots 4 --rx-slots 4)
+  set_tests_properties(ndp_test_provider_explicit_resident_limit PROPERTIES TIMEOUT 15)
+
   add_test(NAME ndp_test_mode_cannot_select_cxi
     COMMAND ndp_cxi_service --provider cxi --test-only --probe)
   set_tests_properties(ndp_test_mode_cannot_select_cxi PROPERTIES WILL_FAIL TRUE TIMEOUT 15)

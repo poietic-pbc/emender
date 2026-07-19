@@ -101,7 +101,7 @@ EMENDER_NDP_TRANSPORT_LIBRARY=${NDP_ARTIFACT_PATHS[2]}
 export EMENDER_NDP_LIBRARY EMENDER_NDP_TRANSPORT_LIBRARY
 export EMENDER_NDP_MAX_SHARED_BYTES=${RESILIENT_E97_MAX_SHARED_BYTES:-68719476736}
 export EMENDER_NDP_INTERMEDIATE_F64=1
-export NDP_SERVICE_COMMAND="$NDP_SERVICE_BINARY --provider cxi --require-provider cxi --production --serve --payload-max ${RESILIENT_E97_BULK_CHUNK_BYTES:-67108864} --tx-slots 4 --rx-slots 4"
+export NDP_SERVICE_COMMAND="$NDP_SERVICE_BINARY --provider cxi --require-provider cxi --production --serve --payload-max ${RESILIENT_E97_BULK_CHUNK_BYTES:-67108864} --resident-limit ${EMENDER_NDP_MAX_SHARED_BYTES} --tx-slots 4 --rx-slots 4"
 
 [[ ${SLURM_JOB_NUM_NODES:?} == 2 ]] || { echo "requires exactly two nodes" >&2; exit 64; }
 [[ ${SLURM_JOB_QOS:?} == debug ]] || { echo "requires debug QoS" >&2; exit 64; }
