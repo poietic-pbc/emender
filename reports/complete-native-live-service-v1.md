@@ -42,7 +42,13 @@ Approved Python:
 (Python 3.12.13).
 
 * Unified normal build and CTest: `scripts/frontier/build_native_resilient_dataplane.sh build/native-resilient-dataplane` — 8/8 passed.
-* ASan/UBSan configure/build/CTest with `NDP_ENABLE_SANITIZERS=ON` — 8/8 passed.
+* ASan/UBSan configure/build/CTest with `NDP_ENABLE_SANITIZERS=ON` — 8/8
+  passed in the native Cray environment. Repeating under the full activated
+  ROCm environment passed 5/8; the three libfabric-using processes were failed
+  only by LeakSanitizer reporting the same 61,512 bytes retained by external
+  `libhsa-runtime64.so.1` initialization (no project allocation stack). Address
+  and undefined-behavior checks emitted no project finding. This environment
+  difference remains explicit rather than disabling leak detection.
 * Focused handoff and stuck-peer rerun — 7/7 passed.
 * Broad native/resilient suite — 156 passed and two failures on the first run.
   The native failure was a deliberately stale pre-commit build manifest and
@@ -52,7 +58,7 @@ Approved Python:
   clean rerun reached 157/158 and reproduced only that loaded-node SIGTERM
   delay. The regression now uses the production-shaped bounded escalation
   `terminate -> join -> kill -> join`, preventing orphaned synthetic peers;
-  the final broad rerun is recorded in the task log.
+  the final correctly activated broad rerun passed 158/158 in 179.18 seconds.
 
 ## Required conformance checklist
 
