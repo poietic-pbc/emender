@@ -9,6 +9,7 @@ tensor, membership, or heartbeat payload belongs in this database.
 
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
@@ -55,7 +56,7 @@ class SQLiteFencedControlStore:
             raise ValueError("timeout_s must be positive")
         self.path, self.timeout_s, self.clock = Path(path), float(timeout_s), clock
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as db:
+        with closing(self._connect()) as db:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS lease_epochs (
                     run_id TEXT PRIMARY KEY, last_fence INTEGER NOT NULL);
@@ -86,7 +87,7 @@ class SQLiteFencedControlStore:
         return encoded
 
     def _transaction(self, operation: Callable[[sqlite3.Connection], T]) -> T:
-        with self._connect() as db:
+        with closing(self._connect()) as db:
             db.execute("BEGIN IMMEDIATE")
             try:
                 result = operation(db)
@@ -122,7 +123,7 @@ class SQLiteFencedControlStore:
         return self._transaction(cas)
 
     def current(self, run_id: str) -> AllocationLease | None:
-        with self._connect() as db:
+        with closing(self._connect()) as db:
             row = db.execute("SELECT payload FROM leases WHERE run_id=?", (run_id,)).fetchone()
         return self._lease(row[0]) if row else None
 
@@ -244,7 +245,7 @@ class SQLiteFencedControlStore:
         self._transaction(cas)
 
     def read_publication(self, run_id: str, kind: str, name: str) -> dict[str, object] | None:
-        with self._connect() as db:
+        with closing(self._connect()) as db:
             row = db.execute("SELECT payload FROM publications WHERE run_id=? AND kind=? AND name=?",
                              (run_id, kind, name)).fetchone()
         return json.loads(row[0]) if row else None

@@ -436,6 +436,22 @@ class PoolControlClient:
             time.sleep(.01)
         raise TimeoutError("deterministic freeze deadline expired")
 
+    def close_generation(self, generation: int, attempt: int, *,
+                         deadline: float) -> dict[str, object]:
+        """Close from admitted receipts without coupling to one contributor.
+
+        Backend adapters may submit several independent contribution records
+        before asking the allocation holder to freeze.  This is the same
+        metadata-only close operation used by :meth:`contribute_and_freeze`,
+        exposed without implying a fixed caller/world relationship.
+        """
+        while time.monotonic() < deadline:
+            result = self._rpc("close", generation=generation, attempt=attempt)
+            if result["status"] != "open":
+                return result
+            time.sleep(.01)
+        raise TimeoutError("deterministic freeze deadline expired")
+
     def drain(self, worker_id: str, incarnation: str) -> dict[str, object]:
         return self._rpc("expire", worker_id=worker_id, incarnation=incarnation)
 

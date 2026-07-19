@@ -71,6 +71,7 @@ class NativeManagerSession:
         self._frozen = False
         self._checkpoint_proposed = False
         self._checkpoint_identity: dict[str, object] | None = None
+        self._checkpoint_publisher: str | None = None
         self.closed = False
 
     @classmethod
@@ -248,6 +249,7 @@ class NativeManagerSession:
         os.replace(temporary, target)
         self._checkpoint_proposed = True
         self._proposal_generation = result.generation
+        self._checkpoint_publisher = publisher
         self._checkpoint_identity = {
             "attempt": result.attempt,
             "layout_digest": result.layout_digest.hex(),
@@ -283,18 +285,29 @@ class NativeManagerSession:
                 or int(publication.get("generation", -1)) != self._proposal_generation
                 or int(fence.get("coordinator_epoch", -1)) != self.fence_epoch):
             raise RuntimeError("native commit publication identity/fence mismatch")
-        if any(publication.get(key) != value
+        identity = publication
+        owner_results = publication.get("owner_results")
+        if owner_results is not None:
+            if not isinstance(owner_results, dict) or self._checkpoint_publisher is None:
+                raise RuntimeError("native commit publication owner result map is invalid")
+            nested = owner_results.get(self._checkpoint_publisher)
+            if not isinstance(nested, dict):
+                raise RuntimeError("native commit publication omits checkpoint owner result")
+            identity = nested
+        if any(identity.get(key) != value
                for key, value in self._checkpoint_identity.items()):
             raise RuntimeError("native commit publication result identity mismatch")
         self.local.control(Command.COMMIT, deadline_s=deadline_s).close()
         self._generation_installed = self._frozen = self._checkpoint_proposed = False
         self._checkpoint_identity = None
+        self._checkpoint_publisher = None
 
     def abort(self, *, deadline_s: float = 1.0) -> None:
         if self._generation_installed:
             self.local.control(Command.ABORT, deadline_s=deadline_s).close()
         self._generation_installed = self._frozen = self._checkpoint_proposed = False
         self._checkpoint_identity = None
+        self._checkpoint_publisher = None
 
     def telemetry(self, terminal_reason: str = "running") -> NativeServiceTelemetry:
         local = asdict(self.local.metrics)
