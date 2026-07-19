@@ -125,7 +125,11 @@ def state_digest(state: Mapping[str, torch.Tensor]) -> bytes:
         digest.update(struct.pack("<I", value.ndim))
         for dimension in value.shape:
             digest.update(struct.pack("<Q", int(dimension)))
-        digest.update(memoryview(value.numpy()))
+        # NumPy has no stable bfloat16 dtype across the approved runtimes.
+        # Reinterpret the already-contiguous CPU storage as bytes so the
+        # digest covers the exact source bits without dtype conversion or a
+        # second model-sized allocation.
+        digest.update(memoryview(value.reshape(-1).view(torch.uint8).numpy()))
     return digest.digest()
 
 

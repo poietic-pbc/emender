@@ -14,9 +14,22 @@ from ndm.resilient_e97_runtime import (apply_delta, finalize_checkpoint,
                                        assert_node_local_path, flatten_tensors,
                                        outer_state_migration)
 from ndm.fenced_admission import FenceRejected, SQLiteFencedControlStore
+from ndm.native_e97_runtime import state_digest
 
 
 ROLE = Path(__file__).parents[1] / "scripts/frontier/resilient_e97_role.py"
+
+
+def test_native_state_digest_hashes_exact_bfloat16_storage_bits():
+    state = {"bf": torch.tensor([1.0, -2.0], dtype=torch.bfloat16)}
+    expected = hashlib.sha256(b"emender-native-e97-base-v1\0")
+    expected.update((2).to_bytes(4, "little")); expected.update(b"bf")
+    expected.update(b"torch.bfloat16\0")
+    expected.update((1).to_bytes(4, "little"))
+    expected.update((2).to_bytes(8, "little"))
+    expected.update(b"\x80\x3f\x00\xc0")
+
+    assert state_digest(state) == expected.digest()
 
 
 def test_manager_publishes_heartbeat_before_heavy_runtime_imports():
