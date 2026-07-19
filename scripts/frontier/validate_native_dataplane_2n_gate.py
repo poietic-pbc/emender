@@ -147,7 +147,6 @@ def _validate_common_node(node: dict[str, Any], *, rank: int, mode: str,
             global_weight=GLOBAL_WEIGHT,
             node_weight=NODE_WEIGHTS[rank],
             local_reduction_input_bytes=22_027_081_984,
-            admitted_resident_bytes=RESIDENT_BOUND_TWO_OWNERS,
         )
     mismatches = {
         key: (node.get(key), expected)
@@ -156,6 +155,12 @@ def _validate_common_node(node: dict[str, Any], *, rank: int, mode: str,
     }
     if mismatches:
         raise ValueError(f"node {rank} identity/bound mismatch: {mismatches}")
+    admitted_resident = int(node.get("admitted_resident_bytes", 0))
+    if exact and not 0 < admitted_resident <= RESIDENT_BOUND_TWO_OWNERS:
+        raise ValueError(
+            f"node {rank} resident admission {admitted_resident} exceeds "
+            f"the two-owner bound {RESIDENT_BOUND_TWO_OWNERS}"
+        )
     transport = node.get("transport")
     if not isinstance(transport, dict):
         raise ValueError(f"node {rank} transport metrics missing")

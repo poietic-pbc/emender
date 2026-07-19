@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 
@@ -10,6 +11,8 @@ SBATCH = ROOT / "scripts/frontier/native_dataplane_2n_gate.sbatch"
 SUBMIT = ROOT / "scripts/frontier/submit_native_dataplane_2n_gate.sh"
 FABRIC = ROOT / "native/dataplane/src/fabric.cpp"
 RUNNER = ROOT / "native/dataplane/src/frontier_2n_gate.cpp"
+PROTOCOL = ROOT / "native/dataplane/src/protocol.cpp"
+JOB_5031115 = ROOT / "reports/frontier/native-dataplane/5031115"
 
 
 def _module():
@@ -87,3 +90,25 @@ def test_native_gate_fences_contribution_before_redistribution():
     assert "peer_redistribution_complete" in source
     assert "send_generation_goodbye" in source
     assert "generation goodbye did not match the frozen generation" in source
+
+
+def test_exact_validator_accepts_rank_specific_admission_below_bound():
+    module = _module()
+    for rank in (0, 1):
+        node = json.loads((JOB_5031115 / f"node-{rank}.json").read_text(encoding="utf-8"))
+        module._validate_common_node(node, rank=rank, mode="clean", provider="cxi", exact=True)
+
+
+def test_native_full_layout_uses_bounded_dense_pipeline_and_cached_validation():
+    runner = RUNNER.read_text(encoding="utf-8")
+    protocol = PROTOCOL.read_text(encoding="utf-8")
+    fabric = FABRIC.read_text(encoding="utf-8")
+    assert "active_count_ < kDenseWindow" in runner
+    assert "constexpr std::size_t kDenseWindow = kSlots - 1" in runner
+    assert "pending_fetches" in runner
+    assert "pending_frames_" in runner
+    assert "poll_receive" in runner
+    assert "pending_frames_.push_back" in runner
+    assert "encode_frame_prehashed" in runner
+    assert "payload_validated" in protocol
+    assert "event.detail = sha256" not in fabric

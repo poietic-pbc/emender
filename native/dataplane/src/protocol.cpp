@@ -182,15 +182,16 @@ bool message_has_body(MessageType type) noexcept {
   return type == MessageType::contribution_data || type == MessageType::result_data;
 }
 
-int encode_frame(const FrameHeader &header,
-                 const std::uint8_t *payload, std::size_t payload_bytes,
-                 std::vector<std::uint8_t> *out) {
+int encode_frame_impl(const FrameHeader &header,
+                      const std::uint8_t *payload, std::size_t payload_bytes,
+                      std::vector<std::uint8_t> *out, bool verify_payload) {
   if (out == nullptr || (payload_bytes != 0 && payload == nullptr)) return NDP_T_EINVAL;
   const bool has_body = message_has_body(header.type);
   if ((has_body && payload_bytes != header.payload_bytes) ||
       (!has_body && payload_bytes != 0) || header.flags != 0 ||
       header.payload_bytes > NDP_TRANSPORT_MAX_PAYLOAD) return NDP_T_EBOUNDS;
-  if (has_body && !constant_time_equal(sha256(payload, payload_bytes), header.payload_digest)) {
+  if (has_body && verify_payload &&
+      !constant_time_equal(sha256(payload, payload_bytes), header.payload_digest)) {
     return NDP_T_ECHECKSUM;
   }
 
@@ -226,6 +227,19 @@ int encode_frame(const FrameHeader &header,
   if (out->size() != kHeaderBytes) return NDP_T_EIO;
   if (payload_bytes != 0) w.bytes(payload, payload_bytes);
   return NDP_T_OK;
+}
+
+int encode_frame(const FrameHeader &header,
+                 const std::uint8_t *payload, std::size_t payload_bytes,
+                 std::vector<std::uint8_t> *out) {
+  return encode_frame_impl(header, payload, payload_bytes, out, true);
+}
+
+int encode_frame_prehashed(const FrameHeader &header,
+                           const std::uint8_t *payload,
+                           std::size_t payload_bytes,
+                           std::vector<std::uint8_t> *out) {
+  return encode_frame_impl(header, payload, payload_bytes, out, false);
 }
 
 int decode_frame_view(const std::uint8_t *frame, std::size_t frame_bytes,
@@ -293,6 +307,7 @@ int decode_frame(const std::uint8_t *frame, std::size_t frame_bytes,
   if (rc != NDP_T_OK) return rc;
   out->header = header;
   out->payload.assign(payload, payload + payload_bytes);
+  out->payload_validated = true;
   return NDP_T_OK;
 }
 

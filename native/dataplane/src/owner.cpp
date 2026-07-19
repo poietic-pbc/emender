@@ -366,8 +366,12 @@ Receipt OwnerEngine::apply(const DecodedFrame &frame, std::uint64_t now_unix_ns)
       !constant_time_equal(shard.credited_contribution, h.contribution_digest)) {
     return reject(h, WireReason::no_credit);
   }
-  const Digest observed_digest = sha256(frame.payload.data(), frame.payload.size());
-  if (!constant_time_equal(observed_digest, h.payload_digest)) return reject(h, WireReason::checksum);
+  if (!frame.payload_validated) {
+    const Digest observed_digest = sha256(frame.payload.data(), frame.payload.size());
+    if (!constant_time_equal(observed_digest, h.payload_digest)) {
+      return reject(h, WireReason::checksum);
+    }
+  }
 
   const auto *raw = frame.payload.data();
   const std::size_t elements = shard.accumulator.size() / sizeof(double);
@@ -574,7 +578,8 @@ int ResultAssembler::accept(const DecodedFrame &frame, std::uint64_t now_unix_ns
   if (h.chunk_index != h.shard_id || h.chunk_count != plan_.shard_count ||
       h.payload_offset != offset || h.payload_bytes != bytes ||
       h.shard_bytes != bytes || frame.payload.size() != bytes) return NDP_T_EBOUNDS;
-  if (!constant_time_equal(sha256(frame.payload.data(), frame.payload.size()),
+  if (!frame.payload_validated &&
+      !constant_time_equal(sha256(frame.payload.data(), frame.payload.size()),
                            h.payload_digest)) return NDP_T_ECHECKSUM;
   if (received_[h.shard_id]) {
     return constant_time_equal(digests_[h.shard_id], h.payload_digest)

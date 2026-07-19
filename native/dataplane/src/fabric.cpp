@@ -500,10 +500,6 @@ int FabricEndpoint::drain_cq(fid_cq *cq, bool receive) {
     event.useful_bytes = accept_receive && completed_bytes >= kHeaderBytes
         ? body_bytes(static_cast<const std::uint8_t *>(slot->buffer),
                      completed_bytes) : 0;
-    if (receive && accept_receive) {
-      event.detail = sha256(static_cast<const std::uint8_t *>(slot->buffer),
-                            completed_bytes);
-    }
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (receive) {

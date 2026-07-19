@@ -91,6 +91,10 @@ struct FrameHeader {
 struct DecodedFrame {
   FrameHeader header{};
   std::vector<std::uint8_t> payload;
+  // True only when decode_frame authenticated payload_digest. Pure-engine
+  // callers leave this false so owner/assembler entry points still verify
+  // direct or deliberately corrupted frames independently.
+  bool payload_validated{false};
 };
 
 struct EndpointRecord {
@@ -117,6 +121,10 @@ bool message_has_body(MessageType type) noexcept;
 int encode_frame(const FrameHeader &header,
                  const std::uint8_t *payload, std::size_t payload_bytes,
                  std::vector<std::uint8_t> *out);
+int encode_frame_prehashed(const FrameHeader &header,
+                           const std::uint8_t *payload,
+                           std::size_t payload_bytes,
+                           std::vector<std::uint8_t> *out);
 int decode_frame_view(const std::uint8_t *frame, std::size_t frame_bytes,
                       std::uint64_t payload_max, FrameHeader *header,
                       const std::uint8_t **payload, std::size_t *payload_bytes);

@@ -54,6 +54,7 @@ constexpr std::uint64_t kNode1Weight = UINT64_C(1968000);
 constexpr std::uint64_t kGlobalWeight = UINT64_C(3934080);
 constexpr std::uint32_t kTrainers = 8;
 constexpr std::uint32_t kSlots = 4;
+constexpr std::size_t kDenseWindow = kSlots - 1;
 constexpr std::uint64_t kGiB = UINT64_C(1024) * 1024 * 1024;
 constexpr std::array<std::uint8_t, 8> kControlMagic{{'N', 'D', 'P', 'C', 'T', 'L', '1', 0}};
 
@@ -392,6 +393,15 @@ class NativeTransport {
   }
 
   std::vector<DecodedFrame> receive(int timeout_ms) {
+    if (!pending_frames_.empty()) {
+      std::vector<DecodedFrame> frames;
+      frames.swap(pending_frames_);
+      return frames;
+    }
+    return poll_receive(timeout_ms);
+  }
+
+  std::vector<DecodedFrame> poll_receive(int timeout_ms) {
     ndp_transport_event_v1 events[32]{};
     for (auto &event : events) {
       event.struct_size = sizeof(event);
@@ -442,7 +452,8 @@ class NativeTransport {
 
   void wait_idle(std::uint64_t deadline_unix_ns) {
     while (emender::ndp::unix_time_ns() < deadline_unix_ns) {
-      (void)receive(10);
+      auto frames = poll_receive(10);
+      for (auto &frame : frames) pending_frames_.push_back(std::move(frame));
       const auto current = metrics().value;
       if (current.in_flight_bytes == 0 && current.retained_bytes == 0) return;
     }
@@ -454,6 +465,7 @@ class NativeTransport {
   std::uint64_t peer_id_{0};
   std::uint64_t payload_max_{0};
   std::vector<std::uint8_t> endpoint_record_;
+  std::vector<DecodedFrame> pending_frames_;
 };
 
 PeerRecord exchange_endpoint(int control_fd, std::uint32_t rank,
@@ -649,8 +661,8 @@ std::vector<std::uint8_t> contribution_frame(
   header.chunk_index = shard;
   header.chunk_count = plan.shard_count;
   std::vector<std::uint8_t> encoded;
-  require_code(emender::ndp::encode_frame(header, payload,
-                                          static_cast<std::size_t>(bytes), &encoded),
+  require_code(emender::ndp::encode_frame_prehashed(
+                   header, payload, static_cast<std::size_t>(bytes), &encoded),
                "encode_contribution");
   return encoded;
 }
@@ -695,8 +707,9 @@ std::vector<std::uint8_t> result_frame(const GenerationPlan &plan,
   header.chunk_index = shard;
   header.chunk_count = plan.shard_count;
   std::vector<std::uint8_t> encoded;
-  require_code(emender::ndp::encode_frame(header, payload.data(), payload.size(),
-                                          &encoded), "encode_result");
+  require_code(emender::ndp::encode_frame_prehashed(
+                   header, payload.data(), payload.size(), &encoded),
+               "encode_result");
   return encoded;
 }
 
@@ -829,7 +842,7 @@ class ContributionStage {
   }
 
   void activate_more() {
-    while (active_count_ < 2 && next_owned_ < owned_.size()) {
+    while (active_count_ < kDenseWindow && next_owned_ < owned_.size()) {
       const std::uint32_t shard = owned_[next_owned_++];
       active_[shard] = true;
       ++active_count_;
@@ -931,6 +944,7 @@ class ContributionStage {
       // same receiver-side fault boundary as a provider/data-integrity error;
       // sender-side frame validation remains fail-closed.
       candidate.payload[0] ^= UINT8_C(0xff);
+      candidate.payload_validated = false;
     }
     const auto receipt = owner_->apply(candidate, emender::ndp::unix_time_ns());
     send_control_header(receipt.header);
@@ -1090,7 +1104,7 @@ Sample run_generation(const Options &options, NativeTransport *transport,
     }
   }
 
-  for (const std::uint32_t requested : remote_shards) {
+  const auto send_fetch = [&](std::uint32_t requested) {
     FrameHeader fetch{};
     fetch.type = MessageType::fetch;
     fetch.run_key = plan.run_key;
@@ -1112,50 +1126,43 @@ Sample run_generation(const Options &options, NativeTransport *transport,
     fetch.worker_key = plan.owner_worker_key;
     fetch.incarnation = plan.owner_incarnation;
     transport->send(encode_header(fetch), plan.deadline_unix_ns);
-    bool received_requested = false;
-    while (!received_requested) {
-      for (const auto &frame : transport->receive(10)) {
-        if (frame.header.type == MessageType::fetch) {
-          const auto *payload = owner->result(frame.header.shard_id);
-          if (payload == nullptr) fail("peer fetched a non-owned result shard");
-          auto encoded = result_frame(plan, *payload, frame.header.shard_id,
-                                      ++sequence);
-          redistribution_tx += payload->size();
-          transport->send(encoded, plan.deadline_unix_ns);
-        } else if (frame.header.type == MessageType::result_data) {
-          require_code(assembler.accept(frame, emender::ndp::unix_time_ns()),
-                       "assemble_remote_result");
-          if (frame.header.shard_id == requested) received_requested = true;
-        } else if (frame.header.type == MessageType::goodbye) {
-          handle_generation_goodbye(frame.header);
-        } else {
-          fail("unexpected frame during redistribution: type=" +
-               std::to_string(static_cast<std::uint16_t>(frame.header.type)) +
-               " generation=" + std::to_string(frame.header.generation));
-        }
-      }
+  };
+  std::vector<bool> pending_fetches(plan.shard_count, false);
+  std::size_t next_remote = 0;
+  std::size_t pending_count = 0;
+  while (next_remote != remote_shards.size() || pending_count != 0) {
+    while (next_remote != remote_shards.size() && pending_count < kDenseWindow) {
+      const std::uint32_t requested = remote_shards[next_remote++];
+      send_fetch(requested);
+      pending_fetches[requested] = true;
+      ++pending_count;
     }
-  }
-  while (!assembler.complete()) {
     for (const auto &frame : transport->receive(10)) {
       if (frame.header.type == MessageType::fetch) {
         const auto *payload = owner->result(frame.header.shard_id);
-        if (payload == nullptr) fail("late fetch named a non-owned shard");
+        if (payload == nullptr) fail("peer fetched a non-owned result shard");
         auto encoded = result_frame(plan, *payload, frame.header.shard_id, ++sequence);
         redistribution_tx += payload->size();
         transport->send(encoded, plan.deadline_unix_ns);
       } else if (frame.header.type == MessageType::result_data) {
+        const std::uint32_t received = frame.header.shard_id;
+        if (received >= pending_fetches.size() || !pending_fetches[received]) {
+          fail("result arrived without a bounded outstanding fetch");
+        }
         require_code(assembler.accept(frame, emender::ndp::unix_time_ns()),
-                     "assemble_late_result");
+                     "assemble_remote_result");
+        pending_fetches[received] = false;
+        --pending_count;
       } else if (frame.header.type == MessageType::goodbye) {
         handle_generation_goodbye(frame.header);
       } else {
-        fail("unexpected late redistribution frame: type=" +
+        fail("unexpected frame during redistribution: type=" +
              std::to_string(static_cast<std::uint16_t>(frame.header.type)) +
              " generation=" + std::to_string(frame.header.generation));
       }
     }
   }
+  if (!assembler.complete()) fail("bounded fetch pipeline ended before assembly");
   const auto send_generation_goodbye = [&]() {
     FrameHeader goodbye = generation_signal(plan, MessageType::goodbye, ++sequence);
     transport->send(encode_header(goodbye), plan.deadline_unix_ns);
