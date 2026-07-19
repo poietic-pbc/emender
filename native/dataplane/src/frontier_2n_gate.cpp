@@ -667,20 +667,6 @@ std::vector<std::uint8_t> contribution_frame(
   return encoded;
 }
 
-DecodedFrame local_contribution_frame(const GenerationPlan &plan,
-                                      const Contribution &contribution,
-                                      const double *numerator,
-                                      std::uint32_t shard,
-                                      std::uint64_t message_seq) {
-  const auto encoded = contribution_frame(plan, contribution, numerator,
-                                          shard, message_seq, false, false);
-  DecodedFrame decoded{};
-  require_code(emender::ndp::decode_frame(encoded.data(), encoded.size(),
-                                          plan.payload_max, &decoded),
-               "decode_local_contribution");
-  return decoded;
-}
-
 std::vector<std::uint8_t> result_frame(const GenerationPlan &plan,
                                        const std::vector<std::uint8_t> &payload,
                                        std::uint32_t shard,
@@ -868,11 +854,17 @@ class ContributionStage {
         send_control_header(credit);
         return;
       }
-      DecodedFrame local = local_contribution_frame(
-          plan_, local_contribution(), local_numerator_->data(), shard,
-          ++message_sequence_);
-      const auto receipt = owner_->apply(local, emender::ndp::unix_time_ns());
-      if (receipt.status != WireStatus::applied) fail("local owner application rejected");
+      const std::uint64_t offset =
+          static_cast<std::uint64_t>(shard) * plan_.payload_max;
+      const std::size_t bytes = static_cast<std::size_t>(
+          std::min(plan_.payload_max, plan_.layout_bytes - offset));
+      const auto *payload =
+          reinterpret_cast<const std::uint8_t *>(local_numerator_->data()) +
+          static_cast<std::size_t>(offset);
+      require_code(owner_->apply_local_contribution(
+                       local_contribution(), shard, payload, bytes,
+                       emender::ndp::unix_time_ns()),
+                   "apply_local_contribution");
       ++owner_next_[shard];
     }
     owner_completed(shard);

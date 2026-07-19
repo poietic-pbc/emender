@@ -118,3 +118,6 @@ def test_native_full_layout_uses_bounded_dense_pipeline_and_cached_validation():
     assert "event.detail = sha256" not in fabric
     assert "accept_local_owned" in runner
     assert "ResultAssembler::accept_local_owned" in owner
+    assert "apply_local_contribution" in runner
+    assert "OwnerEngine::apply_local_contribution" in owner
+    assert "decode_local_contribution" not in runner

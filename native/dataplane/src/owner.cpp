@@ -410,6 +410,79 @@ Receipt OwnerEngine::apply(const DecodedFrame &frame, std::uint64_t now_unix_ns)
   return receipt;
 }
 
+int OwnerEngine::apply_local_contribution(
+    const Contribution &contribution, std::uint32_t shard_id,
+    const std::uint8_t *payload, std::size_t payload_bytes,
+    std::uint64_t now_unix_ns) {
+  if (state_ != 1) return NDP_T_ESTATE;
+  if (now_unix_ns >= plan_.deadline_unix_ns) return NDP_T_EDEADLINE;
+  if (payload == nullptr) return NDP_T_EINVAL;
+  const auto found = shards_.find(shard_id);
+  if (found == shards_.end()) return NDP_T_EBOUNDS;
+  auto &shard = found->second;
+  const std::uint64_t offset = static_cast<std::uint64_t>(shard_id) * plan_.payload_max;
+  const std::uint64_t expected_bytes =
+      std::min(plan_.payload_max, plan_.layout_bytes - offset);
+  if (payload_bytes != expected_bytes || expected_bytes % sizeof(double) != 0) {
+    return NDP_T_EBOUNDS;
+  }
+  if (shard.next >= shard.order.size()) return NDP_T_ESTATE;
+  const Contribution &expected = shard.order[shard.next];
+  if (!constant_time_equal(expected.contribution_digest,
+                           contribution.contribution_digest) ||
+      !same_key(expected.worker_key, contribution.worker_key) ||
+      !same_key(expected.incarnation, contribution.incarnation) ||
+      expected.contribution_seq != contribution.contribution_seq ||
+      expected.weight != contribution.weight) {
+    return NDP_T_ESTALE;
+  }
+  if (shard.credit_bytes != expected_bytes ||
+      !constant_time_equal(shard.credited_contribution,
+                           contribution.contribution_digest)) {
+    return NDP_T_ECREDIT;
+  }
+  if (shard.ledger[shard.next].has_value()) return NDP_T_ECONFLICT;
+
+  const std::size_t elements = payload_bytes / sizeof(double);
+  for (std::size_t i = 0; i != elements; ++i) {
+    double value = 0.0;
+    double current = 0.0;
+    std::memcpy(&value, payload + i * sizeof(double), sizeof(double));
+    std::memcpy(&current, shard.accumulator.data() + i * sizeof(double),
+                sizeof(double));
+    if (!std::isfinite(value) || !std::isfinite(current + value)) {
+      return NDP_T_ENONFINITE;
+    }
+  }
+  for (std::size_t i = 0; i != elements; ++i) {
+    double value = 0.0;
+    double current = 0.0;
+    std::memcpy(&value, payload + i * sizeof(double), sizeof(double));
+    std::memcpy(&current, shard.accumulator.data() + i * sizeof(double),
+                sizeof(double));
+    current += value;
+    std::memcpy(shard.accumulator.data() + i * sizeof(double), &current,
+                sizeof(double));
+  }
+
+  LedgerEntry entry{};
+  entry.payload_offset = offset;
+  entry.payload_bytes = payload_bytes;
+  entry.payload_digest = contribution.contribution_digest;
+  entry.weight = contribution.weight;
+  entry.owner_epoch = plan_.owner_epoch;
+  entry.status = WireStatus::applied;
+  entry.reason = WireReason::none;
+  entry.application_ordinal = static_cast<std::uint32_t>(shard.next);
+  shard.ledger[shard.next] = entry;
+  ++shard.next;
+  shard.credit_bytes = 0;
+  shard.credited_contribution.fill(0);
+  metrics_.useful_bytes += payload_bytes;
+  ++metrics_.receipt_count;
+  return NDP_T_OK;
+}
+
 int OwnerEngine::finalize(std::uint64_t now_unix_ns) {
   if (state_ != 1) return NDP_T_ESTATE;
   if (now_unix_ns >= plan_.deadline_unix_ns) return NDP_T_EDEADLINE;

@@ -97,6 +97,11 @@ class OwnerEngine {
   int grant_next(std::uint32_t shard_id, std::uint64_t credit_epoch,
                  FrameHeader *credit);
   Receipt apply(const DecodedFrame &frame, std::uint64_t now_unix_ns);
+  int apply_local_contribution(const Contribution &contribution,
+                               std::uint32_t shard_id,
+                               const std::uint8_t *payload,
+                               std::size_t payload_bytes,
+                               std::uint64_t now_unix_ns);
   int finalize(std::uint64_t now_unix_ns);
   int reassign(std::uint64_t new_owner_epoch);
   void cancel();

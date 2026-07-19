@@ -225,6 +225,66 @@ void test_owner_order_duplicate_corruption_timeout_replay() {
   CHECK(stale_owner.state() == 3);
 }
 
+void test_local_contribution_fast_path() {
+  const auto p = plan();
+  const auto payload_for = [&](const Contribution &c) {
+    return constant_time_equal(c.contribution_digest,
+                               p.accepted[0].contribution_digest)
+        ? doubles({6.0, 12.0}) : doubles({20.0, 28.0});
+  };
+  OwnerEngine owner(p);
+  CHECK(owner.freeze() == NDP_T_OK);
+  FrameHeader credit{};
+  const auto order = contribution_order(p, 0);
+  for (std::size_t index = 0; index != order.size(); ++index) {
+    CHECK(owner.grant_next(0, index + 1, &credit) == NDP_T_OK);
+    const auto payload = payload_for(order[index]);
+    CHECK(owner.apply_local_contribution(
+              order[index], 0, payload.data(), payload.size(), unix_time_ns()) ==
+          NDP_T_OK);
+  }
+  CHECK(owner.finalize(unix_time_ns()) == NDP_T_OK);
+  const auto *result = owner.result(0);
+  CHECK(result != nullptr && result->size() == 16);
+  if (result != nullptr) {
+    double first_value = 0.0;
+    double second_value = 0.0;
+    std::memcpy(&first_value, result->data(), sizeof(double));
+    std::memcpy(&second_value, result->data() + sizeof(double), sizeof(double));
+    CHECK(first_value == 26.0 / 8.0);
+    CHECK(second_value == 40.0 / 8.0);
+  }
+
+  OwnerEngine rejected(p);
+  CHECK(rejected.freeze() == NDP_T_OK);
+  CHECK(rejected.grant_next(0, 1, &credit) == NDP_T_OK);
+  const auto first_payload = payload_for(order[0]);
+  CHECK(rejected.apply_local_contribution(
+            order[1], 0, first_payload.data(), first_payload.size(),
+            unix_time_ns()) == NDP_T_ESTALE);
+  CHECK(rejected.apply_local_contribution(
+            order[0], 0, first_payload.data(), first_payload.size() - 1,
+            unix_time_ns()) == NDP_T_EBOUNDS);
+  const auto nonfinite = doubles({std::numeric_limits<double>::infinity(), 1.0});
+  CHECK(rejected.apply_local_contribution(
+            order[0], 0, nonfinite.data(), nonfinite.size(), unix_time_ns()) ==
+        NDP_T_ENONFINITE);
+  CHECK(rejected.apply_local_contribution(
+            order[0], 0, first_payload.data(), first_payload.size(),
+            unix_time_ns()) == NDP_T_OK);
+  CHECK(rejected.grant_next(0, 2, &credit) == NDP_T_OK);
+  const auto second_payload = payload_for(order[1]);
+  CHECK(rejected.apply_local_contribution(
+            order[1], 0, second_payload.data(), second_payload.size(),
+            unix_time_ns()) == NDP_T_OK);
+  CHECK(rejected.finalize(unix_time_ns()) == NDP_T_OK);
+  const auto *rejected_result = rejected.result(0);
+  CHECK(rejected_result != nullptr);
+  if (rejected_result != nullptr && result != nullptr) {
+    CHECK(*rejected_result == *result);
+  }
+}
+
 void test_replay_and_redistribution_bounds() {
   const std::uint64_t deadline = unix_time_ns() + UINT64_C(10) * 1000 * 1000 * 1000;
   ReplayBuffer replay(1024, deadline);
@@ -318,6 +378,7 @@ void test_replay_and_redistribution_bounds() {
 int main() {
   test_wire_codec();
   test_owner_order_duplicate_corruption_timeout_replay();
+  test_local_contribution_fast_path();
   test_replay_and_redistribution_bounds();
   if (failures != 0) {
     std::cerr << failures << " test assertion(s) failed\n";
