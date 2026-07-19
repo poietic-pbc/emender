@@ -10,6 +10,7 @@ endpoint/incarnation; rank 0 keeps its original persistent endpoint.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 from dataclasses import dataclass
 import hashlib
 import json
@@ -99,10 +100,15 @@ def _recv_exact(stream: socket.socket, size: int) -> bytes:
 
 
 def _read_request(
-    stream: socket.socket, *, expected_phase: int
+    stream: socket.socket, *, expected_phase: int,
+    observed_controller_unix_ns: int | None = None,
 ) -> tuple[int, int, int, EndpointRecord]:
     header = _recv_exact(stream, REQUEST.size)
-    controller_unix_ns = time.time_ns()
+    controller_unix_ns = (
+        time.time_ns()
+        if observed_controller_unix_ns is None
+        else observed_controller_unix_ns
+    )
     magic, version, phase, rank, record_bytes, client_unix_ns = REQUEST.unpack(header)
     if magic != MAGIC or version != 1 or phase != expected_phase:
         raise RuntimeError("native endpoint exchange protocol mismatch")
@@ -143,13 +149,34 @@ def _phase(
     expected_provider: str,
     expected_run_key: bytes | None,
     expected_fence: int | None,
+    observed_controller_clocks: dict[int, int] | None = None,
 ) -> tuple[dict[int, EndpointRecord], int]:
+    if (
+        observed_controller_clocks is not None
+        and set(observed_controller_clocks) != {0, 1}
+    ):
+        raise RuntimeError("initial clock observations are incomplete")
     records: dict[int, EndpointRecord] = {}
     clock_offsets: dict[int, int] = {}
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=2, thread_name_prefix=f"ndp-membership-phase-{phase}"
+    ) as executor:
+        futures = {
+            rank: executor.submit(
+                _read_request,
+                clients[rank],
+                expected_phase=phase,
+                observed_controller_unix_ns=(
+                    None
+                    if observed_controller_clocks is None
+                    else observed_controller_clocks[rank]
+                ),
+            )
+            for rank in (0, 1)
+        }
+        requests = {rank: futures[rank].result() for rank in (0, 1)}
     for expected_rank in (0, 1):
-        rank, client_clock, controller_clock, record = _read_request(
-            clients[expected_rank], expected_phase=phase
-        )
+        rank, client_clock, controller_clock, record = requests[expected_rank]
         if rank != expected_rank or rank in records:
             raise RuntimeError("duplicate or misrouted native endpoint rank")
         if record.provider != expected_provider:
@@ -191,6 +218,7 @@ def main() -> int:
     listener.listen(2)
     listener.settimeout(args.accept_deadline_seconds)
     clients: dict[int, socket.socket] = {}
+    initial_controller_clocks: dict[int, int] = {}
     try:
         while len(clients) != 2:
             stream, _address = listener.accept()
@@ -198,6 +226,7 @@ def main() -> int:
             # The rank is part of the request, so peek just the fixed header and
             # leave it queued for the phase decoder.
             header = stream.recv(REQUEST.size, socket.MSG_PEEK | socket.MSG_WAITALL)
+            observed_controller_clock = time.time_ns()
             if len(header) != REQUEST.size:
                 raise RuntimeError("truncated native endpoint hello")
             magic, version, phase, rank, _bytes, _clock = REQUEST.unpack(header)
@@ -206,6 +235,7 @@ def main() -> int:
             if rank in clients:
                 raise RuntimeError("duplicate native endpoint connection")
             clients[rank] = stream
+            initial_controller_clocks[rank] = observed_controller_clock
 
         initial, initial_skew_ns = _phase(
             clients,
@@ -213,6 +243,7 @@ def main() -> int:
             expected_provider=args.provider,
             expected_run_key=None,
             expected_fence=None,
+            observed_controller_clocks=initial_controller_clocks,
         )
         phases = [initial]
         skews = [initial_skew_ns]
@@ -244,6 +275,7 @@ def main() -> int:
             "phase_count": len(phases),
             "two_endpoints": True,
             "clock_attestation": "client_minus_controller_offset_delta",
+            "clock_sample": "first_observed_initial_hello",
             "max_clock_skew_ms": max(skews) / 1_000_000,
             "phases": [
                 {

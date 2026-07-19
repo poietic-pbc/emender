@@ -1,0 +1,49 @@
+-- Cray Programming Environment 2.7.33 C
+-- Cray Programming Environment 2.7.33 CXX
+-- Configuring done (0.2s)
+-- Generating done (0.3s)
+-- Build files have been written to: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane-build
+[ 10%] Built target emender_ndp
+[ 30%] Built target emender_ndp_core
+[ 40%] Built target ndp_local_abi_test
+[ 60%] Built target ndp_protocol_owner_test
+[ 70%] Built target ndp_fabric_multiprocess_test
+[ 70%] Built target emender_ndp_transport
+[ 95%] Built target ndp_transport_c_abi_test
+[ 95%] Built target ndp_cxi_service
+[100%] Built target ndp_frontier_2n_gate
+Internal ctest changing into directory: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane-build
+Test project /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane-build
+    Start 1: ndp_local_abi_test
+1/8 Test #1: ndp_local_abi_test .....................   Passed    0.03 sec
+    Start 2: ndp_protocol_owner_test
+2/8 Test #2: ndp_protocol_owner_test ................   Passed    0.02 sec
+    Start 3: ndp_fabric_multiprocess_test
+3/8 Test #3: ndp_fabric_multiprocess_test ...........   Passed    0.33 sec
+    Start 4: ndp_transport_c_abi_test
+4/8 Test #4: ndp_transport_c_abi_test ...............   Passed    0.21 sec
+    Start 5: ndp_production_provider_fails_closed
+5/8 Test #5: ndp_production_provider_fails_closed ...   Passed    0.03 sec
+    Start 6: ndp_test_provider_explicit
+6/8 Test #6: ndp_test_provider_explicit .............   Passed    0.11 sec
+    Start 7: ndp_test_mode_cannot_select_cxi
+7/8 Test #7: ndp_test_mode_cannot_select_cxi ........   Passed    0.03 sec
+    Start 8: ndp_production_env_cannot_weaken
+8/8 Test #8: ndp_production_env_cannot_weaken .......   Passed    0.03 sec
+
+100% tests passed, 0 tests failed out of 8
+
+Total Test time (real) =   0.80 sec
+-- Install configuration: "RelWithDebInfo"
+-- Up-to-date: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/lib64/libemender_ndp.so.1.0.0
+-- Up-to-date: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/lib64/libemender_ndp.so.1
+-- Up-to-date: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/lib64/libemender_ndp.so
+-- Up-to-date: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/include/emender/ndp.h
+-- Up-to-date: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/lib64/libemender_ndp_transport.so.1.0.0
+-- Up-to-date: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/lib64/libemender_ndp_transport.so.1
+-- Up-to-date: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/lib64/libemender_ndp_transport.so
+-- Up-to-date: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/bin/ndp_cxi_service
+-- Up-to-date: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/bin/ndp_frontier_2n_gate
+-- Up-to-date: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/include/emender/ndp_transport.h
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+{"build_manifest":"/lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/native-artifacts.json","status":"recorded"}

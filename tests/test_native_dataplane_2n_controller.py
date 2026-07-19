@@ -110,3 +110,70 @@ def test_clock_attestation_measures_offset_not_staggered_launch_time():
     for pair in pairs:
         pair[0].close()
         pair[1].close()
+
+
+def test_clock_attestation_uses_first_observed_hello_not_delayed_phase_read():
+    module = _module()
+    records = {rank: decode_endpoint_record(_endpoint(rank)) for rank in (0, 1)}
+    pairs = [socket.socketpair(), socket.socketpair()]
+    observed_controller_clocks: dict[int, int] = {}
+    for rank in (0, 1):
+        client_clock = time.time_ns()
+        request = module.REQUEST.pack(
+            module.MAGIC, 1, 0, rank, len(records[rank].encoded), client_clock
+        ) + records[rank].encoded
+        pairs[rank][1].sendall(request)
+        observed_controller_clocks[rank] = time.time_ns()
+        if rank == 0:
+            time.sleep(0.3)
+
+    records_by_rank, clock_offset_delta_ns = module._phase(
+        {0: pairs[0][0], 1: pairs[1][0]}, phase=0,
+        expected_provider="cxi", expected_run_key=None, expected_fence=None,
+        observed_controller_clocks=observed_controller_clocks,
+    )
+    assert set(records_by_rank) == {0, 1}
+    assert clock_offset_delta_ns < 50_000_000
+    for rank in (0, 1):
+        raw = module._recv_exact(pairs[rank][1], module.REPLY_PREFIX.size)
+        reply = module.REPLY_PREFIX.unpack(raw)
+        module._recv_exact(pairs[rank][1], reply[-1])
+    for pair in pairs:
+        pair[0].close()
+        pair[1].close()
+
+
+def test_clock_attestation_samples_persistent_clients_independently():
+    module = _module()
+    records = {rank: decode_endpoint_record(_endpoint(rank)) for rank in (0, 1)}
+    result: dict[str, object] = {}
+    pairs = [socket.socketpair(), socket.socketpair()]
+    thread = threading.Thread(
+        target=lambda: result.update(
+            parsed=module._phase(
+                {0: pairs[0][0], 1: pairs[1][0]}, phase=1,
+                expected_provider="cxi", expected_run_key=records[0].run_key,
+                expected_fence=records[0].fence_epoch,
+            )
+        )
+    )
+    thread.start()
+    for rank in (1, 0):
+        client_clock = time.time_ns()
+        request = module.REQUEST.pack(
+            module.MAGIC, 1, 1, rank, len(records[rank].encoded), client_clock
+        ) + records[rank].encoded
+        pairs[rank][1].sendall(request)
+        if rank == 1:
+            time.sleep(0.3)
+    for rank in (0, 1):
+        raw = module._recv_exact(pairs[rank][1], module.REPLY_PREFIX.size)
+        reply = module.REPLY_PREFIX.unpack(raw)
+        module._recv_exact(pairs[rank][1], reply[-1])
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    _, clock_offset_delta_ns = result["parsed"]
+    assert clock_offset_delta_ns < 50_000_000
+    for pair in pairs:
+        pair[0].close()
+        pair[1].close()
