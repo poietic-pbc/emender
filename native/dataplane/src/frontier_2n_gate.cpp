@@ -54,7 +54,7 @@ constexpr std::uint64_t kNode1Weight = UINT64_C(1968000);
 constexpr std::uint64_t kGlobalWeight = UINT64_C(3934080);
 constexpr std::uint32_t kTrainers = 8;
 constexpr std::uint32_t kSlots = 4;
-constexpr std::size_t kDenseWindow = kSlots - 1;
+constexpr std::size_t kDenseWindow = kSlots;
 constexpr std::uint64_t kGiB = UINT64_C(1024) * 1024 * 1024;
 constexpr std::array<std::uint8_t, 8> kControlMagic{{'N', 'D', 'P', 'C', 'T', 'L', '1', 0}};
 
@@ -1092,13 +1092,9 @@ Sample run_generation(const Options &options, NativeTransport *transport,
     if (owners[shard] == options.rank) {
       const auto *payload = owner->result(shard);
       if (payload == nullptr) fail("owned result shard is missing");
-      const auto encoded = result_frame(plan, *payload, shard, ++sequence);
-      DecodedFrame decoded{};
-      require_code(emender::ndp::decode_frame(encoded.data(), encoded.size(),
-                                              plan.payload_max, &decoded),
-                   "decode_local_result");
-      require_code(assembler.accept(decoded, emender::ndp::unix_time_ns()),
-                   "assemble_local_result");
+      require_code(assembler.accept_local_owned(
+                       shard, *payload, emender::ndp::unix_time_ns()),
+                   "assemble_local_owned_result");
     } else {
       remote_shards.push_back(shard);
     }

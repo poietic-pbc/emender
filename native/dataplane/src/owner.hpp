@@ -160,6 +160,9 @@ class ResultAssembler {
  public:
   explicit ResultAssembler(GenerationPlan plan);
   int accept(const DecodedFrame &frame, std::uint64_t now_unix_ns);
+  int accept_local_owned(std::uint32_t shard_id,
+                         const std::vector<std::uint8_t> &payload,
+                         std::uint64_t now_unix_ns);
   bool complete() const noexcept;
   const std::vector<std::uint8_t> &aggregate() const noexcept { return aggregate_; }
   std::uint64_t released_bytes() const noexcept { return released_bytes_; }

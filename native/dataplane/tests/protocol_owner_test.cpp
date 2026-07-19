@@ -284,6 +284,23 @@ void test_replay_and_redistribution_bounds() {
   assembler.release();
   CHECK(assembler.released_bytes() == 32);
 
+  // A result that is already owned locally enters the bounded assembler
+  // without a synthetic wire encode/decode loop. It is accepted once and has
+  // exactly the same aggregate layout as remote authenticated result frames.
+  ResultAssembler local_assembler(result_plan);
+  CHECK(local_assembler.accept_local_owned(0, first_payload, unix_time_ns()) ==
+        NDP_T_OK);
+  CHECK(local_assembler.accept_local_owned(0, first_payload, unix_time_ns()) ==
+        NDP_T_ECONFLICT);
+  CHECK(!local_assembler.complete());
+  CHECK(local_assembler.accept_local_owned(1, second_payload, unix_time_ns()) ==
+        NDP_T_OK);
+  CHECK(local_assembler.complete());
+  CHECK(std::equal(first_payload.begin(), first_payload.end(),
+                   local_assembler.aggregate().begin()));
+  local_assembler.release();
+  CHECK(local_assembler.released_bytes() == 32);
+
   const auto map1 = deterministic_owner_map(key(1), 7, 9, 2, 1, 3, 17);
   const auto map2 = deterministic_owner_map(key(1), 7, 9, 2, 3, 3, 17);
   const auto map1_repeat = deterministic_owner_map(key(1), 7, 9, 2, 1, 3, 17);

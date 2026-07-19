@@ -12,6 +12,7 @@ SUBMIT = ROOT / "scripts/frontier/submit_native_dataplane_2n_gate.sh"
 FABRIC = ROOT / "native/dataplane/src/fabric.cpp"
 RUNNER = ROOT / "native/dataplane/src/frontier_2n_gate.cpp"
 PROTOCOL = ROOT / "native/dataplane/src/protocol.cpp"
+OWNER = ROOT / "native/dataplane/src/owner.cpp"
 JOB_5031115 = ROOT / "reports/frontier/native-dataplane/5031115"
 
 
@@ -102,9 +103,10 @@ def test_exact_validator_accepts_rank_specific_admission_below_bound():
 def test_native_full_layout_uses_bounded_dense_pipeline_and_cached_validation():
     runner = RUNNER.read_text(encoding="utf-8")
     protocol = PROTOCOL.read_text(encoding="utf-8")
+    owner = OWNER.read_text(encoding="utf-8")
     fabric = FABRIC.read_text(encoding="utf-8")
     assert "active_count_ < kDenseWindow" in runner
-    assert "constexpr std::size_t kDenseWindow = kSlots - 1" in runner
+    assert "constexpr std::size_t kDenseWindow = kSlots" in runner
     assert "pending_fetches" in runner
     assert "pending_frames_" in runner
     assert "poll_receive" in runner
@@ -114,3 +116,5 @@ def test_native_full_layout_uses_bounded_dense_pipeline_and_cached_validation():
     assert "decode_frame_view_header_only" in fabric
     assert "payload_validated" in protocol
     assert "event.detail = sha256" not in fabric
+    assert "accept_local_owned" in runner
+    assert "ResultAssembler::accept_local_owned" in owner

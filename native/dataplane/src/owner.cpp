@@ -591,6 +591,25 @@ int ResultAssembler::accept(const DecodedFrame &frame, std::uint64_t now_unix_ns
   return NDP_T_OK;
 }
 
+int ResultAssembler::accept_local_owned(
+    std::uint32_t shard_id, const std::vector<std::uint8_t> &payload,
+    std::uint64_t now_unix_ns) {
+  if (now_unix_ns >= deadline_unix_ns_) return NDP_T_EDEADLINE;
+  if (shard_id >= received_.size() ||
+      std::find(plan_.assigned_shards.begin(), plan_.assigned_shards.end(),
+                shard_id) == plan_.assigned_shards.end()) {
+    return NDP_T_EBOUNDS;
+  }
+  const std::uint64_t offset = static_cast<std::uint64_t>(shard_id) * payload_max_;
+  const std::uint64_t bytes = std::min(payload_max_, aggregate_.size() - offset);
+  if (payload.size() != bytes) return NDP_T_EBOUNDS;
+  if (received_[shard_id]) return NDP_T_ECONFLICT;
+  std::copy(payload.begin(), payload.end(),
+            aggregate_.begin() + static_cast<std::ptrdiff_t>(offset));
+  received_[shard_id] = true;
+  return NDP_T_OK;
+}
+
 bool ResultAssembler::complete() const noexcept {
   return std::all_of(received_.begin(), received_.end(), [](bool value) { return value; });
 }
