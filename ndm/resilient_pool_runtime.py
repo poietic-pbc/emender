@@ -200,6 +200,9 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
         self.snapshots: dict[tuple[int, int], dict[str, object]] = {}
         self.admissions: dict[tuple[int, int], GenerationAdmission] = {}
         self.result_roots: dict[tuple[int, int], dict[str, dict[str, object]]] = {}
+        self.route_readiness: dict[
+            tuple[int, int, tuple[str, str]], dict[str, tuple[str, str]]
+        ] = {}
         self._lock = threading.RLock()
         super().__init__(address, _ControlHandler)
 
@@ -218,6 +221,8 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
                 return self._contribute(request, payload)
             if op == "close":
                 return self._close(request)
+            if op == "route_ready":
+                return self._route_ready(request)
             if op == "result_root":
                 return self._result_root(request)
             if op == "expire":
@@ -370,6 +375,52 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
             self.membership.drain(worker_id, incarnation)
         return {"status": "DRAINING", "worker_id": worker_id}
 
+    def _route_ready(self, request: Mapping[str, object]) -> dict[str, object]:
+        """Release one native peer pair only after both routes are installed.
+
+        A libfabric endpoint can receive before Python has installed the
+        current-fence address-vector entry.  Such frames are correctly
+        rejected, but an initial credit rejection can strand an otherwise
+        healthy exact transfer.  This is deliberately a reciprocal pairwise
+        control-plane rendezvous, not a launched-rank or accepted-set barrier:
+        unrelated peers never participate and can progress independently.
+        """
+        generation, attempt = int(request["generation"]), int(request["attempt"])
+        admission = self.admissions[(generation, attempt)]
+        close = admission.close_result
+        if close is None or close.status != "commit_ready":
+            raise RuntimeError("route readiness cannot precede the frozen accepted set")
+        worker_id = str(request["worker_id"])
+        incarnation = str(request["incarnation"])
+        peer_worker_id = str(request["peer_worker_id"])
+        peer_incarnation = str(request["peer_incarnation"])
+        if worker_id == peer_worker_id:
+            raise ValueError("native route readiness requires a remote peer")
+        accepted = {(item.worker_id, item.incarnation)
+                    for item in close.frozen_identities}
+        if ((worker_id, incarnation) not in accepted
+                or (peer_worker_id, peer_incarnation) not in accepted):
+            raise ValueError("route readiness reporter is outside the frozen accepted set")
+        pair = tuple(sorted((worker_id, peer_worker_id)))
+        reports = self.route_readiness.setdefault(
+            (generation, attempt, pair), {})
+        report = (incarnation, peer_incarnation)
+        prior = reports.get(worker_id)
+        if prior is not None and prior != report:
+            raise ValueError("conflicting native route readiness replay")
+        reports[worker_id] = report
+        if set(reports) != set(pair):
+            return {"status": "waiting", "workers": sorted(reports),
+                    "required": list(pair)}
+        # Both directional reports must name the same exact frozen
+        # incarnations; this prevents a superseded endpoint from releasing a
+        # current route.
+        left, right = pair
+        if (reports[left] != (dict(accepted)[left], dict(accepted)[right])
+                or reports[right] != (dict(accepted)[right], dict(accepted)[left])):
+            raise ValueError("native route readiness incarnation mismatch")
+        return {"status": "ready", "workers": list(pair)}
+
     def _result_root(self, request: Mapping[str, object]) -> dict[str, object]:
         generation, attempt = int(request["generation"]), int(request["attempt"])
         admission = self.admissions[(generation, attempt)]
@@ -484,6 +535,23 @@ class PoolControlClient:
                 return close
             time.sleep(.01)
         raise TimeoutError("deterministic freeze deadline expired")
+
+    def await_peer_route_ready(self, *, generation: int, attempt: int,
+                               worker_id: str, incarnation: str,
+                               peer_worker_id: str, peer_incarnation: str,
+                               deadline: float) -> dict[str, object]:
+        """Wait for reciprocal installation of one frozen native peer pair."""
+        last: dict[str, object] = {"status": "waiting"}
+        while time.monotonic() < deadline:
+            last = self._rpc(
+                "route_ready", generation=generation, attempt=attempt,
+                worker_id=worker_id, incarnation=incarnation,
+                peer_worker_id=peer_worker_id,
+                peer_incarnation=peer_incarnation)
+            if last.get("status") == "ready":
+                return last
+            time.sleep(.01)
+        raise TimeoutError(f"native peer route-readiness deadline expired: {last}")
 
     def drain(self, worker_id: str, incarnation: str) -> dict[str, object]:
         return self._rpc("expire", worker_id=worker_id, incarnation=incarnation)

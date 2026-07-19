@@ -651,10 +651,28 @@ def _native_manager(args) -> int:
                 endpoints = tuple(_owner_endpoint_from_snapshot(peer)
                                   for peer in snapshot["peers"]
                                   if str(peer["worker_id"]) in workers)
-                session.install_routes(endpoints)
                 peer_id = next(item for item in workers if item != f"node-{node}")
                 peer_endpoint = next(item for item in endpoints
                                      if item.worker_id == peer_id)
+                # A bound fabric endpoint can receive before its current-fence
+                # AV route exists.  Reciprocally confirm this one peer pair
+                # after both sides install routes, so the first exact credit
+                # cannot be rejected in ROUTE_IDLE.  This metadata rendezvous
+                # is pairwise; it is not a fixed-world/all-rank collective.
+                route_ready_started = time.monotonic()
+                session.install_routes(endpoints)
+                route_ready = pool_client.await_peer_route_ready(
+                    generation=generation, attempt=1,
+                    worker_id=f"node-{node}", incarnation=incarnation,
+                    peer_worker_id=peer_id,
+                    peer_incarnation=peer_endpoint.incarnation,
+                    deadline=min(native_deadline, time.monotonic()
+                                 + pool_config.slo.freeze_s))
+                _stage_telemetry(
+                    bulk, identity, generation, "native_route_readiness",
+                    route_ready_started, pool_config.slo.freeze_s,
+                    peer_id=peer_id, participants=route_ready["workers"],
+                    pairwise=True, python_dense_socket_bytes=0)
                 weights = {str(key): int(value) for key, value in
                            dict(close["accepted_weights"]).items()}
                 roots = {str(key): bytes.fromhex(str(value)) for key, value in

@@ -75,6 +75,19 @@ def test_owner_endpoint_snapshot_filters_control_only_lease_metadata():
     assert not hasattr(endpoint, "lease_expiry")
 
 
+def test_native_owner_credits_follow_reciprocal_pair_route_readiness():
+    source = ROLE.read_text()
+    manager = source[source.index("def _native_manager(args)"):
+                     source.index("def manager(args)")]
+    install = manager.index("session.install_routes(endpoints)")
+    reciprocal_ready = manager.index("pool_client.await_peer_route_ready(")
+    exchange = manager.index("_native_peer_exchange(")
+
+    assert install < reciprocal_ready < exchange
+    assert '"native_route_readiness"' in manager
+    assert "pairwise=True" in manager
+
+
 def test_import_liveness_does_not_refresh_runtime_import_progress_deadline():
     text = ROLE.read_text()
     bootstrap = text[text.index("def _role_import_heartbeat"):

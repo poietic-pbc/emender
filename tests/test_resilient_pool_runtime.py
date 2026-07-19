@@ -127,6 +127,35 @@ def test_ready_token_floor_distributed_owner_loss_and_late_join(tmp_path):
             "n0": "payload-0", "n1": "payload-1"}
         assert close["accepted_weights"] == {"n0": 3, "n1": 7}
 
+        # Native endpoints may begin receiving as soon as the provider is
+        # bound, but frames are rejected until the frozen peer route is
+        # installed.  No reporter may leave this fenced metadata barrier
+        # until every accepted worker has installed every remote route.
+        route_ready = {}
+        route_release_order = []
+        first_reported = threading.Event()
+
+        def await_routes(index):
+            if index == 0:
+                first_reported.set()
+            route_ready[index] = clients[index].await_peer_route_ready(
+                generation=4, attempt=0, worker_id=f"n{index}",
+                incarnation=f"i{index}", peer_worker_id=f"n{1 - index}",
+                peer_incarnation=f"i{1 - index}",
+                deadline=time.monotonic() + 2)
+            route_release_order.append(index)
+
+        first = threading.Thread(target=await_routes, args=(0,))
+        first.start()
+        assert first_reported.wait(1)
+        time.sleep(.05)
+        assert first.is_alive() and route_release_order == []
+        second = threading.Thread(target=await_routes, args=(1,))
+        second.start()
+        first.join(); second.join()
+        assert {value["status"] for value in route_ready.values()} == {"ready"}
+        assert route_ready[0]["workers"] == ["n0", "n1"]
+
         layout = TensorLayout.from_state(_state(0), max_chunk_bytes=16)
         contributions = {"n0:i0:9": layout.pack(_state(1)),
                          "n1:i1:9": layout.pack(_state(5))}
