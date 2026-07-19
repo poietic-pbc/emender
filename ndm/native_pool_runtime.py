@@ -16,6 +16,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import socket
+import struct
 import time
 from typing import Mapping, Sequence
 
@@ -42,6 +44,104 @@ class NativeServiceTelemetry:
     local: Mapping[str, int]
     transport: Mapping[str, object]
     terminal_reason: str
+
+
+@dataclass(frozen=True)
+class NativeTrainerContribution:
+    """Producer-owned dense memfd received without copying its payload."""
+    trainer_id: str
+    incarnation: str
+    submission_seq: int
+    generation: int
+    weight: int
+    length: int
+    sha256: str
+    fd: int
+
+    def close(self) -> None:
+        os.close(self.fd)
+
+
+class NativeTrainerHandoff:
+    """Metadata-only seqpacket boundary for producer-direct sealed memfds."""
+    MAX_METADATA = 4096
+
+    def __init__(self, sock: socket.socket, *, run_id: str, fence_epoch: int,
+                 generation: int, expected_bytes: int):
+        if expected_bytes <= 0:
+            raise ValueError("expected_bytes must be positive")
+        self.sock, self.run_id = sock, run_id
+        self.fence_epoch, self.generation = fence_epoch, generation
+        self.expected_bytes = expected_bytes
+
+    @classmethod
+    def listen(cls, path: str | Path, **identity) -> "NativeTrainerHandoff":
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            target.unlink()
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        sock.bind(str(target)); os.chmod(target, 0o600); sock.listen(16)
+        return cls(sock, **identity)
+
+    @classmethod
+    def connect(cls, path: str | Path, **identity) -> "NativeTrainerHandoff":
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        sock.connect(str(path))
+        return cls(sock, **identity)
+
+    def send_memfd(self, fd: int, *, trainer_id: str, incarnation: str,
+                   submission_seq: int, weight: int, sha256: str) -> None:
+        import fcntl
+        required = fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_WRITE
+        if (os.fstat(fd).st_size != self.expected_bytes
+                or fcntl.fcntl(fd, fcntl.F_GET_SEALS) & required != required):
+            raise ValueError("trainer memfd must have exact extent and immutable seals")
+        value = {"run_id": self.run_id, "fence_epoch": self.fence_epoch,
+                 "generation": self.generation, "trainer_id": trainer_id,
+                 "incarnation": incarnation, "submission_seq": submission_seq,
+                 "weight": weight, "length": self.expected_bytes, "sha256": sha256}
+        encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+        if (not trainer_id or not incarnation or submission_seq < 0 or weight <= 0
+                or len(sha256) != 64 or len(encoded) > self.MAX_METADATA):
+            raise ValueError("invalid trainer handoff identity")
+        self.sock.sendmsg([encoded], [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
+                                      struct.pack("i", fd))])
+
+    def receive_memfd(self) -> NativeTrainerContribution:
+        conn, _ = self.sock.accept()
+        try:
+            encoded, ancillary, flags, _ = conn.recvmsg(
+                self.MAX_METADATA, socket.CMSG_SPACE(struct.calcsize("i")))
+            if flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC):
+                raise ValueError("truncated trainer handoff")
+            fds = [struct.unpack("i", data[:4])[0] for level, kind, data in ancillary
+                   if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS
+                   and len(data) >= 4]
+            if len(fds) != 1:
+                for item in fds: os.close(item)
+                raise ValueError("trainer handoff requires exactly one memfd")
+            fd = fds[0]
+            try:
+                value = json.loads(encoded)
+                if (value.get("run_id") != self.run_id
+                        or int(value.get("fence_epoch", -1)) != self.fence_epoch
+                        or int(value.get("generation", -1)) != self.generation
+                        or int(value.get("length", -1)) != self.expected_bytes
+                        or os.fstat(fd).st_size != self.expected_bytes
+                        or int(value.get("weight", 0)) <= 0):
+                    raise ValueError("trainer handoff identity/extent mismatch")
+                return NativeTrainerContribution(
+                    str(value["trainer_id"]), str(value["incarnation"]),
+                    int(value["submission_seq"]), self.generation,
+                    int(value["weight"]), self.expected_bytes, str(value["sha256"]), fd)
+            except BaseException:
+                os.close(fd); raise
+        finally:
+            conn.close()
+
+    def close(self) -> None:
+        self.sock.close()
 
 
 def _artifact_paths(manifest_path: str | Path) -> dict[str, Path]:
@@ -327,6 +427,9 @@ class NativeManagerSession:
         if any(publication.get(key) != value
                for key, value in self._checkpoint_identity.items()):
             raise RuntimeError("native commit publication result identity mismatch")
+        # This is a state transition, not an idempotent transport receipt.
+        # Issue it exactly once after the durable CAS evidence has passed every
+        # run/fence/generation/attempt/layout/base/result/weight check above.
         self.local.control(Command.COMMIT, deadline_s=deadline_s).close()
         self._generation_installed = self._frozen = self._checkpoint_proposed = False
         self._checkpoint_identity = None
@@ -404,4 +507,5 @@ class NativeManagerSession:
         self.close("exception" if type_ is not None else "normal")
 
 
-__all__ = ["NativeManagerSession", "NativeServiceTelemetry", "PYTHON_TCP_DEBUG"]
+__all__ = ["NativeManagerSession", "NativeServiceTelemetry",
+           "NativeTrainerContribution", "NativeTrainerHandoff", "PYTHON_TCP_DEBUG"]
