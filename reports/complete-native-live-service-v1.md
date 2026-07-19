@@ -1,7 +1,7 @@
 # Persistent native live service v1: recovery audit and bounded implementation
 
-**Task:** `complete-native-live-service-v1`  
-**Date:** 2026-07-19  
+**Task:** `complete-native-live-service-v1`
+**Date:** 2026-07-19
 **Authority:** Resilient DiLoCo Compute Pool v1 and Native resilient DiLoCo
 data plane v1. No Slurm command or job was submitted.
 
