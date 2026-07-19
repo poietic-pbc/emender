@@ -6,7 +6,11 @@ SOURCE_DIR=${SOURCE_DIR:-$REPO/native}
 BUILD_DIR=${BUILD_DIR:-$REPO/build/native-resilient-dataplane-build}
 INSTALL_DIR=${INSTALL_DIR:-$REPO/build/native-resilient-dataplane}
 BUILD_TYPE=${BUILD_TYPE:-RelWithDebInfo}
-PYTHON_BIN=${PYTHON_BIN:-python3.11}
+if [[ -z "${PYTHON_BIN:-}" ]]; then
+  # shellcheck source=activate_emender_frontier.sh
+  source "$REPO/scripts/frontier/activate_emender_frontier.sh"
+fi
+: "${PYTHON_BIN:?canonical Frontier activation did not select PYTHON_BIN}"
 
 cmake -S "$SOURCE_DIR" -B "$BUILD_DIR" \
   -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \

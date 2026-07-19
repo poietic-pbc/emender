@@ -4,6 +4,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_canonical_frontier_environment_loads_modules_and_approved_python():
+    activation = (ROOT / "scripts/frontier/activate_emender_frontier.sh").read_text()
+    build = (ROOT / "scripts/frontier/build_native_resilient_dataplane.sh").read_text()
+
+    assert "Source this file" in activation
+    assert "frontier_load_default_modules" in activation
+    assert "frontier_activate_emender_conda_env" in activation
+    assert ".envs/olcf-rocm711-torch210-py312" in activation
+    assert 'export EMENDER_PYTHON="${EMENDER_CONDA_ENV}/bin/python"' in activation
+    assert 'export PYTHON_BIN="$EMENDER_PYTHON"' in activation
+    assert "sys.version_info < (3, 12)" in activation
+    assert "--git-common-dir" in activation
+    assert "activate_emender_frontier.sh" in build
+    assert "python3.11" not in build
+
+
 def test_frontier_runtime_helper_loads_olcf_plugin_after_rocm():
     helper = (ROOT / "scripts/frontier/frontier_runtime_env.sh").read_text()
 
