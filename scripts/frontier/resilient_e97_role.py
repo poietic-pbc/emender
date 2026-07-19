@@ -248,6 +248,30 @@ def _terminal_native_checkpoint(run: Path, args, *, completed: int,
     return checkpoint
 
 
+def _wait_for_native_apply_lane(control: Path, args, *, generation: int,
+                                rank: int, result_root: str,
+                                deadline: float) -> dict[str, object] | None:
+    """Serialize readers of the one shared node aggregate by local rank.
+
+    The service intentionally exposes one read-only result instead of eight
+    trainer-sized copies.  Full E97 showed that letting all eight trainers
+    stream that 5.5 GiB mapping concurrently turns a roughly 2.5-second apply
+    into an apply-deadline failure.  The preceding rank's authenticated apply
+    marker is a node-local, metadata-only credit: every trainer still maps and
+    applies the canonical aggregate, but only one reader per node is active.
+    """
+    if rank <= 0:
+        return None
+    return wait_metadata(
+        control / f"native-applied-{generation:08d}-{rank - 1:02d}.json",
+        deadline=deadline,
+        expected={"run_id": args.run_id,
+                  "fence_epoch": _fence_epoch(args),
+                  "generation": generation,
+                  "result_root": result_root,
+                  "rank": rank - 1})
+
+
 def _liveness_heartbeat(bulk: Path, identity: str, interval_s: float = 5.0):
     """Refresh liveness without disguising stalled generation progress."""
     state = bulk / "supervision" / f"{identity}.liveness.json"
@@ -1455,11 +1479,22 @@ def trainer(args) -> int:
         # window for every trainer; liveness alone must not disguise progress.
         heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
                   stage="peer_apply")
+        trainer_apply_started = time.monotonic()
+        if native:
+            _wait_for_native_apply_lane(
+                control, args, generation=generation, rank=rank,
+                result_root=str(manifest["result_root"]),
+                deadline=trainer_apply_started + PoolStageSLO.production().apply_s)
         if not native:
             spool.release_trainer(fence, rank)
         state = apply_delta(state, aggregate, eta_outer=args.eta_outer, in_place=True)
         if native:
             native_context.__exit__(None, None, None)
+            _stage_telemetry(
+                bulk, identity, generation, "native_trainer_apply",
+                trainer_apply_started, PoolStageSLO.production().apply_s,
+                lane_rank=rank, result_bytes=int(manifest["result_bytes"]),
+                python_dense_socket_bytes=0)
         accepted_token_clock += int(manifest["weight"])
         step += args.local_steps; losses.append(loss)
         completed = generation + 1

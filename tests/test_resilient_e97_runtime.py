@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import socket
+import threading
 import time
 from types import SimpleNamespace
 
@@ -127,6 +128,42 @@ def test_terminal_native_follower_reuses_fenced_authoritative_checkpoint(tmp_pat
     with pytest.raises(ValueError, match="identity"):
         role._terminal_native_checkpoint(
             tmp_path, args, completed=1, deadline=time.monotonic() + 1)
+
+
+def test_native_trainer_apply_lanes_are_serialized_by_local_rank(tmp_path):
+    from scripts.frontier import resilient_e97_role as role
+
+    control = tmp_path / "control"
+    control.mkdir()
+    args = SimpleNamespace(run_id="run-a", coordinator_epoch=4)
+    observed = {}
+
+    def wait_for_rank_one():
+        observed["marker"] = role._wait_for_native_apply_lane(
+            control, args, generation=2, rank=1,
+            result_root="ab" * 32, deadline=time.monotonic() + 2)
+
+    waiter = threading.Thread(target=wait_for_rank_one)
+    waiter.start()
+    time.sleep(.05)
+    assert waiter.is_alive(), "rank one must not contend with rank zero's result view"
+    role.atomic_metadata(control / "native-applied-00000002-00.json", {
+        "run_id": "run-a", "fence_epoch": 4, "generation": 2,
+        "result_root": "ab" * 32, "rank": 0,
+    })
+    waiter.join(2)
+
+    assert not waiter.is_alive()
+    assert observed["marker"]["rank"] == 0
+    assert role._wait_for_native_apply_lane(
+        control, args, generation=2, rank=0,
+        result_root="ab" * 32, deadline=time.monotonic() + .1) is None
+    trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args)"):]
+    visible = trainer.index("manifest, aggregate = native_context.__enter__()")
+    lane = trainer.index("_wait_for_native_apply_lane(", visible)
+    apply = trainer.index("state = apply_delta(", lane)
+    assert visible < lane < apply
+    assert "PoolStageSLO.production().apply_s" in trainer[lane:apply]
 
 
 def test_import_liveness_does_not_refresh_runtime_import_progress_deadline():
