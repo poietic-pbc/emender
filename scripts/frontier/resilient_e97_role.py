@@ -211,6 +211,43 @@ def _publish_role_recovery(control: Path, identity: str, args, generation: int,
         "coordinator_epoch": _fence_epoch(args), "generation": generation, **extra})
 
 
+def _terminal_native_checkpoint(run: Path, args, *, completed: int,
+                                deadline: float) -> Path:
+    """Resolve the already-fenced final checkpoint for a disposable follower.
+
+    Intermediate generations still require identity-specific node-local
+    recovery checkpoints.  Once the terminal generation is atomically
+    published, however, writing fifteen additional 7.9 GiB copies only delays
+    apply acknowledgement and cannot improve recovery: the fenced handoff is
+    the authoritative continuation state.
+    """
+    latest = wait_metadata(
+        run / "handoff/latest.json", deadline=deadline,
+        expected={"generation": completed, "fence": _fence_epoch(args)})
+    manifest = Path(str(latest.get("manifest", ""))).resolve()
+    manifest.relative_to((run / "handoff").resolve())
+    encoded = manifest.read_bytes()
+    if (__import__("hashlib").sha256(encoded).hexdigest()
+            != latest.get("manifest_sha256")):
+        raise ValueError("terminal native handoff manifest digest mismatch")
+    value = json.loads(encoded)
+    if (not isinstance(value, dict) or not value.get("finalized")
+            or value.get("run_id") != args.run_id
+            or value.get("payload_id") != args.payload_id
+            or value.get("source_id") != args.source_id
+            or int(value.get("generation", -1)) != completed
+            or int(dict(value.get("fence", {})).get("coordinator_epoch", -1))
+            != _fence_epoch(args)):
+        raise ValueError("terminal native handoff identity mismatch")
+    checkpoint = Path(str(value.get("checkpoint", ""))).resolve()
+    checkpoint.relative_to((run / "checkpoints").resolve())
+    if (not checkpoint.is_file()
+            or checkpoint.stat().st_size != int(value.get("checkpoint_bytes", -1))
+            or len(str(value.get("checkpoint_sha256", ""))) != 64):
+        raise ValueError("terminal native checkpoint extent/digest is invalid")
+    return checkpoint
+
+
 def _liveness_heartbeat(bulk: Path, identity: str, interval_s: float = 5.0):
     """Refresh liveness without disguising stalled generation progress."""
     state = bulk / "supervision" / f"{identity}.liveness.json"
@@ -1498,7 +1535,13 @@ def trainer(args) -> int:
                 {"generation": generation, "result_generation": completed,
                  "fence": fence.__dict__})
 
-        if leader_checkpoint is None:
+        terminal_native_follower = (
+            native and leader_checkpoint is None and completed == target_generation)
+        if terminal_native_follower:
+            recovery_checkpoint = _terminal_native_checkpoint(
+                run, args, completed=completed,
+                deadline=time.monotonic() + min(args.deadline_s, 60.0))
+        elif leader_checkpoint is None:
             recovery_checkpoint = (bulk / "recovery" / identity /
                                    f"generation-{completed:08d}.pt")
             recovery_checkpoint.parent.mkdir(parents=True, exist_ok=True)
@@ -1517,14 +1560,15 @@ def trainer(args) -> int:
             os.replace(temporary, recovery_checkpoint)
         else:
             recovery_checkpoint = leader_checkpoint
-        _publish_role_recovery(
-            control, identity, args, completed, step=step,
-            checkpoint=str(recovery_checkpoint),
-            checkpoint_sha256=__import__("hashlib").sha256(
-                recovery_checkpoint.read_bytes()).hexdigest(),
-            membership=manifest["members"], fence=fence.__dict__,
-            accepted_tokens=accepted_token_clock,
-            **({"native_runtime_digests": native_runtime} if native else {}))
+        if not terminal_native_follower:
+            _publish_role_recovery(
+                control, identity, args, completed, step=step,
+                checkpoint=str(recovery_checkpoint),
+                checkpoint_sha256=__import__("hashlib").sha256(
+                    recovery_checkpoint.read_bytes()).hexdigest(),
+                membership=manifest["members"], fence=fence.__dict__,
+                accepted_tokens=accepted_token_clock,
+                **({"native_runtime_digests": native_runtime} if native else {}))
         if native:
             native_plane.close()
             atomic_metadata(

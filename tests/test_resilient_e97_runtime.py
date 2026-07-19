@@ -5,6 +5,8 @@ from pathlib import Path
 import subprocess
 import sys
 import socket
+import time
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -86,6 +88,45 @@ def test_native_owner_credits_follow_reciprocal_pair_route_readiness():
     assert install < reciprocal_ready < exchange
     assert '"native_route_readiness"' in manager
     assert "pairwise=True" in manager
+
+
+def test_terminal_native_follower_reuses_fenced_authoritative_checkpoint(tmp_path):
+    from scripts.frontier import resilient_e97_role as role
+
+    checkpoint = tmp_path / "checkpoints/generation-00000001-fence-00000001.pt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"authoritative-generation-one")
+    manifest = tmp_path / "handoff/generation-00000001-fence-00000001.json"
+    manifest.parent.mkdir(parents=True)
+    value = {
+        "schema": 1, "finalized": True, "run_id": "run-a",
+        "payload_id": "payload-a", "source_id": "source-a",
+        "generation": 1, "checkpoint": str(checkpoint),
+        "checkpoint_bytes": checkpoint.stat().st_size,
+        "checkpoint_sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+        "fence": {"coordinator_epoch": 1},
+    }
+    manifest.write_text(json.dumps(value, sort_keys=True))
+    latest = tmp_path / "handoff/latest.json"
+    latest.write_text(json.dumps({
+        "generation": 1, "fence": 1, "manifest": str(manifest),
+        "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+    }))
+    args = SimpleNamespace(
+        run_id="run-a", payload_id="payload-a", source_id="source-a",
+        coordinator_epoch=1)
+
+    assert role._terminal_native_checkpoint(
+        tmp_path, args, completed=1, deadline=time.monotonic() + 1) == checkpoint
+    value["payload_id"] = "stale-payload"
+    manifest.write_text(json.dumps(value, sort_keys=True))
+    latest.write_text(json.dumps({
+        "generation": 1, "fence": 1, "manifest": str(manifest),
+        "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+    }))
+    with pytest.raises(ValueError, match="identity"):
+        role._terminal_native_checkpoint(
+            tmp_path, args, completed=1, deadline=time.monotonic() + 1)
 
 
 def test_import_liveness_does_not_refresh_runtime_import_progress_deadline():
