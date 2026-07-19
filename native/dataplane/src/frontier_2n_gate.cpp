@@ -318,6 +318,12 @@ class NativeTransport {
       const std::string required{"cxi"};
       config.require_provider_len = static_cast<std::uint32_t>(required.size());
       std::copy(required.begin(), required.end(), config.require_provider);
+      // Frontier exposes cxi0 and cxi1 on each compute node.  Pin one native
+      // domain so provider resolution cannot silently pick a rail or reject
+      // an otherwise valid but ambiguous set of CXI matches.
+      const std::string domain{"cxi0"};
+      config.domain_len = static_cast<std::uint32_t>(domain.size());
+      std::copy(domain.begin(), domain.end(), config.domain);
     } else {
       const std::string bind{"127.0.0.1"};
       config.bind_node_len = static_cast<std::uint32_t>(bind.size());

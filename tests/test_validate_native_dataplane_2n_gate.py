@@ -9,6 +9,7 @@ SCRIPT = ROOT / "scripts/frontier/validate_native_dataplane_2n_gate.py"
 SBATCH = ROOT / "scripts/frontier/native_dataplane_2n_gate.sbatch"
 SUBMIT = ROOT / "scripts/frontier/submit_native_dataplane_2n_gate.sh"
 FABRIC = ROOT / "native/dataplane/src/fabric.cpp"
+RUNNER = ROOT / "native/dataplane/src/frontier_2n_gate.cpp"
 
 
 def _module():
@@ -67,8 +68,11 @@ def test_frontier_payload_is_exactly_two_node_debug_cxi_and_fault_is_gated():
 
 def test_native_cxi_setup_uses_provider_mr_contract():
     source = FABRIC.read_text(encoding="utf-8")
+    runner = RUNNER.read_text(encoding="utf-8")
     assert "hints->caps = FI_MSG;" in source
     assert "if (!config_.production) hints->caps |= FI_SOURCE;" in source
     assert "info_->domain_attr->mr_mode & FI_MR_ENDPOINT" in source
     assert "fi_mr_bind(slot->mr, &endpoint_->fid, 0)" in source
     assert "fi_mr_enable(slot->mr)" in source
+    assert 'const std::string domain{"cxi0"};' in runner
+    assert "config.domain_len" in runner

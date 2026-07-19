@@ -209,6 +209,21 @@ def validate_gate(
     expected_phases = 2 if mode == "fault" else 1
     if membership.get("phase_count") != expected_phases:
         raise ValueError("membership endpoint phase count mismatch")
+    if exact:
+        for phase in membership.get("phases", []):
+            for rank in ("0", "1"):
+                record = phase.get(rank, {})
+                provider_facts = {
+                    "provider": record.get("provider"),
+                    "fabric": record.get("fabric"),
+                    "domain": record.get("domain"),
+                }
+                if provider_facts != {
+                    "provider": "cxi", "fabric": "cxi", "domain": "cxi0"
+                }:
+                    raise ValueError(
+                        f"endpoint {rank} selected unexpected CXI facts: {provider_facts}"
+                    )
 
     for rank, node in enumerate(nodes):
         _validate_common_node(node, rank=rank, mode=mode, provider=provider, exact=exact)
