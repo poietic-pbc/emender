@@ -69,6 +69,18 @@ def test_native_service_reduces_once_validated_sealed_sources_in_parallel():
     assert "std::atomic<bool> nonfinite" in reduce_local
 
 
+def test_native_service_dense_sha_uses_optimized_crypto_provider():
+    """Full-layout admission/root hashes must not use the scalar fallback."""
+    sha = (ROOT / "src/native_resilient_dataplane/src/sha256.hpp").read_text()
+    cmake = (ROOT / "src/native_resilient_dataplane/CMakeLists.txt").read_text()
+
+    assert "#include <openssl/evp.h>" in sha
+    assert "EVP_DigestUpdate" in sha
+    assert "EVP_sha256()" in sha
+    assert "find_package(OpenSSL REQUIRED COMPONENTS Crypto)" in cmake
+    assert cmake.count("OpenSSL::Crypto") >= 2
+
+
 def test_native_final_projection_fuses_divide_and_f32_write_in_parallel():
     """Final apply keeps exact element semantics without two serial passes."""
     source = (ROOT / "src/native_resilient_dataplane/src/ndp.cpp").read_text()

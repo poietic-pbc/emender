@@ -4,6 +4,7 @@ project(emender_native_resilient_dataplane VERSION 1.0.0 LANGUAGES C CXX)
 include(GNUInstallDirs)
 include(CTest)
 find_package(Threads REQUIRED)
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 
 option(NDP_ENABLE_XPMEM "Enable same-process XPMEM-address ABI registration hook" OFF)
 option(NDP_ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
@@ -19,7 +20,7 @@ set_target_properties(emender_ndp_service_core PROPERTIES
 target_compile_features(emender_ndp_service_core PUBLIC cxx_std_17)
 target_include_directories(emender_ndp_service_core
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(emender_ndp_service_core PUBLIC Threads::Threads)
+target_link_libraries(emender_ndp_service_core PUBLIC Threads::Threads OpenSSL::Crypto)
 target_compile_options(emender_ndp_service_core PRIVATE
     -Wall -Wextra -Wpedantic
     -fno-fast-math -ffp-contract=off -frounding-math)
@@ -41,7 +42,7 @@ target_include_directories(emender_ndp
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-target_link_libraries(emender_ndp PRIVATE Threads::Threads)
+target_link_libraries(emender_ndp PRIVATE Threads::Threads OpenSSL::Crypto)
 target_compile_options(emender_ndp PRIVATE
     -Wall -Wextra -Wpedantic
     -fno-fast-math -ffp-contract=off -frounding-math

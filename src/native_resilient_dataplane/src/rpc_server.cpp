@@ -71,7 +71,7 @@ bool request_identity(const Header& header, const Session& session) noexcept {
 }
 
 bool metadata_fd_valid(int fd, std::uint64_t expected_bytes,
-                       const std::uint8_t expected_digest[32]) noexcept {
+                       const std::uint8_t expected_digest[32]) {
     if (fd < 0 || expected_bytes == 0 || expected_bytes > (UINT64_C(16) << 20))
         return false;
     struct stat status{};

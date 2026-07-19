@@ -130,7 +130,7 @@ inline std::uint64_t take_u64(const std::uint8_t*& cursor) {
 }
 
 inline std::array<std::uint8_t, 32> payload_digest(
-        const std::vector<std::uint8_t>& payload) noexcept {
+        const std::vector<std::uint8_t>& payload) {
     return Sha256::digest(payload.data(), payload.size());
 }
 

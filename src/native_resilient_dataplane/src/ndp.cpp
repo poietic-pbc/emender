@@ -124,14 +124,14 @@ std::uint64_t read_u64(const std::uint8_t*& cursor,
     return result;
 }
 
-void append_u32(Sha256& hash, std::uint32_t value) noexcept {
+void append_u32(Sha256& hash, std::uint32_t value) {
     std::uint8_t encoded[4];
     for (unsigned index = 0; index != 4; ++index)
         encoded[index] = static_cast<std::uint8_t>(value >> (index * 8));
     hash.update(encoded, sizeof(encoded));
 }
 
-void append_u64(Sha256& hash, std::uint64_t value) noexcept {
+void append_u64(Sha256& hash, std::uint64_t value) {
     std::uint8_t encoded[8];
     for (unsigned index = 0; index != 8; ++index)
         encoded[index] = static_cast<std::uint8_t>(value >> (index * 8));

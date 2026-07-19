@@ -118,7 +118,10 @@ if(BUILD_TESTING AND NDP_BUILD_TESTS)
   target_include_directories(ndp_service_rpc_integration_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../src/native_resilient_dataplane/src)
-  target_link_libraries(ndp_service_rpc_integration_test PRIVATE emender_ndp)
+  # The integration fixture computes exact expected source digests through the
+  # service's private optimized SHA wrapper as well as exercising the RPC ABI.
+  target_link_libraries(ndp_service_rpc_integration_test PRIVATE
+    emender_ndp OpenSSL::Crypto)
   target_compile_options(ndp_service_rpc_integration_test PRIVATE
     -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror=return-type)
   add_test(NAME ndp_service_rpc_integration_test
