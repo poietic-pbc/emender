@@ -53,6 +53,33 @@ def test_reference_rejects_partial_f64_pair_layout():
         raise AssertionError("partial alternating f64 reference was accepted")
 
 
+def test_fault_physical_accounting_requires_one_exact_remote_replay_shard():
+    module = _module()
+    layout = module.LAYOUT_BYTES
+    payload = module.PAYLOAD_MAX
+    module._validate_physical_transfer_counts(
+        mode="clean", layout_bytes=layout, payload_max=payload,
+        physical_contribution=[layout] * 3,
+        physical_redistribution=[layout] * 3,
+    )
+    module._validate_physical_transfer_counts(
+        mode="fault", layout_bytes=layout, payload_max=payload,
+        physical_contribution=[layout + payload],
+        physical_redistribution=[layout],
+    )
+    for observed in (layout, layout + payload - 1, layout + payload + 1):
+        try:
+            module._validate_physical_transfer_counts(
+                mode="fault", layout_bytes=layout, payload_max=payload,
+                physical_contribution=[observed],
+                physical_redistribution=[layout],
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"invalid fault contribution bytes accepted: {observed}")
+
+
 def test_frontier_payload_is_exactly_two_node_debug_cxi_and_fault_is_gated():
     payload = SBATCH.read_text(encoding="utf-8")
     submit = SUBMIT.read_text(encoding="utf-8")
@@ -66,6 +93,10 @@ def test_frontier_payload_is_exactly_two_node_debug_cxi_and_fault_is_gated():
     assert "--nodes=2 --ntasks=2 --ntasks-per-node=1" in payload
     assert "NDP_CLEAN_GATE_JSON" in submit
     assert "fault payload ID is unchanged" in submit
+    assert (
+        '"$NDP_PYTHON_BIN" "$REPO/scripts/frontier/attest_native_dataplane.py" verify'
+        in submit
+    )
     forbidden = ("mpirun", "MPI_Allreduce", "torchrun", "gpus-per-node")
     assert all(term not in payload for term in forbidden)
 

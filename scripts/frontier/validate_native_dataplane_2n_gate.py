@@ -59,6 +59,19 @@ def _atomic_json(path: Path, value: object) -> None:
     os.replace(temporary, path)
 
 
+def _validate_physical_transfer_counts(
+    *, mode: str, layout_bytes: int, payload_max: int,
+    physical_contribution: list[int], physical_redistribution: list[int],
+) -> None:
+    expected_contribution = layout_bytes + (payload_max if mode == "fault" else 0)
+    if any(value != expected_contribution for value in physical_contribution):
+        raise ValueError(
+            f"{mode} physical contribution bytes do not match exact owner/replay accounting"
+        )
+    if any(value != layout_bytes for value in physical_redistribution):
+        raise ValueError("physical redistribution bytes do not cover both nodes")
+
+
 def _digest_text(value: str) -> bytes:
     return hashlib.sha256(value.encode()).digest()
 
@@ -284,10 +297,11 @@ def validate_gate(
         sum(int(nodes[rank]["samples"][index]["redistribution_tx_bytes"]) for rank in (0, 1))
         for index in range(sample_count)
     ]
-    if any(value != layout_bytes for value in physical_contribution):
-        raise ValueError("clean physical contribution bytes do not cover distributed owners")
-    if any(value != layout_bytes for value in physical_redistribution):
-        raise ValueError("physical redistribution bytes do not cover both nodes")
+    _validate_physical_transfer_counts(
+        mode=mode, layout_bytes=layout_bytes, payload_max=payload_max,
+        physical_contribution=physical_contribution,
+        physical_redistribution=physical_redistribution,
+    )
 
     stale_rejects = sum(
         int(sample["stale_rejects"])

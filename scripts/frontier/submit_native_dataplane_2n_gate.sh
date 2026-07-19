@@ -29,7 +29,7 @@ if [[ $MODE == clean ]]; then
   GENERATIONS=3
 else
   [[ -s $NDP_CLEAN_GATE_JSON ]] || { echo "fault submission requires readable NDP_CLEAN_GATE_JSON" >&2; exit 64; }
-  "$REPO/scripts/frontier/attest_native_dataplane.py" verify \
+  "$NDP_PYTHON_BIN" "$REPO/scripts/frontier/attest_native_dataplane.py" verify \
     --backend native-cxi --production --full-layout \
     --build-manifest "$NDP_BUILD_MANIFEST" --gate-json "$NDP_CLEAN_GATE_JSON" \
     --source-root "$REPO" >/dev/null
