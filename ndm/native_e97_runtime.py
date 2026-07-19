@@ -523,15 +523,38 @@ class NativeTrainerDataPlane:
             expected={"run_id": self.metadata.run_id,
                       "fence_epoch": self.metadata.fence_epoch,
                       "generation": self.metadata.generation})
+        attempt = int(value.get("attempt", 0))
+        owner_epoch = int(value.get("owner_epoch", 0))
+        deadline_unix_ns = int(value.get("deadline_unix_ns", 0))
+        source_dtype = DType(int(value.get("source_dtype", 0)))
         if (value.get("layout_digest") != self.metadata.layout_digest
+                or value.get("base_digest") != self.metadata.base_digest
+                or value.get("plan_digest") != self.metadata.plan_digest
+                or attempt < self.metadata.attempt or owner_epoch <= 0
+                or deadline_unix_ns <= time.time_ns()
                 or int(value.get("global_weight", 0)) <= 0
                 or len(str(value.get("result_root", ""))) != 64):
             raise ValueError("native result marker identity/root is invalid")
+        # The two-node owner plane replaces local attempt 1 with the exact
+        # global attempt 2.  Refresh the persistent trainer connection from
+        # the controller-published fenced marker before requesting its view;
+        # otherwise the server correctly rejects the stale attempt-1 header.
+        self.client.refresh_generation(
+            total_elements=self.metadata.total_elements,
+            layout_digest=bytes.fromhex(self.metadata.layout_digest),
+            generation=self.metadata.generation, attempt=attempt,
+            owner_epoch=owner_epoch, source_dtype=source_dtype,
+            deadline_s=max(.001, deadline - time.monotonic()),
+            deadline_unix_ns=deadline_unix_ns,
+            base_digest=bytes.fromhex(self.metadata.base_digest),
+            plan_digest=bytes.fromhex(self.metadata.plan_digest))
         view = self.client.result_view_handle(int(value["operation_handle"]))
         try:
             if (view.fence_epoch != self.metadata.fence_epoch
                     or view.generation != self.metadata.generation
+                    or view.attempt != attempt
                     or view.layout_digest.hex() != self.metadata.layout_digest
+                    or view.base_digest.hex() != self.metadata.base_digest
                     or view.result_root.hex() != value["result_root"]
                     or view.global_weight != int(value["global_weight"])
                     or view.dtype is not DType.F32):

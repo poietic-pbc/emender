@@ -811,6 +811,32 @@ class Client:
         if self.generation_deadline_ns <= time.time_ns():
             raise ValueError("native generation deadline has expired")
 
+    def refresh_generation(self, *, total_elements: int, layout_digest: bytes,
+                           generation: int, attempt: int, owner_epoch: int,
+                           source_dtype: DType, deadline_s: float,
+                           deadline_unix_ns: int, base_digest: bytes,
+                           plan_digest: bytes) -> None:
+        """Adopt a controller-published retry without mutating service state.
+
+        A trainer can remain connected while the controller replaces its
+        node-local attempt with the globally redistributed attempt.  The
+        metadata-only metrics RPC first refreshes the native connection's
+        fenced request header from the service snapshot; ``attach_generation``
+        then keeps the Python-side typed metadata identical to that snapshot.
+        """
+        if self.role is not Role.TRAINER:
+            raise RuntimeError("only a trainer may refresh controller metadata")
+        # Metrics is accepted independent of the old attempt header.  Every
+        # successful RPC response carries the service's current generation,
+        # attempt, and layout, so this does not install or mutate a generation.
+        self.metrics
+        self.attach_generation(
+            total_elements=total_elements, layout_digest=layout_digest,
+            generation=generation, attempt=attempt, owner_epoch=owner_epoch,
+            source_dtype=source_dtype, deadline_s=deadline_s,
+            deadline_unix_ns=deadline_unix_ns, base_digest=base_digest,
+            plan_digest=plan_digest)
+
     @property
     def poll_fd(self) -> int:
         result = ctypes.c_int(-1)
