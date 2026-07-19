@@ -4,12 +4,15 @@ This directory implements the node-local half of
 [`NATIVE_RESILIENT_DILOCO_DATAPLANE.md`](../../docs/NATIVE_RESILIENT_DILOCO_DATAPLANE.md):
 the stable C ABI, bounded memfd ownership, deterministic native reduction, one
 shared f32 apply view, prompt release, and the optional single reduced-node
-replay journal. It is model-free and contains no lease, membership, quorum,
-checkpoint, Slurm, libfabric, MPI, or all-rank policy.
+replay journal. `libemender_ndp.so.1` is now a metadata-only RPC client. The
+authoritative `LocalServiceCore` is linked only into `ndp_cxi_service`, beside
+the persistent `FabricEndpoint`; client processes never construct a local
+dense-state singleton. The core is model-free and contains no lease,
+membership, quorum, checkpoint, Slurm, MPI, or all-rank policy.
 
-The transport sibling intentionally lives in `native/dataplane`. Integration
-links its additive `ndp_transport_*_v1` API to this local core; neither half
-duplicates the other's ownership domain.
+The transport sibling intentionally lives in `native/dataplane`. The single
+service executable links both ownership domains for one process lifetime while
+preserving their versioned C ABIs.
 
 ## Build
 
@@ -36,24 +39,30 @@ The reduction translation unit is compiled as C++17 with `-fno-fast-math`,
 
 ## Ownership and lifecycle
 
-1. The controller installs a sealed canonical layout descriptor and a fenced
+1. The service binds a mode-`0600` `AF_UNIX/SOCK_SEQPACKET` socket, validates
+   `SO_PEERCRED`, the 256-bit admission token, and run/fence identity, and caps
+   every RPC packet at 64 KiB. Every packet carries run, fence, generation,
+   attempt, incarnation, sequence, extent, layout, and metadata digest fields.
+2. The controller installs a sealed canonical layout descriptor and a fenced
    generation identity.
-2. A trainer requests a sealed-size memfd, maps it writable, produces directly
+3. A trainer requests a sealed-size memfd, maps it writable, produces directly
    into the final mapping, closes the mapping, and seals it.
-3. `ndp_submit_local_v1` validates the exact identity, byte bounds, SHA-256,
+4. `ndp_submit_local_v1` validates the exact identity, byte bounds, SHA-256,
    dtype, finiteness, weight, and deadline. Identical replay receives an
    idempotent operation; conflicting reuse rejects.
-4. `FREEZE` reduces retained sources in raw `trainer_key` order. It maps one
+5. `FREEZE` reduces retained sources in raw `trainer_key` order. It maps one
    source at a time, converts each element once to binary64, performs the
    specified checked weighted additions, emits `BUFFER_RELEASED`, and retains
    one node numerator.
-5. `FINALIZE_OWNERS` divides once in binary64 and projects exactly once into a
-   single sealed f32 memfd. Any number of local trainers receive read-only fd
-   duplicates of those same pages; there is no per-trainer aggregate file or
-   service copy.
-6. Every buffer, view, and operation is released explicitly. Python context
+6. `FINALIZE_OWNERS` divides once in binary64 and projects exactly once into a
+   single sealed f32 memfd. Clients receive an `O_RDONLY|O_CLOEXEC` descriptor
+   for those same pages using `SCM_RIGHTS`; there is no per-trainer aggregate
+   file or service copy.
+7. Every buffer, view, and operation is released explicitly. Python context
    managers close them safely on exceptions and stale-fence supersession.
-   Handles contain a process-boot cookie and cannot be reused after restart.
+   Handles contain a service-boot cookie and cannot be reused after restart.
+   A controller or trainer disconnect does not destroy an admitted attempt;
+   explicit abort/drain or a newer fence does.
 
 The default replay mode is memory-only and writes zero disk bytes. Setting
 `EMENDER_NDP_FALLBACK_SPOOL_DIR` explicitly materializes exactly one
@@ -63,7 +72,12 @@ on commit, abort, or fence change.
 
 ## Python bridge
 
-`ndm.native_dataplane.Client` loads the ABI through typed `ctypes` calls.
+`ndm.native_dataplane.Client` loads the RPC client ABI through typed `ctypes`
+calls. `EMENDER_NDP_SOCKET` and `EMENDER_NDP_ADMISSION_TOKEN_HEX` identify the
+already-running service selected by the post-lease supervisor. Production
+launch passes the 32-byte token to `ndp_cxi_service --admission-token-fd FD`;
+the hex command-line form is test-only so the token is not exposed in the
+process list.
 `Buffer.mapped(...)` exposes NumPy/`torch.frombuffer`-compatible pages directly;
 only fixed-size metadata is marshalled by Python. `ResultView` is read-only and
 reports the full `(run_key, fence, generation, attempt, layout, base, root,
@@ -74,8 +88,10 @@ exhaustion, and the required zero-copy/spool counters.
 ## Local validation
 
 ```bash
-EMENDER_NDP_LIBRARY=$PWD/build/native-dataplane/libemender_ndp.so \
-python -m pytest -q \
+source scripts/frontier/activate_emender_frontier.sh
+EMENDER_NDP_LIBRARY=$PWD/build/native-resilient-dataplane/lib64/libemender_ndp.so.1 \
+EMENDER_NDP_SERVICE=$PWD/build/native-resilient-dataplane/bin/ndp_cxi_service \
+"$EMENDER_PYTHON" -m pytest -q \
   tests/test_native_dataplane_abi.py \
   tests/test_native_dataplane_reference.py \
   tests/test_native_dataplane_failure.py

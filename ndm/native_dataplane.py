@@ -670,11 +670,13 @@ class Client:
              role: Role = Role.CONTROLLER, run_key: bytes | str,
              fence_epoch: int, worker_key: bytes | str,
              incarnation: bytes | str, admission_token: bytes | None = None,
-             socket_path: str = "/tmp/emender-ndp.sock",
+             socket_path: str | None = None,
              deadline_s: float = 10.0) -> "Client":
         native = library if isinstance(library, NativeLibrary) else NativeLibrary(library)
         request = _versioned(OpenV1())
         request.role = int(role)
+        if socket_path is None:
+            socket_path = os.environ.get("EMENDER_NDP_SOCKET", "/tmp/emender-ndp.sock")
         encoded_path = os.fsencode(socket_path)
         if not 0 < len(encoded_path) <= 108:
             raise ValueError("native control socket path must contain 1..108 bytes")
@@ -683,7 +685,16 @@ class Client:
         run = _key16(run_key, field="run_key")
         worker = _key16(worker_key, field="worker_key")
         boot = _key16(incarnation, field="incarnation")
-        token = admission_token or hashlib.sha256(run + int(fence_epoch).to_bytes(8, "little")).digest()
+        configured_token = os.environ.get("EMENDER_NDP_ADMISSION_TOKEN_HEX")
+        if admission_token is not None:
+            token = admission_token
+        elif configured_token:
+            try:
+                token = bytes.fromhex(configured_token)
+            except ValueError as error:
+                raise ValueError("EMENDER_NDP_ADMISSION_TOKEN_HEX must be hexadecimal") from error
+        else:
+            token = hashlib.sha256(run + int(fence_epoch).to_bytes(8, "little")).digest()
         request.run_key[:] = run
         request.fence_epoch = int(fence_epoch)
         request.worker_key[:] = worker
