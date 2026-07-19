@@ -700,6 +700,40 @@ std::vector<std::uint8_t> result_frame(const GenerationPlan &plan,
   return encoded;
 }
 
+FrameHeader generation_signal(const GenerationPlan &plan, MessageType type,
+                              std::uint64_t message_seq) {
+  FrameHeader header{};
+  header.type = type;
+  header.run_key = plan.run_key;
+  header.fence_epoch = plan.fence_epoch;
+  header.generation = plan.generation;
+  header.attempt = plan.attempt;
+  header.owner_epoch = plan.owner_epoch;
+  header.worker_key = plan.owner_worker_key;
+  header.incarnation = plan.owner_incarnation;
+  header.layout_digest = plan.layout_digest;
+  header.base_digest = plan.base_digest;
+  header.message_seq = message_seq;
+  header.deadline_unix_ns = plan.deadline_unix_ns;
+  return header;
+}
+
+bool generation_signal_matches(const FrameHeader &header,
+                               const GenerationPlan &plan) {
+  return same_key(header.run_key, plan.run_key) &&
+         header.fence_epoch == plan.fence_epoch &&
+         header.generation == plan.generation &&
+         header.attempt == plan.attempt &&
+         header.owner_epoch == plan.owner_epoch &&
+         emender::ndp::constant_time_equal(header.layout_digest,
+                                            plan.layout_digest) &&
+         emender::ndp::constant_time_equal(header.base_digest,
+                                            plan.base_digest) &&
+         header.shard_id == emender::ndp::kNoShard &&
+         header.payload_bytes == 0 &&
+         header.deadline_unix_ns > emender::ndp::unix_time_ns();
+}
+
 Digest result_root(const GenerationPlan &plan,
                    const std::vector<std::uint8_t> &aggregate) {
   std::vector<std::uint8_t> encoded;
@@ -851,35 +885,14 @@ class ContributionStage {
   }
 
   void send_result_announce() {
-    FrameHeader announcement{};
-    announcement.type = MessageType::result_announce;
-    announcement.run_key = plan_.run_key;
-    announcement.fence_epoch = plan_.fence_epoch;
-    announcement.generation = plan_.generation;
-    announcement.attempt = plan_.attempt;
-    announcement.owner_epoch = plan_.owner_epoch;
-    announcement.layout_digest = plan_.layout_digest;
-    announcement.base_digest = plan_.base_digest;
-    announcement.message_seq = ++message_sequence_;
-    announcement.deadline_unix_ns = plan_.deadline_unix_ns;
+    FrameHeader announcement = generation_signal(
+        plan_, MessageType::result_announce, ++message_sequence_);
     send_control_header(announcement);
     result_announced_ = true;
   }
 
   void handle_result_announce(const FrameHeader &header) {
-    if (prime_only_ ||
-        !same_key(header.run_key, plan_.run_key) ||
-        header.fence_epoch != plan_.fence_epoch ||
-        header.generation != plan_.generation ||
-        header.attempt != plan_.attempt ||
-        header.owner_epoch != plan_.owner_epoch ||
-        !emender::ndp::constant_time_equal(header.layout_digest,
-                                           plan_.layout_digest) ||
-        !emender::ndp::constant_time_equal(header.base_digest,
-                                           plan_.base_digest) ||
-        header.shard_id != emender::ndp::kNoShard ||
-        header.payload_bytes != 0 ||
-        header.deadline_unix_ns <= emender::ndp::unix_time_ns()) {
+    if (prime_only_ || !generation_signal_matches(header, plan_)) {
       fail("result announce did not match the frozen generation");
     }
     peer_result_announced_ = true;
@@ -1053,6 +1066,13 @@ Sample run_generation(const Options &options, NativeTransport *transport,
   ResultAssembler assembler(plan);
   std::uint64_t redistribution_tx = 0;
   std::uint64_t sequence = 1000000;
+  bool peer_redistribution_complete = false;
+  const auto handle_generation_goodbye = [&](const FrameHeader &header) {
+    if (!generation_signal_matches(header, plan)) {
+      fail("generation goodbye did not match the frozen generation");
+    }
+    peer_redistribution_complete = true;
+  };
   std::vector<std::uint32_t> remote_shards;
   for (std::uint32_t shard = 0; shard != plan.shard_count; ++shard) {
     if (owners[shard] == options.rank) {
@@ -1106,8 +1126,12 @@ Sample run_generation(const Options &options, NativeTransport *transport,
           require_code(assembler.accept(frame, emender::ndp::unix_time_ns()),
                        "assemble_remote_result");
           if (frame.header.shard_id == requested) received_requested = true;
+        } else if (frame.header.type == MessageType::goodbye) {
+          handle_generation_goodbye(frame.header);
         } else {
-          fail("unexpected frame during redistribution");
+          fail("unexpected frame during redistribution: type=" +
+               std::to_string(static_cast<std::uint16_t>(frame.header.type)) +
+               " generation=" + std::to_string(frame.header.generation));
         }
       }
     }
@@ -1123,8 +1147,37 @@ Sample run_generation(const Options &options, NativeTransport *transport,
       } else if (frame.header.type == MessageType::result_data) {
         require_code(assembler.accept(frame, emender::ndp::unix_time_ns()),
                      "assemble_late_result");
+      } else if (frame.header.type == MessageType::goodbye) {
+        handle_generation_goodbye(frame.header);
       } else {
-        fail("unexpected late redistribution frame");
+        fail("unexpected late redistribution frame: type=" +
+             std::to_string(static_cast<std::uint16_t>(frame.header.type)) +
+             " generation=" + std::to_string(frame.header.generation));
+      }
+    }
+  }
+  const auto send_generation_goodbye = [&]() {
+    FrameHeader goodbye = generation_signal(plan, MessageType::goodbye, ++sequence);
+    transport->send(encode_header(goodbye), plan.deadline_unix_ns);
+  };
+  send_generation_goodbye();
+  while (!peer_redistribution_complete) {
+    if (emender::ndp::unix_time_ns() >= plan.deadline_unix_ns) {
+      fail("generation completion exchange exceeded its absolute deadline");
+    }
+    for (const auto &frame : transport->receive(10)) {
+      if (frame.header.type == MessageType::fetch) {
+        const auto *payload = owner->result(frame.header.shard_id);
+        if (payload == nullptr) fail("completion fetch named a non-owned shard");
+        auto encoded = result_frame(plan, *payload, frame.header.shard_id, ++sequence);
+        redistribution_tx += payload->size();
+        transport->send(encoded, plan.deadline_unix_ns);
+      } else if (frame.header.type == MessageType::goodbye) {
+        handle_generation_goodbye(frame.header);
+      } else {
+        fail("unexpected frame during generation completion: type=" +
+             std::to_string(static_cast<std::uint16_t>(frame.header.type)) +
+             " generation=" + std::to_string(frame.header.generation));
       }
     }
   }

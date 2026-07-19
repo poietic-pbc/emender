@@ -83,3 +83,7 @@ def test_native_gate_fences_contribution_before_redistribution():
     assert "peer_result_announced_" in source
     assert "send_result_announce" in source
     assert "result announce did not match the frozen generation" in source
+    assert "MessageType::goodbye" in source
+    assert "peer_redistribution_complete" in source
+    assert "send_generation_goodbye" in source
+    assert "generation goodbye did not match the frozen generation" in source
