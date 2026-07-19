@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -211,6 +212,105 @@ def _publish_role_recovery(control: Path, identity: str, args, generation: int,
         "coordinator_epoch": _fence_epoch(args), "generation": generation, **extra})
 
 
+def _native_manager_resume_point(
+        run: Path, args,
+        fenced: tuple[SQLiteFencedControlStore, AllocationLease] | None,
+        ) -> tuple[int, dict[str, object]]:
+    """Resolve a restarted model-free manager against fenced committed state.
+
+    A manager owns no model or optimizer, so synchronizing it means validating
+    the immutable handoff chain and advertising the resulting base generation.
+    Node-local native handles are deliberately recreated under a new
+    incarnation.  Unfinished transport state is never inferred from old local
+    markers or replayed as a committed generation.
+    """
+    initial = int(args.initial_generation)
+    target = initial + int(args.generations)
+    latest_path = run / "handoff" / "latest.json"
+    if not latest_path.exists():
+        return initial, {"status": "cold_start", "generation": initial,
+                         "fence": _fence_epoch(args)}
+    latest = json.loads(latest_path.read_text())
+    generation = int(latest.get("generation", -1))
+    fence_epoch = int(latest.get("fence", -1))
+    if generation < initial or generation > target:
+        raise ValueError("authoritative latest generation is outside this run bound")
+    if fence_epoch != _fence_epoch(args):
+        raise ValueError("manager rejoin latest fence differs from allocation fence")
+    manifest = Path(str(latest.get("manifest", ""))).resolve()
+    try:
+        manifest.relative_to((run / "handoff").resolve())
+    except ValueError as error:
+        raise ValueError("manager rejoin manifest escapes the handoff root") from error
+    encoded = manifest.read_bytes()
+    manifest_sha256 = hashlib.sha256(encoded).hexdigest()
+    if manifest_sha256 != latest.get("manifest_sha256"):
+        raise ValueError("manager rejoin manifest checksum mismatch")
+    value = json.loads(encoded)
+    if (not value.get("finalized") or value.get("run_id") != args.run_id
+            or value.get("payload_id") != args.payload_id
+            or value.get("source_id") != args.source_id
+            or value.get("code_id") != args.code_id
+            or int(value.get("generation", -1)) != generation
+            or int(value.get("fence", {}).get("coordinator_epoch", -1))
+            != fence_epoch):
+        raise ValueError("manager rejoin manifest identity mismatch")
+    if fenced is not None:
+        fenced[0].assert_current(fenced[1])
+        authoritative = fenced[0].read_publication(
+            args.run_id, "latest", "authoritative")
+        if (authoritative is None
+                or int(authoritative.get("generation", -1)) != generation
+                or authoritative.get("manifest_sha256") != manifest_sha256):
+            raise ValueError("manager rejoin handoff is not authoritative")
+    return generation, {
+        "status": "synchronized", "generation": generation,
+        "fence": fence_epoch, "manifest": str(manifest),
+        "manifest_sha256": manifest_sha256,
+    }
+
+
+def _native_ready_delay(*, node: int, generation: int) -> float:
+    """Return an exact, bounded test-only late-READY delay for one peer."""
+    encoded = os.environ.get("RESILIENT_E97_DELAY_READY", "")
+    if not encoded:
+        return 0.0
+    fields = encoded.split(":")
+    if len(fields) != 3:
+        raise ValueError("delayed READY injection must be NODE:GENERATION:SECONDS")
+    target_node, target_generation = map(int, fields[:2])
+    delay = float(fields[2])
+    if not 0.0 <= delay <= 180.0:
+        raise ValueError("delayed READY injection must be bounded by 180 seconds")
+    return delay if (node, generation) == (target_node, target_generation) else 0.0
+
+
+def _wait_native_ready_delay(control: Path, args, *, node: int, generation: int,
+                             incarnation: str,
+                             term_requested: dict[str, bool]) -> bool:
+    """Apply and attest the bounded late-READY injection for one incarnation."""
+    ready_delay = _native_ready_delay(node=node, generation=generation)
+    if not ready_delay:
+        return not term_requested["value"]
+    delay_marker = (control /
+                    f"native-delayed-ready-{generation:08d}-{incarnation}.json")
+    marker = {
+        "schema": "emender-native-delayed-ready-v1",
+        "run_id": args.run_id, "worker_id": f"node-{node}",
+        "incarnation": incarnation, "fence_epoch": _fence_epoch(args),
+        "generation": generation, "delay_seconds": ready_delay,
+    }
+    atomic_metadata(delay_marker, {**marker, "status": "delaying"})
+    delay_deadline = time.monotonic() + ready_delay
+    while (not term_requested["value"] and time.monotonic() < delay_deadline):
+        time.sleep(min(.1, delay_deadline - time.monotonic()))
+    atomic_metadata(
+        delay_marker,
+        {**marker, "status": ("cancelled" if term_requested["value"]
+                              else "completed")})
+    return not term_requested["value"]
+
+
 def _terminal_native_checkpoint(run: Path, args, *, completed: int,
                                 deadline: float) -> Path:
     """Resolve the already-fenced final checkpoint for a disposable follower.
@@ -263,7 +363,7 @@ def _wait_for_native_apply_lane(control: Path, args, *, generation: int,
     if rank <= 0:
         return None
     return wait_metadata(
-        control / f"native-applied-{generation:08d}-{rank - 1:02d}.json",
+        control / f"native-result-applied-{generation:08d}-{rank - 1:02d}.json",
         deadline=deadline,
         expected={"run_id": args.run_id,
                   "fence_epoch": _fence_epoch(args),
@@ -581,6 +681,16 @@ def _native_peer_exchange(session: NativeManagerSession, local_result, *, args,
         raise
 
 
+def _native_manager_session_lifetime_s(args) -> float:
+    """Bound one endpoint identity across this finite generation sequence."""
+    # ``deadline_s`` remains the per-generation/per-operation ceiling at every
+    # call site below.  The transport open deadline and signed endpoint expiry
+    # are session lifetime bounds, so they must cover every requested
+    # generation rather than expiring while a healthy manager advertises READY
+    # for the next one.  Slurm's requested walltime remains the outer hard cap.
+    return float(args.deadline_s) * max(1, int(args.generations))
+
+
 def _native_manager(args) -> int:
     """Model-free controller for direct memfd admission and native ownership."""
     if args.local_quorum != 8 and not args.control:
@@ -603,14 +713,30 @@ def _native_manager(args) -> int:
         worker_id=f"node-{node}", incarnation=incarnation,
         host=_pool_hosts(args)[node], build_manifest=args.native_build_manifest,
         gate_json=args.native_gate_json or None, source_root=ROOT,
-        production=production, full_layout=full_layout, deadline_s=args.deadline_s,
+        production=production, full_layout=full_layout,
+        deadline_s=_native_manager_session_lifetime_s(args),
         telemetry_path=bulk / "telemetry" / f"{identity}-native.jsonl",
         payload_max=args.bulk_chunk_bytes, resident_limit_bytes=args.max_spool_bytes)
     control = bulk / "control"
     session.write_readiness(control / "native-service-ready.json")
-    heartbeat(bulk, identity, generation=args.initial_generation,
-              step=args.initial_generation * args.local_steps, loss=None,
+    start_generation, sync_evidence = _native_manager_resume_point(
+        run, args, fenced)
+    atomic_metadata(
+        control / f"native-manager-sync-{incarnation}.json", {
+            "schema": "emender-native-manager-sync-v1",
+            "run_id": args.run_id, "worker_id": f"node-{node}",
+            "incarnation": incarnation, "fence_epoch": _fence_epoch(args),
+            **sync_evidence,
+        })
+    heartbeat(bulk, identity, generation=start_generation,
+              step=start_generation * args.local_steps, loss=None,
               stage="native_service_ready")
+    term_requested = {"value": False}
+
+    def request_term(*_ignored) -> None:
+        term_requested["value"] = True
+
+    signal.signal(signal.SIGTERM, request_term)
     pool_config = _pool_config(args)
     control_server = control_thread = None
     pool_client = None
@@ -627,19 +753,16 @@ def _native_manager(args) -> int:
             (args.coordinator_host, args.coordinator_port),
             timeout_s=min(args.deadline_s, pool_config.slo.sync_s)).bind(
                 args.run_id, _fence_epoch(args))
-        pool_client.ready(session.owner_endpoint, args.initial_generation,
-                          run_id=args.run_id, fence=_fence_epoch(args))
-    term_requested = {"value": False}
-
-    def request_term(*_ignored) -> None:
-        term_requested["value"] = True
-
-    signal.signal(signal.SIGTERM, request_term)
+        if _wait_native_ready_delay(
+                control, args, node=node, generation=start_generation,
+                incarnation=incarnation, term_requested=term_requested):
+            pool_client.ready(session.owner_endpoint, start_generation,
+                              run_id=args.run_id, fence=_fence_epoch(args))
     liveness_stop, liveness_thread = _liveness_heartbeat(bulk, identity)
     terminal_published = False
     try:
-        for generation in range(args.initial_generation,
-                                args.initial_generation + args.generations):
+        target_generation = args.initial_generation + args.generations
+        for generation in range(start_generation, target_generation):
             if term_requested["value"]:
                 break
             if fenced is not None:
@@ -858,11 +981,16 @@ def _native_manager(args) -> int:
                 deadline=time.monotonic() + pool_config.slo.apply_s,
                 expected={"generation": generation + 1,
                           "fence": _fence_epoch(args)})
-            apply_deadline = time.monotonic() + pool_config.slo.apply_s
+            # Each trainer's native result apply remains bounded by APPLY.
+            # Waiting for all eight independent durable recovery receipts is
+            # the aggregate exchange/commit phase: live E97 checkpoint I/O can
+            # legitimately outlast one reader's 60 second apply SLO, while the
+            # allocation contract still caps this complete phase at 180s.
+            recovery_deadline = time.monotonic() + min(args.deadline_s, 180.0)
             for rank in range(args.local_quorum):
                 wait_metadata(
                     control / f"native-applied-{generation:08d}-{rank:02d}.json",
-                    deadline=apply_deadline,
+                    deadline=recovery_deadline,
                     expected={"run_id": args.run_id,
                               "fence_epoch": _fence_epoch(args),
                               "generation": generation,
@@ -875,11 +1003,15 @@ def _native_manager(args) -> int:
             heartbeat(bulk, identity, generation=generation + 1,
                       step=(generation + 1) * args.local_steps, loss=None,
                       stage="published")
-            has_next_generation = (
-                generation + 1 < args.initial_generation + args.generations)
+            has_next_generation = generation + 1 < target_generation
             if pool_client is not None and has_next_generation:
-                pool_client.ready(session.owner_endpoint, generation + 1,
-                                  run_id=args.run_id, fence=_fence_epoch(args))
+                next_generation = generation + 1
+                if _wait_native_ready_delay(
+                        control, args, node=node, generation=next_generation,
+                        incarnation=incarnation, term_requested=term_requested):
+                    pool_client.ready(session.owner_endpoint, next_generation,
+                                      run_id=args.run_id,
+                                      fence=_fence_epoch(args))
             elif not has_next_generation:
                 terminal_published = True
     except BaseException:
@@ -1484,12 +1616,15 @@ def trainer(args) -> int:
         # window for every trainer; liveness alone must not disguise progress.
         heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
                   stage="peer_apply")
-        trainer_apply_started = time.monotonic()
         if native:
             _wait_for_native_apply_lane(
                 control, args, generation=generation, rank=rank,
                 result_root=str(manifest["result_root"]),
-                deadline=trainer_apply_started + PoolStageSLO.production().apply_s)
+                deadline=exchange_deadline)
+        # Waiting for the preceding local reader is bounded by the complete
+        # exchange window, but is not itself APPLY work.  Start the per-reader
+        # APPLY SLO only after this trainer owns the shared-result read lane.
+        trainer_apply_started = time.monotonic()
         if not native:
             spool.release_trainer(fence, rank)
         state = apply_delta(state, aggregate, eta_outer=args.eta_outer, in_place=True)
@@ -1500,6 +1635,17 @@ def trainer(args) -> int:
                 trainer_apply_started, PoolStageSLO.production().apply_s,
                 lane_rank=rank, result_bytes=int(manifest["result_bytes"]),
                 python_dense_socket_bytes=0)
+            # Release the one-reader lane as soon as native result mapping and
+            # model apply finish.  The durable per-trainer recovery checkpoint
+            # below is independent local I/O; serializing it behind this
+            # credit made later ranks exceed APPLY despite bounded apply work.
+            atomic_metadata(
+                control / f"native-result-applied-{generation:08d}-{rank:02d}.json", {
+                    "schema": "emender-native-e97-result-applied-lane-v1",
+                    "run_id": args.run_id, "fence_epoch": _fence_epoch(args),
+                    "generation": generation, "result_root": manifest["result_root"],
+                    "rank": rank,
+                })
         accepted_token_clock += int(manifest["weight"])
         step += args.local_steps; losses.append(loss)
         completed = generation + 1

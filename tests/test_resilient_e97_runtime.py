@@ -64,6 +64,15 @@ def test_live_native_selection_is_wired_and_python_debug_remains_explicit():
     assert "role recovery native runtime digest mismatch" in source
 
 
+def test_native_manager_endpoint_lifetime_spans_all_configured_generations():
+    from scripts.frontier import resilient_e97_role as role
+
+    args = SimpleNamespace(deadline_s=600.0, generations=3)
+    assert role._native_manager_session_lifetime_s(args) == 1800.0
+    manager = ROLE.read_text()[ROLE.read_text().index("def _native_manager(args)"):]
+    assert "deadline_s=_native_manager_session_lifetime_s(args)" in manager
+
+
 def test_owner_endpoint_snapshot_filters_control_only_lease_metadata():
     from scripts.frontier import resilient_e97_role as role
 
@@ -147,7 +156,7 @@ def test_native_trainer_apply_lanes_are_serialized_by_local_rank(tmp_path):
     waiter.start()
     time.sleep(.05)
     assert waiter.is_alive(), "rank one must not contend with rank zero's result view"
-    role.atomic_metadata(control / "native-applied-00000002-00.json", {
+    role.atomic_metadata(control / "native-result-applied-00000002-00.json", {
         "run_id": "run-a", "fence_epoch": 4, "generation": 2,
         "result_root": "ab" * 32, "rank": 0,
     })
@@ -163,7 +172,41 @@ def test_native_trainer_apply_lanes_are_serialized_by_local_rank(tmp_path):
     lane = trainer.index("_wait_for_native_apply_lane(", visible)
     apply = trainer.index("state = apply_delta(", lane)
     assert visible < lane < apply
-    assert "PoolStageSLO.production().apply_s" in trainer[lane:apply]
+    assert "deadline=exchange_deadline" in trainer[lane:apply]
+
+
+def test_native_apply_lane_excludes_durable_recovery_checkpoint_io():
+    """A slow local checkpoint must not hold the shared-result read lane.
+
+    Intermediate generations persist one trainer recovery checkpoint per GPU.
+    Charging that disk write to the next rank's native result-view lane makes
+    eight otherwise bounded applies exceed the 60 second APPLY budget.
+    """
+    trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args)"):]
+    wait = trainer.index("_wait_for_native_apply_lane(")
+    apply = trainer.index("state = apply_delta(", wait)
+    lane_credit = trainer.index("native-result-applied-", apply)
+    recovery_save = trainer.index("torch.save(", lane_credit)
+    durable_receipt = trainer.index("native-applied-", recovery_save)
+
+    assert wait < apply < lane_credit < recovery_save < durable_receipt
+    timer_reset = trainer.rfind("trainer_apply_started = time.monotonic()", wait, apply)
+    assert timer_reset > wait, "the APPLY SLO must measure apply, not lane waiting"
+
+
+def test_manager_uses_exchange_commit_bound_for_all_recovery_receipts():
+    """Eight durable checkpoints are an aggregate commit phase, not one apply."""
+    source = ROLE.read_text()
+    manager = source[source.index("def _native_manager(args)"):
+                     source.index("def manager(args)")]
+    receipt_loop = manager.index("for rank in range(args.local_quorum):")
+    commit = manager.index("session.commit(", receipt_loop)
+    window = manager[receipt_loop - 300:commit]
+
+    assert "recovery_deadline" in window
+    assert "min(args.deadline_s, 180.0)" in window
+    assert "deadline=recovery_deadline" in window
+    assert "apply_deadline" not in window
 
 
 def test_import_liveness_does_not_refresh_runtime_import_progress_deadline():

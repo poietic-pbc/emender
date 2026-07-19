@@ -644,12 +644,115 @@ def test_node_step_injection_uses_manager_generation_and_distinct_control(tmp_pa
     child.process = type("Process", (), {"poll": lambda self: None})()
     state = tmp_path / "supervision" / "node-1-manager.json"
     state.write_text(json.dumps({"heartbeat_time": 10, "progress_time": 10,
-                                 "generation": 2}))
+                                 "generation": 2, "stage": "published"}))
     monkeypatch.setenv("RESILIENT_E97_INJECT_MANAGER", "1:-1:2")
     assert supervisor._deadline_reason(child, 10) is None
     monkeypatch.setenv("RESILIENT_E97_INJECT_NODE_STEP", "1:-1:2")
     assert supervisor._deadline_reason(child, 10) == "injected_generation_gate"
     assert supervisor._deadline_reason(child, 10) is None
+
+
+def test_finalized_generation_injection_waits_for_durable_role_stage(tmp_path, monkeypatch):
+    child = Child("trainer", 0, "node000", 3, "trainer")
+    supervisor = AllocationSupervisor(tmp_path, [child], heartbeat_s=60,
+                                      progress_s=60, max_restarts=1)
+    child.process = type("Process", (), {"poll": lambda self: None})()
+    state = tmp_path / "supervision" / "node-0-trainer-3.json"
+    monkeypatch.setenv("RESILIENT_E97_INJECT_TRAINER", "0:3:1")
+    state.write_text(json.dumps({"heartbeat_time": 10, "progress_time": 10,
+                                 "generation": 1, "stage": "checkpoint_commit"}))
+    assert supervisor._deadline_reason(child, 10) is None
+    state.write_text(json.dumps({"heartbeat_time": 10, "progress_time": 10,
+                                 "generation": 1, "stage": "applied"}))
+    assert supervisor._deadline_reason(child, 10) == "injected_generation_gate"
+
+
+def test_native_service_loss_is_gated_by_manager_owner_stage(tmp_path, monkeypatch):
+    child = Child("native-service", 1, "node001", None, "service")
+    supervisor = AllocationSupervisor(tmp_path, [child], heartbeat_s=60,
+                                      progress_s=60, max_restarts=0)
+    child.process = type("Process", (), {"poll": lambda self: None})()
+    state = tmp_path / "supervision" / "node-1-manager.json"
+    state.write_text(json.dumps({"heartbeat_time": 10, "progress_time": 10,
+                                 "generation": 1, "stage": "training_wait"}))
+    monkeypatch.setenv("RESILIENT_E97_INJECT_NATIVE_SERVICE",
+                       "1:-1:1:owner_transport")
+    assert supervisor._deadline_reason(child, 10) is None
+    state.write_text(json.dumps({"heartbeat_time": 10, "progress_time": 10,
+                                 "generation": 1, "stage": "owner_transport"}))
+    assert supervisor._deadline_reason(child, 10) == "injected_native_service_stage"
+
+
+def test_native_manager_rejoin_syncs_authoritative_latest_generation(tmp_path):
+    from types import SimpleNamespace
+    from scripts.frontier import resilient_e97_role as role
+
+    handoff = tmp_path / "handoff"
+    handoff.mkdir()
+    manifest = handoff / "generation-00000002-fence-00000001.json"
+    manifest.write_text(json.dumps({
+        "finalized": True, "run_id": "run", "payload_id": "payload",
+        "source_id": "source", "code_id": "code", "generation": 2,
+        "fence": {"coordinator_epoch": 1},
+    }, sort_keys=True))
+    digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    (handoff / "latest.json").write_text(json.dumps({
+        "generation": 2, "fence": 1, "manifest": str(manifest),
+        "manifest_sha256": digest,
+    }, sort_keys=True))
+    args = SimpleNamespace(initial_generation=0, generations=3, run_id="run",
+                           payload_id="payload", source_id="source", code_id="code",
+                           coordinator_epoch=1)
+    generation, evidence = role._native_manager_resume_point(tmp_path, args, None)
+    assert generation == 2
+    assert evidence == {
+        "status": "synchronized", "generation": 2, "fence": 1,
+        "manifest": str(manifest.resolve()), "manifest_sha256": digest,
+    }
+
+    (handoff / "latest.json").write_text(json.dumps({
+        "generation": 2, "fence": 1, "manifest": str(manifest),
+        "manifest_sha256": "00" * 32,
+    }))
+    with pytest.raises(ValueError, match="manifest checksum"):
+        role._native_manager_resume_point(tmp_path, args, None)
+
+
+def test_delayed_ready_injection_is_exact_and_bounded(monkeypatch):
+    from scripts.frontier import resilient_e97_role as role
+
+    monkeypatch.setenv("RESILIENT_E97_DELAY_READY", "1:2:7.5")
+    assert role._native_ready_delay(node=1, generation=2) == 7.5
+    assert role._native_ready_delay(node=0, generation=2) == 0.0
+    monkeypatch.setenv("RESILIENT_E97_DELAY_READY", "1:2:181")
+    with pytest.raises(ValueError, match="bounded by 180"):
+        role._native_ready_delay(node=1, generation=2)
+
+
+def test_rejoining_manager_delays_ready_before_advertising(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from scripts.frontier import resilient_e97_role as role
+
+    monkeypatch.setenv("RESILIENT_E97_DELAY_READY", "1:2:0.02")
+    args = SimpleNamespace(run_id="run-a", coordinator_epoch=4)
+    term = {"value": False}
+    started = time.monotonic()
+    assert role._wait_native_ready_delay(
+        tmp_path, args, node=1, generation=2, incarnation="new-inc",
+        term_requested=term)
+    assert time.monotonic() - started >= 0.015
+    marker = json.loads(
+        (tmp_path / "native-delayed-ready-00000002-new-inc.json").read_text())
+    assert marker["status"] == "completed"
+    assert marker["incarnation"] == "new-inc"
+
+    source = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    manager = source[source.index("def _native_manager(args)"):]
+    initial_ready = manager.index(
+        "pool_client.ready(session.owner_endpoint, start_generation")
+    assert manager.rfind("_wait_native_ready_delay(", 0, initial_ready) >= 0
+
+
 def test_child_without_first_heartbeat_hits_startup_deadline(tmp_path):
     child = Child("manager", 0, "node000", None, "python manager.py")
     supervisor = AllocationSupervisor(tmp_path, [child], heartbeat_s=60,
@@ -826,8 +929,8 @@ def test_terminal_generation_does_not_rejoin_draining_pool():
     role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
     manager = role[role.index("def _native_manager(args)"):
                    role.index("def manager(args)")]
-    assert ("generation + 1 < args.initial_generation + args.generations"
-            ) in manager
+    assert "target_generation = args.initial_generation + args.generations" in manager
+    assert "has_next_generation = generation + 1 < target_generation" in manager
     assert "if pool_client is not None and has_next_generation:" in manager
     assert manager.index('stage="published"') < manager.index(
         "has_next_generation =", manager.index('stage="published"'))

@@ -18,7 +18,7 @@ from ndm.native_dataplane import (
 )
 from ndm.native_e97_runtime import (
     GenerationMetadata, NativeTrainerDataPlane, atomic_metadata,
-    exact_weighted_reference,
+    exact_weighted_reference, wait_metadata,
 )
 from ndm.native_pool_runtime import NativeManagerSession, NativeTrainerHandoff
 from ndm.native_transport import NativeTransport, NativeTransportLibrary
@@ -27,6 +27,25 @@ from ndm.resilient_pool_runtime import OwnerEndpoint
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD_MANIFEST = ROOT / "build/native-resilient-dataplane/native-artifacts.json"
+
+
+def test_wait_metadata_tolerates_stale_atomic_generation_until_publication(tmp_path):
+    latest = tmp_path / "latest.json"
+    atomic_metadata(latest, {"generation": 1, "fence": 9})
+
+    def publish_next_generation():
+        time.sleep(.05)
+        atomic_metadata(latest, {"generation": 2, "fence": 9})
+
+    publisher = threading.Thread(target=publish_next_generation)
+    publisher.start()
+    try:
+        assert wait_metadata(
+            latest, deadline=time.monotonic() + 1,
+            expected={"generation": 2, "fence": 9},
+        )["generation"] == 2
+    finally:
+        publisher.join()
 
 
 def test_native_service_validates_dense_submissions_without_global_serialization():
@@ -292,6 +311,23 @@ def test_native_manager_binds_both_abis_before_ready_installs_routes_and_drains(
     assert final.local["shared_bytes_current"] == 0
     assert final.transport["in_flight_bytes"] == 0
     assert final.transport["retained_bytes"] == 0
+
+    # A manager process is disposable.  Its allocation-handoff close must
+    # detach only this client/endpoint so a new incarnation can own the same
+    # persistent service.  The node supervisor, not a manager child, owns the
+    # eventual service-wide TERM/drain.
+    replacement = NativeManagerSession.start(
+        backend=NATIVE_TEST, run_id="run", fence_epoch=19,
+        worker_id="node-0", incarnation="node-0-rejoined", host="127.0.0.1",
+        build_manifest=BUILD_MANIFEST, gate_json=None, source_root=ROOT,
+        production=False, full_layout=False, deadline_s=20,
+        telemetry_path=tmp_path / "native-rejoined.jsonl", payload_max=4096,
+        resident_limit_bytes=1 << 20,
+    )
+    replacement.install_generation(
+        total_elements=8, generation=5, payload_max=64, deadline_s=10)
+    replacement.abort(deadline_s=10)
+    replacement.close("normal")
 
 
 def test_transport_python_bridge_exposes_bounded_native_send_receive_abi():

@@ -59,7 +59,7 @@ def wait_metadata(path: str | Path, *, deadline: float,
             if expected and any(value.get(key) != item for key, item in expected.items()):
                 raise ValueError("native metadata identity/fence mismatch")
             return value
-        except (FileNotFoundError, json.JSONDecodeError) as error:
+        except (FileNotFoundError, json.JSONDecodeError, ValueError) as error:
             last = error
             time.sleep(.02)
     raise TimeoutError(f"native metadata deadline expired for {target}: {last}")

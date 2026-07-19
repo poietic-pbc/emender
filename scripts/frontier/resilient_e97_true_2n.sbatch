@@ -119,7 +119,7 @@ if [[ ${RESILIENT_E97_STARTUP_SMOKE:-0} == 1 ]]; then
   [[ ${RESILIENT_E97_GENERATIONS:-1} == 1 ]] || {
     echo "startup smoke requires exactly one finalized generation" >&2; exit 64;
   }
-  [[ -z ${RESILIENT_E97_INJECT_TRAINER:-}${RESILIENT_E97_INJECT_MANAGER:-}${RESILIENT_E97_INJECT_NODE_STEP:-} ]] || {
+  [[ -z ${RESILIENT_E97_INJECT_TRAINER:-}${RESILIENT_E97_INJECT_MANAGER:-}${RESILIENT_E97_INJECT_NODE_STEP:-}${RESILIENT_E97_INJECT_NATIVE_SERVICE:-}${RESILIENT_E97_DELAY_READY:-} ]] || {
     echo "startup smoke forbids failure injection" >&2; exit 64;
   }
 else

@@ -307,10 +307,10 @@ class AllocationSupervisor:
         assert child.process is not None
         if child.process.poll() is not None:
             return f"exit:{child.process.returncode}"
-        if child.role == "native-service":
-            return None
         state_path = self._state_path(child)
         if not state_path.exists():
+            if child.role == "native-service":
+                return None
             if child.started_at is not None and now - child.started_at > self.startup_s:
                 return "startup_deadline"
             return None
@@ -326,21 +326,42 @@ class AllocationSupervisor:
             "trainer": "RESILIENT_E97_INJECT_TRAINER",
             "manager": "RESILIENT_E97_INJECT_MANAGER",
             "node-supervisor": "RESILIENT_E97_INJECT_NODE_STEP",
+            "native-service": "RESILIENT_E97_INJECT_NATIVE_SERVICE",
         }[child.role]
         injection = os.environ.get(injection_variable, "")
         if injection and child.identity not in self.injected:
             fields = injection.split(":")
-            if len(fields) != 3:
-                raise ValueError("injection must be NODE:RANK:FINALIZED_GENERATION")
-            node, rank, generation = map(int, fields)
+            if len(fields) not in {3, 4}:
+                raise ValueError(
+                    "injection must be NODE:RANK:GENERATION[:STAGE]")
+            node, rank, generation = map(int, fields[:3])
+            requested_stage = fields[3] if len(fields) == 4 else None
+            observed_stage = str(state.get("stage", "unknown"))
+            finalized_stage = {
+                "trainer": "applied", "manager": "published",
+                "node-supervisor": "published",
+            }.get(child.role)
+            stage_matches = (observed_stage == requested_stage
+                             if requested_stage is not None
+                             else observed_stage == finalized_stage)
             matches = (child.node_rank == node and
                        ((child.role == "trainer" and child.local_rank == rank) or
-                        (child.role in {"manager", "node-supervisor"} and rank == -1)))
-            if matches and int(state.get("generation", -1)) >= generation:
+                        (child.role in {"manager", "node-supervisor", "native-service"}
+                         and rank == -1)))
+            if (child.role == "native-service" and requested_stage is None):
+                raise ValueError("native-service injection requires an exact owner stage")
+            if (matches and stage_matches
+                    and int(state.get("generation", -1)) >= generation):
                 self.injected.add(child.identity)
                 self._event("generation_gated_injection", child, generation=generation,
-                            injection_class=child.role)
-                return "injected_generation_gate"
+                            injection_class=child.role,
+                            observed_generation=int(state.get("generation", -1)),
+                            observed_stage=observed_stage)
+                return ("injected_native_service_stage"
+                        if child.role == "native-service"
+                        else "injected_generation_gate")
+        if child.role == "native-service":
+            return None
         if now - float(state.get("heartbeat_time", 0)) > self.heartbeat_s:
             return "heartbeat_deadline"
         stage = str(state.get("stage", "unknown"))
@@ -376,7 +397,7 @@ class AllocationSupervisor:
         # A node supervisor deliberately owns no training loop.  Its progress is
         # the model-free manager that it supervises, so use that fenced heartbeat
         # for generation-gated whole-node-step injection.
-        if child.role == "node-supervisor":
+        if child.role in {"node-supervisor", "native-service"}:
             state_path = (state_root / "supervision" /
                           f"node-{child.node_rank}-manager.json")
         return state_path
@@ -523,6 +544,10 @@ class AllocationSupervisor:
         completed: set[str] = set()
         while not self.stopping:
             now = time.time()
+            for child in services:
+                reason = self._deadline_reason(child, now)
+                if reason == "injected_native_service_stage":
+                    self.stop_child(child, reason)
             if any(child.process is not None and child.process.poll() is not None
                    for child in services):
                 self.stop_children(

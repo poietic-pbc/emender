@@ -707,17 +707,21 @@ class NativeManagerSession:
     def close(self, terminal_reason: str = "normal") -> NativeServiceTelemetry:
         if self.closed:
             raise RuntimeError("native manager session is already closed")
-        # Local DRAIN is bounded by the caller's absolute process deadline. It
-        # has no peer rendezvous; transport route removal/cancel is likewise
-        # independent for each current endpoint.
+        # A process-local allocation handoff detaches this disposable manager
+        # incarnation without changing the persistent service's global state.
+        # The node supervisor owns the eventual service-wide TERM/drain.  A
+        # normal terminal manager close still drains explicitly after the last
+        # generation.  Transport route removal/cancel is independent for each
+        # current endpoint in either case.
         try:
-            try:
-                self.local.control(Command.DRAIN, deadline_s=30.0).close()
-            except Exception:
+            if terminal_reason != "allocation_term_handoff":
                 try:
-                    self.local.control(Command.ABORT, deadline_s=1.0).close()
+                    self.local.control(Command.DRAIN, deadline_s=30.0).close()
                 except Exception:
-                    pass
+                    try:
+                        self.local.control(Command.ABORT, deadline_s=1.0).close()
+                    except Exception:
+                        pass
             for peer_id in tuple(self.routes.values()):
                 try:
                     self.transport.library.check(
