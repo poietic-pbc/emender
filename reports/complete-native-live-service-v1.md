@@ -88,6 +88,21 @@ does not change the architectural gaps or fail-closed conclusion below.
   `terminate -> join -> kill -> join`, preventing orphaned synthetic peers;
   the final correctly activated broad rerun passed 158/158 in 179.18 seconds.
 
+### Final retry validation
+
+The final retry repeated validation after sourcing the canonical Frontier
+activation script for every Python/build command. The first broad invocation
+was intentionally allowed to exercise source attestation and rejected the
+stale pre-commit native build manifest (142 passed, one attestation failure).
+Rebuilding at `413fff0` with
+`PYTHON_BIN="$EMENDER_PYTHON" scripts/frontier/build_native_resilient_dataplane.sh
+build/native-resilient-dataplane` passed normal CTest 8/8 and emitted a current
+manifest. A clean rerun of every current `tests/test_native*` and
+`tests/test_resilient*` module then passed **143/143 in 211.59 seconds** under
+Python 3.12.13. This retry submitted no Slurm command or job. The passing rerun
+validates the landed component and fail-closed behavior; it does not change the
+NDP03/NDP14 persistent compiled-service gap described below.
+
 ## Required conformance checklist
 
 Compute Pool v1 R01–R16 was checked. This pass advances R03–R05, R08–R10,
