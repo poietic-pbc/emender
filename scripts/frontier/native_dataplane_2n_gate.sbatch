@@ -29,7 +29,6 @@ REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
    ,${SLURM_NETWORK:-}, == *,job_vni,* ]] || {
   echo "native gate requires allocation-time single-node and job VNIs" >&2; exit 64;
 }
-: "${SLINGSHOT_VNIS:?Slurm did not provision a CXI VNI for the native gate}"
 [[ ${FI_PROVIDER:-} == cxi ]] || { echo "native Frontier gate requires exact FI_PROVIDER=cxi" >&2; exit 64; }
 [[ ${NDP_LAYOUT:-} == e97-f64-5506770496 ]] || { echo "native gate requires exact E97 f64 layout" >&2; exit 64; }
 [[ ${NDP_TRAINERS_PER_NODE:-} == 8 ]] || { echo "native gate requires eight local lanes" >&2; exit 64; }
@@ -85,7 +84,9 @@ value = {
     "nodelist": os.environ["SLURM_JOB_NODELIST"],
     "requested_walltime": os.environ["NDP_REQUESTED_WALLTIME"],
     "slurm_network": os.environ["SLURM_NETWORK"],
-    "slingshot_vnis": os.environ["SLINGSHOT_VNIS"],
+    "slingshot_step_env_at_batch_scope": {
+        key: value for key, value in os.environ.items() if key.startswith("SLINGSHOT_")
+    },
     "submit_host": socket.gethostname(),
     "batch_started_unix_ns": time.time_ns(),
     "mode": os.environ["NDP_MODE"],
@@ -109,8 +110,13 @@ CONTROLLER_STEP_PID=$!
 
 set +e
 srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task=32 \
+  --network=single_node_vni,job_vni \
   --cpu-bind=cores --overlap --exact --kill-on-bad-exit=0 \
-  bash -c 'exec "$1" --controller-host "$2" --controller-port "$3" \
+  bash -c 'if [[ $SLURM_PROCID == 0 ]]; then
+      printf "native_step_network=%s slingshot_env_names=" "${SLURM_NETWORK:-unset}" >&2
+      env | sed -n "s/^\(SLINGSHOT_[^=]*\)=.*/\1/p" | sort | paste -sd, - >&2
+    fi
+    exec "$1" --controller-host "$2" --controller-port "$3" \
     --rank "$SLURM_PROCID" --provider cxi --production --mode "$4" \
     --layout-bytes 5506770496 --payload-max 67108864 \
     --generations "$5" --warmup "$6" --reduction-threads 16 \
