@@ -35,7 +35,7 @@ def test_native_service_validates_dense_submissions_without_global_serialization
     submit = source[source.index("int Service::submit("):
                     source.index("void Service::release_submissions()")]
     unlock = submit.index("lock.unlock();")
-    checksum = submit.index("validation_digest.update")
+    checksum = submit.index("Sha256::digest")
     relock = submit.index("lock.lock();")
     assert "std::unique_lock<std::mutex> lock(mutex_);" in submit
     assert unlock < checksum < relock
@@ -50,10 +50,11 @@ def test_native_service_reduces_once_validated_sealed_sources_in_parallel():
                     source.index("void Service::release_submissions()")]
     reduce_local = source[source.index("int Service::reduce_local("):
                           source.index("bool local_spool_path(")]
-    assert "kValidationChunkElements" in submit
-    assert "validation_digest.update" in submit
+    assert "validation_workers" in submit
+    assert "finite_workers" in submit
+    assert "Sha256::digest(mapping.data, mapping.bytes)" in submit
     assert "actual != receipt.digest" in submit
-    assert "else if (!all_finite)" in submit
+    assert "nonfinite.load(std::memory_order_relaxed)" in submit
     assert "Re-hashing here would add a redundant full-layout pass" in reduce_local
     assert "Sha256::digest(mapping.data, mapping.bytes)" not in reduce_local
     assert "std::thread::hardware_concurrency()" in reduce_local

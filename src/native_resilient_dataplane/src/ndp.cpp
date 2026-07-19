@@ -980,32 +980,53 @@ int Service::submit(ndp_client_t handle, const ndp_submit_v1* input,
     Mapping mapping;
     int validation_status = map_readonly(*validation_buffer, mapping);
     if (validation_status == NDP_OK) {
-        // Hash then inspect cache-sized extents. This preserves checksum
-        // precedence and the byte-for-byte SHA while avoiding two independent
-        // DRAM passes over an 11 GiB owner numerator.
+        // Integrity and finiteness are independent immutable-source checks.
+        // Bound the finite scan to four workers per submission (32 total for
+        // eight local trainers, eight total for the two owner numerators) and
+        // overlap it with the exact byte-for-byte checksum. Checksum rejection
+        // retains precedence after both bounded checks complete.
         const auto* raw = static_cast<const std::uint8_t*>(mapping.data);
-        static constexpr std::uint64_t kValidationChunkElements = UINT64_C(1) << 20;
-        Sha256 validation_digest;
-        bool all_finite = true;
-        for (std::uint64_t begin = 0; begin != request.element_count;) {
-            const std::uint64_t count =
-                std::min(kValidationChunkElements, request.element_count - begin);
-            validation_digest.update(raw + begin * width,
-                                     static_cast<std::size_t>(count * width));
-            if (all_finite) {
-                for (std::uint64_t index = begin; index != begin + count; ++index) {
-                    if (!std::isfinite(read_source(
-                            raw, request.source_dtype, index))) {
-                        all_finite = false;
-                        break;
+        const unsigned advertised_workers = std::thread::hardware_concurrency();
+        const std::size_t validation_workers = std::min<std::size_t>(
+            4, std::min<std::uint64_t>(request.element_count,
+                advertised_workers == 0 ? 1U : advertised_workers));
+        const std::uint64_t elements_per_worker =
+            request.element_count / validation_workers;
+        const std::uint64_t remainder_elements =
+            request.element_count % validation_workers;
+        std::atomic<bool> nonfinite{false};
+        std::vector<std::thread> finite_workers;
+        try {
+            finite_workers.reserve(validation_workers);
+            for (std::size_t worker_index = 0;
+                 worker_index != validation_workers; ++worker_index) {
+                const std::uint64_t begin = worker_index * elements_per_worker
+                    + std::min<std::uint64_t>(worker_index, remainder_elements);
+                const std::uint64_t end = begin + elements_per_worker
+                    + (worker_index < remainder_elements ? 1U : 0U);
+                finite_workers.emplace_back([&, begin, end] {
+                    for (std::uint64_t index = begin;
+                         index < end && !nonfinite.load(std::memory_order_relaxed);
+                         ++index) {
+                        if (!std::isfinite(read_source(
+                                raw, request.source_dtype, index))) {
+                            nonfinite.store(true, std::memory_order_relaxed);
+                            return;
+                        }
                     }
-                }
+                });
             }
-            begin += count;
+        } catch (...) {
+            for (auto& worker : finite_workers) if (worker.joinable()) worker.join();
+            validation_status = NDP_EPROVIDER;
         }
-        const Digest actual = validation_digest.finish();
-        if (actual != receipt.digest) validation_status = NDP_ECHECKSUM;
-        else if (!all_finite) validation_status = NDP_ENONFINITE;
+        const Digest actual = Sha256::digest(mapping.data, mapping.bytes);
+        for (auto& worker : finite_workers) if (worker.joinable()) worker.join();
+        if (validation_status == NDP_OK && actual != receipt.digest)
+            validation_status = NDP_ECHECKSUM;
+        else if (validation_status == NDP_OK
+                 && nonfinite.load(std::memory_order_relaxed))
+            validation_status = NDP_ENONFINITE;
     }
     lock.lock();
 
