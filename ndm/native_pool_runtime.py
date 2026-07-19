@@ -11,6 +11,8 @@ callers cannot accidentally fall back to a Python dense socket after freezing.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 import hashlib
 import json
@@ -20,7 +22,7 @@ from pathlib import Path
 import socket
 import struct
 import time
-from typing import Mapping, Sequence
+from typing import Iterator, Mapping, Sequence
 
 from ndm.native_artifacts import (
     NATIVE_CXI, NATIVE_TEST, PYTHON_TCP_DEBUG, attest_launch,
@@ -381,6 +383,95 @@ class NativeManagerSession:
             deadline_s=deadline_s).close()
         self._generation_installed = True
         self._frozen = self._checkpoint_proposed = False
+
+    @contextmanager
+    def import_reduction_sources(
+            self, sources: Sequence[tuple[int, str, str, int, int]], *,
+            source_dtype: DType, deadline_s: float
+            ) -> Iterator[tuple[Operation, ...]]:
+        """Admit independent sealed owner results through parallel RPC clients.
+
+        Each source tuple is ``(fd, worker_id, incarnation, sequence, weight)``.
+        A real E97 binary64 node numerator is several GiB.  Importing two of
+        them through the controller's one RPC session serializes the caller
+        checksum and service checksum/finite scans even though the service is
+        explicitly able to validate independent client sessions concurrently.
+        Give every immutable source its own short-lived native client so those
+        scans overlap without weakening either validation boundary.
+
+        The controller still owns the installed attempt, freeze, exact
+        reduction, and result.  Source clients remain live through the yielded
+        freeze/finalize window and are closed on every exit path.
+        """
+        if (not self._generation_installed or self._frozen
+                or not sources or len(sources) > 16 or deadline_s <= 0):
+            raise RuntimeError("imported reduction sources are outside LOCAL_COLLECT")
+        if len({(worker, incarnation, sequence)
+                for _fd, worker, incarnation, sequence, _weight in sources}) \
+                != len(sources):
+            raise ValueError("imported reduction source identities must be unique")
+        if any(fd < 0 or not worker or not incarnation or sequence < 0 or weight <= 0
+               for fd, worker, incarnation, sequence, weight in sources):
+            raise ValueError("imported reduction source metadata is invalid")
+
+        def admit(source: tuple[int, str, str, int, int]
+                  ) -> tuple[Client, Operation]:
+            fd, worker, incarnation, sequence, weight = source
+            client = Client.open(
+                library=self.local.native, role=Role.TRAINER,
+                run_key=self.run_id, fence_epoch=self.fence_epoch,
+                worker_key=f"owner-import:{worker}:{sequence}",
+                incarnation=incarnation,
+                deadline_s=min(10.0, deadline_s))
+            try:
+                client.attach_generation(
+                    total_elements=self.local.total_elements,
+                    layout_digest=self.local.layout_digest,
+                    generation=self.local.generation,
+                    attempt=self.local.attempt,
+                    owner_epoch=self.local.owner_epoch,
+                    source_dtype=source_dtype,
+                    deadline_s=deadline_s,
+                    deadline_unix_ns=self.local.generation_deadline_ns,
+                    base_digest=self.local.base_digest,
+                    plan_digest=self.local.plan_digest)
+                with client.register_memfd(
+                        fd, length=self.local.total_elements
+                        * source_dtype.numpy_dtype.itemsize,
+                        handle_generation=self.local.generation) as buffer:
+                    operation = client.submit(
+                        buffer, trainer_key=worker,
+                        trainer_incarnation=incarnation,
+                        submission_seq=sequence, weight=weight,
+                        source_dtype=source_dtype, deadline_s=deadline_s)
+                return client, operation
+            except BaseException:
+                client.close()
+                raise
+
+        admitted: list[tuple[Client, Operation]] = []
+        futures = []
+        try:
+            with ThreadPoolExecutor(
+                    max_workers=len(sources),
+                    thread_name_prefix="native-owner-import") as executor:
+                futures = [executor.submit(admit, source) for source in sources]
+                admitted = [future.result() for future in futures]
+            yield tuple(operation for _client, operation in admitted)
+        finally:
+            # A future after the first failed one may still have admitted a
+            # source.  Collect every successful result before releasing so an
+            # exception cannot strand a native client or descriptor.
+            known_clients = {id(client) for client, _operation in admitted}
+            for future in futures:
+                if not future.done() or future.cancelled() or future.exception() is not None:
+                    continue
+                pair = future.result()
+                if id(pair[0]) not in known_clients:
+                    admitted.append(pair); known_clients.add(id(pair[0]))
+            for client, operation in admitted:
+                operation.close()
+                client.close()
 
     def allocate_trainer_buffer(self, *, deadline_s: float = 30.0) -> Buffer:
         if not self._generation_installed or self._frozen:

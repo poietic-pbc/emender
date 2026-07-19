@@ -609,10 +609,16 @@ def _native_manager(args) -> int:
             local_weight = sum(int(item["tokens"]) for item in submissions)
             heartbeat(bulk, identity, generation=generation,
                       step=generation * args.local_steps, loss=None, stage="freeze")
+            local_reduce_started = time.monotonic()
             freeze = session.freeze(
                 deadline_s=max(.001, native_deadline - time.monotonic()))
             local_operation, local_result = session.finalize_redistribution(
                 deadline_s=max(.001, native_deadline - time.monotonic()))
+            _stage_telemetry(
+                bulk, identity, generation, "native_local_reduction",
+                local_reduce_started, pool_config.slo.sync_s,
+                contributions=len(submissions), input_dtype="float32",
+                result_dtype="float64", result_bytes=local_result.length)
             final_operation, final_result = local_operation, local_result
             if pool_client is not None:
                 close = pool_client.contribute_and_freeze(
@@ -641,12 +647,19 @@ def _native_manager(args) -> int:
                 heartbeat(bulk, identity, generation=generation,
                           step=generation * args.local_steps, loss=None,
                           stage="owner_transport")
+                owner_transport_started = time.monotonic()
                 exchange_deadline = time.monotonic() + pool_config.slo.transport_s
                 remote_fd = _native_peer_exchange(
                     session, local_result, args=args, node=node, peer_id=peer_id,
                     peer_incarnation=peer_endpoint.incarnation,
                     peer_root=roots[peer_id], peer_weight=weights[peer_id],
                     deadline=exchange_deadline)
+                _stage_telemetry(
+                    bulk, identity, generation, "native_owner_exchange",
+                    owner_transport_started, pool_config.slo.transport_s,
+                    sent_bytes=local_result.length,
+                    received_bytes=local_result.length,
+                    python_dense_socket_bytes=0)
                 local_fd = os.dup(local_result.fd)
                 session.abort(deadline_s=5)
                 local_result.close(); local_operation.close(); freeze.close()
@@ -655,24 +668,32 @@ def _native_manager(args) -> int:
                     source_dtype=DType.F64, base_digest=base_digest,
                     plan_digest=plan_digest,
                     deadline_s=max(.001, args.deadline_s))
-                registered = []
-                for sequence, worker in enumerate(workers):
-                    fd = local_fd if worker == f"node-{node}" else remote_fd
-                    buffer = session.local.register_memfd(
-                        fd, length=elements * 8, handle_generation=generation)
-                    operation = session.local.submit(
-                        buffer, trainer_key=worker,
-                        trainer_incarnation=(incarnation if worker == f"node-{node}"
-                                             else peer_endpoint.incarnation),
-                        submission_seq=sequence, weight=weights[worker],
-                        source_dtype=DType.F64, deadline_s=args.deadline_s)
-                    buffer.close(); registered.append(operation)
-                os.close(local_fd); os.close(remote_fd)
-                freeze = session.freeze(deadline_s=args.deadline_s)
-                final_operation, final_result = session.finalize_redistribution(
-                    deadline_s=args.deadline_s)
-                for operation in registered:
-                    operation.close()
+                heartbeat(bulk, identity, generation=generation,
+                          step=generation * args.local_steps, loss=None,
+                          stage="redistribution")
+                redistribution_started = time.monotonic()
+                imported_sources = tuple(
+                    (local_fd if worker == f"node-{node}" else remote_fd,
+                     worker,
+                     incarnation if worker == f"node-{node}"
+                     else peer_endpoint.incarnation,
+                     sequence, weights[worker])
+                    for sequence, worker in enumerate(workers))
+                try:
+                    with session.import_reduction_sources(
+                            imported_sources, source_dtype=DType.F64,
+                            deadline_s=args.deadline_s):
+                        freeze = session.freeze(deadline_s=args.deadline_s)
+                        final_operation, final_result = session.finalize_redistribution(
+                            deadline_s=args.deadline_s)
+                finally:
+                    os.close(local_fd); os.close(remote_fd)
+                _stage_telemetry(
+                    bulk, identity, generation, "native_redistribution",
+                    redistribution_started, pool_config.slo.apply_s,
+                    contributions=len(imported_sources), input_dtype="float64",
+                    result_dtype="float32", result_bytes=final_result.length,
+                    python_dense_socket_bytes=0)
                 validated = pool_client.validate_result_root(
                     generation=generation, attempt=1, worker_id=f"node-{node}",
                     incarnation=incarnation, result_root=final_result.result_root.hex(),

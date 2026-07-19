@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import socket
 import struct
+import threading
 import time
 
 import numpy as np
@@ -54,6 +55,87 @@ def test_native_service_parallelizes_deterministic_full_layout_local_reduction()
     assert parallel.index("for (std::uint64_t index = begin;") < parallel.index(
         "for (std::size_t source_index = 0;")
     assert "std::atomic<bool> nonfinite" in reduce_local
+
+
+def test_native_manager_imports_owner_results_on_independent_rpc_sessions(monkeypatch):
+    """Attempt-2 source validation overlaps and owns clients through freeze."""
+    session = object.__new__(NativeManagerSession)
+    session._generation_installed = True
+    session._frozen = False
+    session.run_id = "run"
+    session.fence_epoch = 19
+
+    class Local:
+        native = object()
+        total_elements = 8
+        layout_digest = bytes.fromhex("11" * 32)
+        generation = 5
+        attempt = 2
+        owner_epoch = 1
+        generation_deadline_ns = time.time_ns() + 10_000_000_000
+        base_digest = bytes.fromhex("22" * 32)
+        plan_digest = bytes.fromhex("33" * 32)
+
+    session.local = Local()
+    validation_barrier = threading.Barrier(2, timeout=2)
+    opened, closed = [], []
+
+    class FakeBuffer:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_ignored):
+            return None
+
+    class FakeOperation:
+        def __init__(self, worker):
+            self.worker, self.closed = worker, False
+
+        def close(self):
+            self.closed = True
+
+    class FakeClient:
+        def __init__(self, worker):
+            self.worker = worker
+            opened.append(worker)
+
+        def attach_generation(self, **metadata):
+            assert metadata["attempt"] == 2
+            assert metadata["source_dtype"] is DType.F64
+
+        def register_memfd(self, fd, *, length, handle_generation):
+            assert fd in {41, 42}
+            assert length == 64
+            assert handle_generation == 5
+            return FakeBuffer()
+
+        def submit(self, _buffer, *, trainer_key, trainer_incarnation,
+                   submission_seq, weight, source_dtype, deadline_s):
+            assert trainer_key == self.worker
+            assert trainer_incarnation.endswith("-boot")
+            assert submission_seq in {0, 1} and weight > 0
+            assert source_dtype is DType.F64 and deadline_s == 10
+            validation_barrier.wait()
+            return FakeOperation(self.worker)
+
+        def close(self):
+            closed.append(self.worker)
+
+    monkeypatch.setattr(
+        Client, "open",
+        lambda **values: FakeClient(values["worker_key"].split(":")[-2]))
+    sources = (
+        (41, "node-0", "node-0-boot", 0, 17),
+        (42, "node-1", "node-1-boot", 1, 23),
+    )
+    with session.import_reduction_sources(
+            sources, source_dtype=DType.F64, deadline_s=10) as operations:
+        assert [operation.worker for operation in operations] == ["node-0", "node-1"]
+        assert not any(operation.closed for operation in operations)
+        assert closed == []
+    assert sorted(opened) == ["node-0", "node-1"]
+    assert closed == ["node-0", "node-1"]
+    assert all(operation.closed for operation in operations)
 
 
 def test_native_manager_binds_both_abis_before_ready_installs_routes_and_drains(tmp_path):
@@ -606,17 +688,20 @@ def test_persistent_service_preserves_exact_global_numerator():
     controller.source_dtype = DType.F64
     second_install = controller.install_generation(
         5, attempt=2, owner_epoch=1, deadline_s=10)
-    reductions = []
-    for sequence, (worker, fd, weight) in enumerate((
-            ("node-0", local_fd, sum(node_weights[0])),
-            ("node-1", peer_fd, sum(node_weights[1])))):
-        with controller.register_memfd(fd, length=elements * 8) as buffer:
-            reductions.append(controller.submit(
-                buffer, trainer_key=worker, trainer_incarnation=f"{worker}-boot",
-                submission_seq=sequence, weight=weight, source_dtype=DType.F64,
-                deadline_s=10))
-    global_freeze = controller.control(Command.FREEZE, deadline_s=10)
-    global_operation = controller.control(Command.FINALIZE_OWNERS, deadline_s=10)
+    manager = object.__new__(NativeManagerSession)
+    manager.local = controller
+    manager.run_id, manager.fence_epoch = "global-run", 29
+    manager._generation_installed, manager._frozen = True, False
+    imported = (
+        (local_fd, "node-0", "node-0-boot", 0, sum(node_weights[0])),
+        (peer_fd, "node-1", "node-1-boot", 1, sum(node_weights[1])),
+    )
+    with manager.import_reduction_sources(
+            imported, source_dtype=DType.F64, deadline_s=10):
+        global_freeze = manager.freeze(deadline_s=10)
+        global_operation, global_result = manager.finalize_redistribution(
+            deadline_s=10)
+    global_result.close()
     with controller.result_view(global_operation) as global_view:
         expected = ((local_numerator + node1_numerator) /
                     sum(sum(item) for item in node_weights)).astype(np.float32)
@@ -627,6 +712,4 @@ def test_persistent_service_preserves_exact_global_numerator():
     assert controller.metrics.projection_count == 2
     controller.control(Command.ABORT, deadline_s=10).close()
     global_operation.close(); global_freeze.close(); second_install.close()
-    for operation in reductions:
-        operation.close()
     os.close(local_fd); os.close(peer_fd); controller.close()
