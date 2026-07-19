@@ -636,6 +636,7 @@ def _native_manager(args) -> int:
 
     signal.signal(signal.SIGTERM, request_term)
     liveness_stop, liveness_thread = _liveness_heartbeat(bulk, identity)
+    terminal_published = False
     try:
         for generation in range(args.initial_generation,
                                 args.initial_generation + args.generations):
@@ -874,10 +875,13 @@ def _native_manager(args) -> int:
             heartbeat(bulk, identity, generation=generation + 1,
                       step=(generation + 1) * args.local_steps, loss=None,
                       stage="published")
-            if (pool_client is not None and generation + 1 <
-                    args.initial_generation + args.generations):
+            has_next_generation = (
+                generation + 1 < args.initial_generation + args.generations)
+            if pool_client is not None and has_next_generation:
                 pool_client.ready(session.owner_endpoint, generation + 1,
                                   run_id=args.run_id, fence=_fence_epoch(args))
+            elif not has_next_generation:
+                terminal_published = True
     except BaseException:
         try:
             session.abort(deadline_s=1)
@@ -886,7 +890,7 @@ def _native_manager(args) -> int:
         raise
     finally:
         liveness_stop.set(); liveness_thread.join(10)
-        if pool_client is not None:
+        if pool_client is not None and not terminal_published:
             try:
                 pool_client.drain(session.owner_endpoint.worker_id,
                                   session.owner_endpoint.incarnation)

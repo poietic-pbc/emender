@@ -826,10 +826,14 @@ def test_terminal_generation_does_not_rejoin_draining_pool():
     role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
     manager = role[role.index("def _native_manager(args)"):
                    role.index("def manager(args)")]
-    assert ("if (pool_client is not None and generation + 1 <\n"
-            "                    args.initial_generation + args.generations):") in manager
+    assert ("generation + 1 < args.initial_generation + args.generations"
+            ) in manager
+    assert "if pool_client is not None and has_next_generation:" in manager
     assert manager.index('stage="published"') < manager.index(
-        "generation + 1 <", manager.index('stage="published"'))
+        "has_next_generation =", manager.index('stage="published"'))
+    assert "terminal_published = False" in manager
+    assert "terminal_published = True" in manager
+    assert "if pool_client is not None and not terminal_published:" in manager
 
 
 def test_node_local_exit_retains_only_small_control_evidence(tmp_path):
