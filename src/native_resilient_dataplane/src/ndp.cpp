@@ -1147,38 +1147,11 @@ int Service::reduce_local(const std::shared_ptr<Client>& client) {
         }
     };
 
-    // Sealed submissions were validated at admission, but v1 deliberately
-    // rechecks them at reduction.  Hash independent mappings concurrently so
-    // the safety check does not reintroduce one full-layout pass per trainer.
-    std::vector<Digest> actual_digests(sources.size());
-    std::vector<std::thread> hash_workers;
-    try {
-        hash_workers.reserve(sources.size());
-        for (std::size_t source_index = 0; source_index != sources.size();
-             ++source_index) {
-            hash_workers.emplace_back([&, source_index] {
-                const Mapping& mapping = *sources[source_index].mapping;
-                actual_digests[source_index] = Sha256::digest(mapping.data, mapping.bytes);
-            });
-        }
-    } catch (...) {
-        for (auto& worker : hash_workers) if (worker.joinable()) worker.join();
-        unaccount_mappings();
-        release_submissions();
-        numerator_.clear();
-        return NDP_EPROVIDER;
-    }
-    for (auto& worker : hash_workers) worker.join();
-    for (std::size_t source_index = 0; source_index != sources.size(); ++source_index) {
-        if (actual_digests[source_index]
-                != sources[source_index].submission->receipt.digest) {
-            ++sources[source_index].submission->buffer->metrics->value.checksum_rejects;
-            unaccount_mappings();
-            release_submissions();
-            numerator_.clear();
-            return NDP_ECHECKSUM;
-        }
-    }
+    // Admission already checks the complete SHA-256 and every finite element
+    // before retaining the source. All admitted buffers are immutable sealed
+    // memfds held by the service, so they cannot change between that check and
+    // this reduction. Re-hashing here would add a redundant full-layout pass
+    // without strengthening the integrity boundary.
 
     // Partition by element, not trainer.  Each element still visits the
     // rank/sequence-sorted submissions_ map in exactly the v1 order, making
@@ -1189,8 +1162,8 @@ int Service::reduce_local(const std::shared_ptr<Client>& client) {
     const std::size_t parallel_reduction_workers = std::min<std::size_t>(
         32, std::min<std::uint64_t>(elements,
             advertised_workers == 0 ? 1U : advertised_workers));
-    const std::uint64_t elements_per_worker =
-        (elements + parallel_reduction_workers - 1) / parallel_reduction_workers;
+    const std::uint64_t elements_per_worker = elements / parallel_reduction_workers;
+    const std::uint64_t remainder_elements = elements % parallel_reduction_workers;
     std::atomic<bool> nonfinite{false};
     std::atomic<std::size_t> nonfinite_source{sources.size()};
     std::atomic<bool> rounding_failure{false};
@@ -1199,15 +1172,21 @@ int Service::reduce_local(const std::shared_ptr<Client>& client) {
         reduction_workers.reserve(parallel_reduction_workers);
         for (std::size_t worker_index = 0;
              worker_index != parallel_reduction_workers; ++worker_index) {
-            const std::uint64_t begin = worker_index * elements_per_worker;
-            const std::uint64_t end = std::min(elements, begin + elements_per_worker);
+            // Split the remainder across the first workers.  This produces
+            // exactly `parallel_reduction_workers` non-empty, disjoint ranges
+            // without an overflowing ceil division or a final begin > end.
+            const std::uint64_t begin =
+                worker_index * elements_per_worker
+                + std::min<std::uint64_t>(worker_index, remainder_elements);
+            const std::uint64_t end = begin + elements_per_worker
+                + (worker_index < remainder_elements ? 1U : 0U);
             reduction_workers.emplace_back([&, begin, end] {
                 if (std::fesetround(FE_TONEAREST) != 0) {
                     rounding_failure.store(true, std::memory_order_relaxed);
                     return;
                 }
                 for (std::uint64_t index = begin;
-                     index != end && !nonfinite.load(std::memory_order_relaxed); ++index) {
+                     index < end && !nonfinite.load(std::memory_order_relaxed); ++index) {
                     double sum = 0.0;
                     for (std::size_t source_index = 0;
                          source_index != sources.size(); ++source_index) {

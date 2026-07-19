@@ -14,9 +14,9 @@ from ndm.native_transport import (
 )
 from ndm.native_e97_runtime import (
     decode_credit_frame_fd, decode_owner_frame_fd, encode_credit_frame_fd,
-    encode_owner_frame_fd,
+    encode_owner_frame_fd, fd_sha256,
 )
-from ndm.native_dataplane import create_memfd
+from ndm.native_dataplane import create_memfd, seal_memfd
 
 
 def _open(tag: int) -> NativeTransport:
@@ -180,6 +180,20 @@ def test_frozen_owner_frame_moves_memfd_to_memfd_over_native_provider():
                 if fd >= 0:
                     os.close(fd)
             os.close(source_fd); os.close(destination_fd)
+
+
+def test_owner_import_digest_covers_the_exact_sealed_memfd_extent():
+    payload = bytes((index * 17 + 3) & 0xFF for index in range(8192))
+    descriptor = create_memfd("native-owner-digest", allow_sealing=True)
+    try:
+        os.ftruncate(descriptor, len(payload))
+        os.pwrite(descriptor, payload, 0)
+        seal_memfd(descriptor)
+        assert fd_sha256(descriptor, length=len(payload)) == hashlib.sha256(payload).digest()
+        with pytest.raises(ValueError, match="extent"):
+            fd_sha256(descriptor, length=len(payload) - 1)
+    finally:
+        os.close(descriptor)
 
 
 def test_production_provider_and_poll_bounds_cannot_be_weakened():

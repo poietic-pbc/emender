@@ -386,12 +386,15 @@ class NativeManagerSession:
 
     @contextmanager
     def import_reduction_sources(
-            self, sources: Sequence[tuple[int, str, str, int, int]], *,
+            self, sources: Sequence[tuple[int, str, str, int, int, bytes]], *,
             source_dtype: DType, deadline_s: float
             ) -> Iterator[tuple[Operation, ...]]:
         """Admit independent sealed owner results through parallel RPC clients.
 
-        Each source tuple is ``(fd, worker_id, incarnation, sequence, weight)``.
+        Each source tuple is ``(fd, worker_id, incarnation, sequence, weight,
+        sha256)``. The raw digest is accumulated while the authenticated owner
+        transfer is in progress, so admission does not add a Python full-buffer
+        pass before the authoritative native checksum and finite scan.
         A real E97 binary64 node numerator is several GiB.  Importing two of
         them through the controller's one RPC session serializes the caller
         checksum and service checksum/finite scans even though the service is
@@ -407,16 +410,17 @@ class NativeManagerSession:
                 or not sources or len(sources) > 16 or deadline_s <= 0):
             raise RuntimeError("imported reduction sources are outside LOCAL_COLLECT")
         if len({(worker, incarnation, sequence)
-                for _fd, worker, incarnation, sequence, _weight in sources}) \
+                for _fd, worker, incarnation, sequence, _weight, _digest in sources}) \
                 != len(sources):
             raise ValueError("imported reduction source identities must be unique")
         if any(fd < 0 or not worker or not incarnation or sequence < 0 or weight <= 0
-               for fd, worker, incarnation, sequence, weight in sources):
+                   or len(bytes(digest)) != 32
+               for fd, worker, incarnation, sequence, weight, digest in sources):
             raise ValueError("imported reduction source metadata is invalid")
 
-        def admit(source: tuple[int, str, str, int, int]
+        def admit(source: tuple[int, str, str, int, int, bytes]
                   ) -> tuple[Client, Operation]:
-            fd, worker, incarnation, sequence, weight = source
+            fd, worker, incarnation, sequence, weight, source_sha256 = source
             client = Client.open(
                 library=self.local.native, role=Role.TRAINER,
                 run_key=self.run_id, fence_epoch=self.fence_epoch,
@@ -443,7 +447,8 @@ class NativeManagerSession:
                         buffer, trainer_key=worker,
                         trainer_incarnation=incarnation,
                         submission_seq=sequence, weight=weight,
-                        source_dtype=source_dtype, deadline_s=deadline_s)
+                        source_dtype=source_dtype,
+                        source_sha256=source_sha256, deadline_s=deadline_s)
                 return client, operation
             except BaseException:
                 client.close()

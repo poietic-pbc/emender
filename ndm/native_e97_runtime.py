@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import json
+import mmap
 import os
 from pathlib import Path
 import tempfile
@@ -151,6 +152,15 @@ def _hash_fd(fd: int, *, offset: int, length: int) -> bytes:
             raise ValueError("native frame payload ended before its admitted extent")
         digest.update(chunk); consumed += len(chunk)
     return digest.digest()
+
+
+def fd_sha256(fd: int, *, length: int) -> bytes:
+    """Hash one exact memfd extent through a read-only zero-copy mapping."""
+    if fd < 0 or length <= 0 or os.fstat(fd).st_size != length:
+        raise ValueError("native digest extent does not match its memfd")
+    with mmap.mmap(fd, length, flags=mmap.MAP_PRIVATE,
+                   prot=mmap.PROT_READ) as mapping:
+        return hashlib.sha256(mapping).digest()
 
 
 def encode_owner_frame_fd(*, source_fd: int, payload_offset: int, payload_bytes: int,
@@ -568,6 +578,6 @@ __all__ = [
     "GenerationMetadata", "NativeTrainerDataPlane", "SCHEMA", "artifact_path",
     "atomic_metadata", "decode_credit_frame_fd", "decode_owner_frame_fd",
     "encode_credit_frame_fd", "encode_owner_frame_fd",
-    "exact_weighted_reference", "layout_identity", "runtime_digests",
+    "exact_weighted_reference", "fd_sha256", "layout_identity", "runtime_digests",
     "state_digest", "state_elements", "wait_metadata",
 ]

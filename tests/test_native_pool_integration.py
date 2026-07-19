@@ -43,13 +43,21 @@ def test_native_service_validates_dense_submissions_without_global_serialization
     assert "generation_ != validation_generation" in submit
 
 
-def test_native_service_parallelizes_deterministic_full_layout_local_reduction():
-    """Element ranges reduce in parallel while trainer order stays stable."""
+def test_native_service_reduces_once_validated_sealed_sources_in_parallel():
+    """Admission is the sole hash boundary; element ranges reduce in parallel."""
     source = (ROOT / "src/native_resilient_dataplane/src/ndp.cpp").read_text()
+    submit = source[source.index("int Service::submit("):
+                    source.index("void Service::release_submissions()")]
     reduce_local = source[source.index("int Service::reduce_local("):
                           source.index("bool local_spool_path(")]
+    assert "Sha256::digest(mapping.data, mapping.bytes)" in submit
+    assert "Re-hashing here would add a redundant full-layout pass" in reduce_local
+    assert "Sha256::digest(mapping.data, mapping.bytes)" not in reduce_local
     assert "std::thread::hardware_concurrency()" in reduce_local
     assert "parallel_reduction_workers" in reduce_local
+    assert "remainder_elements = elements % parallel_reduction_workers" in reduce_local
+    assert "index < end" in reduce_local
+    assert "index != end" not in reduce_local
     parallel = reduce_local[reduce_local.index("const std::size_t parallel_reduction_workers"):]
     assert "for (std::size_t source_index = 0;" in parallel
     assert parallel.index("for (std::uint64_t index = begin;") < parallel.index(
@@ -110,10 +118,13 @@ def test_native_manager_imports_owner_results_on_independent_rpc_sessions(monkey
             return FakeBuffer()
 
         def submit(self, _buffer, *, trainer_key, trainer_incarnation,
-                   submission_seq, weight, source_dtype, deadline_s):
+                   submission_seq, weight, source_dtype, source_sha256,
+                   deadline_s):
             assert trainer_key == self.worker
             assert trainer_incarnation.endswith("-boot")
             assert submission_seq in {0, 1} and weight > 0
+            assert source_sha256 in {bytes.fromhex("44" * 32),
+                                     bytes.fromhex("55" * 32)}
             assert source_dtype is DType.F64 and deadline_s == 10
             validation_barrier.wait()
             return FakeOperation(self.worker)
@@ -125,8 +136,8 @@ def test_native_manager_imports_owner_results_on_independent_rpc_sessions(monkey
         Client, "open",
         lambda **values: FakeClient(values["worker_key"].split(":")[-2]))
     sources = (
-        (41, "node-0", "node-0-boot", 0, 17),
-        (42, "node-1", "node-1-boot", 1, 23),
+        (41, "node-0", "node-0-boot", 0, 17, bytes.fromhex("44" * 32)),
+        (42, "node-1", "node-1-boot", 1, 23, bytes.fromhex("55" * 32)),
     )
     with session.import_reduction_sources(
             sources, source_dtype=DType.F64, deadline_s=10) as operations:
@@ -693,8 +704,10 @@ def test_persistent_service_preserves_exact_global_numerator():
     manager.run_id, manager.fence_epoch = "global-run", 29
     manager._generation_installed, manager._frozen = True, False
     imported = (
-        (local_fd, "node-0", "node-0-boot", 0, sum(node_weights[0])),
-        (peer_fd, "node-1", "node-1-boot", 1, sum(node_weights[1])),
+        (local_fd, "node-0", "node-0-boot", 0, sum(node_weights[0]),
+         __import__("hashlib").sha256(local_numerator.tobytes()).digest()),
+        (peer_fd, "node-1", "node-1-boot", 1, sum(node_weights[1]),
+         __import__("hashlib").sha256(node1_numerator.tobytes()).digest()),
     )
     with manager.import_reduction_sources(
             imported, source_dtype=DType.F64, deadline_s=10):

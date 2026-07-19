@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -69,7 +70,7 @@ from ndm.native_dataplane import DType, copy_fd_range, create_memfd, seal_memfd
 from ndm.native_e97_runtime import (
     GenerationMetadata, NativeTrainerDataPlane, atomic_metadata,
     decode_credit_frame_fd, decode_owner_frame_fd, encode_credit_frame_fd,
-    encode_owner_frame_fd, layout_identity, runtime_digests, state_digest,
+    encode_owner_frame_fd, fd_sha256, layout_identity, runtime_digests, state_digest,
     state_elements, wait_metadata,
 )
 from ndm.native_pool_runtime import NativeManagerSession
@@ -333,7 +334,7 @@ def _copy_frame_payload(frame_fd: int, destination_fd: int, *,
 def _native_peer_exchange(session: NativeManagerSession, local_result, *, args,
                           node: int, peer_id: str, peer_incarnation: str,
                           peer_root: bytes, peer_weight: int,
-                          deadline: float) -> int:
+                          deadline: float) -> tuple[int, bytes, bytes]:
     """Symmetric two-node memfd/libfabric exchange with bounded chunk replay."""
     payload_max = args.bulk_chunk_bytes
     chunk_count = (local_result.length + payload_max - 1) // payload_max
@@ -492,17 +493,31 @@ def _native_peer_exchange(session: NativeManagerSession, local_result, *, args,
             finally:
                 os.close(frame_fd)
 
-    # Static byte credits are granted before each direction; they are distinct
-    # from CQ completion and bound each exact frozen chunk. The lower worker's
-    # data direction runs first, without a fixed-world rendezvous.
-    if f"node-{node}" < peer_id:
-        receive_credits(); send_all(sequence_base=1)
-        send_credits(sequence_base=chunk_count + 1); receive_all()
-    else:
-        send_credits(sequence_base=1); receive_all()
-        receive_credits(); send_all(sequence_base=chunk_count + 1)
-    seal_memfd(remote_fd)
-    return remote_fd
+    try:
+        # Hash the immutable local numerator while CXI is consuming it. The
+        # remote raw digest follows the transfer while those pages are still
+        # resident. Both become metadata for native admission; Python never
+        # carries a dense value or sends one through a socket.
+        with ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="native-local-result-digest"
+                ) as digest_executor:
+            local_digest = digest_executor.submit(local_result.sha256)
+            # Static byte credits are granted before each direction; they are
+            # distinct from CQ completion and bound each exact frozen chunk.
+            # The lower worker's data direction runs first, without a
+            # fixed-world rendezvous.
+            if f"node-{node}" < peer_id:
+                receive_credits(); send_all(sequence_base=1)
+                send_credits(sequence_base=chunk_count + 1); receive_all()
+            else:
+                send_credits(sequence_base=1); receive_all()
+                receive_credits(); send_all(sequence_base=chunk_count + 1)
+            seal_memfd(remote_fd)
+            remote_digest = fd_sha256(remote_fd, length=local_result.length)
+            return remote_fd, local_digest.result(), remote_digest
+    except BaseException:
+        os.close(remote_fd)
+        raise
 
 
 def _native_manager(args) -> int:
@@ -649,7 +664,8 @@ def _native_manager(args) -> int:
                           stage="owner_transport")
                 owner_transport_started = time.monotonic()
                 exchange_deadline = time.monotonic() + pool_config.slo.transport_s
-                remote_fd = _native_peer_exchange(
+                remote_fd, local_source_sha256, remote_source_sha256 = \
+                    _native_peer_exchange(
                     session, local_result, args=args, node=node, peer_id=peer_id,
                     peer_incarnation=peer_endpoint.incarnation,
                     peer_root=roots[peer_id], peer_weight=weights[peer_id],
@@ -677,7 +693,9 @@ def _native_manager(args) -> int:
                      worker,
                      incarnation if worker == f"node-{node}"
                      else peer_endpoint.incarnation,
-                     sequence, weights[worker])
+                     sequence, weights[worker],
+                     local_source_sha256 if worker == f"node-{node}"
+                     else remote_source_sha256)
                     for sequence, worker in enumerate(workers))
                 try:
                     with session.import_reduction_sources(
