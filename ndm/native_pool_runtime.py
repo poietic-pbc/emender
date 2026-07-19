@@ -148,30 +148,42 @@ class NativeTrainerHandoff:
         conn, _ = self.sock.accept()
         try:
             encoded, ancillary, flags, _ = conn.recvmsg(
-                self.MAX_METADATA, socket.CMSG_SPACE(struct.calcsize("i")))
+                self.MAX_METADATA, socket.CMSG_SPACE(2 * struct.calcsize("i")),
+                getattr(socket, "MSG_CMSG_CLOEXEC", 0))
             if flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC):
                 raise ValueError("truncated trainer handoff")
-            fds = [struct.unpack("i", data[:4])[0] for level, kind, data in ancillary
-                   if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS
-                   and len(data) >= 4]
+            fds = []
+            for level, kind, data in ancillary:
+                if level != socket.SOL_SOCKET or kind != socket.SCM_RIGHTS:
+                    continue
+                if len(data) % struct.calcsize("i"):
+                    raise ValueError("malformed trainer descriptor control message")
+                fds.extend(item[0] for item in struct.iter_unpack("i", data))
             if len(fds) != 1:
                 for item in fds: os.close(item)
                 raise ValueError("trainer handoff requires exactly one memfd")
             fd = fds[0]
             try:
                 value = json.loads(encoded)
+                if not isinstance(value, dict):
+                    raise ValueError("trainer handoff metadata must be an object")
+                integer_fields = ("fence_epoch", "generation", "attempt", "length",
+                                  "weight", "submission_seq")
+                if any(type(value.get(field)) is not int for field in integer_fields):
+                    raise ValueError("trainer handoff integer metadata is malformed")
                 if (value.get("run_id") != self.run_id
-                        or int(value.get("fence_epoch", -1)) != self.fence_epoch
-                        or int(value.get("generation", -1)) != self.generation
-                        or int(value.get("attempt", -1)) != self.attempt
+                        or value["fence_epoch"] != self.fence_epoch
+                        or value["generation"] != self.generation
+                        or value["attempt"] != self.attempt
                         or value.get("layout_digest") != self.layout_digest
-                        or int(value.get("length", -1)) != self.expected_bytes
+                        or value["length"] != self.expected_bytes
                         or os.fstat(fd).st_size != self.expected_bytes
-                        or int(value.get("weight", 0)) <= 0):
+                        or value["weight"] <= 0
+                        or value["submission_seq"] < 0):
                     raise ValueError("trainer handoff identity/extent mismatch")
                 trainer_id = str(value.get("trainer_id", ""))
                 incarnation = str(value.get("incarnation", ""))
-                sequence = int(value.get("submission_seq", -1))
+                sequence = value["submission_seq"]
                 if self.accepted_incarnations.get(trainer_id) != incarnation:
                     raise ValueError("trainer handoff incarnation mismatch")
                 import fcntl

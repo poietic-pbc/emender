@@ -299,6 +299,57 @@ def test_descriptor_admission_rejects_stale_corrupt_nonfinite_and_restart_replay
     assert "extent" in attempt(identity, finite, sequence=6, extent=12)[1]
 
 
+def test_descriptor_admission_rejects_ancillary_fd_smuggling(tmp_path):
+    """One metadata packet cannot hide a second producer-owned descriptor."""
+    import fcntl
+    import hashlib
+    import multiprocessing
+    import os
+    from ndm.native_dataplane import _memfd_create
+
+    path = tmp_path / "service.seqpacket"
+    identity = dict(run_id="run", fence_epoch=7, generation=11, attempt=2,
+                    expected_bytes=16, layout_digest="ab" * 32,
+                    accepted_incarnations={"trainer": "boot-a"})
+    manager = NativeTrainerHandoff.listen(path, **identity)
+    context = multiprocessing.get_context("fork")
+    outcome = context.Queue()
+
+    def receive():
+        try:
+            manager.receive_memfd()
+            outcome.put("accepted")
+        except Exception as error:
+            outcome.put(str(error))
+
+    process = context.Process(target=receive)
+    process.start()
+    trainer = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+    trainer.connect(str(path))
+    payload = struct.pack("<4f", 1.0, 2.0, 3.0, 4.0)
+    metadata = json.dumps({
+        "run_id": "run", "fence_epoch": 7, "generation": 11, "attempt": 2,
+        "layout_digest": "ab" * 32, "trainer_id": "trainer",
+        "incarnation": "boot-a", "submission_seq": 1, "weight": 3,
+        "length": 16, "sha256": hashlib.sha256(payload).hexdigest(),
+    }).encode()
+    descriptors = []
+    for name in ("admitted", "smuggled"):
+        fd = _memfd_create(name, getattr(os, "MFD_ALLOW_SEALING", 2))
+        os.write(fd, payload)
+        fcntl.fcntl(fd, getattr(fcntl, "F_ADD_SEALS", 1033),
+                    0x0004 | 0x0002 | 0x0008)
+        descriptors.append(fd)
+    trainer.sendmsg([metadata], [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
+                                  struct.pack("2i", *descriptors))])
+    process.join(5)
+    assert process.exitcode == 0
+    assert "exactly one memfd" in outcome.get(timeout=1)
+    for fd in descriptors:
+        os.close(fd)
+    trainer.close(); manager.close(); outcome.close(); outcome.join_thread()
+
+
 def test_fenced_checkpoint_commit_releases_native_result_exactly_once(tmp_path):
     """The fenced publication approval has one native state transition."""
     import hashlib

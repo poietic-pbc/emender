@@ -5,6 +5,24 @@
 **Authority:** Resilient DiLoCo Compute Pool v1 and Native resilient DiLoCo
 data plane v1. No Slurm command or job was submitted.
 
+## Retry hardening: descriptor control-message cardinality
+
+The recovered producer-direct `SOCK_SEQPACKET` boundary now parses every file
+descriptor in an `SCM_RIGHTS` control message and rejects a packet unless it
+contains exactly one descriptor. Previously, a control message containing two
+packed descriptors was interpreted as only its first descriptor, leaking the
+second into the service process and violating bounded admission. Received
+descriptors are also marked close-on-exec atomically where Linux provides
+`MSG_CMSG_CLOEXEC`, and JSON boolean/string coercions are no longer accepted for
+fence, generation, attempt, extent, weight, or sequence fields.
+
+The regression launches the listener and sender in separate processes, sends
+two sealed memfds in one metadata-only packet, and proves fail-closed rejection.
+This strengthens R03/R05/R08/R10/R14 and NDP01/NDP04/NDP06/NDP08/NDP13/NDP14.
+It does not close NDP03/NDP14: the accepting service is still Python-owned and
+the compiled local ABI remains a process-local singleton. Production therefore
+remains fail-closed. No Slurm job was submitted.
+
 ## Outcome
 
 This pass selectively recovered two sound partial commits and hardened the
