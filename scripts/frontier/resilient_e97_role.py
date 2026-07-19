@@ -874,7 +874,8 @@ def _native_manager(args) -> int:
             heartbeat(bulk, identity, generation=generation + 1,
                       step=(generation + 1) * args.local_steps, loss=None,
                       stage="published")
-            if pool_client is not None:
+            if (pool_client is not None and generation + 1 <
+                    args.initial_generation + args.generations):
                 pool_client.ready(session.owner_endpoint, generation + 1,
                                   run_id=args.run_id, fence=_fence_epoch(args))
     except BaseException:
