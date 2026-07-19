@@ -54,9 +54,9 @@ def test_frontier_payload_is_exactly_two_node_debug_cxi_and_fault_is_gated():
     assert "#SBATCH -q debug" in payload
     assert "#SBATCH -N 2" in payload
     assert "#SBATCH -t 00:20:00" in payload
-    assert "#SBATCH --network=single_node_vni,job_vni" in payload
-    assert "--network=single_node_vni,job_vni" in submit
-    assert payload.count("--network=single_node_vni,job_vni") == 1
+    assert "#SBATCH --network=job_vni" in payload
+    assert "--network=job_vni" in submit
+    assert "--network=single_node_vni" not in payload
     assert "FI_PROVIDER=cxi" in submit
     assert "--nodes=2 --ntasks=2 --ntasks-per-node=1" in payload
     assert "NDP_CLEAN_GATE_JSON" in submit

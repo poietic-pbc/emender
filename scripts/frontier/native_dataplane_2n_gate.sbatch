@@ -6,7 +6,7 @@
 #SBATCH -q debug
 #SBATCH -N 2
 #SBATCH -t 00:20:00
-#SBATCH --network=single_node_vni,job_vni
+#SBATCH --network=job_vni
 #SBATCH --signal=B:TERM@120
 #SBATCH -o logs/frontier/native-dataplane/%x-%j.out
 #SBATCH -e logs/frontier/native-dataplane/%x-%j.err
@@ -25,9 +25,8 @@ REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
 [[ ${SLURM_JOB_PARTITION:?} == batch ]] || { echo "native gate requires batch partition" >&2; exit 64; }
 [[ ${NDP_REQUESTED_WALLTIME:-} == 00:20:00 ]] || { echo "native gate requires exact 20m payload" >&2; exit 64; }
 [[ ${NDP_GATE:-} == full-layout ]] || { echo "native gate requires full-layout identity" >&2; exit 64; }
-[[ ,${SLURM_NETWORK:-}, == *,single_node_vni,* &&
-   ,${SLURM_NETWORK:-}, == *,job_vni,* ]] || {
-  echo "native gate requires allocation-time single-node and job VNIs" >&2; exit 64;
+[[ ,${SLURM_NETWORK:-}, == *,job_vni,* ]] || {
+  echo "native gate requires an allocation-time cross-node job VNI" >&2; exit 64;
 }
 [[ ${FI_PROVIDER:-} == cxi ]] || { echo "native Frontier gate requires exact FI_PROVIDER=cxi" >&2; exit 64; }
 [[ ${NDP_LAYOUT:-} == e97-f64-5506770496 ]] || { echo "native gate requires exact E97 f64 layout" >&2; exit 64; }
@@ -101,11 +100,12 @@ value = {
 path.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
 PY
 
-srun --nodes=1 --ntasks=1 --ntasks-per-node=1 --nodelist="$CONTROLLER_HOST" \
-  --cpus-per-task=1 --overlap --exact \
-  "$PYTHON_BIN" "$REPO/scripts/frontier/native_dataplane_2n_controller.py" \
-    --host 0.0.0.0 --port "$CONTROLLER_PORT" --provider cxi --mode "$NDP_MODE" \
-    --output "$ARTIFACT_DIR/membership.json" &
+# The batch shell already runs on CONTROLLER_HOST.  Keeping bounded metadata
+# here avoids a needless one-node Slurm step and its single_node_vni path; the
+# only job step is the exact two-node native CXI data plane below.
+"$PYTHON_BIN" "$REPO/scripts/frontier/native_dataplane_2n_controller.py" \
+  --host 0.0.0.0 --port "$CONTROLLER_PORT" --provider cxi --mode "$NDP_MODE" \
+  --output "$ARTIFACT_DIR/membership.json" &
 CONTROLLER_STEP_PID=$!
 
 set +e
