@@ -980,17 +980,32 @@ int Service::submit(ndp_client_t handle, const ndp_submit_v1* input,
     Mapping mapping;
     int validation_status = map_readonly(*validation_buffer, mapping);
     if (validation_status == NDP_OK) {
-        const Digest actual = Sha256::digest(mapping.data, mapping.bytes);
-        if (actual != receipt.digest) validation_status = NDP_ECHECKSUM;
-    }
-    if (validation_status == NDP_OK) {
+        // Hash then inspect cache-sized extents. This preserves checksum
+        // precedence and the byte-for-byte SHA while avoiding two independent
+        // DRAM passes over an 11 GiB owner numerator.
         const auto* raw = static_cast<const std::uint8_t*>(mapping.data);
-        for (std::uint64_t index = 0; index != request.element_count; ++index) {
-            if (!std::isfinite(read_source(raw, request.source_dtype, index))) {
-                validation_status = NDP_ENONFINITE;
-                break;
+        static constexpr std::uint64_t kValidationChunkElements = UINT64_C(1) << 20;
+        Sha256 validation_digest;
+        bool all_finite = true;
+        for (std::uint64_t begin = 0; begin != request.element_count;) {
+            const std::uint64_t count =
+                std::min(kValidationChunkElements, request.element_count - begin);
+            validation_digest.update(raw + begin * width,
+                                     static_cast<std::size_t>(count * width));
+            if (all_finite) {
+                for (std::uint64_t index = begin; index != begin + count; ++index) {
+                    if (!std::isfinite(read_source(
+                            raw, request.source_dtype, index))) {
+                        all_finite = false;
+                        break;
+                    }
+                }
             }
+            begin += count;
         }
+        const Digest actual = validation_digest.finish();
+        if (actual != receipt.digest) validation_status = NDP_ECHECKSUM;
+        else if (!all_finite) validation_status = NDP_ENONFINITE;
     }
     lock.lock();
 
@@ -1350,13 +1365,7 @@ int Service::project_result(const std::shared_ptr<Client>& client,
     // Normative NDP03/NDP09 exchange the binary64 node numerator, not a local
     // mean.  Only the final owner attempt divides by the exact global token
     // total, avoiding a lossy divide/multiply round trip between nodes.
-    if (!intermediate_f64) {
-        const double total = static_cast<double>(total_weight_);
-        for (double& value : numerator_) {
-            value = value / total;
-            if (!std::isfinite(value)) return NDP_ENONFINITE;
-        }
-    } else if (std::any_of(numerator_.begin(), numerator_.end(),
+    if (intermediate_f64 && std::any_of(numerator_.begin(), numerator_.end(),
                            [](double value) { return !std::isfinite(value); })) {
         return NDP_ENONFINITE;
     }
@@ -1373,9 +1382,63 @@ int Service::project_result(const std::shared_ptr<Client>& client,
     if (intermediate_f64) {
         std::memcpy(mapped, numerator_.data(), static_cast<std::size_t>(result_bytes));
     } else {
+        // Divide the stable binary64 numerator and project it to the f32 result
+        // in the same element pass. Disjoint ranges preserve the former exact
+        // per-element operation and result-root bytes while using the service's
+        // granted CPU set instead of two serial billion-element loops.
         auto* projected = static_cast<float*>(mapped);
-        for (std::size_t index = 0; index != numerator_.size(); ++index)
-            projected[index] = static_cast<float>(numerator_[index]);
+        const std::size_t elements = numerator_.size();
+        const unsigned advertised_workers = std::thread::hardware_concurrency();
+        const std::size_t projection_workers = std::min<std::size_t>(
+            32, std::min<std::size_t>(elements,
+                advertised_workers == 0 ? 1U : advertised_workers));
+        const std::size_t elements_per_worker = elements / projection_workers;
+        const std::size_t remainder_elements = elements % projection_workers;
+        const double total = static_cast<double>(total_weight_);
+        std::atomic<bool> nonfinite{false};
+        std::atomic<bool> rounding_failure{false};
+        std::vector<std::thread> workers;
+        try {
+            workers.reserve(projection_workers);
+            for (std::size_t worker_index = 0;
+                 worker_index != projection_workers; ++worker_index) {
+                const std::size_t begin = worker_index * elements_per_worker
+                    + std::min(worker_index, remainder_elements);
+                const std::size_t end = begin + elements_per_worker
+                    + (worker_index < remainder_elements ? 1U : 0U);
+                workers.emplace_back([&, begin, end] {
+                    if (std::fesetround(FE_TONEAREST) != 0) {
+                        rounding_failure.store(true, std::memory_order_relaxed);
+                        return;
+                    }
+                    for (std::size_t index = begin; index != end; ++index) {
+                        const double divided = numerator_[index] / total;
+                        if (!std::isfinite(divided)) {
+                            nonfinite.store(true, std::memory_order_relaxed);
+                            return;
+                        }
+                        numerator_[index] = divided;
+                        projected[index] = static_cast<float>(divided);
+                    }
+                });
+            }
+        } catch (...) {
+            for (auto& worker : workers) if (worker.joinable()) worker.join();
+            ::munmap(mapped, static_cast<std::size_t>(result_bytes));
+            account_maybe_release(result_buffer);
+            return NDP_EPROVIDER;
+        }
+        for (auto& worker : workers) worker.join();
+        if (rounding_failure.load(std::memory_order_relaxed)) {
+            ::munmap(mapped, static_cast<std::size_t>(result_bytes));
+            account_maybe_release(result_buffer);
+            return NDP_EPROVIDER;
+        }
+        if (nonfinite.load(std::memory_order_relaxed)) {
+            ::munmap(mapped, static_cast<std::size_t>(result_bytes));
+            account_maybe_release(result_buffer);
+            return NDP_ENONFINITE;
+        }
     }
     ::munmap(mapped, static_cast<std::size_t>(result_bytes));
     if (::fcntl(result_buffer->fd, F_ADD_SEALS,

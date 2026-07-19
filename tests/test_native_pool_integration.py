@@ -35,7 +35,7 @@ def test_native_service_validates_dense_submissions_without_global_serialization
     submit = source[source.index("int Service::submit("):
                     source.index("void Service::release_submissions()")]
     unlock = submit.index("lock.unlock();")
-    checksum = submit.index("Sha256::digest")
+    checksum = submit.index("validation_digest.update")
     relock = submit.index("lock.lock();")
     assert "std::unique_lock<std::mutex> lock(mutex_);" in submit
     assert unlock < checksum < relock
@@ -50,7 +50,10 @@ def test_native_service_reduces_once_validated_sealed_sources_in_parallel():
                     source.index("void Service::release_submissions()")]
     reduce_local = source[source.index("int Service::reduce_local("):
                           source.index("bool local_spool_path(")]
-    assert "Sha256::digest(mapping.data, mapping.bytes)" in submit
+    assert "kValidationChunkElements" in submit
+    assert "validation_digest.update" in submit
+    assert "actual != receipt.digest" in submit
+    assert "else if (!all_finite)" in submit
     assert "Re-hashing here would add a redundant full-layout pass" in reduce_local
     assert "Sha256::digest(mapping.data, mapping.bytes)" not in reduce_local
     assert "std::thread::hardware_concurrency()" in reduce_local
@@ -63,6 +66,19 @@ def test_native_service_reduces_once_validated_sealed_sources_in_parallel():
     assert parallel.index("for (std::uint64_t index = begin;") < parallel.index(
         "for (std::size_t source_index = 0;")
     assert "std::atomic<bool> nonfinite" in reduce_local
+
+
+def test_native_final_projection_fuses_divide_and_f32_write_in_parallel():
+    """Final apply keeps exact element semantics without two serial passes."""
+    source = (ROOT / "src/native_resilient_dataplane/src/ndp.cpp").read_text()
+    project = source[source.index("int Service::project_result("):
+                     source.index("int Service::control(")]
+    assert "projection_workers" in project
+    assert "numerator_[index] = divided" in project
+    assert "projected[index] = static_cast<float>(divided)" in project
+    assert project.index("numerator_[index] = divided") < project.index(
+        "projected[index] = static_cast<float>(divided)")
+    assert "for (double& value : numerator_)" not in project
 
 
 def test_native_manager_imports_owner_results_on_independent_rpc_sessions(monkeypatch):
