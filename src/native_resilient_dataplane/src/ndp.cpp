@@ -916,27 +916,32 @@ int Service::submit(ndp_client_t handle, const ndp_submit_v1* input,
     if (!valid_input(input) || output == nullptr) return input &&
         (input->abi_version >> 16) != (NDP_ABI_V1 >> 16) ? NDP_EVERSION : NDP_EINVAL;
     *output = 0;
-    std::lock_guard<std::mutex> lock(mutex_);
+    // The RPC server gives every trainer its own worker thread.  Do not hold
+    // the service metadata lock while checksumming and scanning a sealed dense
+    // buffer: a real E97 buffer is several GiB, and serializing eight of those
+    // scans makes the final local submission miss its fixed stage bound.
+    const ndp_submit_v1 request = *input;
+    std::unique_lock<std::mutex> lock(mutex_);
     auto client = current_client(handle);
     const int current = require_current(client);
     if (current != NDP_OK) return current;
     if (state_ != NDP_STATE_LOCAL_COLLECT || !layout_) return NDP_ESTATE;
-    if (input->flags != 0 || input->deadline_unix_ns <= unix_ns()
-        || input->deadline_unix_ns > generation_deadline_ || input->weight == 0
-        || input->weight > kMaxWeight || input->element_offset != 0
-        || input->element_count != layout_->total_elements) return NDP_EINVAL;
-    const auto buffer_found = buffers_.find(input->buffer);
-    if (buffer_found == buffers_.end() || buffer_owners_[input->buffer] != handle
+    if (request.flags != 0 || request.deadline_unix_ns <= unix_ns()
+        || request.deadline_unix_ns > generation_deadline_ || request.weight == 0
+        || request.weight > kMaxWeight || request.element_offset != 0
+        || request.element_count != layout_->total_elements) return NDP_EINVAL;
+    auto buffer_found = buffers_.find(request.buffer);
+    if (buffer_found == buffers_.end() || buffer_owners_[request.buffer] != handle
         || !buffer_found->second->sealed) return NDP_EINVAL;
     std::uint64_t width = 0;
-    if (dtype_size(input->source_dtype, width) != NDP_OK
-        || input->element_count > std::numeric_limits<std::uint64_t>::max() / width
-        || buffer_found->second->length != input->element_count * width) return NDP_EBOUNDS;
+    if (dtype_size(request.source_dtype, width) != NDP_OK
+        || request.element_count > std::numeric_limits<std::uint64_t>::max() / width
+        || buffer_found->second->length != request.element_count * width) return NDP_EBOUNDS;
 
-    SubmissionKey key{bytes(input->trainer_key), bytes(input->trainer_incarnation),
-                      input->submission_seq};
-    Receipt receipt{input->weight, input->element_offset, input->element_count,
-                    input->source_dtype, bytes(input->source_buffer_sha256)};
+    SubmissionKey key{bytes(request.trainer_key), bytes(request.trainer_incarnation),
+                      request.submission_seq};
+    Receipt receipt{request.weight, request.element_offset, request.element_count,
+                    request.source_dtype, bytes(request.source_buffer_sha256)};
     for (const auto& prior : receipts_) {
         if (prior.first.trainer == key.trainer && prior.first.incarnation != key.incarnation) {
             ++client->metrics->value.stale_rejects;
@@ -964,37 +969,95 @@ int Service::submit(ndp_client_t handle, const ndp_submit_v1* input,
         return NDP_OK;
     }
 
+    const auto validation_buffer = buffer_found->second;
+    const std::uint64_t validation_generation = generation_;
+    const std::uint32_t validation_attempt = attempt_;
+    const std::uint64_t validation_owner_epoch = owner_epoch_;
+    lock.unlock();
+
     Mapping mapping;
-    const int mapped = map_readonly(*buffer_found->second, mapping);
-    if (mapped != NDP_OK) return mapped;
-    auto& metrics = client->metrics->value;
-    metrics.mapped_bytes_current += mapping.bytes;
-    metrics.mapped_bytes_high_water = std::max(metrics.mapped_bytes_high_water,
-                                                metrics.mapped_bytes_current);
-    const Digest actual = Sha256::digest(mapping.data, mapping.bytes);
-    if (actual != receipt.digest) {
-        metrics.mapped_bytes_current -= mapping.bytes;
-        ++metrics.checksum_rejects;
-        return NDP_ECHECKSUM;
+    int validation_status = map_readonly(*validation_buffer, mapping);
+    if (validation_status == NDP_OK) {
+        const Digest actual = Sha256::digest(mapping.data, mapping.bytes);
+        if (actual != receipt.digest) validation_status = NDP_ECHECKSUM;
     }
-    const auto* raw = static_cast<const std::uint8_t*>(mapping.data);
-    for (std::uint64_t index = 0; index != input->element_count; ++index) {
-        if (!std::isfinite(read_source(raw, input->source_dtype, index))) {
-            metrics.mapped_bytes_current -= mapping.bytes;
-            ++metrics.nonfinite_rejects;
-            return NDP_ENONFINITE;
+    if (validation_status == NDP_OK) {
+        const auto* raw = static_cast<const std::uint8_t*>(mapping.data);
+        for (std::uint64_t index = 0; index != request.element_count; ++index) {
+            if (!std::isfinite(read_source(raw, request.source_dtype, index))) {
+                validation_status = NDP_ENONFINITE;
+                break;
+            }
         }
     }
-    metrics.mapped_bytes_current -= mapping.bytes;
+    lock.lock();
+
+    // Control, close, buffer release, or a newer generation may have raced the
+    // immutable scan.  Revalidate every admission fact under the lock before
+    // mutating receipts, submissions, operations, events, or metrics.
+    if (current_client(handle) != client) return NDP_EINVAL;
+    const int revalidated = require_current(client);
+    if (revalidated != NDP_OK) return revalidated;
+    if (state_ != NDP_STATE_LOCAL_COLLECT || !layout_) return NDP_ESTATE;
+    if (generation_ != validation_generation || attempt_ != validation_attempt
+        || owner_epoch_ != validation_owner_epoch) return NDP_ESTALE;
+    if (request.deadline_unix_ns <= unix_ns()
+        || request.deadline_unix_ns > generation_deadline_
+        || request.element_count != layout_->total_elements) return NDP_EDEADLINE;
+    buffer_found = buffers_.find(request.buffer);
+    if (buffer_found == buffers_.end() || buffer_found->second != validation_buffer
+        || buffer_owners_[request.buffer] != handle || !validation_buffer->sealed)
+        return NDP_EINVAL;
+    if (validation_buffer->length != request.element_count * width) return NDP_EBOUNDS;
+
+    // A concurrent request can establish an idempotency receipt while this
+    // request is scanning, so repeat the receipt checks after reacquiring.
+    for (const auto& prior : receipts_) {
+        if (prior.first.trainer == key.trainer && prior.first.incarnation != key.incarnation) {
+            ++client->metrics->value.stale_rejects;
+            return NDP_ESTALE;
+        }
+        if (prior.first.trainer == key.trainer && prior.first.sequence != key.sequence) {
+            ++client->metrics->value.conflict_count;
+            return NDP_ECONFLICT;
+        }
+    }
+    const auto concurrent_seen = receipts_.find(key);
+    if (concurrent_seen != receipts_.end()) {
+        const Receipt& old = concurrent_seen->second;
+        if (old.weight != receipt.weight || old.offset != receipt.offset
+            || old.count != receipt.count || old.dtype != receipt.dtype
+            || old.digest != receipt.digest) {
+            ++client->metrics->value.conflict_count;
+            return NDP_ECONFLICT;
+        }
+        auto duplicate = make_operation(client, OperationKind::Submit);
+        *output = duplicate->handle;
+        ++client->metrics->value.duplicate_count;
+        enqueue(client, NDP_EVENT_LOCAL_DUPLICATE, NDP_STATUS_DUPLICATE,
+                NDP_REASON_NONE, duplicate->handle, 0, &receipt.digest);
+        return NDP_OK;
+    }
+
+    auto& metrics = client->metrics->value;
+    if (mapping.bytes != 0) {
+        metrics.mapped_bytes_high_water = std::max(metrics.mapped_bytes_high_water,
+                                                    mapping.bytes);
+    }
+    if (validation_status != NDP_OK) {
+        if (validation_status == NDP_ECHECKSUM) ++metrics.checksum_rejects;
+        if (validation_status == NDP_ENONFINITE) ++metrics.nonfinite_rejects;
+        return validation_status;
+    }
 
     auto operation = make_operation(client, OperationKind::Submit);
-    ++buffer_found->second->retained_refs;
-    Submission submission{key, receipt, buffer_found->second, operation->handle};
+    ++validation_buffer->retained_refs;
+    Submission submission{key, receipt, validation_buffer, operation->handle};
     receipts_[key] = receipt;
     submissions_[key] = std::move(submission);
     *output = operation->handle;
     enqueue(client, NDP_EVENT_LOCAL_ACCEPTED, NDP_STATUS_APPLIED, NDP_REASON_NONE,
-            operation->handle, buffer_found->second->length, &receipt.digest);
+            operation->handle, validation_buffer->length, &receipt.digest);
     return NDP_OK;
 }
 

@@ -28,6 +28,20 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILD_MANIFEST = ROOT / "build/native-resilient-dataplane/native-artifacts.json"
 
 
+def test_native_service_validates_dense_submissions_without_global_serialization():
+    """Large sealed buffers may be scanned concurrently across trainer RPCs."""
+    source = (ROOT / "src/native_resilient_dataplane/src/ndp.cpp").read_text()
+    submit = source[source.index("int Service::submit("):
+                    source.index("void Service::release_submissions()")]
+    unlock = submit.index("lock.unlock();")
+    checksum = submit.index("Sha256::digest")
+    relock = submit.index("lock.lock();")
+    assert "std::unique_lock<std::mutex> lock(mutex_);" in submit
+    assert unlock < checksum < relock
+    assert "buffer_found->second != validation_buffer" in submit
+    assert "generation_ != validation_generation" in submit
+
+
 def test_native_manager_binds_both_abis_before_ready_installs_routes_and_drains(tmp_path):
     manifest = json.loads(BUILD_MANIFEST.read_text())
     transport_library = (
