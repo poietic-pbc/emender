@@ -48,8 +48,11 @@ Approved Python:
   The native failure was a deliberately stale pre-commit build manifest and
   passed after rebuilding at the implementation commit. The stuck-process
   timing test was affected by two earlier orphaned pytest invocations; after
-  terminating those exact test PIDs it passed alone. A clean complete broad
-  rerun remains required before promotion.
+  terminating those exact test PIDs it passed alone. A correctly activated
+  clean rerun reached 157/158 and reproduced only that loaded-node SIGTERM
+  delay. The regression now uses the production-shaped bounded escalation
+  `terminate -> join -> kill -> join`, preventing orphaned synthetic peers;
+  the final broad rerun is recorded in the task log.
 
 ## Required conformance checklist
 
