@@ -356,6 +356,42 @@ def test_launch_modes_preserve_identical_local_role_identity_and_environment(tmp
     assert any(value.startswith("TORCHINDUCTOR_CACHE_DIR=") for value in step_argv)
 
 
+def test_node_local_native_service_uses_pinned_cxi_domain_without_hostname_bind(
+        tmp_path, monkeypatch):
+    launched = []
+
+    class Process:
+        pid = 123
+        returncode = None
+
+        def poll(self):
+            return None
+
+    def fake_popen(argv, **kwargs):
+        launched.append((argv, kwargs))
+        return Process()
+
+    monkeypatch.setattr(
+        "scripts.frontier.resilient_e97_allocation_supervisor.subprocess.Popen",
+        fake_popen)
+    command = (
+        "ndp_cxi_service --provider cxi --require-provider cxi "
+        "--production --serve --domain cxi0 --socket /tmp/ndp.sock"
+    )
+    child = Child("native-service", 0, "frontier00001", None, command)
+    supervisor = AllocationSupervisor(
+        tmp_path, [child], heartbeat_s=2, progress_s=3, max_restarts=0,
+        launch_backend="node-local-child")
+    supervisor.start(child)
+
+    argv, kwargs = launched[0]
+    assert argv[argv.index("--domain") + 1] == "cxi0"
+    assert "--bind-node" not in argv
+    assert argv[argv.index("--admission-token-fd") + 1] == str(
+        supervisor.native_token_fd)
+    assert supervisor.native_token_fd in kwargs["pass_fds"]
+
+
 def test_node_local_supervisor_waits_for_manager_ready_before_cold_trainers(
         tmp_path, monkeypatch):
     manager = Child("manager", 0, "node000", None, "manager")

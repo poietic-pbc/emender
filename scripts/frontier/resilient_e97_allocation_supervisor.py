@@ -277,8 +277,14 @@ class AllocationSupervisor:
             argv = shlex.split(child.command)
             if child.role == "native-service":
                 telemetry = self.run_dir / "logs" / f"{child.identity}-transport.jsonl"
+                # CXI is selected by its explicit cxi0 domain. Passing the
+                # Slurm hostname to fi_getinfo(FI_SOURCE) is a TCP-style bind
+                # request and makes native CXI provider resolution fail before
+                # endpoint creation. Test-only socket providers retain their
+                # explicit local bind.
+                if "--production" not in argv:
+                    argv.extend(["--bind-node", child.node])
                 argv.extend([
-                    "--bind-node", child.node,
                     "--telemetry", str(telemetry),
                     "--admission-token-fd", str(self.native_token_fd),
                 ])
