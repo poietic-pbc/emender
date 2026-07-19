@@ -635,8 +635,11 @@ def test_persistent_service_matches_k40_delta_tokens_for_all_eight_trainers(tmp_
         result_marker = {
             "schema": "emender-native-e97-result-v1", "run_id": "e97-run",
             "fence_epoch": 23, "generation": 7, "attempt": 1,
+            "owner_epoch": 1, "source_dtype": int(DType.F32),
+            "deadline_unix_ns": controller.generation_deadline_ns,
             "operation_handle": result_operation.handle,
             "layout_digest": digest.hex(),
+            "base_digest": base_digest.hex(), "plan_digest": plan_digest.hex(),
             "result_root": manager_view.result_root.hex(),
             "global_weight": sum(weights),
         }
@@ -658,7 +661,7 @@ def test_persistent_service_matches_k40_delta_tokens_for_all_eight_trainers(tmp_
     controller.close()
 
 
-def test_persistent_service_preserves_exact_global_numerator():
+def test_persistent_service_preserves_exact_global_numerator(tmp_path):
     """Node exchange keeps f64 numerators; it never divides then reweights."""
     manifest = json.loads(BUILD_MANIFEST.read_text())
     library = NativeLibrary(
@@ -712,6 +715,22 @@ def test_persistent_service_preserves_exact_global_numerator():
     assert local_view.dtype is DType.F64
     assert local_view.global_weight == sum(node_weights[0])
     local_fd = os.dup(local_view.fd)
+    reader_client = Client.open(
+        library=library, role=Role.TRAINER, run_key="global-run", fence_epoch=29,
+        worker_key="node-0-result-reader", incarnation="reader-boot", deadline_s=10)
+    reader_client.attach_generation(
+        total_elements=elements, layout_digest=digest, generation=5, attempt=1,
+        owner_epoch=1, source_dtype=DType.F32, deadline_s=10,
+        deadline_unix_ns=controller.generation_deadline_ns,
+        base_digest=controller.base_digest, plan_digest=controller.plan_digest)
+    reader = NativeTrainerDataPlane(
+        reader_client,
+        GenerationMetadata(
+            "global-run", 29, 5, 1, 1, elements, digest.hex(),
+            controller.base_digest.hex(), controller.plan_digest.hex(),
+            controller.generation_deadline_ns, {}),
+        rank=0, identity="node-0-result-reader", incarnation="reader-boot",
+        control_root=tmp_path)
     controller.control(Command.ABORT, deadline_s=10).close()
     local_view.close(); local_operation.close(); local_freeze.close(); first_install.close()
     for operation in local_submissions:
@@ -751,6 +770,27 @@ def test_persistent_service_preserves_exact_global_numerator():
             assert np.array_equal(actual, expected)
         assert global_view.global_weight == sum(sum(item) for item in node_weights)
         assert global_view.dtype is DType.F32
+        result_root = global_view.result_root.hex()
+
+    # The live two-node path attaches trainers to local attempt 1, then the
+    # managers publish the globally redistributed result from attempt 2.  A
+    # trainer must adopt that fenced result attempt before sending ResultView;
+    # otherwise the RPC server correctly rejects the stale request header.
+    atomic_metadata(tmp_path / "native-result-00000005.json", {
+        "schema": "emender-native-e97-result-v1", "run_id": "global-run",
+        "fence_epoch": 29, "generation": 5, "attempt": 2, "owner_epoch": 1,
+        "source_dtype": int(DType.F64),
+        "operation_handle": global_operation.handle,
+        "layout_digest": digest.hex(), "base_digest": controller.base_digest.hex(),
+        "plan_digest": controller.plan_digest.hex(),
+        "deadline_unix_ns": controller.generation_deadline_ns,
+        "result_root": result_root,
+        "global_weight": sum(sum(item) for item in node_weights),
+    })
+    with reader.result_shards(
+            deadline=time.monotonic() + 10, chunk_elements=7) as (_marker, shards):
+        assert np.array_equal(np.concatenate([item.numpy() for item in shards]), expected)
+    reader.close()
     assert controller.metrics.projection_count == 2
     controller.control(Command.ABORT, deadline_s=10).close()
     global_operation.close(); global_freeze.close(); second_install.close()
