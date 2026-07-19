@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import socket
+import struct
 import time
 
 import numpy as np
 import pytest
 
 from ndm.native_artifacts import NATIVE_TEST
-from ndm.native_pool_runtime import NativeManagerSession
+from ndm.native_pool_runtime import NativeManagerSession, NativeTrainerHandoff
 from ndm.native_transport import NativeTransport, NativeTransportLibrary
 from ndm.resilient_pool_runtime import OwnerEndpoint
 
@@ -151,3 +153,244 @@ def test_transport_python_bridge_exposes_bounded_native_send_receive_abi():
         transport.send(1, b"", deadline_unix_ns=time.time_ns() + 1)
     with pytest.raises(ValueError, match="receive capacity"):
         transport.receive(capacity=4096 + 321)
+
+
+def test_frozen_owner_transfer_uses_native_fabric_and_bounds_replay(monkeypatch):
+    """Regression: frozen dense bytes cannot escape through a Python socket."""
+    session = object.__new__(NativeManagerSession)
+    session._frozen = True
+    session.routes = {"node-1": 7}
+    session._owner_replays = {}
+    sent = []
+
+    class Transport:
+        deadline_unix_ns = time.time_ns() + 1_000_000_000
+
+        def send(self, peer_id, frame, *, deadline_unix_ns):
+            sent.append((peer_id, frame, deadline_unix_ns))
+
+        def receive(self, *, capacity=None):
+            return (7, b"native-result")
+
+    session.transport = Transport()
+    root = bytes.fromhex("12" * 32)
+    for _ in range(3):
+        session.transfer_frozen_frame("node-1", b"dense-native-frame",
+                                      result_root=root)
+    assert [item[:2] for item in sent] == [
+        (7, b"dense-native-frame"),
+        (7, b"dense-native-frame"),
+        (7, b"dense-native-frame"),
+    ]
+    with pytest.raises(RuntimeError, match="replay limit"):
+        session.transfer_frozen_frame("node-1", b"dense-native-frame",
+                                      result_root=root)
+    assert session.receive_owner_frame() == ("node-1", b"native-result")
+
+    session._frozen = False
+    with pytest.raises(RuntimeError, match="frozen accepted set"):
+        session.transfer_frozen_frame("node-1", b"late", result_root=root)
+
+
+def test_cross_process_trainer_handoff_passes_sealed_memfd_without_dense_socket(tmp_path):
+    import fcntl
+    import hashlib
+    import multiprocessing
+    import os
+    from ndm.native_dataplane import _memfd_create
+
+    path = tmp_path / "manager.seqpacket"
+    identity = dict(run_id="run", fence_epoch=7, generation=11,
+                    attempt=2, expected_bytes=4096, layout_digest="ab" * 32,
+                    accepted_incarnations={"trainer-3": "boot-a"},
+                    replay_ledger=tmp_path / "admitted.json")
+    manager = NativeTrainerHandoff.listen(path, **identity)
+    context = multiprocessing.get_context("fork")
+    received = context.Queue()
+
+    def manager_process():
+        contribution = manager.receive_memfd()
+        received.put({"trainer_id": contribution.trainer_id,
+                      "generation": contribution.generation,
+                      "attempt": contribution.attempt,
+                      "weight": contribution.weight,
+                      "layout_digest": contribution.layout_digest,
+                      "payload": os.pread(contribution.fd, contribution.length, 0)})
+        contribution.close()
+
+    process = context.Process(target=manager_process)
+    process.start()
+    trainer = NativeTrainerHandoff.connect(path, **identity)
+    fd = _memfd_create("trainer-delta", getattr(os, "MFD_ALLOW_SEALING", 2))
+    payload = struct.pack("<1024f", *(float(index) for index in range(1024)))
+    os.write(fd, payload)
+    fcntl.fcntl(fd, getattr(fcntl, "F_ADD_SEALS", 1033), 0x0004 | 0x0002 | 0x0008)
+    trainer.send_memfd(fd, trainer_id="trainer-3", incarnation="boot-a",
+                       submission_seq=4, weight=99,
+                       sha256=hashlib.sha256(payload).hexdigest())
+    process.join(5)
+    assert process.exitcode == 0
+    contribution = received.get(timeout=1)
+    assert contribution["trainer_id"] == "trainer-3"
+    assert contribution["generation"] == 11 and contribution["attempt"] == 2
+    assert contribution["weight"] == 99 and contribution["layout_digest"] == "ab" * 32
+    assert contribution["payload"] == payload
+    received.close(); received.join_thread()
+    os.close(fd); trainer.close(); manager.close()
+
+
+def test_descriptor_admission_rejects_stale_corrupt_nonfinite_and_restart_replay(tmp_path):
+    import fcntl
+    import hashlib
+    import os
+    import threading
+    from ndm.native_dataplane import _memfd_create
+
+    path = tmp_path / "service.seqpacket"
+    ledger = tmp_path / "admitted.json"
+    identity = dict(run_id="run", fence_epoch=7, generation=11, attempt=2,
+                    expected_bytes=16, layout_digest="ab" * 32,
+                    accepted_incarnations={"trainer": "boot-a"},
+                    replay_ledger=ledger)
+
+    def attempt(client_identity, payload, *, incarnation="boot-a", sequence=1,
+                claimed=None, extent=None):
+        manager = NativeTrainerHandoff.listen(path, **identity)
+        outcome = []
+
+        def receive():
+            try:
+                contribution = manager.receive_memfd()
+                outcome.append(("accepted", contribution.sha256))
+                contribution.close()
+            except Exception as error:
+                outcome.append(("rejected", str(error)))
+
+        thread = threading.Thread(target=receive)
+        thread.start()
+        trainer = NativeTrainerHandoff.connect(path, **client_identity)
+        fd = _memfd_create("adversarial-delta", getattr(os, "MFD_ALLOW_SEALING", 2))
+        os.write(fd, payload if extent is None else payload[:extent])
+        fcntl.fcntl(fd, getattr(fcntl, "F_ADD_SEALS", 1033),
+                    0x0004 | 0x0002 | 0x0008)
+        try:
+            trainer.send_memfd(fd, trainer_id="trainer", incarnation=incarnation,
+                               submission_seq=sequence, weight=3,
+                               sha256=claimed or hashlib.sha256(payload).hexdigest())
+        except Exception as error:
+            outcome.append(("rejected", str(error)))
+            # No packet was sent, so release the blocked accept.
+            trainer.close()
+            socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET).connect(str(path))
+        thread.join(5)
+        os.close(fd); trainer.close(); manager.close()
+        return outcome[0]
+
+    finite = struct.pack("<4f", 1.0, 2.0, 3.0, 4.0)
+    assert attempt(identity, finite)[0] == "accepted"
+    # The persisted identity ledger is loaded by a fresh service instance.
+    assert "duplicate" in attempt(identity, finite)[1]
+    wrong_fence = dict(identity, fence_epoch=8, replay_ledger=None)
+    assert "identity" in attempt(wrong_fence, finite, sequence=2)[1]
+    assert "incarnation" in attempt(identity, finite, incarnation="boot-b", sequence=3)[1]
+    assert "digest" in attempt(identity, finite, sequence=4, claimed="00" * 32)[1]
+    nonfinite = struct.pack("<4f", 1.0, float("nan"), 3.0, 4.0)
+    assert "nonfinite" in attempt(identity, nonfinite, sequence=5)[1]
+    assert "extent" in attempt(identity, finite, sequence=6, extent=12)[1]
+
+
+def test_descriptor_admission_rejects_ancillary_fd_smuggling(tmp_path):
+    """One metadata packet cannot hide a second producer-owned descriptor."""
+    import fcntl
+    import hashlib
+    import multiprocessing
+    import os
+    from ndm.native_dataplane import _memfd_create
+
+    path = tmp_path / "service.seqpacket"
+    identity = dict(run_id="run", fence_epoch=7, generation=11, attempt=2,
+                    expected_bytes=16, layout_digest="ab" * 32,
+                    accepted_incarnations={"trainer": "boot-a"})
+    manager = NativeTrainerHandoff.listen(path, **identity)
+    context = multiprocessing.get_context("fork")
+    outcome = context.Queue()
+
+    def receive():
+        try:
+            manager.receive_memfd()
+            outcome.put("accepted")
+        except Exception as error:
+            outcome.put(str(error))
+
+    process = context.Process(target=receive)
+    process.start()
+    trainer = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+    trainer.connect(str(path))
+    payload = struct.pack("<4f", 1.0, 2.0, 3.0, 4.0)
+    metadata = json.dumps({
+        "run_id": "run", "fence_epoch": 7, "generation": 11, "attempt": 2,
+        "layout_digest": "ab" * 32, "trainer_id": "trainer",
+        "incarnation": "boot-a", "submission_seq": 1, "weight": 3,
+        "length": 16, "sha256": hashlib.sha256(payload).hexdigest(),
+    }).encode()
+    descriptors = []
+    for name in ("admitted", "smuggled"):
+        fd = _memfd_create(name, getattr(os, "MFD_ALLOW_SEALING", 2))
+        os.write(fd, payload)
+        fcntl.fcntl(fd, getattr(fcntl, "F_ADD_SEALS", 1033),
+                    0x0004 | 0x0002 | 0x0008)
+        descriptors.append(fd)
+    trainer.sendmsg([metadata], [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
+                                  struct.pack("2i", *descriptors))])
+    process.join(5)
+    assert process.exitcode == 0
+    assert "exactly one memfd" in outcome.get(timeout=1)
+    for fd in descriptors:
+        os.close(fd)
+    trainer.close(); manager.close(); outcome.close(); outcome.join_thread()
+
+
+def test_fenced_checkpoint_commit_releases_native_result_exactly_once(tmp_path):
+    """The fenced publication approval has one native state transition."""
+    import hashlib
+    from types import SimpleNamespace
+    from ndm.native_dataplane import Command
+
+    publication = tmp_path / "generation.json"
+    value = {
+        "finalized": True, "run_id": "live-split", "generation": 8,
+        "fence": {"coordinator_epoch": 19}, "attempt": 2,
+        "layout_digest": "11" * 32, "base_digest": "22" * 32,
+        "result_root": "33" * 32, "global_weight": 41,
+        "result_bytes": 128,
+    }
+    publication.write_text(json.dumps(value, sort_keys=True))
+    calls = []
+
+    class Operation:
+        def close(self):
+            calls.append("close")
+
+    session = object.__new__(NativeManagerSession)
+    session.run_id, session.fence_epoch = "live-split", 19
+    session.local = SimpleNamespace(control=lambda command, deadline_s: (
+        calls.append((command, deadline_s)) or Operation()))
+    session._checkpoint_proposed = True
+    session._proposal_generation = 8
+    session._checkpoint_identity = {
+        key: value[key] for key in (
+            "attempt", "layout_digest", "base_digest", "result_root",
+            "global_weight", "result_bytes")}
+    session._generation_installed = session._frozen = True
+    session._owner_replays = {("node-1", bytes.fromhex("33" * 32)): 2}
+
+    session.commit(
+        publication_manifest=publication,
+        authoritative_latest={
+            "generation": 8, "fence": 19, "manifest": str(publication.resolve()),
+            "manifest_sha256": hashlib.sha256(publication.read_bytes()).hexdigest(),
+        }, deadline_s=7.0)
+
+    assert calls == [(Command.COMMIT, 7.0), "close"]
+    assert not session._generation_installed and not session._frozen
+    assert session._checkpoint_identity is None and not session._owner_replays

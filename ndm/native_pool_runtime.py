@@ -5,8 +5,8 @@ freeze, checkpoint policy, and atomic publication.  This module owns the two
 compiled ABI handles as one manager-scoped resource: the local exact reducer
 and the libfabric endpoint start together, native routes are installed from
 leased endpoint records, and cleanup drains both without a peer rendezvous.
-The split-role launcher does not yet route its dense owner traffic through
-this class; production native selection therefore fails closed there.
+Dense owner frames are transferred and replayed through the same session, so
+callers cannot accidentally fall back to a Python dense socket after freezing.
 """
 
 from __future__ import annotations
@@ -14,8 +14,11 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
+import socket
+import struct
 import time
 from typing import Mapping, Sequence
 
@@ -42,6 +45,188 @@ class NativeServiceTelemetry:
     local: Mapping[str, int]
     transport: Mapping[str, object]
     terminal_reason: str
+
+
+@dataclass(frozen=True)
+class NativeTrainerContribution:
+    """Producer-owned dense memfd received without copying its payload."""
+    trainer_id: str
+    incarnation: str
+    submission_seq: int
+    generation: int
+    attempt: int
+    weight: int
+    length: int
+    layout_digest: str
+    sha256: str
+    fd: int
+
+    def close(self) -> None:
+        os.close(self.fd)
+
+
+class NativeTrainerHandoff:
+    """Metadata-only seqpacket boundary for producer-direct sealed memfds."""
+    MAX_METADATA = 4096
+
+    def __init__(self, sock: socket.socket, *, run_id: str, fence_epoch: int,
+                 generation: int, attempt: int, expected_bytes: int,
+                 layout_digest: str, accepted_incarnations: Mapping[str, str],
+                 replay_ledger: str | Path | None = None):
+        if expected_bytes <= 0 or expected_bytes % 4:
+            raise ValueError("expected_bytes must be positive f32 extent")
+        if attempt <= 0 or len(layout_digest) != 64:
+            raise ValueError("attempt/layout identity is invalid")
+        self.sock, self.run_id = sock, run_id
+        self.fence_epoch, self.generation, self.attempt = fence_epoch, generation, attempt
+        self.expected_bytes = expected_bytes
+        self.layout_digest = layout_digest.lower()
+        self.accepted_incarnations = dict(accepted_incarnations)
+        self.replay_ledger = Path(replay_ledger) if replay_ledger else None
+        self._seen: dict[str, str] = {}
+        if self.replay_ledger is not None and self.replay_ledger.exists():
+            value = json.loads(self.replay_ledger.read_text(encoding="utf-8"))
+            if value.get("identity") != self._ledger_identity():
+                raise ValueError("trainer replay ledger identity mismatch")
+            self._seen = dict(value.get("seen", {}))
+
+    def _ledger_identity(self) -> dict[str, object]:
+        return {"run_id": self.run_id, "fence_epoch": self.fence_epoch,
+                "generation": self.generation, "attempt": self.attempt,
+                "layout_digest": self.layout_digest,
+                "expected_bytes": self.expected_bytes}
+
+    def _record(self, key: str, digest: str) -> None:
+        self._seen[key] = digest
+        if self.replay_ledger is None:
+            return
+        self.replay_ledger.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.replay_ledger.with_name(
+            f".{self.replay_ledger.name}.{os.getpid()}.tmp")
+        temporary.write_text(json.dumps({"identity": self._ledger_identity(),
+                                         "seen": self._seen}, sort_keys=True) + "\n",
+                             encoding="utf-8")
+        os.replace(temporary, self.replay_ledger)
+
+    @classmethod
+    def listen(cls, path: str | Path, **identity) -> "NativeTrainerHandoff":
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            target.unlink()
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        sock.bind(str(target)); os.chmod(target, 0o600); sock.listen(16)
+        return cls(sock, **identity)
+
+    @classmethod
+    def connect(cls, path: str | Path, **identity) -> "NativeTrainerHandoff":
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        sock.connect(str(path))
+        return cls(sock, **identity)
+
+    def send_memfd(self, fd: int, *, trainer_id: str, incarnation: str,
+                   submission_seq: int, weight: int, sha256: str) -> None:
+        import fcntl
+        required = 0x0004 | 0x0002 | 0x0008  # F_SEAL_GROW|SHRINK|WRITE
+        if (os.fstat(fd).st_size != self.expected_bytes
+                or fcntl.fcntl(fd, getattr(fcntl, "F_GET_SEALS", 1034))
+                & required != required):
+            raise ValueError("trainer memfd must have exact extent and immutable seals")
+        value = {"run_id": self.run_id, "fence_epoch": self.fence_epoch,
+                 "generation": self.generation, "attempt": self.attempt,
+                 "layout_digest": self.layout_digest, "trainer_id": trainer_id,
+                 "incarnation": incarnation, "submission_seq": submission_seq,
+                 "weight": weight, "length": self.expected_bytes, "sha256": sha256}
+        encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+        if (not trainer_id or not incarnation or submission_seq < 0 or weight <= 0
+                or len(sha256) != 64 or len(encoded) > self.MAX_METADATA):
+            raise ValueError("invalid trainer handoff identity")
+        self.sock.sendmsg([encoded], [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
+                                      struct.pack("i", fd))])
+
+    def receive_memfd(self) -> NativeTrainerContribution:
+        conn, _ = self.sock.accept()
+        try:
+            encoded, ancillary, flags, _ = conn.recvmsg(
+                self.MAX_METADATA, socket.CMSG_SPACE(2 * struct.calcsize("i")),
+                getattr(socket, "MSG_CMSG_CLOEXEC", 0))
+            if flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC):
+                raise ValueError("truncated trainer handoff")
+            fds = []
+            for level, kind, data in ancillary:
+                if level != socket.SOL_SOCKET or kind != socket.SCM_RIGHTS:
+                    continue
+                if len(data) % struct.calcsize("i"):
+                    raise ValueError("malformed trainer descriptor control message")
+                fds.extend(item[0] for item in struct.iter_unpack("i", data))
+            if len(fds) != 1:
+                for item in fds: os.close(item)
+                raise ValueError("trainer handoff requires exactly one memfd")
+            fd = fds[0]
+            try:
+                value = json.loads(encoded)
+                if not isinstance(value, dict):
+                    raise ValueError("trainer handoff metadata must be an object")
+                integer_fields = ("fence_epoch", "generation", "attempt", "length",
+                                  "weight", "submission_seq")
+                if any(type(value.get(field)) is not int for field in integer_fields):
+                    raise ValueError("trainer handoff integer metadata is malformed")
+                if (value.get("run_id") != self.run_id
+                        or value["fence_epoch"] != self.fence_epoch
+                        or value["generation"] != self.generation
+                        or value["attempt"] != self.attempt
+                        or value.get("layout_digest") != self.layout_digest
+                        or value["length"] != self.expected_bytes
+                        or os.fstat(fd).st_size != self.expected_bytes
+                        or value["weight"] <= 0
+                        or value["submission_seq"] < 0):
+                    raise ValueError("trainer handoff identity/extent mismatch")
+                trainer_id = str(value.get("trainer_id", ""))
+                incarnation = str(value.get("incarnation", ""))
+                sequence = value["submission_seq"]
+                if self.accepted_incarnations.get(trainer_id) != incarnation:
+                    raise ValueError("trainer handoff incarnation mismatch")
+                import fcntl
+                required = 0x0004 | 0x0002 | 0x0008
+                if (fcntl.fcntl(fd, getattr(fcntl, "F_GET_SEALS", 1034))
+                        & required != required):
+                    raise ValueError("received trainer memfd is not immutable")
+                claimed = str(value.get("sha256", "")).lower()
+                actual_hash = hashlib.sha256()
+                finite = True
+                offset = 0
+                while offset < self.expected_bytes:
+                    chunk = os.pread(fd, min(1 << 20, self.expected_bytes - offset), offset)
+                    if not chunk:
+                        raise ValueError("trainer memfd ended before its admitted extent")
+                    actual_hash.update(chunk)
+                    if len(chunk) % 4:
+                        raise ValueError("trainer f32 extent is misaligned")
+                    finite = finite and all(math.isfinite(item[0]) for item in
+                        struct.iter_unpack("<f", chunk))
+                    offset += len(chunk)
+                actual = actual_hash.hexdigest()
+                if claimed != actual:
+                    raise ValueError("trainer handoff digest mismatch")
+                if not finite:
+                    raise ValueError("trainer handoff contains nonfinite input")
+                key = f"{trainer_id}\0{incarnation}\0{sequence}"
+                prior = self._seen.get(key)
+                if prior is not None:
+                    kind = "duplicate" if prior == actual else "conflicting"
+                    raise ValueError(f"{kind} trainer submission sequence")
+                self._record(key, actual)
+                return NativeTrainerContribution(
+                    trainer_id, incarnation, sequence, self.generation, self.attempt,
+                    int(value["weight"]), self.expected_bytes, self.layout_digest,
+                    actual, fd)
+            except BaseException:
+                os.close(fd); raise
+        finally:
+            conn.close()
+
+    def close(self) -> None:
+        self.sock.close()
 
 
 def _artifact_paths(manifest_path: str | Path) -> dict[str, Path]:
@@ -71,6 +256,7 @@ class NativeManagerSession:
         self._frozen = False
         self._checkpoint_proposed = False
         self._checkpoint_identity: dict[str, object] | None = None
+        self._owner_replays: dict[tuple[str, bytes], int] = {}
         self.closed = False
 
     @classmethod
@@ -205,6 +391,46 @@ class NativeManagerSession:
         self._frozen = True
         return operation
 
+    def transfer_frozen_frame(self, worker_id: str, frame: bytes, *,
+                              result_root: bytes,
+                              deadline_unix_ns: int | None = None) -> None:
+        """Transfer a frozen owner frame with bounded, identity-stable replay.
+
+        Python supplies only an already encoded native frame and its expected
+        result root.  The bytes themselves cross the compiled fabric ABI.  A
+        given ``(worker, result_root)`` may be sent initially and replayed at
+        most twice after owner loss (NDP11); conflicting or unfrozen traffic is
+        rejected before provider submission.
+        """
+        if not self._frozen:
+            raise RuntimeError("owner transfer requires a frozen accepted set")
+        if worker_id not in self.routes:
+            raise KeyError(f"no current-fence native route for {worker_id}")
+        root = bytes(result_root)
+        if len(root) != 32 or root == bytes(32):
+            raise ValueError("owner transfer requires a full nonzero result root")
+        key = (worker_id, root)
+        sends = self._owner_replays.get(key, 0)
+        if sends >= 3:
+            raise RuntimeError("native owner replay limit exceeded")
+        deadline = deadline_unix_ns or self.transport.deadline_unix_ns
+        self.transport.send(self.routes[worker_id], frame,
+                            deadline_unix_ns=deadline)
+        self._owner_replays[key] = sends + 1
+
+    def receive_owner_frame(self, *, capacity: int | None = None
+                            ) -> tuple[str, bytes] | None:
+        """Receive one compiled-ABI frame and authenticate its installed route."""
+        received = self.transport.receive(capacity=capacity)
+        if received is None:
+            return None
+        peer_id, frame = received
+        worker = next((name for name, value in self.routes.items()
+                       if value == peer_id), None)
+        if worker is None:
+            raise RuntimeError("native frame arrived from an unfenced route")
+        return worker, frame
+
     def finalize_redistribution(self, *, deadline_s: float = 30.0
                                 ) -> tuple[Operation, ResultView]:
         """Expose the one shared read-only trainer-apply view after owner readiness."""
@@ -286,15 +512,20 @@ class NativeManagerSession:
         if any(publication.get(key) != value
                for key, value in self._checkpoint_identity.items()):
             raise RuntimeError("native commit publication result identity mismatch")
+        # This is a state transition, not an idempotent transport receipt.
+        # Issue it exactly once after the durable CAS evidence has passed every
+        # run/fence/generation/attempt/layout/base/result/weight check above.
         self.local.control(Command.COMMIT, deadline_s=deadline_s).close()
         self._generation_installed = self._frozen = self._checkpoint_proposed = False
         self._checkpoint_identity = None
+        self._owner_replays.clear()
 
     def abort(self, *, deadline_s: float = 1.0) -> None:
         if self._generation_installed:
             self.local.control(Command.ABORT, deadline_s=deadline_s).close()
         self._generation_installed = self._frozen = self._checkpoint_proposed = False
         self._checkpoint_identity = None
+        self._owner_replays.clear()
 
     def telemetry(self, terminal_reason: str = "running") -> NativeServiceTelemetry:
         local = asdict(self.local.metrics)
@@ -361,4 +592,5 @@ class NativeManagerSession:
         self.close("exception" if type_ is not None else "normal")
 
 
-__all__ = ["NativeManagerSession", "NativeServiceTelemetry", "PYTHON_TCP_DEBUG"]
+__all__ = ["NativeManagerSession", "NativeServiceTelemetry",
+           "NativeTrainerContribution", "NativeTrainerHandoff", "PYTHON_TCP_DEBUG"]

@@ -40,6 +40,12 @@ def test_real_stuck_node_process_is_killed_while_quorum_continues(tmp_path):
     _node(store, fence, "healthy-1", ([4],))
     stuck.terminate()
     stuck.join(timeout=5)
+    # A loaded Frontier login node can delay SIGTERM delivery beyond the
+    # bounded grace period. Exercise the supervisor's fail-closed escalation
+    # and never leave the synthetic 60-second peer alive after this test.
+    if stuck.is_alive():
+        stuck.kill()
+        stuck.join(timeout=5)
     assert not stuck.is_alive() and stuck.exitcode != 0
     committed = coordinator.commit(fence, store.generation(fence), quorum=2,
                                    expected_buckets=1)
