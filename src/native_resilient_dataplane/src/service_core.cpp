@@ -1408,8 +1408,10 @@ int Service::metrics(ndp_client_t handle, ndp_metrics_v1* output) {
         (output->abi_version >> 16) != (NDP_ABI_V1 >> 16) ? NDP_EVERSION : NDP_EINVAL;
     std::lock_guard<std::mutex> lock(mutex_);
     auto client = current_client(handle);
-    const int current = require_current(client);
-    if (current != NDP_OK) return current;
+    if (!client || client->closed) return NDP_EINVAL;
+    if (client->run != run_ || client->fence != fence_) return NDP_EFENCE;
+    // The draining controller must be able to take one terminal counter
+    // snapshot. Process shutdown still invalidates its socket/handle domain.
     *output = client->metrics->value;
     return NDP_OK;
 }
