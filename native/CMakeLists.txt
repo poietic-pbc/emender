@@ -5,6 +5,15 @@ project(emender_native_resilient_dataplane_bundle VERSION 1.0.0 LANGUAGES C CXX)
 # artifacts on the same source commit and compiler configuration.  The child
 # projects retain their focused standalone builds for component development.
 include(CTest)
+include(GNUInstallDirs)
+
+# CMake normally embeds an absolute build RPATH and edits it in-place during
+# installation.  The vacated string-table padding then reflects the absolute
+# build-directory length even though the effective installed RPATH is the
+# same.  Use an origin-relative build RPATH and one fixed installed RPATH so
+# differently shaped clean build directories produce identical package bytes.
+set(CMAKE_BUILD_RPATH_USE_ORIGIN ON)
+set(CMAKE_INSTALL_RPATH "\$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 
 # RelWithDebInfo is the retained Frontier package configuration.  Without
 # prefix maps, DWARF records CMAKE_BINARY_DIR and otherwise-identical clean
