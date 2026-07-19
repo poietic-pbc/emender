@@ -64,7 +64,19 @@ target_include_directories(ndp_cxi_service PRIVATE
 target_link_libraries(ndp_cxi_service PRIVATE emender_ndp_transport emender_ndp_core)
 target_compile_options(ndp_cxi_service PRIVATE -Wall -Wextra -Wpedantic -Werror=return-type)
 
-install(TARGETS emender_ndp_transport ndp_cxi_service
+# The Frontier G2 executable is intentionally part of the installed, hashed
+# bundle. It uses the same protocol/owner implementation and transport C ABI
+# as the persistent service while keeping synthetic dense bytes out of Python.
+add_executable(ndp_frontier_2n_gate src/frontier_2n_gate.cpp)
+target_include_directories(ndp_frontier_2n_gate PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(ndp_frontier_2n_gate PRIVATE
+  emender_ndp_transport emender_ndp_core)
+target_compile_options(ndp_frontier_2n_gate PRIVATE
+  -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror=return-type
+  -fno-fast-math -ffp-contract=off)
+
+install(TARGETS emender_ndp_transport ndp_cxi_service ndp_frontier_2n_gate
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES include/emender/ndp_transport.h

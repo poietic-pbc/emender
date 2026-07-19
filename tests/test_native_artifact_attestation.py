@@ -15,6 +15,8 @@ from ndm.native_artifacts import (
     PYTHON_TCP_DEBUG,
     attest_launch,
     validate_backend,
+    validate_build_manifest,
+    validate_g2_gate,
 )
 
 
@@ -27,6 +29,7 @@ def _manifest(tmp_path: Path) -> tuple[Path, dict[str, object]]:
         "local_library": "lib/libemender_ndp.so.1",
         "transport_library": "lib/libemender_ndp_transport.so.1",
         "service_binary": "bin/ndp_cxi_service",
+        "synthetic_gate_binary": "bin/ndp_frontier_2n_gate",
     }
     artifacts = {}
     for name, relative in paths.items():
@@ -82,6 +85,23 @@ def test_production_attestation_binds_source_binaries_provider_and_full_layout(t
     assert result["bundle_sha256"] == manifest["bundle_sha256"]
     assert result["artifacts"] == {
         name: record["sha256"] for name, record in manifest["artifacts"].items()}
+
+
+def test_historical_component_manifest_is_valid_but_cannot_claim_g2(tmp_path):
+    manifest_path, manifest = _manifest(tmp_path)
+    manifest["artifacts"].pop("synthetic_gate_binary")
+    bound = [
+        (name, value["sha256"])
+        for name, value in sorted(manifest["artifacts"].items())
+    ]
+    manifest["bundle_sha256"] = hashlib.sha256(_canonical(bound)).hexdigest()
+    manifest_path.write_bytes(_canonical(manifest) + b"\n")
+    build = validate_build_manifest(manifest_path)
+    assert set(build.artifacts) == {
+        "local_library", "transport_library", "service_binary"
+    }
+    with pytest.raises(ValueError, match="synthetic gate executable"):
+        validate_g2_gate(_gate(tmp_path, manifest), build)
 
 
 def test_production_and_full_layout_refuse_python_tcp_or_unattested_native(tmp_path):

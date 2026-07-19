@@ -18,11 +18,15 @@ NATIVE_TEST = "native-test"
 PYTHON_TCP_DEBUG = "python-tcp-debug"
 BACKENDS = frozenset((NATIVE_CXI, NATIVE_TEST, PYTHON_TCP_DEBUG))
 
-_ARTIFACT_NAMES = {
+_REQUIRED_ARTIFACT_NAMES = {
     "local_library": "lib/libemender_ndp.so.1",
     "transport_library": "lib/libemender_ndp_transport.so.1",
     "service_binary": "bin/ndp_cxi_service",
 }
+_GATE_ARTIFACT_NAMES = {
+    "synthetic_gate_binary": "bin/ndp_frontier_2n_gate",
+}
+_ARTIFACT_NAMES = {**_REQUIRED_ARTIFACT_NAMES, **_GATE_ARTIFACT_NAMES}
 
 
 def sha256_file(path: str | Path) -> str:
@@ -155,7 +159,12 @@ def validate_build_manifest(path: str | Path, *,
     if require_clean and value.get("source_tree_dirty") is not False:
         raise ValueError("production native build was recorded from a dirty source tree")
     artifacts = value.get("artifacts")
-    if not isinstance(artifacts, dict) or set(artifacts) != set(_ARTIFACT_NAMES):
+    artifact_names = set(artifacts) if isinstance(artifacts, dict) else set()
+    accepted_artifact_sets = (
+        set(_REQUIRED_ARTIFACT_NAMES),
+        set(_ARTIFACT_NAMES),
+    )
+    if not isinstance(artifacts, dict) or artifact_names not in accepted_artifact_sets:
         raise ValueError("native build manifest artifact set is incomplete")
     for name, record in artifacts.items():
         if not isinstance(record, dict):
@@ -220,6 +229,8 @@ def validate_g2_gate(path: str | Path, build: BuildAttestation) -> Mapping[str, 
                   if gate.get(name) != expected}
     if mismatches:
         raise ValueError(f"native G2 gate identity/metrics mismatch: {mismatches}")
+    if set(build.artifacts) != set(_ARTIFACT_NAMES):
+        raise ValueError("native G2 build does not attest the synthetic gate executable")
     artifacts = gate.get("artifacts")
     expected_artifacts = {name: record["sha256"]
                           for name, record in build.artifacts.items()}
