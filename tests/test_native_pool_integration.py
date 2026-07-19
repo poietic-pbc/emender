@@ -151,3 +151,40 @@ def test_transport_python_bridge_exposes_bounded_native_send_receive_abi():
         transport.send(1, b"", deadline_unix_ns=time.time_ns() + 1)
     with pytest.raises(ValueError, match="receive capacity"):
         transport.receive(capacity=4096 + 321)
+
+
+def test_frozen_owner_transfer_uses_native_fabric_and_bounds_replay(monkeypatch):
+    """Regression: frozen dense bytes cannot escape through a Python socket."""
+    session = object.__new__(NativeManagerSession)
+    session._frozen = True
+    session.routes = {"node-1": 7}
+    session._owner_replays = {}
+    sent = []
+
+    class Transport:
+        deadline_unix_ns = time.time_ns() + 1_000_000_000
+
+        def send(self, peer_id, frame, *, deadline_unix_ns):
+            sent.append((peer_id, frame, deadline_unix_ns))
+
+        def receive(self, *, capacity=None):
+            return (7, b"native-result")
+
+    session.transport = Transport()
+    root = bytes.fromhex("12" * 32)
+    for _ in range(3):
+        session.transfer_frozen_frame("node-1", b"dense-native-frame",
+                                      result_root=root)
+    assert [item[:2] for item in sent] == [
+        (7, b"dense-native-frame"),
+        (7, b"dense-native-frame"),
+        (7, b"dense-native-frame"),
+    ]
+    with pytest.raises(RuntimeError, match="replay limit"):
+        session.transfer_frozen_frame("node-1", b"dense-native-frame",
+                                      result_root=root)
+    assert session.receive_owner_frame() == ("node-1", b"native-result")
+
+    session._frozen = False
+    with pytest.raises(RuntimeError, match="frozen accepted set"):
+        session.transfer_frozen_frame("node-1", b"late", result_root=root)

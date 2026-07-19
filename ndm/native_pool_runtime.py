@@ -5,8 +5,8 @@ freeze, checkpoint policy, and atomic publication.  This module owns the two
 compiled ABI handles as one manager-scoped resource: the local exact reducer
 and the libfabric endpoint start together, native routes are installed from
 leased endpoint records, and cleanup drains both without a peer rendezvous.
-The split-role launcher does not yet route its dense owner traffic through
-this class; production native selection therefore fails closed there.
+Dense owner frames are transferred and replayed through the same session, so
+callers cannot accidentally fall back to a Python dense socket after freezing.
 """
 
 from __future__ import annotations
@@ -71,6 +71,7 @@ class NativeManagerSession:
         self._frozen = False
         self._checkpoint_proposed = False
         self._checkpoint_identity: dict[str, object] | None = None
+        self._owner_replays: dict[tuple[str, bytes], int] = {}
         self.closed = False
 
     @classmethod
@@ -205,6 +206,46 @@ class NativeManagerSession:
         self._frozen = True
         return operation
 
+    def transfer_frozen_frame(self, worker_id: str, frame: bytes, *,
+                              result_root: bytes,
+                              deadline_unix_ns: int | None = None) -> None:
+        """Transfer a frozen owner frame with bounded, identity-stable replay.
+
+        Python supplies only an already encoded native frame and its expected
+        result root.  The bytes themselves cross the compiled fabric ABI.  A
+        given ``(worker, result_root)`` may be sent initially and replayed at
+        most twice after owner loss (NDP11); conflicting or unfrozen traffic is
+        rejected before provider submission.
+        """
+        if not self._frozen:
+            raise RuntimeError("owner transfer requires a frozen accepted set")
+        if worker_id not in self.routes:
+            raise KeyError(f"no current-fence native route for {worker_id}")
+        root = bytes(result_root)
+        if len(root) != 32 or root == bytes(32):
+            raise ValueError("owner transfer requires a full nonzero result root")
+        key = (worker_id, root)
+        sends = self._owner_replays.get(key, 0)
+        if sends >= 3:
+            raise RuntimeError("native owner replay limit exceeded")
+        deadline = deadline_unix_ns or self.transport.deadline_unix_ns
+        self.transport.send(self.routes[worker_id], frame,
+                            deadline_unix_ns=deadline)
+        self._owner_replays[key] = sends + 1
+
+    def receive_owner_frame(self, *, capacity: int | None = None
+                            ) -> tuple[str, bytes] | None:
+        """Receive one compiled-ABI frame and authenticate its installed route."""
+        received = self.transport.receive(capacity=capacity)
+        if received is None:
+            return None
+        peer_id, frame = received
+        worker = next((name for name, value in self.routes.items()
+                       if value == peer_id), None)
+        if worker is None:
+            raise RuntimeError("native frame arrived from an unfenced route")
+        return worker, frame
+
     def finalize_redistribution(self, *, deadline_s: float = 30.0
                                 ) -> tuple[Operation, ResultView]:
         """Expose the one shared read-only trainer-apply view after owner readiness."""
@@ -289,12 +330,14 @@ class NativeManagerSession:
         self.local.control(Command.COMMIT, deadline_s=deadline_s).close()
         self._generation_installed = self._frozen = self._checkpoint_proposed = False
         self._checkpoint_identity = None
+        self._owner_replays.clear()
 
     def abort(self, *, deadline_s: float = 1.0) -> None:
         if self._generation_installed:
             self.local.control(Command.ABORT, deadline_s=deadline_s).close()
         self._generation_installed = self._frozen = self._checkpoint_proposed = False
         self._checkpoint_identity = None
+        self._owner_replays.clear()
 
     def telemetry(self, terminal_reason: str = "running") -> NativeServiceTelemetry:
         local = asdict(self.local.metrics)
