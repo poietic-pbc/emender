@@ -750,7 +750,12 @@ class ContributionStage {
 
   void run() {
     activate_more();
-    while (!complete()) {
+    for (;;) {
+      if (complete()) {
+        if (prime_only_) break;
+        if (!result_announced_) send_result_announce();
+        if (peer_result_announced_) break;
+      }
       if (emender::ndp::unix_time_ns() >= plan_.deadline_unix_ns) {
         fail("contribution stage exceeded its absolute deadline");
       }
@@ -843,6 +848,41 @@ class ContributionStage {
     header.worker_key = plan_.owner_worker_key;
     header.incarnation = plan_.owner_incarnation;
     transport_->send(encode_header(header), plan_.deadline_unix_ns);
+  }
+
+  void send_result_announce() {
+    FrameHeader announcement{};
+    announcement.type = MessageType::result_announce;
+    announcement.run_key = plan_.run_key;
+    announcement.fence_epoch = plan_.fence_epoch;
+    announcement.generation = plan_.generation;
+    announcement.attempt = plan_.attempt;
+    announcement.owner_epoch = plan_.owner_epoch;
+    announcement.layout_digest = plan_.layout_digest;
+    announcement.base_digest = plan_.base_digest;
+    announcement.message_seq = ++message_sequence_;
+    announcement.deadline_unix_ns = plan_.deadline_unix_ns;
+    send_control_header(announcement);
+    result_announced_ = true;
+  }
+
+  void handle_result_announce(const FrameHeader &header) {
+    if (prime_only_ ||
+        !same_key(header.run_key, plan_.run_key) ||
+        header.fence_epoch != plan_.fence_epoch ||
+        header.generation != plan_.generation ||
+        header.attempt != plan_.attempt ||
+        header.owner_epoch != plan_.owner_epoch ||
+        !emender::ndp::constant_time_equal(header.layout_digest,
+                                           plan_.layout_digest) ||
+        !emender::ndp::constant_time_equal(header.base_digest,
+                                           plan_.base_digest) ||
+        header.shard_id != emender::ndp::kNoShard ||
+        header.payload_bytes != 0 ||
+        header.deadline_unix_ns <= emender::ndp::unix_time_ns()) {
+      fail("result announce did not match the frozen generation");
+    }
+    peer_result_announced_ = true;
   }
 
   void handle_credit(const FrameHeader &header) {
@@ -946,6 +986,7 @@ class ContributionStage {
       case MessageType::contribution_data: handle_contribution(frame); break;
       case MessageType::receipt: handle_receipt(frame.header); break;
       case MessageType::route_probe_ack: prime_route_ack_ = true; break;
+      case MessageType::result_announce: handle_result_announce(frame.header); break;
       default: fail("unexpected frame in contribution stage");
     }
   }
@@ -974,6 +1015,8 @@ class ContributionStage {
   std::uint32_t prime_shard_{0};
   bool prime_route_ack_{false};
   bool prime_route_ack_sent_{false};
+  bool result_announced_{false};
+  bool peer_result_announced_{false};
 };
 
 Sample run_generation(const Options &options, NativeTransport *transport,

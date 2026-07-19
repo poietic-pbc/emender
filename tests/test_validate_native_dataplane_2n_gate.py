@@ -75,3 +75,11 @@ def test_native_cxi_setup_uses_provider_mr_contract():
     assert "fi_mr_enable(slot->mr)" in source
     assert 'const std::string domain{"cxi0"};' in runner
     assert "config.domain_len" in runner
+
+
+def test_native_gate_fences_contribution_before_redistribution():
+    source = RUNNER.read_text(encoding="utf-8")
+    assert "MessageType::result_announce" in source
+    assert "peer_result_announced_" in source
+    assert "send_result_announce" in source
+    assert "result announce did not match the frozen generation" in source
