@@ -8,7 +8,23 @@ find_package(Threads REQUIRED)
 option(NDP_ENABLE_XPMEM "Enable same-process XPMEM-address ABI registration hook" OFF)
 option(NDP_ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
 
-add_library(emender_ndp SHARED src/ndp.cpp)
+add_library(emender_ndp_service_core STATIC
+    src/ndp.cpp
+    src/rpc_server.cpp)
+set_target_properties(emender_ndp_service_core PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    CXX_EXTENSIONS OFF
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN YES)
+target_compile_features(emender_ndp_service_core PUBLIC cxx_std_17)
+target_include_directories(emender_ndp_service_core
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(emender_ndp_service_core PUBLIC Threads::Threads)
+target_compile_options(emender_ndp_service_core PRIVATE
+    -Wall -Wextra -Wpedantic
+    -fno-fast-math -ffp-contract=off -frounding-math)
+
+add_library(emender_ndp SHARED src/client.cpp)
 add_library(Emender::ndp ALIAS emender_ndp)
 target_compile_features(emender_ndp PUBLIC cxx_std_17)
 set_target_properties(emender_ndp PROPERTIES
@@ -31,13 +47,15 @@ target_compile_options(emender_ndp PRIVATE
     -fno-fast-math -ffp-contract=off -frounding-math
 )
 if(NDP_ENABLE_SANITIZERS)
+    target_compile_options(emender_ndp_service_core PRIVATE -fsanitize=address,undefined)
+    target_link_options(emender_ndp_service_core INTERFACE -fsanitize=address,undefined)
     target_compile_options(emender_ndp PRIVATE -fsanitize=address,undefined)
     target_link_options(emender_ndp PUBLIC -fsanitize=address,undefined)
 endif()
 if(NDP_ENABLE_XPMEM)
-    target_compile_definitions(emender_ndp PRIVATE NDP_ENABLE_XPMEM=1)
+    target_compile_definitions(emender_ndp_service_core PRIVATE NDP_ENABLE_XPMEM=1)
 else()
-    target_compile_definitions(emender_ndp PRIVATE NDP_ENABLE_XPMEM=0)
+    target_compile_definitions(emender_ndp_service_core PRIVATE NDP_ENABLE_XPMEM=0)
 endif()
 
 install(TARGETS emender_ndp

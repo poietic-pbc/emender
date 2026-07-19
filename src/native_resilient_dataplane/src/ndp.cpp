@@ -3,6 +3,7 @@
 #endif
 
 #include "emender/ndp.h"
+#include "service_core.hpp"
 #include "sha256.hpp"
 
 #include <algorithm>
@@ -163,6 +164,19 @@ bool valid_utf8(const std::uint8_t* input, std::size_t length) noexcept {
 int duplicate_fd(int fd) noexcept {
     int result;
     do { result = ::fcntl(fd, F_DUPFD_CLOEXEC, 3); } while (result < 0 && errno == EINTR);
+    return result;
+}
+
+int duplicate_readonly_fd(int fd) noexcept {
+    char path[64];
+    const int length = std::snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+    if (length <= 0 || static_cast<std::size_t>(length) >= sizeof(path)) {
+        errno = EINVAL;
+        return -1;
+    }
+    int result;
+    do { result = ::open(path, O_RDONLY | O_CLOEXEC); }
+    while (result < 0 && errno == EINTR);
     return result;
 }
 
@@ -411,6 +425,7 @@ public:
                     ndp_buffer_t* buffer, int* output_fd);
     int op_release(ndp_client_t handle, ndp_op_t op);
     int metrics(ndp_client_t handle, ndp_metrics_v1* output);
+    ServiceSnapshot snapshot(ndp_client_t handle) const;
 
 private:
     static std::uint32_t boot_cookie();
@@ -546,7 +561,10 @@ int Service::client_open(const ndp_open_v1* input, ndp_client_t* output) {
         stopped_ = false;
         state_ = NDP_STATE_IDLE;
     } else if (requested_run != run_) {
-        if (!clients_.empty()) return NDP_ECONFLICT;
+        if (!clients_.empty() || (state_ != NDP_STATE_IDLE
+                                  && state_ != NDP_STATE_STOPPED))
+            return NDP_ECONFLICT;
+        abort_generation(true);
         run_ = requested_run;
         fence_ = input->fence_epoch;
         stopped_ = false;
@@ -608,13 +626,14 @@ int Service::client_close(ndp_client_t handle) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto client = current_client(handle);
     if (!client || client->closed) return NDP_EINVAL;
-    if (controller_ == handle && client->fence == fence_) {
-        abort_generation(false);
-        controller_ = 0;
-    }
+    // A local RPC connection is not the generation lifetime.  The service
+    // retains admitted submissions and result state when a controller or
+    // trainer disconnects; only an explicit ABORT/DRAIN or a newer fence may
+    // invalidate it.
+    if (controller_ == handle && client->fence == fence_) controller_ = 0;
     std::vector<ndp_buffer_t> owned_buffers;
     for (const auto& item : buffers_)
-        if (item.second->metrics == client->metrics) owned_buffers.push_back(item.first);
+        if (item.second->owner_client == handle) owned_buffers.push_back(item.first);
     for (const auto buffer_handle : owned_buffers) {
         auto buffer = buffers_[buffer_handle];
         buffers_.erase(buffer_handle);
@@ -626,6 +645,10 @@ int Service::client_close(ndp_client_t handle) {
         if (item.second->owner == handle) owned_ops.push_back(item.first);
     for (const auto op_handle : owned_ops) {
         auto op = operations_[op_handle];
+        if (op == result_operation_ || op == freeze_operation_) {
+            op->owner = 0;
+            continue;
+        }
         operations_.erase(op_handle);
         op->valid = false;
         if (op->result_buffer && op->result_buffer->retained_refs != 0) {
@@ -794,7 +817,7 @@ int Service::buffer_seal(ndp_client_t handle, ndp_buffer_t buffer_handle) {
     const int current = require_current(client);
     if (current != NDP_OK) return current;
     const auto found = buffers_.find(buffer_handle);
-    if (found == buffers_.end() || found->second->metrics != client->metrics)
+    if (found == buffers_.end() || found->second->owner_client != handle)
         return NDP_EINVAL;
     auto& buffer = *found->second;
     if (buffer.sealed) return NDP_OK;
@@ -809,9 +832,10 @@ int Service::buffer_seal(ndp_client_t handle, ndp_buffer_t buffer_handle) {
 int Service::buffer_release(ndp_client_t handle, ndp_buffer_t buffer_handle) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto client = current_client(handle);
-    if (!client || client->closed) return NDP_EINVAL;
+    const int current = require_current(client);
+    if (current != NDP_OK) return current;
     const auto found = buffers_.find(buffer_handle);
-    if (found == buffers_.end() || found->second->metrics != client->metrics)
+    if (found == buffers_.end() || found->second->owner_client != handle)
         return NDP_EINVAL;
     auto buffer = found->second;
     buffers_.erase(found);
@@ -885,7 +909,7 @@ int Service::submit(ndp_client_t handle, const ndp_submit_v1* input,
         || input->weight > kMaxWeight || input->element_offset != 0
         || input->element_count != layout_->total_elements) return NDP_EINVAL;
     const auto buffer_found = buffers_.find(input->buffer);
-    if (buffer_found == buffers_.end() || buffer_found->second->metrics != client->metrics
+    if (buffer_found == buffers_.end() || buffer_found->second->owner_client != handle
         || !buffer_found->second->sealed) return NDP_EINVAL;
     std::uint64_t width = 0;
     if (dtype_size(input->source_dtype, width) != NDP_OK
@@ -1347,12 +1371,18 @@ int Service::result_view(ndp_client_t handle, ndp_op_t op_handle,
     const int current = require_current(client);
     if (current != NDP_OK) return current;
     const auto found = operations_.find(op_handle);
-    if (found == operations_.end() || found->second->owner != handle
+    const bool reclaimable_result = found != operations_.end()
+        && found->second == result_operation_
+        && client->role == NDP_ROLE_CONTROLLER && controller_ == handle;
+    if (found == operations_.end()
+        || (found->second->owner != handle && !reclaimable_result)
         || !found->second->valid || found->second->kind != OperationKind::Result
         || !found->second->result_buffer || state_ != NDP_STATE_RESULT_READY)
         return NDP_ESTATE;
-    const int duplicate = duplicate_fd(found->second->result_buffer->fd);
+    const int duplicate = duplicate_readonly_fd(found->second->result_buffer->fd);
     if (duplicate < 0) return NDP_EIO;
+    if (reclaimable_result) found->second->owner = handle;
+    found->second->result_buffer->owner_client = handle;
     const ndp_buffer_t view_handle = next_handle();
     ++found->second->result_buffer->public_refs;
     buffers_[view_handle] = found->second->result_buffer;
@@ -1365,9 +1395,14 @@ int Service::result_view(ndp_client_t handle, ndp_op_t op_handle,
 int Service::op_release(ndp_client_t handle, ndp_op_t op_handle) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto client = current_client(handle);
-    if (!client || client->closed) return NDP_EINVAL;
+    const int current = require_current(client);
+    if (current != NDP_OK) return current;
     const auto found = operations_.find(op_handle);
-    if (found == operations_.end() || found->second->owner != handle)
+    const bool reclaimable_result = found != operations_.end()
+        && found->second == result_operation_
+        && client->role == NDP_ROLE_CONTROLLER && controller_ == handle;
+    if (found == operations_.end()
+        || (found->second->owner != handle && !reclaimable_result))
         return NDP_EINVAL;
     auto op = found->second;
     operations_.erase(found);
@@ -1390,9 +1425,19 @@ int Service::metrics(ndp_client_t handle, ndp_metrics_v1* output) {
     return NDP_OK;
 }
 
-Service& service() {
-    static Service instance;
-    return instance;
+ServiceSnapshot Service::snapshot(ndp_client_t handle) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ServiceSnapshot output{};
+    output.run = run_;
+    output.layout_digest = layout_ ? layout_->digest : Digest{};
+    output.fence = fence_;
+    output.generation = generation_;
+    output.owner_epoch = owner_epoch_;
+    output.attempt = attempt_;
+    output.state = state_;
+    const auto client = current_client(handle);
+    if (client) output.incarnation = client->incarnation;
+    return output;
 }
 
 template <typename Callable>
@@ -1403,83 +1448,67 @@ int guarded(Callable&& callable) noexcept {
 }
 
 }  // namespace
+
+struct LocalServiceCore::Impl {
+    Service service;
+};
+
+LocalServiceCore::LocalServiceCore() : impl_(std::make_unique<Impl>()) {}
+LocalServiceCore::~LocalServiceCore() = default;
+
+#define NDP_CORE_FORWARD(method, ...) \
+    return guarded([&] { return impl_->service.method(__VA_ARGS__); })
+
+int LocalServiceCore::client_open(const ndp_open_v1* a, ndp_client_t* b) {
+    NDP_CORE_FORWARD(client_open, a, b);
+}
+int LocalServiceCore::client_poll_fd(ndp_client_t a, int* b) {
+    NDP_CORE_FORWARD(client_poll_fd, a, b);
+}
+int LocalServiceCore::client_close(ndp_client_t a) { NDP_CORE_FORWARD(client_close, a); }
+int LocalServiceCore::layout_install(ndp_client_t a, const ndp_layout_v1* b) {
+    NDP_CORE_FORWARD(layout_install, a, b);
+}
+int LocalServiceCore::buffer_register(ndp_client_t a, const ndp_buffer_v1* b,
+                                      ndp_buffer_t* c) {
+    NDP_CORE_FORWARD(buffer_register, a, b, c);
+}
+int LocalServiceCore::buffer_allocate(ndp_client_t a, const ndp_alloc_v1* b,
+                                      ndp_buffer_t* c, int* d) {
+    NDP_CORE_FORWARD(buffer_allocate, a, b, c, d);
+}
+int LocalServiceCore::buffer_seal(ndp_client_t a, ndp_buffer_t b) {
+    NDP_CORE_FORWARD(buffer_seal, a, b);
+}
+int LocalServiceCore::buffer_release(ndp_client_t a, ndp_buffer_t b) {
+    NDP_CORE_FORWARD(buffer_release, a, b);
+}
+int LocalServiceCore::submit(ndp_client_t a, const ndp_submit_v1* b, ndp_op_t* c) {
+    NDP_CORE_FORWARD(submit, a, b, c);
+}
+int LocalServiceCore::control(ndp_client_t a, const struct ndp_control_v1* b,
+                              ndp_op_t* c) {
+    NDP_CORE_FORWARD(control, a, b, c);
+}
+int LocalServiceCore::poll(ndp_client_t a, ndp_event_v1* b, std::uint32_t c,
+                           std::uint32_t* d, int e) {
+    NDP_CORE_FORWARD(poll, a, b, c, d, e);
+}
+int LocalServiceCore::result_view(ndp_client_t a, ndp_op_t b, ndp_result_v1* c,
+                                  ndp_buffer_t* d, int* e) {
+    NDP_CORE_FORWARD(result_view, a, b, c, d, e);
+}
+int LocalServiceCore::op_release(ndp_client_t a, ndp_op_t b) {
+    NDP_CORE_FORWARD(op_release, a, b);
+}
+int LocalServiceCore::metrics(ndp_client_t a, ndp_metrics_v1* b) {
+    NDP_CORE_FORWARD(metrics, a, b);
+}
+
+#undef NDP_CORE_FORWARD
+
+ServiceSnapshot LocalServiceCore::snapshot(ndp_client_t client) const {
+    return impl_->service.snapshot(client);
+}
+
 }  // namespace emender_ndp
-
-extern "C" {
-
-uint32_t ndp_abi_version(void) { return NDP_ABI_V1; }
-
-const char* ndp_error_string(int code) {
-    switch (code) {
-        case NDP_OK: return "success";
-        case NDP_IN_PROGRESS: return "accepted/in progress";
-        case NDP_EINVAL: return "invalid argument";
-        case NDP_EVERSION: return "ABI version mismatch";
-        case NDP_ESTATE: return "invalid lifecycle state";
-        case NDP_EFENCE: return "stale allocation fence";
-        case NDP_ESTALE: return "stale generation, attempt, owner, or incarnation";
-        case NDP_ECONFLICT: return "conflicting identity replay";
-        case NDP_ECHECKSUM: return "checksum mismatch";
-        case NDP_ENONFINITE: return "nonfinite dense input";
-        case NDP_EBOUNDS: return "configured byte or slot bound exceeded";
-        case NDP_ECREDIT: return "credit exhausted";
-        case NDP_EDEADLINE: return "absolute deadline expired";
-        case NDP_EROUTE: return "route failure";
-        case NDP_EPROVIDER: return "provider or numerical platform unsupported";
-        case NDP_ENOMEM: return "bounded allocation unavailable";
-        case NDP_EIO: return "local I/O failure";
-        case NDP_ESHUTDOWN: return "native service is draining or stopped";
-        default: return "unknown native data-plane result";
-    }
-}
-
-int ndp_client_open_v1(const ndp_open_v1* input, ndp_client_t* output) {
-    return emender_ndp::guarded([&] { return emender_ndp::service().client_open(input, output); });
-}
-int ndp_client_poll_fd_v1(ndp_client_t client, int* output) {
-    return emender_ndp::guarded([&] { return emender_ndp::service().client_poll_fd(client, output); });
-}
-int ndp_client_close_v1(ndp_client_t client) {
-    return emender_ndp::guarded([&] { return emender_ndp::service().client_close(client); });
-}
-int ndp_layout_install_v1(ndp_client_t client, const ndp_layout_v1* input) {
-    return emender_ndp::guarded([&] { return emender_ndp::service().layout_install(client, input); });
-}
-int ndp_buffer_register_v1(ndp_client_t client, const ndp_buffer_v1* input,
-                           ndp_buffer_t* output) {
-    return emender_ndp::guarded([&] { return emender_ndp::service().buffer_register(client, input, output); });
-}
-int ndp_buffer_allocate_v1(ndp_client_t client, const ndp_alloc_v1* input,
-                           ndp_buffer_t* output, int* output_fd) {
-    return emender_ndp::guarded([&] { return emender_ndp::service().buffer_allocate(client, input, output, output_fd); });
-}
-int ndp_buffer_seal_v1(ndp_client_t client, ndp_buffer_t buffer) {
-    return emender_ndp::guarded([&] { return emender_ndp::service().buffer_seal(client, buffer); });
-}
-int ndp_buffer_release_v1(ndp_client_t client, ndp_buffer_t buffer) {
-    return emender_ndp::guarded([&] { return emender_ndp::service().buffer_release(client, buffer); });
-}
-int ndp_submit_local_v1(ndp_client_t client, const ndp_submit_v1* input,
-                        ndp_op_t* output) {
-    return emender_ndp::guarded([&] { return emender_ndp::service().submit(client, input, output); });
-}
-int ndp_control_v1(ndp_client_t client, const struct ndp_control_v1* input,
-                   ndp_op_t* output) {
-    return emender_ndp::guarded([&] { return emender_ndp::service().control(client, input, output); });
-}
-int ndp_poll_v1(ndp_client_t client, ndp_event_v1* events,
-                uint32_t capacity, uint32_t* count, int timeout_ms) {
-    return emender_ndp::guarded([&] { return emender_ndp::service().poll(client, events, capacity, count, timeout_ms); });
-}
-int ndp_result_view_v1(ndp_client_t client, ndp_op_t op,
-                       ndp_result_v1* result, ndp_buffer_t* buffer, int* output_fd) {
-    return emender_ndp::guarded([&] { return emender_ndp::service().result_view(client, op, result, buffer, output_fd); });
-}
-int ndp_op_release_v1(ndp_client_t client, ndp_op_t op) {
-    return emender_ndp::guarded([&] { return emender_ndp::service().op_release(client, op); });
-}
-int ndp_client_metrics_v1(ndp_client_t client, ndp_metrics_v1* output) {
-    return emender_ndp::guarded([&] { return emender_ndp::service().metrics(client, output); });
-}
-
-}  // extern "C"

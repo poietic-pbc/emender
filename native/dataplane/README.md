@@ -11,7 +11,8 @@ integration task binds those calls to the authoritative local service handles.
 
 ## Delivered service
 
-`ndp_cxi_service` owns one persistent libfabric endpoint, one address vector,
+`ndp_cxi_service` owns one persistent local reduction/handle core, one bounded
+seqpacket RPC server, one libfabric endpoint, one address vector,
 distinct transmit and receive completion queues, fixed 2 MiB-aligned TX/RX
 slot pools, and one native progress thread. It uses `FI_EP_RDM`, `FI_MSG`, and
 `FI_CONTEXT`. Peer endpoint names are opaque inputs to `peer_upsert`; the
@@ -37,6 +38,12 @@ order, receiver-issued absolute credit, finite float64 application, a compact
 once-only receipt ledger, identical duplicate replay, conflicting-reuse
 quarantine, at most two reassignments, at most `2*layout_bytes` replay, and
 one preallocated redistribution aggregate.
+
+The installed `libemender_ndp.so.1` is a client library for the service's
+version-1 `AF_UNIX/SOCK_SEQPACKET` protocol. The socket is mode `0600`; peers
+must match `SO_PEERCRED`, admission token, run, and fence. Packets are at most
+64 KiB and metadata-only. Dense trainer input and read-only sealed results move
+as exactly one memfd descriptor per operation through `SCM_RIGHTS`.
 
 There is one route per current endpoint, not one connection per shard.
 Generation, fence, contribution, owner epoch, shard, and sequence identities
@@ -99,6 +106,9 @@ The compiled tests cover:
 - resident/in-flight/retained bounds and prompt release;
 - preservation on a too-small consumer buffer without an internal payload copy;
 - C ABI lifecycle/forward-prefix rules and provider fail-closed policy; and
+- a separate-process service/controller/trainer RPC lifecycle including
+  disconnect, replay, nonfinite input, newer-fence and service-restart rejects,
+  read-only result descriptors, and socket/child cleanup; and
 - an actual two-process `tcp;ofi_rxm` `FI_EP_RDM` exchange using the active
   libfabric headers and shared library.
 

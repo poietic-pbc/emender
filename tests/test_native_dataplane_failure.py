@@ -85,7 +85,7 @@ def test_cancellation_releases_retained_source_and_invalidates_finalize():
         assert client.metrics.shared_bytes_current == 0
 
 
-def test_buffer_slot_and_shared_byte_exhaustion_are_bounded(monkeypatch):
+def test_buffer_slot_exhaustion_is_bounded():
     with open_client(151) as client:
         buffers = [client.allocate(bytes_count=1) for _ in range(64)]
         try:
@@ -98,7 +98,9 @@ def test_buffer_slot_and_shared_byte_exhaustion_are_bounded(monkeypatch):
                 buffer.close()
         assert client.metrics.shared_bytes_current == 0
 
-    monkeypatch.setenv("EMENDER_NDP_MAX_SHARED_BYTES", "31")
+
+
+def test_shared_byte_exhaustion_is_fixed_at_service_start():
     with open_client(152) as client:
         with pytest.raises(BoundsError):
             client.allocate(bytes_count=32)
@@ -124,8 +126,7 @@ def test_registered_memfd_cannot_claim_bytes_beyond_its_sealed_extent():
             assert handle.value == 0
 
 
-def test_optional_fallback_materializes_only_one_reduced_numerator(monkeypatch, tmp_path):
-    monkeypatch.setenv("EMENDER_NDP_FALLBACK_SPOOL_DIR", str(tmp_path))
+def test_optional_fallback_materializes_only_one_reduced_numerator(tmp_path):
     elements = 128
     with open_client(161) as client:
         client.install_flat_layout(elements, source_dtype=DType.F32, payload_max=256)
@@ -161,8 +162,7 @@ def test_optional_fallback_materializes_only_one_reduced_numerator(monkeypatch, 
         assert not list(tmp_path.iterdir())
 
 
-def test_default_steady_state_writes_no_replay_or_trainer_spool(monkeypatch, tmp_path):
-    monkeypatch.delenv("EMENDER_NDP_FALLBACK_SPOOL_DIR", raising=False)
+def test_default_steady_state_writes_no_replay_or_trainer_spool(tmp_path):
     with open_client(191) as client:
         client.install_flat_layout(16, source_dtype=DType.F32, payload_max=64)
         client.install_generation(1, deadline_s=20).close()

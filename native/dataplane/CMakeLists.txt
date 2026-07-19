@@ -16,6 +16,13 @@ pkg_check_modules(LIBFABRIC REQUIRED IMPORTED_TARGET libfabric>=1.18)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 find_package(Threads REQUIRED)
 
+# Standalone transport builds still assemble the same persistent service.  The
+# unified native/ build has already created this target.
+if(NOT TARGET emender_ndp_service_core)
+  add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../src/native_resilient_dataplane
+                   ${CMAKE_CURRENT_BINARY_DIR}/local-service)
+endif()
+
 add_library(emender_ndp_core STATIC
   src/protocol.cpp
   src/owner.cpp
@@ -61,7 +68,8 @@ endif()
 add_executable(ndp_cxi_service src/service_main.cpp)
 target_include_directories(ndp_cxi_service PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(ndp_cxi_service PRIVATE emender_ndp_transport emender_ndp_core)
+target_link_libraries(ndp_cxi_service PRIVATE
+  emender_ndp_transport emender_ndp_core emender_ndp_service_core)
 target_compile_options(ndp_cxi_service PRIVATE -Wall -Wextra -Wpedantic -Werror=return-type)
 
 # The Frontier G2 executable is intentionally part of the installed, hashed
@@ -104,6 +112,18 @@ if(BUILD_TESTING AND NDP_BUILD_TESTS)
   target_compile_options(ndp_transport_c_abi_test PRIVATE -Wall -Wextra -Wpedantic)
   add_test(NAME ndp_transport_c_abi_test COMMAND ndp_transport_c_abi_test)
   set_tests_properties(ndp_transport_c_abi_test PROPERTIES TIMEOUT 15)
+
+  add_executable(ndp_service_rpc_integration_test
+    tests/service_rpc_integration_test.cpp)
+  target_include_directories(ndp_service_rpc_integration_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../src/native_resilient_dataplane/src)
+  target_link_libraries(ndp_service_rpc_integration_test PRIVATE emender_ndp)
+  target_compile_options(ndp_service_rpc_integration_test PRIVATE
+    -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror=return-type)
+  add_test(NAME ndp_service_rpc_integration_test
+    COMMAND ndp_service_rpc_integration_test $<TARGET_FILE:ndp_cxi_service>)
+  set_tests_properties(ndp_service_rpc_integration_test PROPERTIES TIMEOUT 90)
 
   add_test(NAME ndp_production_provider_fails_closed
     COMMAND ndp_cxi_service --provider tcp\;ofi_rxm --require-provider cxi --production --probe)
