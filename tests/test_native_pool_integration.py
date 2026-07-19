@@ -42,6 +42,20 @@ def test_native_service_validates_dense_submissions_without_global_serialization
     assert "generation_ != validation_generation" in submit
 
 
+def test_native_service_parallelizes_deterministic_full_layout_local_reduction():
+    """Element ranges reduce in parallel while trainer order stays stable."""
+    source = (ROOT / "src/native_resilient_dataplane/src/ndp.cpp").read_text()
+    reduce_local = source[source.index("int Service::reduce_local("):
+                          source.index("bool local_spool_path(")]
+    assert "std::thread::hardware_concurrency()" in reduce_local
+    assert "parallel_reduction_workers" in reduce_local
+    parallel = reduce_local[reduce_local.index("const std::size_t parallel_reduction_workers"):]
+    assert "for (std::size_t source_index = 0;" in parallel
+    assert parallel.index("for (std::uint64_t index = begin;") < parallel.index(
+        "for (std::size_t source_index = 0;")
+    assert "std::atomic<bool> nonfinite" in reduce_local
+
+
 def test_native_manager_binds_both_abis_before_ready_installs_routes_and_drains(tmp_path):
     manifest = json.loads(BUILD_MANIFEST.read_text())
     transport_library = (

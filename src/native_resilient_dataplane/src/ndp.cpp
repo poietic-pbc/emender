@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <cfenv>
 #include <chrono>
@@ -36,6 +37,7 @@
 #include <sys/statfs.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
+#include <thread>
 #include <unistd.h>
 #include <unordered_map>
 #include <utility>
@@ -1083,6 +1085,17 @@ int Service::reduce_local(const std::shared_ptr<Client>& client) {
     if (std::fesetround(FE_TONEAREST) != 0) return NDP_EPROVIDER;
     try { numerator_.assign(static_cast<std::size_t>(layout_->total_elements), 0.0); }
     catch (const std::bad_alloc&) { return NDP_ENOMEM; }
+
+    struct ReductionSource {
+        const Submission* submission = nullptr;
+        std::unique_ptr<Mapping> mapping;
+        bool preweighted_numerator = false;
+    };
+    std::vector<ReductionSource> sources;
+    try { sources.reserve(submissions_.size()); }
+    catch (const std::bad_alloc&) { numerator_.clear(); return NDP_ENOMEM; }
+
+    const char* hierarchical = std::getenv("EMENDER_NDP_INTERMEDIATE_F64");
     total_weight_ = 0;
     for (const auto& item : submissions_) {
         const Submission& submission = item.second;
@@ -1091,46 +1104,160 @@ int Service::reduce_local(const std::shared_ptr<Client>& client) {
             numerator_.clear();
             return NDP_EBOUNDS;
         }
-        Mapping mapping;
-        const int mapped = map_readonly(*submission.buffer, mapping);
-        if (mapped != NDP_OK) { release_submissions(); numerator_.clear(); return mapped; }
-        auto& metrics = submission.buffer->metrics->value;
-        metrics.mapped_bytes_current += mapping.bytes;
-        metrics.mapped_bytes_high_water = std::max(metrics.mapped_bytes_high_water,
-                                                    metrics.mapped_bytes_current);
-        const Digest actual = Sha256::digest(mapping.data, mapping.bytes);
-        if (actual != submission.receipt.digest) {
-            metrics.mapped_bytes_current -= mapping.bytes;
-            ++metrics.checksum_rejects;
+        std::unique_ptr<Mapping> mapping;
+        try { mapping = std::make_unique<Mapping>(); }
+        catch (const std::bad_alloc&) {
+            for (const auto& source : sources) {
+                source.submission->buffer->metrics->value.mapped_bytes_current
+                    -= source.mapping->bytes;
+            }
             release_submissions();
             numerator_.clear();
-            return NDP_ECHECKSUM;
+            return NDP_ENOMEM;
         }
-        const auto* raw = static_cast<const std::uint8_t*>(mapping.data);
-        const double weight = static_cast<double>(submission.receipt.weight);
-        const char* hierarchical = std::getenv("EMENDER_NDP_INTERMEDIATE_F64");
+        const int mapped = map_readonly(*submission.buffer, *mapping);
+        if (mapped != NDP_OK) {
+            for (const auto& source : sources) {
+                source.submission->buffer->metrics->value.mapped_bytes_current
+                    -= source.mapping->bytes;
+            }
+            release_submissions();
+            numerator_.clear();
+            return mapped;
+        }
+        auto& metrics = submission.buffer->metrics->value;
+        metrics.mapped_bytes_current += mapping->bytes;
+        metrics.mapped_bytes_high_water = std::max(metrics.mapped_bytes_high_water,
+                                                    metrics.mapped_bytes_current);
         // Attempt 1 emits a token-weighted binary64 node numerator.  A later
         // owner attempt submits those already-weighted numerators with their
         // exact token weights, so add rather than multiply them a second time.
         const bool preweighted_numerator = attempt_ > 1
             && submission.receipt.dtype == NDP_DTYPE_F64
             && hierarchical != nullptr && std::strcmp(hierarchical, "1") == 0;
-        for (std::uint64_t index = 0; index != layout_->total_elements; ++index) {
-            const double source = read_source(raw, submission.receipt.dtype, index);
-            const double term = preweighted_numerator ? source : source * weight;
-            const double sum = numerator_[static_cast<std::size_t>(index)] + term;
-            if (!std::isfinite(source) || !std::isfinite(term) || !std::isfinite(sum)) {
-                metrics.mapped_bytes_current -= mapping.bytes;
-                ++metrics.nonfinite_rejects;
-                release_submissions();
-                numerator_.clear();
-                return NDP_ENONFINITE;
-            }
-            numerator_[static_cast<std::size_t>(index)] = sum;
-        }
-        metrics.mapped_bytes_current -= mapping.bytes;
+        sources.push_back(ReductionSource{
+            &submission, std::move(mapping), preweighted_numerator});
         total_weight_ += submission.receipt.weight;
     }
+
+    const auto unaccount_mappings = [&sources]() noexcept {
+        for (const auto& source : sources) {
+            source.submission->buffer->metrics->value.mapped_bytes_current
+                -= source.mapping->bytes;
+        }
+    };
+
+    // Sealed submissions were validated at admission, but v1 deliberately
+    // rechecks them at reduction.  Hash independent mappings concurrently so
+    // the safety check does not reintroduce one full-layout pass per trainer.
+    std::vector<Digest> actual_digests(sources.size());
+    std::vector<std::thread> hash_workers;
+    try {
+        hash_workers.reserve(sources.size());
+        for (std::size_t source_index = 0; source_index != sources.size();
+             ++source_index) {
+            hash_workers.emplace_back([&, source_index] {
+                const Mapping& mapping = *sources[source_index].mapping;
+                actual_digests[source_index] = Sha256::digest(mapping.data, mapping.bytes);
+            });
+        }
+    } catch (...) {
+        for (auto& worker : hash_workers) if (worker.joinable()) worker.join();
+        unaccount_mappings();
+        release_submissions();
+        numerator_.clear();
+        return NDP_EPROVIDER;
+    }
+    for (auto& worker : hash_workers) worker.join();
+    for (std::size_t source_index = 0; source_index != sources.size(); ++source_index) {
+        if (actual_digests[source_index]
+                != sources[source_index].submission->receipt.digest) {
+            ++sources[source_index].submission->buffer->metrics->value.checksum_rejects;
+            unaccount_mappings();
+            release_submissions();
+            numerator_.clear();
+            return NDP_ECHECKSUM;
+        }
+    }
+
+    // Partition by element, not trainer.  Each element still visits the
+    // rank/sequence-sorted submissions_ map in exactly the v1 order, making
+    // the result bitwise identical to the former serial loop while using the
+    // CPU set granted to the node-local service.
+    const std::uint64_t elements = layout_->total_elements;
+    const unsigned advertised_workers = std::thread::hardware_concurrency();
+    const std::size_t parallel_reduction_workers = std::min<std::size_t>(
+        32, std::min<std::uint64_t>(elements,
+            advertised_workers == 0 ? 1U : advertised_workers));
+    const std::uint64_t elements_per_worker =
+        (elements + parallel_reduction_workers - 1) / parallel_reduction_workers;
+    std::atomic<bool> nonfinite{false};
+    std::atomic<std::size_t> nonfinite_source{sources.size()};
+    std::atomic<bool> rounding_failure{false};
+    std::vector<std::thread> reduction_workers;
+    try {
+        reduction_workers.reserve(parallel_reduction_workers);
+        for (std::size_t worker_index = 0;
+             worker_index != parallel_reduction_workers; ++worker_index) {
+            const std::uint64_t begin = worker_index * elements_per_worker;
+            const std::uint64_t end = std::min(elements, begin + elements_per_worker);
+            reduction_workers.emplace_back([&, begin, end] {
+                if (std::fesetround(FE_TONEAREST) != 0) {
+                    rounding_failure.store(true, std::memory_order_relaxed);
+                    return;
+                }
+                for (std::uint64_t index = begin;
+                     index != end && !nonfinite.load(std::memory_order_relaxed); ++index) {
+                    double sum = 0.0;
+                    for (std::size_t source_index = 0;
+                         source_index != sources.size(); ++source_index) {
+                        const ReductionSource& reduction_source = sources[source_index];
+                        const Submission& submission = *reduction_source.submission;
+                        const auto* raw = static_cast<const std::uint8_t*>(
+                            reduction_source.mapping->data);
+                        const double source = read_source(
+                            raw, submission.receipt.dtype, index);
+                        const double term = reduction_source.preweighted_numerator
+                            ? source : source * static_cast<double>(submission.receipt.weight);
+                        sum += term;
+                        if (!std::isfinite(source) || !std::isfinite(term)
+                            || !std::isfinite(sum)) {
+                            std::size_t expected = sources.size();
+                            nonfinite_source.compare_exchange_strong(
+                                expected, source_index, std::memory_order_relaxed);
+                            nonfinite.store(true, std::memory_order_relaxed);
+                            break;
+                        }
+                    }
+                    numerator_[static_cast<std::size_t>(index)] = sum;
+                }
+            });
+        }
+    } catch (...) {
+        for (auto& worker : reduction_workers) if (worker.joinable()) worker.join();
+        unaccount_mappings();
+        release_submissions();
+        numerator_.clear();
+        return NDP_EPROVIDER;
+    }
+    for (auto& worker : reduction_workers) worker.join();
+    if (rounding_failure.load(std::memory_order_relaxed)) {
+        unaccount_mappings();
+        release_submissions();
+        numerator_.clear();
+        return NDP_EPROVIDER;
+    }
+    if (nonfinite.load(std::memory_order_relaxed)) {
+        const std::size_t source_index = nonfinite_source.load(std::memory_order_relaxed);
+        if (source_index < sources.size()) {
+            ++sources[source_index].submission->buffer->metrics->value.nonfinite_rejects;
+        }
+        unaccount_mappings();
+        release_submissions();
+        numerator_.clear();
+        return NDP_ENONFINITE;
+    }
+    unaccount_mappings();
     release_submissions();
     const int spool = materialize_spool(client);
     if (spool != NDP_OK) { numerator_.clear(); return spool; }
