@@ -8,6 +8,7 @@ import pytest
 
 from ndm.native_transport import (
     NativeTransport,
+    NativeTransportLibrary,
     TransportError,
     decode_endpoint_record,
 )
@@ -191,3 +192,27 @@ def test_production_provider_and_poll_bounds_cannot_be_weakened():
     with _open(5) as transport:
         with pytest.raises(ValueError, match="bounded"):
             transport.poll(timeout_ms=-1)
+
+
+def test_production_transport_pins_cxi0_and_omits_hostname_source_bind():
+    captured = {}
+
+    class Library:
+        @staticmethod
+        def ndp_transport_open_v1(config_pointer, handle_pointer):
+            config = config_pointer._obj
+            captured["domain"] = bytes(config.domain[:config.domain_len])
+            captured["bind_node"] = bytes(
+                config.bind_node[:config.bind_node_len])
+            handle_pointer._obj.value = 41
+            return 0
+
+    native = object.__new__(NativeTransportLibrary)
+    native.lib = Library()
+    transport = NativeTransport.open(
+        library=native, provider="cxi", production=True,
+        bind_node="frontier00001", payload_max=4096, tx_slots=1, rx_slots=1,
+        resident_limit_bytes=1 << 20, deadline_s=10)
+    transport.closed = True
+
+    assert captured == {"domain": b"cxi0", "bind_node": b""}

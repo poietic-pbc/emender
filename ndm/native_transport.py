@@ -358,7 +358,13 @@ class NativeTransport:
         _write_text(config, "provider", provider)
         if production:
             _write_text(config, "require_provider", "cxi")
-        _write_text(config, "bind_node", bind_node)
+            # Frontier exposes two CXI domains. Match the attested native G2
+            # endpoint policy: select cxi0 explicitly and leave the source
+            # node empty. A Slurm hostname passed to fi_getinfo(FI_SOURCE) is
+            # a socket-provider bind request, not a valid CXI interface bind.
+            _write_text(config, "domain", "cxi0")
+        else:
+            _write_text(config, "bind_node", bind_node)
         handle = ctypes.c_uint64()
         native.check(native.lib.ndp_transport_open_v1(
             ctypes.byref(config), ctypes.byref(handle)), "transport_open")
