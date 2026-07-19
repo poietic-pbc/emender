@@ -404,7 +404,11 @@ class NativeTransport {
       if (events[index].event == NDP_T_EVENT_CQ_ERROR ||
           events[index].event == NDP_T_EVENT_ROUTE_DOWN ||
           events[index].status < 0) {
-        fail("native CQ/route event failed: " + std::to_string(events[index].status));
+        fail("native CQ/route event failed: event=" +
+             std::to_string(events[index].event) + " status=" +
+             std::to_string(events[index].status) + " provider_errno=" +
+             std::to_string(events[index].provider_errno) + " reason=" +
+             std::to_string(events[index].reason));
       }
     }
     std::vector<DecodedFrame> frames;

@@ -125,13 +125,11 @@ int FabricEndpoint::validate_config(const FabricConfig &config, std::string *why
 int FabricEndpoint::resolve_provider() {
   fi_info *hints = fi_allocinfo();
   if (hints == nullptr) return NDP_T_ENOMEM;
-  // The layered test provider requires FI_SOURCE in its negotiated caps to
-  // make fi_cq_readfrom source authentication deterministic.  Native CXI does
-  // not advertise that optional cap, but still returns its native AV address
-  // with each readfrom completion.  Do not exclude CXI by asking it for a cap
-  // it does not advertise.
-  hints->caps = FI_MSG;
-  if (!config_.production) hints->caps |= FI_SOURCE;
+  // Every accepted RDM frame must be attributable to its installed AV route.
+  // FI_SOURCE makes fi_cq_readfrom return that address on both the layered
+  // local provider and native CXI.  Production separately pins cxi0, so this
+  // capability no longer leaves provider/domain resolution ambiguous.
+  hints->caps = FI_MSG | FI_SOURCE;
   hints->mode = FI_CONTEXT;
   hints->ep_attr->type = FI_EP_RDM;
   hints->domain_attr->threading = FI_THREAD_SAFE;

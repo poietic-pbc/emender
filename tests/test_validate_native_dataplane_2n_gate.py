@@ -69,8 +69,7 @@ def test_frontier_payload_is_exactly_two_node_debug_cxi_and_fault_is_gated():
 def test_native_cxi_setup_uses_provider_mr_contract():
     source = FABRIC.read_text(encoding="utf-8")
     runner = RUNNER.read_text(encoding="utf-8")
-    assert "hints->caps = FI_MSG;" in source
-    assert "if (!config_.production) hints->caps |= FI_SOURCE;" in source
+    assert "hints->caps = FI_MSG | FI_SOURCE;" in source
     assert "info_->domain_attr->mr_mode & FI_MR_ENDPOINT" in source
     assert "fi_mr_bind(slot->mr, &endpoint_->fid, 0)" in source
     assert "fi_mr_enable(slot->mr)" in source
