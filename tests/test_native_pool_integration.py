@@ -235,6 +235,7 @@ def test_cross_process_trainer_handoff_passes_sealed_memfd_without_dense_socket(
     assert contribution["generation"] == 11 and contribution["attempt"] == 2
     assert contribution["weight"] == 99 and contribution["layout_digest"] == "ab" * 32
     assert contribution["payload"] == payload
+    received.close(); received.join_thread()
     os.close(fd); trainer.close(); manager.close()
 
 
