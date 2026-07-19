@@ -822,6 +822,16 @@ def test_all_peers_get_fresh_supervised_apply_window_after_aggregate_visibility(
     assert '"peer_apply": EXCHANGE_COMMIT_HARD_S' in supervisor
 
 
+def test_terminal_generation_does_not_rejoin_draining_pool():
+    role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    manager = role[role.index("def _native_manager(args)"):
+                   role.index("def manager(args)")]
+    assert ("if (pool_client is not None and generation + 1 <\n"
+            "                    args.initial_generation + args.generations):") in manager
+    assert manager.index('stage="published"') < manager.index(
+        "generation + 1 <", manager.index('stage="published"'))
+
+
 def test_node_local_exit_retains_only_small_control_evidence(tmp_path):
     from scripts.frontier import resilient_e97_allocation_supervisor as supervisor
 
