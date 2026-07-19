@@ -11,12 +11,22 @@ integration task binds those calls to the authoritative local service handles.
 
 ## Delivered service
 
-`ndp_cxi_service` owns one persistent libfabric endpoint, one address vector,
-distinct transmit and receive completion queues, fixed 2 MiB-aligned TX/RX
-slot pools, and one native progress thread. It uses `FI_EP_RDM`, `FI_MSG`, and
+`ndp_cxi_service` owns the one authoritative node-local `ServiceCore`, its
+mode-0600 `AF_UNIX/SOCK_SEQPACKET` v1 listener, one persistent libfabric
+endpoint, one address vector, distinct transmit and receive completion queues,
+fixed 2 MiB-aligned TX/RX slot pools, and one native progress thread. It uses `FI_EP_RDM`, `FI_MSG`, and
 `FI_CONTEXT`. Peer endpoint names are opaque inputs to `peer_upsert`; the
 service neither initializes MPI nor discovers launched ranks. Routes can be
 added, cancelled, expired, and removed independently.
+
+`libemender_ndp.so.1` is strictly a client library. Its public handles are
+process-local aliases for service-private handles and its frames are fixed,
+versioned metadata capped at 4,096 bytes. The socket validates `SO_PEERCRED`,
+socket/run/admission-token/fence identity, strictly increasing per-connection
+sequence, exact body size, and exact ancillary descriptor count. Dense trainer
+input crosses only as one sealed memfd; result handoff returns one sealed
+`O_RDONLY` memfd. Disconnect leaves admitted generation state in the service;
+newer fences and service restart invalidate stale handle domains.
 
 Production policy accepts only the explicit pair `--provider=cxi
 --require-provider=cxi --production`. It rejects a conflicting `FI_PROVIDER`,
@@ -98,7 +108,10 @@ The compiled tests cover:
 - owner reassignment/replay caps and deterministic owner mapping;
 - resident/in-flight/retained bounds and prompt release;
 - preservation on a too-small consumer buffer without an internal payload copy;
-- C ABI lifecycle/forward-prefix rules and provider fail-closed policy; and
+- C ABI lifecycle/forward-prefix rules and provider fail-closed policy;
+- a controller/trainer/service multiprocess RPC lifecycle, descriptor
+  smuggling/oversize rejection, disconnect/reconnect, newer fence, and service
+  restart with socket/child leak checks; and
 - an actual two-process `tcp;ofi_rxm` `FI_EP_RDM` exchange using the active
   libfabric headers and shared library.
 

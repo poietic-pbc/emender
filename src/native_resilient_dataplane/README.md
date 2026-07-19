@@ -2,14 +2,17 @@
 
 This directory implements the node-local half of
 [`NATIVE_RESILIENT_DILOCO_DATAPLANE.md`](../../docs/NATIVE_RESILIENT_DILOCO_DATAPLANE.md):
-the stable C ABI, bounded memfd ownership, deterministic native reduction, one
-shared f32 apply view, prompt release, and the optional single reduced-node
-replay journal. It is model-free and contains no lease, membership, quorum,
-checkpoint, Slurm, libfabric, MPI, or all-rank policy.
+the stable client C ABI, bounded seqpacket RPC, service-owned memfd lifetime,
+deterministic native reduction, one shared f32 apply view, prompt release, and
+the optional single reduced-node replay journal. It is model-free and contains
+no lease, membership, quorum, checkpoint, Slurm, MPI, or all-rank policy.
 
-The transport sibling intentionally lives in `native/dataplane`. Integration
-links its additive `ndp_transport_*_v1` API to this local core; neither half
-duplicates the other's ownership domain.
+`service_core.cpp` is a linkable static authority instantiated only by
+`native/dataplane/src/service_main.cpp`. `libemender_ndp.so.1` contains the
+process-local client handle table and the `AF_UNIX/SOCK_SEQPACKET` v1 client;
+it never constructs an authoritative `ServiceCore`. The transport sibling in
+`native/dataplane` links the same core into `ndp_cxi_service`, so that one
+process owns local state and `FabricEndpoint` for the same lifetime.
 
 ## Build
 
@@ -36,8 +39,9 @@ The reduction translation unit is compiled as C++17 with `-fno-fast-math`,
 
 ## Ownership and lifecycle
 
-1. The controller installs a sealed canonical layout descriptor and a fenced
-   generation identity.
+1. The controller authenticates to the mode-0600 service socket using
+   `SO_PEERCRED`, run, admission-token, and fence identity, then installs a
+   sealed canonical layout descriptor and a fenced generation identity.
 2. A trainer requests a sealed-size memfd, maps it writable, produces directly
    into the final mapping, closes the mapping, and seals it.
 3. `ndp_submit_local_v1` validates the exact identity, byte bounds, SHA-256,
@@ -53,7 +57,9 @@ The reduction translation unit is compiled as C++17 with `-fno-fast-math`,
    service copy.
 6. Every buffer, view, and operation is released explicitly. Python context
    managers close them safely on exceptions and stale-fence supersession.
-   Handles contain a process-boot cookie and cannot be reused after restart.
+   Public handles contain a client-process boot cookie and translate to
+   service-private handles only inside bounded RPC records. Service restart or
+   a newer fence invalidates both domains deterministically.
 
 The default replay mode is memory-only and writes zero disk bytes. Setting
 `EMENDER_NDP_FALLBACK_SPOOL_DIR` explicitly materializes exactly one
@@ -81,11 +87,13 @@ python -m pytest -q \
   tests/test_native_dataplane_failure.py
 ```
 
-The suite covers unequal weights, arrival permutations, f32/f64/bfloat16
+The suite launches the compiled service and covers unequal weights, arrival
+permutations, f32/f64/bfloat16
 source policy, duplicate and conflicting replay, stale fences/incarnations,
 checksum corruption, nonfinite input, cancellation, slot/byte exhaustion,
-exception cleanup, restart-unique handles, one shared result, default zero
-disk writes, and the bounded fallback journal.
+exception cleanup, controller/trainer disconnect, restart-unique handles,
+exact ancillary-fd cardinality, one read-only shared result, default zero disk
+writes, and the bounded fallback journal.
 
 Conformance scope: Compute Pool v1 R04, R05, R08, R09, R10, R14, R15 and
 native v1 NDP01, NDP04-NDP06, NDP08-NDP10, NDP12, NDP14-NDP16. Python remains

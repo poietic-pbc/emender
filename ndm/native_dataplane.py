@@ -1,9 +1,11 @@
 """Thin lifecycle-safe bridge for the native resilient data-plane v1 ABI.
 
-Dense values live in service-allocated memfd mappings.  Python passes only
-fixed-size metadata through ``ctypes``: it never serializes tensor elements,
-packs per-shard scalars, or carries dense bytes over a socket.  The native
-library validates, reduces, projects, and owns every retained dense buffer.
+Dense values live in service-allocated memfd mappings. Python passes fixed-size
+metadata through ``ctypes`` into a compiled seqpacket client: it never
+serializes tensor elements, packs per-shard scalars, or carries dense bytes in
+socket frames. The persistent ``ndp_cxi_service`` validates, reduces, projects,
+and owns every retained dense buffer; the shared library owns no authoritative
+singleton.
 
 This module implements the local half of R04/R05/R08-R10/R14/R15 and
 NDP01/NDP04-NDP06/NDP08-NDP10/NDP12/NDP14-NDP16.  Lease acquisition,
@@ -381,7 +383,7 @@ def _memfd_create(name: str, flags: int) -> int:
 
 
 class NativeLibrary:
-    """Typed owner of one loaded ``libemender_ndp.so.1`` instance."""
+    """Typed owner of the ``libemender_ndp.so.1`` metadata-RPC client."""
 
     def __init__(self, path: str | os.PathLike[str] | None = None):
         selected = self._resolve(path)

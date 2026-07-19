@@ -13,6 +13,7 @@ from ndm.native_artifacts import NATIVE_TEST
 from ndm.native_pool_runtime import NativeManagerSession, NativeTrainerHandoff
 from ndm.native_transport import NativeTransport, NativeTransportLibrary
 from ndm.resilient_pool_runtime import OwnerEndpoint
+from tests.native_dataplane_test_support import compiled_service
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +24,8 @@ def test_native_manager_binds_both_abis_before_ready_installs_routes_and_drains(
     manifest = json.loads(BUILD_MANIFEST.read_text())
     transport_library = (
         BUILD_MANIFEST.parent / manifest["artifacts"]["transport_library"]["path"])
+    run_key = __import__("hashlib").sha256(b"run").digest()[:16]
+    service = compiled_service(run_key, 19)
     session = NativeManagerSession.start(
         backend=NATIVE_TEST, run_id="run", fence_epoch=19,
         worker_id="node-0", incarnation="node-0-boot", host="127.0.0.1",
@@ -30,6 +33,7 @@ def test_native_manager_binds_both_abis_before_ready_installs_routes_and_drains(
         production=False, full_layout=False, deadline_s=20,
         telemetry_path=tmp_path / "native.jsonl", payload_max=4096,
         resident_limit_bytes=1 << 20,
+        service_socket_path=service.socket_path, admission_token=service.token,
     )
     session.install_generation(
         total_elements=8, generation=4, payload_max=64, deadline_s=10)

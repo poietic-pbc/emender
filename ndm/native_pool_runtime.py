@@ -266,7 +266,9 @@ class NativeManagerSession:
               source_root: str | Path, production: bool, full_layout: bool,
               deadline_s: float, telemetry_path: str | Path | None = None,
               payload_max: int = 64 << 20,
-              resident_limit_bytes: int = 16 << 30) -> "NativeManagerSession":
+              resident_limit_bytes: int = 16 << 30,
+              service_socket_path: str | Path = "/tmp/emender-ndp.sock",
+              admission_token: bytes | None = None) -> "NativeManagerSession":
         if backend not in {NATIVE_CXI, NATIVE_TEST}:
             raise ValueError("NativeManagerSession cannot start a Python TCP fixture")
         attestation = attest_launch(
@@ -289,6 +291,7 @@ class NativeManagerSession:
                 library=NativeLibrary(artifacts["local_library"]), role=Role.CONTROLLER,
                 run_key=run_id, fence_epoch=fence_epoch, worker_key=worker_id,
                 incarnation=incarnation, deadline_s=min(10.0, deadline_s),
+                socket_path=str(service_socket_path), admission_token=admission_token,
             )
             provider = "cxi" if backend == NATIVE_CXI else os.environ.get(
                 "NDP_TEST_PROVIDER", "tcp;ofi_rxm")

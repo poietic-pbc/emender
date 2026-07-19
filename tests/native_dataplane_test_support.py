@@ -1,12 +1,113 @@
 from __future__ import annotations
 
 import hashlib
+import atexit
+import os
 from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import threading
+import time
 from typing import Sequence
 
 import numpy as np
 
 from ndm.native_dataplane import Client, Command, DType, Metrics, NativeLibrary
+
+
+class _CompiledService:
+    def __init__(self, run_key: bytes, minimum_fence: int):
+        self.run_key = bytes(run_key)
+        self.token = hashlib.sha256(b"emender-native-service-test\0" + self.run_key).digest()
+        self.directory = Path(tempfile.mkdtemp(prefix="emender-ndp-pytest-"))
+        self.socket_path = self.directory / "service.sock"
+        executable = _service_binary()
+        environment = dict(os.environ)
+        self.process = subprocess.Popen([
+            str(executable), "--provider", "tcp;ofi_rxm", "--test-only", "--serve",
+            "--bind-node", "127.0.0.1", "--payload-max", "4096",
+            "--tx-slots", "1", "--rx-slots", "1",
+            "--socket", str(self.socket_path), "--run-key", self.run_key.hex(),
+            "--admission-token", self.token.hex(),
+            "--initial-fence", str(int(minimum_fence)),
+            "--deadline-seconds", "1800",
+        ], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+           stderr=subprocess.PIPE, text=True, env=environment)
+        for _ in range(1000):
+            if self.socket_path.exists():
+                if self.socket_path.stat().st_mode & 0o777 != 0o600:
+                    self.close()
+                    raise RuntimeError("compiled native service socket is not mode 0600")
+                break
+            if self.process.poll() is not None:
+                detail = self.process.stderr.read() if self.process.stderr else ""
+                self.close()
+                raise RuntimeError(f"compiled native service failed to start: {detail}")
+            time.sleep(0.01)
+        else:
+            self.close()
+            raise TimeoutError("compiled native service did not bind its socket")
+
+    def close(self) -> None:
+        process = getattr(self, "process", None)
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        if process is not None and process.stderr is not None:
+            process.stderr.close()
+        directory = getattr(self, "directory", None)
+        if directory is not None:
+            shutil.rmtree(directory, ignore_errors=True)
+
+
+def _service_binary() -> Path:
+    configured = os.environ.get("EMENDER_NDP_SERVICE")
+    candidates = [Path(configured)] if configured else []
+    try:
+        local_library = NativeLibrary().path
+    except FileNotFoundError:
+        local_library = Path("/nonexistent")
+    candidates.extend([
+        local_library.parent.parent / "bin/ndp_cxi_service",
+        Path(__file__).resolve().parents[1]
+            / "build/compiled-native-service-rpc-v1/transport/ndp_cxi_service",
+        Path(__file__).resolve().parents[1]
+            / "build/native-resilient-dataplane/bin/ndp_cxi_service",
+    ])
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate.resolve()
+    raise FileNotFoundError("ndp_cxi_service was not built; set EMENDER_NDP_SERVICE")
+
+
+_SERVICES: dict[bytes, _CompiledService] = {}
+_SERVICES_LOCK = threading.Lock()
+
+
+def compiled_service(run_key: bytes, minimum_fence: int = 1) -> _CompiledService:
+    run_key = bytes(run_key)
+    with _SERVICES_LOCK:
+        service = _SERVICES.get(run_key)
+        if service is None or service.process.poll() is not None:
+            service = _CompiledService(run_key, minimum_fence)
+            _SERVICES[run_key] = service
+        return service
+
+
+def _close_services() -> None:
+    with _SERVICES_LOCK:
+        services = tuple(_SERVICES.values())
+        _SERVICES.clear()
+    for service in services:
+        service.close()
+
+
+atexit.register(_close_services)
 
 
 def key(value: int) -> bytes:
@@ -18,12 +119,16 @@ def library() -> NativeLibrary:
 
 
 def open_client(tag: int, *, fence: int = 1, native: NativeLibrary | None = None) -> Client:
+    run_key = key(tag)
+    service = compiled_service(run_key, fence)
     return Client.open(
         library=native or library(),
-        run_key=key(tag),
+        run_key=run_key,
         fence_epoch=fence,
         worker_key=key(tag + 1),
         incarnation=key(tag + 2),
+        admission_token=service.token,
+        socket_path=str(service.socket_path),
     )
 
 

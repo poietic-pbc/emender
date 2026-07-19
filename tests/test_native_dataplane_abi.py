@@ -15,7 +15,9 @@ from ndm.native_dataplane import (
     ABI_V1, AllocV1, BufferV1, Client, Command, ControlV1, DType, EventV1,
     LayoutV1, MetricsV1, NativeLibrary, OpenV1, ResultCode, ResultV1, SubmitV1,
 )
-from tests.native_dataplane_test_support import key, library_path, open_client
+from tests.native_dataplane_test_support import (
+    compiled_service, key, library_path, open_client,
+)
 
 
 def test_v1_struct_sizes_soname_and_elastic_symbol_boundary():
@@ -98,14 +100,15 @@ def test_poll_fd_is_cloexec_and_result_views_share_one_read_only_memfd():
 
 def test_python_bridge_restarts_with_process_unique_handles(tmp_path):
     native_path = str(library_path())
+    service = compiled_service(key(71), 1)
     first_script = """
 import json
 from ndm.native_dataplane import Client
 k=lambda x: bytes([x])*16
-c=Client.open(library=LIB,run_key=k(71),fence_epoch=1,worker_key=k(72),incarnation=k(73))
+c=Client.open(library=LIB,run_key=k(71),fence_epoch=1,worker_key=k(72),incarnation=k(73),admission_token=TOKEN,socket_path=SOCKET)
 b=c.allocate(bytes_count=16)
 print(json.dumps({'handle': b.handle}))
-""".replace("LIB", repr(native_path))
+""".replace("LIB", repr(native_path)).replace("TOKEN", repr(service.token)).replace("SOCKET", repr(str(service.socket_path)))
     environment = dict(os.environ, EMENDER_NDP_LIBRARY=native_path)
     first = subprocess.run([sys.executable, "-c", first_script], check=True, text=True,
                            capture_output=True, env=environment)
@@ -114,11 +117,11 @@ print(json.dumps({'handle': b.handle}))
 import json
 from ndm.native_dataplane import Client
 k=lambda x: bytes([x])*16
-c=Client.open(library=LIB,run_key=k(71),fence_epoch=2,worker_key=k(72),incarnation=k(74))
+c=Client.open(library=LIB,run_key=k(71),fence_epoch=2,worker_key=k(72),incarnation=k(74),admission_token=TOKEN,socket_path=SOCKET)
 code=c.native.library.ndp_buffer_release_v1(c.handle, STALE)
 print(json.dumps({'code': code}))
 c.close()
-""".replace("LIB", repr(native_path)).replace("STALE", str(stale_handle))
+""".replace("LIB", repr(native_path)).replace("STALE", str(stale_handle)).replace("TOKEN", repr(service.token)).replace("SOCKET", repr(str(service.socket_path)))
     second = subprocess.run([sys.executable, "-c", second_script], check=True, text=True,
                             capture_output=True, env=environment)
     assert json.loads(second.stdout.strip().splitlines()[-1])["code"] == ResultCode.EINVAL
