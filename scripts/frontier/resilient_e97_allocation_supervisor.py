@@ -28,6 +28,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from ndm.fenced_admission import AllocationLease, FenceRejected, SQLiteFencedControlStore
+from ndm.native_dataplane import create_memfd, seal_memfd
 
 
 TRAINERS_PER_NODE = 8
@@ -205,6 +206,13 @@ class AllocationSupervisor:
         self.stopping = False
         self.injected: set[str] = set()
         self._last_shared_stage: dict[str, tuple[int, int, str]] = {}
+        self.native_token_fd = -1
+        if any(child.role == "native-service" for child in children):
+            self.native_token_fd = create_memfd(
+                "emender-ndp-admission", allow_sealing=True)
+            os.write(self.native_token_fd, os.urandom(32))
+            os.lseek(self.native_token_fd, 0, os.SEEK_SET)
+            seal_memfd(self.native_token_fd)
         (run_dir / "supervision").mkdir(parents=True, exist_ok=True)
         (run_dir / "logs").mkdir(parents=True, exist_ok=True)
 
@@ -220,7 +228,7 @@ class AllocationSupervisor:
                        "RESILIENT_E97_NODE_RANK": str(child.node_rank),
                        "RUN_DIR": str(self.run_dir)}
         role_env = [f"{key}={value}" for key, value in role_values.items()]
-        if child.role == "manager":
+        if child.role in {"manager", "native-service"}:
             resources = ["-c8"]
             role_env.append("CUDA_VISIBLE_DEVICES=")
             role_values["CUDA_VISIBLE_DEVICES"] = ""
@@ -264,7 +272,16 @@ class AllocationSupervisor:
             resources = ["-c56"]
         if self.launch_backend == "node-local-child":
             env = os.environ.copy(); env.update(role_values)
+            if self.native_token_fd >= 0:
+                env["EMENDER_NDP_ADMISSION_TOKEN_FD"] = str(self.native_token_fd)
             argv = shlex.split(child.command)
+            if child.role == "native-service":
+                telemetry = self.run_dir / "logs" / f"{child.identity}-transport.jsonl"
+                argv.extend([
+                    "--bind-node", child.node,
+                    "--telemetry", str(telemetry),
+                    "--admission-token-fd", str(self.native_token_fd),
+                ])
         else:
             env = None
             argv = ["srun", "--overlap", "--no-kill", "--exact", "-N1", "-n1",
@@ -272,8 +289,11 @@ class AllocationSupervisor:
         log = self.run_dir / "logs" / child.identity
         stdout = (log.with_suffix(".out")).open("ab", buffering=0)
         stderr = (log.with_suffix(".err")).open("ab", buffering=0)
-        child.process = subprocess.Popen(argv, stdout=stdout, stderr=stderr, env=env,
-                                         start_new_session=True)
+        pass_fds = ((self.native_token_fd,) if self.launch_backend == "node-local-child"
+                    and self.native_token_fd >= 0 else ())
+        child.process = subprocess.Popen(
+            argv, stdout=stdout, stderr=stderr, env=env,
+            start_new_session=True, pass_fds=pass_fds)
         child.started_at = time.time()
         self._event("started", child, pid=child.process.pid, restart=child.restarts)
 
@@ -281,6 +301,8 @@ class AllocationSupervisor:
         assert child.process is not None
         if child.process.poll() is not None:
             return f"exit:{child.process.returncode}"
+        if child.role == "native-service":
+            return None
         state_path = self._state_path(child)
         if not state_path.exists():
             if child.started_at is not None and now - child.started_at > self.startup_s:
@@ -426,8 +448,26 @@ class AllocationSupervisor:
 
     def run(self) -> int:
         if self.launch_backend == "node-local-child":
+            services = [child for child in self.children
+                        if child.role == "native-service"]
             managers = [child for child in self.children if child.role == "manager"]
-            deferred = [child for child in self.children if child.role != "manager"]
+            deferred = [child for child in self.children if child.role == "trainer"]
+            for child in services:
+                self.start(child)
+            service_deadline = time.monotonic() + self.startup_s
+            socket_path = Path(os.environ.get("EMENDER_NDP_SOCKET", ""))
+            while services and not self.stopping:
+                if all(child.process is not None and child.process.poll() is None
+                       for child in services) and socket_path.is_socket():
+                    break
+                if any(child.process is not None and child.process.poll() is not None
+                       for child in services):
+                    self.stop_children(services, "native_service_startup_failure")
+                    return 1
+                if time.monotonic() >= service_deadline:
+                    self.stop_children(services, "native_service_startup_deadline")
+                    return 1
+                time.sleep(self.poll_s)
             for child in managers:
                 self.start(child)
             while not self.stopping:
@@ -450,7 +490,7 @@ class AllocationSupervisor:
                     self.start(child)
                 time.sleep(self.poll_s)
             if self.stopping:
-                self.stop_children(managers, "allocation_term_handoff")
+                self.stop_children([*managers, *services], "allocation_term_handoff")
                 return 0
             # Node-local role heartbeats deliberately stay off Lustre's hot
             # path.  Publish one compact shared attestation after every local
@@ -472,10 +512,18 @@ class AllocationSupervisor:
         else:
             for child in self.children:
                 self.start(child)
+        monitored = [child for child in self.children if child.role != "native-service"]
+        services = [child for child in self.children if child.role == "native-service"]
         completed: set[str] = set()
         while not self.stopping:
             now = time.time()
-            for child in self.children:
+            if any(child.process is not None and child.process.poll() is not None
+                   for child in services):
+                self.stop_children(
+                    [child for child in monitored if child.identity not in completed],
+                    "native_service_lost")
+                return 1
+            for child in monitored:
                 if child.identity in completed:
                     continue
                 self._share_stage_transition(child)
@@ -492,7 +540,8 @@ class AllocationSupervisor:
                     return 1
                 child.restarts += 1
                 self.start(child)
-            if len(completed) == len(self.children):
+            if len(completed) == len(monitored):
+                self.stop_children(services, "allocation_complete")
                 return 0
             time.sleep(self.poll_s)
         self.stop_children(
@@ -513,7 +562,17 @@ def _node_local_main() -> int:
     node = os.environ.get("SLURMD_NODENAME", os.uname().nodename)
     manager = os.environ["RESILIENT_E97_MANAGER_COMMAND"]
     trainer = os.environ["RESILIENT_E97_TRAINER_COMMAND"]
-    children = [Child("manager", node_rank, node, None, manager)]
+    service = os.environ.get("NDP_SERVICE_COMMAND")
+    bulk_root = Path(os.environ.get("RESILIENT_E97_BULK_ROOT", "/tmp/resilient-e97"))
+    children = []
+    if service:
+        run_id = os.environ["RESILIENT_E97_RUN_ID"]
+        socket_path = bulk_root / run_id / f"node-{node_rank}" / "control" / "ndp.sock"
+        socket_path.parent.mkdir(parents=True, exist_ok=True)
+        os.environ["EMENDER_NDP_SOCKET"] = str(socket_path)
+        service = f"{service} --socket {shlex.quote(str(socket_path))}"
+        children.append(Child("native-service", node_rank, node, None, service))
+    children.append(Child("manager", node_rank, node, None, manager))
     children.extend(Child("trainer", node_rank, node, rank, trainer)
                     for rank in range(TRAINERS_PER_NODE))
     supervisor = AllocationSupervisor(

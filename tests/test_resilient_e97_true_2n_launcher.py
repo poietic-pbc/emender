@@ -18,6 +18,23 @@ ROOT = Path(__file__).parents[1]
 APPROVED_ENV = Path("/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312")
 
 
+def _fake_native_manifest(root: Path) -> Path:
+    prefix = root / "native"
+    (prefix / "bin").mkdir(parents=True)
+    (prefix / "lib").mkdir()
+    service = prefix / "bin/ndp_cxi_service"
+    service.write_text("#!/bin/sh\nexit 0\n"); service.chmod(0o755)
+    local = prefix / "lib/libemender_ndp.so.1"; local.write_bytes(b"local")
+    transport = prefix / "lib/libemender_ndp_transport.so.1"; transport.write_bytes(b"transport")
+    manifest = prefix / "native-artifacts.json"
+    manifest.write_text(json.dumps({"artifacts": {
+        "service_binary": {"path": "bin/ndp_cxi_service"},
+        "local_library": {"path": "lib/libemender_ndp.so.1"},
+        "transport_library": {"path": "lib/libemender_ndp_transport.so.1"},
+    }}))
+    return manifest
+
+
 def test_true_launcher_is_exact_debug_twenty_minute_topology_without_sentinels():
     text = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
     supervisor = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
@@ -95,6 +112,7 @@ def test_launcher_omits_empty_resume_argument(tmp_path):
     srun.chmod(0o755)
     tokenizer_cache = tmp_path / "p50k.cache"
     tokenizer_cache.write_text("offline-tokenizer-cache")
+    native_manifest = _fake_native_manifest(tmp_path)
     env = {
         **os.environ,
         "PATH": f"{bindir}:{APPROVED_ENV / 'bin'}:{os.environ['PATH']}",
@@ -113,7 +131,7 @@ def test_launcher_omits_empty_resume_argument(tmp_path):
         "RESILIENT_E97_DATA": "/data",
         "RESILIENT_E97_TIKTOKEN_CACHE_FILE": str(tokenizer_cache),
         "RESILIENT_E97_TIKTOKEN_SHA256": hashlib.sha256(tokenizer_cache.read_bytes()).hexdigest(),
-        "NDP_BUILD_MANIFEST": str(tmp_path / "native-artifacts.json"),
+        "NDP_BUILD_MANIFEST": str(native_manifest),
         "NDP_FULL_LAYOUT_GATE_JSON": str(tmp_path / "full-layout-gate.json"),
     }
     result = subprocess.run(
@@ -146,6 +164,21 @@ def test_full_layout_launcher_requires_native_cxi_and_exact_artifact_gate_before
     assert "NDP_FULL_LAYOUT_GATE_JSON" in text
     assert attestation < roles
     assert "python-tcp-debug" not in text
+
+
+def test_node_local_topology_starts_persistent_service_before_model_free_manager():
+    source = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
+    launcher = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
+    assert 'Child("native-service"' in source
+    assert 'Child("manager"' in source
+    assert "for rank in range(TRAINERS_PER_NODE)" in source
+    assert source.index('Child("native-service"') < source.index('Child("manager"')
+    assert "--admission-token-fd" in source
+    assert "EMENDER_NDP_ADMISSION_TOKEN_FD" in source
+    assert "NDP_SERVICE_COMMAND" in launcher
+    assert 'NDP_SERVICE_BINARY=${NDP_ARTIFACT_PATHS[0]}' in launcher
+    assert "--provider cxi --require-provider cxi --production --serve" in launcher
+    assert "--local-quorum 8" in launcher
 
 
 def test_launcher_activates_approved_frontier_python_before_any_role():
@@ -217,6 +250,7 @@ def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tm
     srun.chmod(0o755)
     tokenizer_cache = tmp_path / "p50k.cache"
     tokenizer_cache.write_text("offline-tokenizer-cache")
+    native_manifest = _fake_native_manifest(tmp_path)
     env = {
         **os.environ,
         "PATH": f"{bindir}:{APPROVED_ENV / 'bin'}:{os.environ['PATH']}",
@@ -238,7 +272,7 @@ def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tm
         "RESILIENT_E97_DATA": "/data",
         "RESILIENT_E97_TIKTOKEN_CACHE_FILE": str(tokenizer_cache),
         "RESILIENT_E97_TIKTOKEN_SHA256": hashlib.sha256(tokenizer_cache.read_bytes()).hexdigest(),
-        "NDP_BUILD_MANIFEST": str(tmp_path / "native-artifacts.json"),
+        "NDP_BUILD_MANIFEST": str(native_manifest),
         "NDP_FULL_LAYOUT_GATE_JSON": str(tmp_path / "full-layout-gate.json"),
     }
     subprocess.run(["bash", str(ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch")],

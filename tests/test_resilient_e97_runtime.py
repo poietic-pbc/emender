@@ -28,14 +28,24 @@ def test_manager_publishes_heartbeat_before_heavy_runtime_imports():
     assert "os.replace(temporary, state)" in text
 
 
-def test_live_native_selection_fails_closed_until_dense_runtime_is_wired():
+def test_live_native_selection_is_wired_and_python_debug_remains_explicit():
     from ndm.native_artifacts import NATIVE_CXI, NATIVE_TEST, PYTHON_TCP_DEBUG
     from scripts.frontier import resilient_e97_role as role
 
-    role._require_wired_dense_runtime(PYTHON_TCP_DEBUG)
-    for backend in (NATIVE_TEST, NATIVE_CXI):
-        with pytest.raises(RuntimeError, match="not wired into the split-role dense path"):
-            role._require_wired_dense_runtime(backend)
+    for backend in (PYTHON_TCP_DEBUG, NATIVE_TEST, NATIVE_CXI):
+        role._require_wired_dense_runtime(backend)
+
+    source = ROLE.read_text()
+    native_manager = source[source.index("def _native_manager(args)"):
+                            source.index("def manager(args)")]
+    assert "LocalTrainerSpool(" not in native_manager
+    assert "DistributedOwnerServer(" not in native_manager
+    assert "NativeManagerSession.start(" in native_manager
+    assert "spool = (LocalTrainerSpool" in source
+    assert "if not native else None" in source
+    assert "manager/trainer native runtime digest mismatch" in source
+    assert "resume checkpoint native runtime digest mismatch" in source
+    assert "role recovery native runtime digest mismatch" in source
 
 
 def test_import_liveness_does_not_refresh_runtime_import_progress_deadline():

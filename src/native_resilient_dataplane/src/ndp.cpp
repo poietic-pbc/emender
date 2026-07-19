@@ -352,9 +352,13 @@ struct SubmissionKey {
     Key16 incarnation{};
     std::uint64_t sequence = 0;
     bool operator<(const SubmissionKey& other) const noexcept {
+        // The real E97 role uses local trainer rank as the sequence.  Preserve
+        // the established rank-sorted float64 accumulation order exactly;
+        // hashed trainer keys are identities, not an ordering contract.
+        if (sequence != other.sequence) return sequence < other.sequence;
         if (trainer != other.trainer) return trainer < other.trainer;
         if (incarnation != other.incarnation) return incarnation < other.incarnation;
-        return sequence < other.sequence;
+        return false;
     }
 };
 
@@ -459,8 +463,13 @@ private:
     std::uint32_t counter_ = 1;
     std::unordered_map<ndp_client_t, std::shared_ptr<Client>> clients_;
     std::unordered_map<ndp_buffer_t, std::shared_ptr<Buffer>> buffers_;
+    // A result buffer is deliberately shared by every current-fence trainer.
+    // Ownership therefore belongs to each public handle, not to the underlying
+    // storage object (which may have many independent read-only views).
+    std::unordered_map<ndp_buffer_t, ndp_client_t> buffer_owners_;
     std::unordered_map<ndp_op_t, std::shared_ptr<Operation>> operations_;
     std::size_t accounted_buffers_ = 0;
+    std::shared_ptr<MetricState> service_metrics_ = std::make_shared<MetricState>();
 
     bool run_bound_ = false;
     Key16 run_{};
@@ -591,6 +600,10 @@ int Service::client_open(const ndp_open_v1* input, ndp_client_t* output) {
     client->worker = bytes(input->worker_key);
     client->incarnation = bytes(input->incarnation);
     client->fence = input->fence_epoch;
+    // Metrics and the shared-byte admission ledger are service-wide.  Per-RPC
+    // accounting let eight trainers each admit the full configured limit and
+    // hid producer activity from the model-free controller.
+    client->metrics = service_metrics_;
     client->event_fd = ::eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
     if (client->event_fd < 0) return NDP_EIO;
     clients_[client->handle] = client;
@@ -632,11 +645,12 @@ int Service::client_close(ndp_client_t handle) {
     // invalidate it.
     if (controller_ == handle && client->fence == fence_) controller_ = 0;
     std::vector<ndp_buffer_t> owned_buffers;
-    for (const auto& item : buffers_)
-        if (item.second->owner_client == handle) owned_buffers.push_back(item.first);
+    for (const auto& item : buffer_owners_)
+        if (item.second == handle) owned_buffers.push_back(item.first);
     for (const auto buffer_handle : owned_buffers) {
         auto buffer = buffers_[buffer_handle];
         buffers_.erase(buffer_handle);
+        buffer_owners_.erase(buffer_handle);
         if (buffer->public_refs != 0) --buffer->public_refs;
         account_maybe_release(buffer);
     }
@@ -745,6 +759,7 @@ int Service::buffer_allocate(ndp_client_t handle, const ndp_alloc_v1* input,
     const ndp_buffer_t buffer_handle = next_handle();
     buffer->public_refs = 1;
     buffers_[buffer_handle] = buffer;
+    buffer_owners_[buffer_handle] = handle;
     *output = buffer_handle;
     *output_fd = duplicate;
     return NDP_OK;
@@ -807,6 +822,7 @@ int Service::buffer_register(ndp_client_t handle, const ndp_buffer_v1* input,
     const ndp_buffer_t buffer_handle = next_handle();
     buffer->public_refs = 1;
     buffers_[buffer_handle] = buffer;
+    buffer_owners_[buffer_handle] = handle;
     *output = buffer_handle;
     return NDP_OK;
 }
@@ -817,7 +833,7 @@ int Service::buffer_seal(ndp_client_t handle, ndp_buffer_t buffer_handle) {
     const int current = require_current(client);
     if (current != NDP_OK) return current;
     const auto found = buffers_.find(buffer_handle);
-    if (found == buffers_.end() || found->second->owner_client != handle)
+    if (found == buffers_.end() || buffer_owners_[buffer_handle] != handle)
         return NDP_EINVAL;
     auto& buffer = *found->second;
     if (buffer.sealed) return NDP_OK;
@@ -835,10 +851,11 @@ int Service::buffer_release(ndp_client_t handle, ndp_buffer_t buffer_handle) {
     const int current = require_current(client);
     if (current != NDP_OK) return current;
     const auto found = buffers_.find(buffer_handle);
-    if (found == buffers_.end() || found->second->owner_client != handle)
+    if (found == buffers_.end() || buffer_owners_[buffer_handle] != handle)
         return NDP_EINVAL;
     auto buffer = found->second;
     buffers_.erase(found);
+    buffer_owners_.erase(buffer_handle);
     if (buffer->public_refs == 0) return NDP_EINVAL;
     --buffer->public_refs;
     account_maybe_release(buffer);
@@ -909,7 +926,7 @@ int Service::submit(ndp_client_t handle, const ndp_submit_v1* input,
         || input->weight > kMaxWeight || input->element_offset != 0
         || input->element_count != layout_->total_elements) return NDP_EINVAL;
     const auto buffer_found = buffers_.find(input->buffer);
-    if (buffer_found == buffers_.end() || buffer_found->second->owner_client != handle
+    if (buffer_found == buffers_.end() || buffer_owners_[input->buffer] != handle
         || !buffer_found->second->sealed) return NDP_EINVAL;
     std::uint64_t width = 0;
     if (dtype_size(input->source_dtype, width) != NDP_OK
@@ -1028,9 +1045,16 @@ int Service::reduce_local(const std::shared_ptr<Client>& client) {
         }
         const auto* raw = static_cast<const std::uint8_t*>(mapping.data);
         const double weight = static_cast<double>(submission.receipt.weight);
+        const char* hierarchical = std::getenv("EMENDER_NDP_INTERMEDIATE_F64");
+        // Attempt 1 emits a token-weighted binary64 node numerator.  A later
+        // owner attempt submits those already-weighted numerators with their
+        // exact token weights, so add rather than multiply them a second time.
+        const bool preweighted_numerator = attempt_ > 1
+            && submission.receipt.dtype == NDP_DTYPE_F64
+            && hierarchical != nullptr && std::strcmp(hierarchical, "1") == 0;
         for (std::uint64_t index = 0; index != layout_->total_elements; ++index) {
             const double source = read_source(raw, submission.receipt.dtype, index);
-            const double term = source * weight;
+            const double term = preweighted_numerator ? source : source * weight;
             const double sum = numerator_[static_cast<std::size_t>(index)] + term;
             if (!std::isfinite(source) || !std::isfinite(term) || !std::isfinite(sum)) {
                 metrics.mapped_bytes_current -= mapping.bytes;
@@ -1122,7 +1146,14 @@ void Service::abort_generation(bool fence_change) {
     total_weight_ = 0;
     remove_spool();
     if (freeze_operation_) freeze_operation_->valid = false;
-    if (result_operation_) result_operation_->valid = false;
+    if (result_operation_) {
+        result_operation_->valid = false;
+        if (result_operation_->result_buffer
+            && result_operation_->result_buffer->retained_refs != 0) {
+            --result_operation_->result_buffer->retained_refs;
+            account_maybe_release(result_operation_->result_buffer);
+        }
+    }
     for (auto& item : clients_) {
         if (item.second->fence == fence_) {
             ++item.second->metrics->value.cancelled_ops;
@@ -1143,24 +1174,43 @@ int Service::project_result(const std::shared_ptr<Client>& client,
                             std::shared_ptr<Operation>& output) {
     if (total_weight_ == 0 || numerator_.size() != layout_->total_elements)
         return NDP_ESTATE;
-    const double total = static_cast<double>(total_weight_);
-    for (double& value : numerator_) {
-        value = value / total;
-        if (!std::isfinite(value)) return NDP_ENONFINITE;
+    const bool intermediate_f64 = attempt_ == 1 && [] {
+        const char* value = std::getenv("EMENDER_NDP_INTERMEDIATE_F64");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    // Normative NDP03/NDP09 exchange the binary64 node numerator, not a local
+    // mean.  Only the final owner attempt divides by the exact global token
+    // total, avoiding a lossy divide/multiply round trip between nodes.
+    if (!intermediate_f64) {
+        const double total = static_cast<double>(total_weight_);
+        for (double& value : numerator_) {
+            value = value / total;
+            if (!std::isfinite(value)) return NDP_ENONFINITE;
+        }
+    } else if (std::any_of(numerator_.begin(), numerator_.end(),
+                           [](double value) { return !std::isfinite(value); })) {
+        return NDP_ENONFINITE;
     }
     std::shared_ptr<Buffer> result_buffer;
-    const std::uint64_t result_bytes = layout_->total_elements * sizeof(float);
+    // Attempt 1 retains its weighted binary64 numerator for native owner
+    // exchange. Attempt 2 projects the globally divided result once to f32.
+    const std::uint64_t result_bytes = layout_->total_elements
+        * (intermediate_f64 ? sizeof(double) : sizeof(float));
     int created = create_buffer(client, result_bytes, result_buffer);
     if (created != NDP_OK) return created;
     void* mapped = ::mmap(nullptr, static_cast<std::size_t>(result_bytes),
                           PROT_READ | PROT_WRITE, MAP_SHARED, result_buffer->fd, 0);
     if (mapped == MAP_FAILED) { account_maybe_release(result_buffer); return NDP_EIO; }
-    auto* projected = static_cast<float*>(mapped);
-    for (std::size_t index = 0; index != numerator_.size(); ++index)
-        projected[index] = static_cast<float>(numerator_[index]);
+    if (intermediate_f64) {
+        std::memcpy(mapped, numerator_.data(), static_cast<std::size_t>(result_bytes));
+    } else {
+        auto* projected = static_cast<float*>(mapped);
+        for (std::size_t index = 0; index != numerator_.size(); ++index)
+            projected[index] = static_cast<float>(numerator_[index]);
+    }
     ::munmap(mapped, static_cast<std::size_t>(result_bytes));
     if (::fcntl(result_buffer->fd, F_ADD_SEALS,
-                F_SEAL_WRITE | F_SEAL_SEAL) != 0) {
+                F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_WRITE | F_SEAL_SEAL) != 0) {
         account_maybe_release(result_buffer);
         return NDP_EIO;
     }
@@ -1186,7 +1236,7 @@ int Service::project_result(const std::shared_ptr<Client>& client,
     operation->result.struct_size = sizeof(ndp_result_v1);
     operation->result.abi_version = NDP_ABI_V1;
     operation->result.flags = NDP_BUFFER_READ;
-    operation->result.dtype = NDP_DTYPE_F32;
+    operation->result.dtype = intermediate_f64 ? NDP_DTYPE_F64 : NDP_DTYPE_F32;
     std::copy(run_.begin(), run_.end(), operation->result.run_key);
     operation->result.fence_epoch = fence_;
     operation->result.generation = generation_;
@@ -1371,21 +1421,19 @@ int Service::result_view(ndp_client_t handle, ndp_op_t op_handle,
     const int current = require_current(client);
     if (current != NDP_OK) return current;
     const auto found = operations_.find(op_handle);
-    const bool reclaimable_result = found != operations_.end()
-        && found->second == result_operation_
-        && client->role == NDP_ROLE_CONTROLLER && controller_ == handle;
+    const bool shared_current_result = found != operations_.end()
+        && found->second == result_operation_;
     if (found == operations_.end()
-        || (found->second->owner != handle && !reclaimable_result)
+        || (found->second->owner != handle && !shared_current_result)
         || !found->second->valid || found->second->kind != OperationKind::Result
         || !found->second->result_buffer || state_ != NDP_STATE_RESULT_READY)
         return NDP_ESTATE;
     const int duplicate = duplicate_readonly_fd(found->second->result_buffer->fd);
     if (duplicate < 0) return NDP_EIO;
-    if (reclaimable_result) found->second->owner = handle;
-    found->second->result_buffer->owner_client = handle;
     const ndp_buffer_t view_handle = next_handle();
     ++found->second->result_buffer->public_refs;
     buffers_[view_handle] = found->second->result_buffer;
+    buffer_owners_[view_handle] = handle;
     *result = found->second->result;
     *buffer_handle = view_handle;
     *output_fd = duplicate;

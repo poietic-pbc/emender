@@ -80,6 +80,28 @@ NDP_LAUNCH_ATTESTATION="$RUN_DIR/native-dataplane-launch-attestation.json"
   --output "$NDP_LAUNCH_ATTESTATION"
 export DILOCO_DATAPLANE FI_PROVIDER NDP_BUILD_MANIFEST \
   NDP_FULL_LAYOUT_GATE_JSON NDP_LAUNCH_ATTESTATION
+readarray -t NDP_ARTIFACT_PATHS < <("$TRAIN_PYTHON_BIN" - "$NDP_BUILD_MANIFEST" <<'PY'
+import json
+from pathlib import Path
+import sys
+manifest = Path(sys.argv[1]).resolve()
+value = json.loads(manifest.read_text())
+for name in ("service_binary", "local_library", "transport_library"):
+    path = (manifest.parent / value["artifacts"][name]["path"]).resolve()
+    path.relative_to(manifest.parent)
+    print(path)
+PY
+)
+NDP_SERVICE_BINARY=${NDP_ARTIFACT_PATHS[0]}
+EMENDER_NDP_LIBRARY=${NDP_ARTIFACT_PATHS[1]}
+EMENDER_NDP_TRANSPORT_LIBRARY=${NDP_ARTIFACT_PATHS[2]}
+[[ -x $NDP_SERVICE_BINARY && -f $EMENDER_NDP_LIBRARY && -f $EMENDER_NDP_TRANSPORT_LIBRARY ]] || {
+  echo "attested native service/client artifacts are missing" >&2; exit 64;
+}
+export EMENDER_NDP_LIBRARY EMENDER_NDP_TRANSPORT_LIBRARY
+export EMENDER_NDP_MAX_SHARED_BYTES=${RESILIENT_E97_MAX_SHARED_BYTES:-68719476736}
+export EMENDER_NDP_INTERMEDIATE_F64=1
+export NDP_SERVICE_COMMAND="$NDP_SERVICE_BINARY --provider cxi --require-provider cxi --production --serve --payload-max ${RESILIENT_E97_BULK_CHUNK_BYTES:-67108864} --tx-slots 4 --rx-slots 4"
 
 [[ ${SLURM_JOB_NUM_NODES:?} == 2 ]] || { echo "requires exactly two nodes" >&2; exit 64; }
 [[ ${SLURM_JOB_QOS:?} == debug ]] || { echo "requires debug QoS" >&2; exit 64; }
@@ -139,7 +161,7 @@ srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task=1 --gpus-per-task=
 export TIKTOKEN_CACHE_DIR=$RESILIENT_E97_NODE_TIKTOKEN_CACHE
 ROLE="$REPO/scripts/frontier/resilient_e97_role.py"
 COMMON="--run-dir $RUN_DIR --run-id $RESILIENT_E97_RUN_ID --generations ${RESILIENT_E97_GENERATIONS:-1} --initial-generation $RESILIENT_E97_INITIAL_GENERATION --local-steps 40 --node-count 2 --global-quorum ${RESILIENT_E97_GLOBAL_QUORUM:-2} --coordinator-host $RESILIENT_E97_COORDINATOR_HOST --coordinator-port ${RESILIENT_E97_COORDINATOR_PORT:-29571} --deadline-s ${RESILIENT_E97_GENERATION_DEADLINE_S:-600} --source-id $RESILIENT_E97_SOURCE_ID --payload-id $RESILIENT_E97_PAYLOAD_ID --code-id ${RESILIENT_E97_CODE_ID:-unknown} --coordinator-epoch ${RESILIENT_E97_COORDINATOR_EPOCH:-1} --bulk-root ${RESILIENT_E97_BULK_ROOT:-/tmp/resilient-e97} --max-spool-bytes ${RESILIENT_E97_MAX_SPOOL_BYTES:-68719476736} --bulk-chunk-bytes ${RESILIENT_E97_BULK_CHUNK_BYTES:-67108864} --local-spool-chunk-bytes ${RESILIENT_E97_LOCAL_SPOOL_CHUNK_BYTES:-67108864} --dataplane-backend $DILOCO_DATAPLANE --native-build-manifest $NDP_BUILD_MANIFEST --native-gate-json $NDP_FULL_LAYOUT_GATE_JSON"
-export RESILIENT_E97_MANAGER_COMMAND="$TRAIN_PYTHON_BIN $ROLE manager $COMMON --local-quorum 6"
+export RESILIENT_E97_MANAGER_COMMAND="$TRAIN_PYTHON_BIN $ROLE manager $COMMON --local-quorum 8"
 RESUME_ARGS=()
 [[ -z $RESILIENT_E97_RESUME_HANDOFF ]] || RESUME_ARGS=(--resume-handoff "$RESILIENT_E97_RESUME_HANDOFF")
 RESUME_COMMAND=

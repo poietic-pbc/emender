@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
+import mmap
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,7 @@ NDP_TRANSPORT_ENDPOINT_MAX = 4096
 NDP_TRANSPORT_PROVIDER_MAX = 64
 NDP_TRANSPORT_FABRIC_MAX = 128
 NDP_TRANSPORT_DOMAIN_MAX = 128
+NDP_TRANSPORT_ECREDIT = -10
 
 
 class TransportError(RuntimeError):
@@ -413,6 +415,25 @@ class NativeTransport:
             self.handle, int(peer_id), storage, len(payload), int(deadline_unix_ns)),
             "transport_send")
 
+    def send_fd(self, peer_id: int, fd: int, *, frame_bytes: int,
+                deadline_unix_ns: int) -> None:
+        """Submit an encoded frame directly from a bounded memfd mapping."""
+        if fd < 0 or not 320 <= frame_bytes <= self.payload_max + 320:
+            raise ValueError("native transport frame memfd extent is invalid")
+        if not 0 < deadline_unix_ns <= self.deadline_unix_ns:
+            raise ValueError("native transport send deadline exceeds service deadline")
+        if os.fstat(fd).st_size != frame_bytes:
+            raise ValueError("native transport frame memfd size mismatch")
+        with mmap.mmap(fd, frame_bytes, flags=mmap.MAP_PRIVATE,
+                       prot=mmap.PROT_READ | mmap.PROT_WRITE) as mapping:
+            storage = (ctypes.c_uint8 * frame_bytes).from_buffer(mapping)
+            try:
+                self.library.check(self.library.lib.ndp_transport_send_v1(
+                    self.handle, int(peer_id), storage, frame_bytes,
+                    int(deadline_unix_ns)), "transport_send_fd")
+            finally:
+                del storage
+
     def receive(self, *, capacity: int | None = None) -> tuple[int, bytes] | None:
         """Take one authenticated native frame; ``None`` means no completed RX."""
         bound = self.payload_max + 320 if capacity is None else int(capacity)
@@ -422,12 +443,36 @@ class NativeTransport:
         frame_bytes, peer_id = ctypes.c_uint64(), ctypes.c_uint64()
         code = int(self.library.lib.ndp_transport_receive_v1(
             self.handle, storage, bound, ctypes.byref(frame_bytes), ctypes.byref(peer_id)))
-        if code == 1:
+        if code in (1, NDP_TRANSPORT_ECREDIT):
             return None
         self.library.check(code, "transport_receive")
         if not 320 <= frame_bytes.value <= bound or peer_id.value == 0:
             raise TransportError(-7, "transport_receive", "native returned invalid frame extent")
         return int(peer_id.value), bytes(storage[:frame_bytes.value])
+
+    def receive_into_fd(self, fd: int, *, capacity: int) -> tuple[int, int] | None:
+        """Receive one authenticated frame directly into a bounded memfd."""
+        bound = int(capacity)
+        if fd < 0 or not 320 <= bound <= self.payload_max + 320:
+            raise ValueError("native receive memfd capacity exceeds the registered bound")
+        if os.fstat(fd).st_size != bound:
+            raise ValueError("native receive memfd size mismatch")
+        with mmap.mmap(fd, bound, access=mmap.ACCESS_WRITE) as mapping:
+            storage = (ctypes.c_uint8 * bound).from_buffer(mapping)
+            frame_bytes, peer_id = ctypes.c_uint64(), ctypes.c_uint64()
+            try:
+                code = int(self.library.lib.ndp_transport_receive_v1(
+                    self.handle, storage, bound, ctypes.byref(frame_bytes),
+                    ctypes.byref(peer_id)))
+            finally:
+                del storage
+        if code in (1, NDP_TRANSPORT_ECREDIT):
+            return None
+        self.library.check(code, "transport_receive_fd")
+        if not 320 <= frame_bytes.value <= bound or peer_id.value == 0:
+            raise TransportError(
+                -7, "transport_receive_fd", "native returned invalid frame extent")
+        return int(peer_id.value), int(frame_bytes.value)
 
     def poll(self, timeout_ms: int = 0, capacity: int = 24) -> tuple[dict[str, object], ...]:
         if not 0 <= timeout_ms <= 30_000 or not 1 <= capacity <= 64:

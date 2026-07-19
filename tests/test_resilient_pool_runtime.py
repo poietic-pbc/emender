@@ -123,6 +123,9 @@ def test_ready_token_floor_distributed_owner_loss_and_late_join(tmp_path):
         close = closes[0]
         assert close["status"] == "commit_ready" and close["accepted_tokens"] == 10
         assert {item["worker_id"] for item in close["frozen_identities"]} == {"n0", "n1"}
+        assert close["accepted_payloads"] == {
+            "n0": "payload-0", "n1": "payload-1"}
+        assert close["accepted_weights"] == {"n0": 3, "n1": 7}
 
         layout = TensorLayout.from_state(_state(0), max_chunk_bytes=16)
         contributions = {"n0:i0:9": layout.pack(_state(1)),
@@ -171,6 +174,28 @@ def test_ready_token_floor_distributed_owner_loss_and_late_join(tmp_path):
         assert len({layout.owner(shard, [item.worker_id for item in live], run_id="run",
                                        generation=4, attempt=0)
                     for shard in range(layout.shard_count)}) > 1
+
+        # Every surviving node independently publishes the identity of the one
+        # native result.  The metadata coordinator approves it only after all
+        # frozen reporters agree with the exact accepted-token total.
+        validated = {}
+        def validate_root(index):
+            validated[index] = clients[index].validate_result_root(
+                generation=4, attempt=0, worker_id=f"n{index}",
+                incarnation=f"i{index}", result_root="ab" * 32,
+                global_weight=10, result_bytes=64,
+                deadline=time.monotonic() + 2)
+        root_threads = [threading.Thread(target=validate_root, args=(0,)),
+                        threading.Thread(target=validate_root, args=(1,))]
+        for thread in root_threads: thread.start()
+        for thread in root_threads: thread.join()
+        assert {value["status"] for value in validated.values()} == {"validated"}
+        assert validated[0]["workers"] == ["n0", "n1"]
+        with pytest.raises(RuntimeError, match="conflicting result root replay"):
+            clients[0].validate_result_root(
+                generation=4, attempt=0, worker_id="n0", incarnation="i0",
+                result_root="cd" * 32, global_weight=10, result_bytes=64,
+                deadline=time.monotonic() + 1)
 
         # The missing trainer/peer rejoins only at the next generation, under a
         # new incarnation after catching up to the committed generation.

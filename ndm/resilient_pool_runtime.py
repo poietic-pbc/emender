@@ -199,6 +199,7 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
         self.seen_incarnations: dict[str, set[str]] = {}
         self.snapshots: dict[tuple[int, int], dict[str, object]] = {}
         self.admissions: dict[tuple[int, int], GenerationAdmission] = {}
+        self.result_roots: dict[tuple[int, int], dict[str, dict[str, object]]] = {}
         self._lock = threading.RLock()
         super().__init__(address, _ControlHandler)
 
@@ -217,6 +218,8 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
                 return self._contribute(request, payload)
             if op == "close":
                 return self._close(request)
+            if op == "result_root":
+                return self._result_root(request)
             if op == "expire":
                 return self._expire(request)
             raise ValueError("unsupported pool control operation")
@@ -348,6 +351,16 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
             "required_contributions": close.required_contributions,
             "ready_snapshot": [list(item) for item in close.ready_snapshot],
             "frozen_identities": [asdict(item) for item in close.frozen_identities],
+            "accepted_payloads": {
+                item.identity.worker_id: item.payload.decode("ascii")
+                for item in admission._accepted.values()
+                if item.identity in close.frozen_identities
+            },
+            "accepted_weights": {
+                item.identity.worker_id: item.accepted_tokens
+                for item in admission._accepted.values()
+                if item.identity in close.frozen_identities
+            },
         }
 
     def _expire(self, request: Mapping[str, object]) -> dict[str, object]:
@@ -356,6 +369,42 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
         if record is not None and record.incarnation == incarnation and record.state is PeerState.READY:
             self.membership.drain(worker_id, incarnation)
         return {"status": "DRAINING", "worker_id": worker_id}
+
+    def _result_root(self, request: Mapping[str, object]) -> dict[str, object]:
+        generation, attempt = int(request["generation"]), int(request["attempt"])
+        admission = self.admissions[(generation, attempt)]
+        if admission.close_result is None or admission.close_result.status != "commit_ready":
+            raise RuntimeError("result root cannot precede the frozen accepted set")
+        worker_id, incarnation = str(request["worker_id"]), str(request["incarnation"])
+        accepted = {(item.worker_id, item.incarnation)
+                    for item in admission.close_result.frozen_identities}
+        if (worker_id, incarnation) not in accepted:
+            raise ValueError("result root reporter is outside the frozen accepted set")
+        root = str(request["result_root"])
+        weight, result_bytes = int(request["global_weight"]), int(request["result_bytes"])
+        if len(root) != 64 or root == "00" * 32 or weight <= 0 or result_bytes <= 0:
+            raise ValueError("result root metadata is invalid")
+        values = self.result_roots.setdefault((generation, attempt), {})
+        record = {"incarnation": incarnation, "result_root": root,
+                  "global_weight": weight, "result_bytes": result_bytes}
+        prior = values.get(worker_id)
+        if prior is not None and prior != record:
+            raise ValueError("conflicting result root replay")
+        values[worker_id] = record
+        accepted_workers = {item[0] for item in accepted}
+        if set(values) != accepted_workers:
+            return {"status": "waiting", "reported": len(values),
+                    "required": len(accepted_workers)}
+        identities = {(item["result_root"], item["global_weight"], item["result_bytes"])
+                      for item in values.values()}
+        if len(identities) != 1:
+            raise ValueError("native result-root validation mismatch")
+        validated_root, validated_weight, validated_bytes = identities.pop()
+        if validated_weight != admission.close_result.accepted_tokens:
+            raise ValueError("native result-root token accounting mismatch")
+        return {"status": "validated", "result_root": validated_root,
+                "global_weight": validated_weight, "result_bytes": validated_bytes,
+                "workers": sorted(values)}
 
 
 class PoolControlClient:
@@ -438,6 +487,22 @@ class PoolControlClient:
 
     def drain(self, worker_id: str, incarnation: str) -> dict[str, object]:
         return self._rpc("expire", worker_id=worker_id, incarnation=incarnation)
+
+    def validate_result_root(self, *, generation: int, attempt: int,
+                             worker_id: str, incarnation: str, result_root: str,
+                             global_weight: int, result_bytes: int,
+                             deadline: float) -> dict[str, object]:
+        last: dict[str, object] = {"status": "waiting"}
+        while time.monotonic() < deadline:
+            last = self._rpc(
+                "result_root", generation=generation, attempt=attempt,
+                worker_id=worker_id, incarnation=incarnation,
+                result_root=result_root, global_weight=global_weight,
+                result_bytes=result_bytes)
+            if last.get("status") == "validated":
+                return last
+            time.sleep(.01)
+        raise TimeoutError(f"native result-root validation deadline expired: {last}")
 
 
 class _OwnerHandler(socketserver.StreamRequestHandler):

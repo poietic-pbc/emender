@@ -380,6 +380,67 @@ def _memfd_create(name: str, flags: int) -> int:
     return fd
 
 
+def create_memfd(name: str, *, allow_sealing: bool = False) -> int:
+    """Create a CLOEXEC memfd on every supported production architecture.
+
+    Frontier's approved Python omits ``os.memfd_create`` even though the Linux
+    syscall is available, so live role code must use this portable binding.
+    """
+    flags = getattr(os, "MFD_CLOEXEC", 0x0001)
+    if allow_sealing:
+        flags |= getattr(os, "MFD_ALLOW_SEALING", 0x0002)
+    return _memfd_create(name, flags)
+
+
+def seal_memfd(fd: int) -> None:
+    """Make one memfd immutable using Linux constants absent from some Pythons."""
+    if fd < 0:
+        raise ValueError("sealed memfd descriptor is invalid")
+    add_seals = getattr(fcntl, "F_ADD_SEALS", 1033)
+    seals = (getattr(fcntl, "F_SEAL_GROW", 0x0004)
+             | getattr(fcntl, "F_SEAL_SHRINK", 0x0002)
+             | getattr(fcntl, "F_SEAL_WRITE", 0x0008)
+             | getattr(fcntl, "F_SEAL_SEAL", 0x0001))
+    fcntl.fcntl(fd, add_seals, seals)
+
+
+def copy_fd_range(source_fd: int, destination_fd: int, length: int, *,
+                  source_offset: int, destination_offset: int) -> None:
+    """Copy an exact kernel-side fd range despite a reduced Python ``os`` API."""
+    if (source_fd < 0 or destination_fd < 0 or length < 0
+            or source_offset < 0 or destination_offset < 0):
+        raise ValueError("fd range copy bounds are invalid")
+    copied = 0
+    wrapper = getattr(os, "copy_file_range", None)
+    while copied < length:
+        if wrapper is not None:
+            count = int(wrapper(
+                source_fd, destination_fd, length - copied,
+                offset_src=source_offset + copied,
+                offset_dst=destination_offset + copied))
+        else:
+            libc = ctypes.CDLL(None, use_errno=True)
+            native = libc.copy_file_range
+            native.argtypes = [
+                ctypes.c_int, ctypes.POINTER(ctypes.c_longlong), ctypes.c_int,
+                ctypes.POINTER(ctypes.c_longlong), ctypes.c_size_t, ctypes.c_uint,
+            ]
+            native.restype = ctypes.c_ssize_t
+            in_offset = ctypes.c_longlong(source_offset + copied)
+            out_offset = ctypes.c_longlong(destination_offset + copied)
+            count = int(native(
+                source_fd, ctypes.byref(in_offset), destination_fd,
+                ctypes.byref(out_offset), length - copied, 0))
+            if count < 0:
+                error = ctypes.get_errno()
+                if error == 4:  # EINTR
+                    continue
+                raise OSError(error, os.strerror(error))
+        if count <= 0:
+            raise OSError("copy_file_range made no memfd progress")
+        copied += count
+
+
 class NativeLibrary:
     """Typed owner of one loaded ``libemender_ndp.so.1`` instance."""
 
@@ -686,8 +747,19 @@ class Client:
         worker = _key16(worker_key, field="worker_key")
         boot = _key16(incarnation, field="incarnation")
         configured_token = os.environ.get("EMENDER_NDP_ADMISSION_TOKEN_HEX")
+        configured_token_fd = os.environ.get("EMENDER_NDP_ADMISSION_TOKEN_FD")
         if admission_token is not None:
             token = admission_token
+        elif configured_token_fd:
+            try:
+                descriptor = int(configured_token_fd)
+                token = os.pread(descriptor, 32, 0)
+            except (OSError, ValueError) as error:
+                raise ValueError(
+                    "EMENDER_NDP_ADMISSION_TOKEN_FD must name a readable protected fd"
+                ) from error
+            if len(token) != 32:
+                raise ValueError("native admission token fd must contain exactly 32 bytes")
         elif configured_token:
             try:
                 token = bytes.fromhex(configured_token)
@@ -706,6 +778,38 @@ class Client:
                      "ndp_client_open_v1")
         return cls(native, handle.value, role=role, run_key=run,
                    fence_epoch=fence_epoch, worker_key=worker, incarnation=boot)
+
+    def attach_generation(self, *, total_elements: int, layout_digest: bytes,
+                          generation: int, attempt: int, owner_epoch: int,
+                          source_dtype: DType, deadline_s: float,
+                          deadline_unix_ns: int | None = None,
+                          base_digest: bytes | None = None,
+                          plan_digest: bytes | None = None) -> None:
+        """Adopt controller-published metadata without mutating service state.
+
+        Trainer RPC clients open after the model-free controller installs a
+        generation.  Their dense buffer is allocated directly by the persistent
+        service, while this local metadata only populates the typed submit ABI.
+        """
+        if self.role is not Role.TRAINER:
+            raise RuntimeError("only a trainer may attach controller metadata")
+        if total_elements <= 0 or generation < 0 or attempt <= 0 or owner_epoch <= 0:
+            raise ValueError("native generation metadata is invalid")
+        self.total_elements = int(total_elements)
+        self.layout_digest = _digest32(layout_digest, field="layout_digest")
+        self.generation, self.attempt = int(generation), int(attempt)
+        self.owner_epoch, self.source_dtype = int(owner_epoch), source_dtype
+        self.base_digest = _digest32(base_digest or hashlib.sha256(
+            b"native-local-base" + self.generation.to_bytes(8, "little")
+        ).digest(), field="base_digest")
+        self.plan_digest = _digest32(plan_digest or hashlib.sha256(
+            b"native-local-plan" + self.generation.to_bytes(8, "little")
+        ).digest(), field="plan_digest")
+        self.generation_deadline_ns = (int(deadline_unix_ns)
+                                       if deadline_unix_ns is not None
+                                       else _deadline(deadline_s))
+        if self.generation_deadline_ns <= time.time_ns():
+            raise ValueError("native generation deadline has expired")
 
     @property
     def poll_fd(self) -> int:
@@ -806,6 +910,29 @@ class Client:
             "ndp_buffer_allocate_v1")
         return Buffer(self, handle.value, fd.value, bytes_count, writable=True)
 
+    def register_memfd(self, fd: int, *, length: int,
+                       handle_generation: int | None = None) -> Buffer:
+        """Register one immutable memfd for native replay/reduction.
+
+        Only the descriptor crosses the metadata-only AF_UNIX protocol; the
+        service duplicates and maps the producer-owned extent directly.
+        """
+        if fd < 0 or length <= 0:
+            raise ValueError("registered native memfd extent is invalid")
+        request = _versioned(BufferV1())
+        request.kind = 2  # NDP_BUFFER_MEMFD
+        request.flags = 1  # NDP_BUFFER_READ
+        request.length = int(length)
+        request.handle_generation = int(
+            self.generation if handle_generation is None else handle_generation)
+        request.fd = int(fd)
+        request.layout_digest[:] = self.layout_digest
+        handle = ctypes.c_uint64()
+        self.native.check(self.native.library.ndp_buffer_register_v1(
+            self.handle, ctypes.byref(request), ctypes.byref(handle)),
+            "ndp_buffer_register_v1")
+        return Buffer(self, handle.value, os.dup(fd), length, writable=False)
+
     def submit(self, buffer: Buffer, *, trainer_key: bytes | str,
                trainer_incarnation: bytes | str, submission_seq: int,
                weight: int, source_dtype: DType | None = None,
@@ -832,11 +959,15 @@ class Client:
         return Operation(self, handle.value)
 
     def result_view(self, operation: Operation) -> ResultView:
+        return self.result_view_handle(operation.handle)
+
+    def result_view_handle(self, operation_handle: int) -> ResultView:
+        """Map the service's one shared result from an independent trainer."""
         result = _versioned(ResultV1())
         handle = ctypes.c_uint64()
         fd = ctypes.c_int(-1)
         self.native.check(self.native.library.ndp_result_view_v1(
-            self.handle, operation.handle, ctypes.byref(result),
+            self.handle, int(operation_handle), ctypes.byref(result),
             ctypes.byref(handle), ctypes.byref(fd)), "ndp_result_view_v1")
         return ResultView(self, handle.value, fd.value, result)
 
@@ -891,5 +1022,6 @@ __all__ = [
     "ABI_V1", "BoundsError", "Buffer", "ChecksumError", "Client", "Command",
     "ConflictError", "DType", "Event", "EventKind", "Metrics", "NativeDataplaneError",
     "NativeLibrary", "NonfiniteError", "Operation", "ResultCode", "ResultView",
-    "Role", "StaleFenceError", "State", "encode_flat_layout",
+    "Role", "StaleFenceError", "State", "copy_fd_range", "create_memfd",
+    "encode_flat_layout", "seal_memfd",
 ]

@@ -191,6 +191,11 @@ class GenerationAdmission:
              ) -> "GenerationAdmission":
         return cls(fence, ready_snapshot, policy, deadline, **digests)
 
+    @property
+    def close_result(self) -> GenerationClose | None:
+        """Expose the immutable terminal freeze decision to metadata validators."""
+        return self._terminal_close
+
     def _receipt(self, contribution: Contribution, status: str, now: float
                  ) -> ContributionReceipt:
         return ContributionReceipt(contribution.identity, status,

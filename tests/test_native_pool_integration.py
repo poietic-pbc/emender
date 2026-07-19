@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import socket
 import struct
@@ -8,8 +9,16 @@ import time
 
 import numpy as np
 import pytest
+import torch
 
 from ndm.native_artifacts import NATIVE_TEST
+from ndm.native_dataplane import (
+    Client, Command, DType, NativeLibrary, Role, create_memfd, seal_memfd,
+)
+from ndm.native_e97_runtime import (
+    GenerationMetadata, NativeTrainerDataPlane, atomic_metadata,
+    exact_weighted_reference,
+)
 from ndm.native_pool_runtime import NativeManagerSession, NativeTrainerHandoff
 from ndm.native_transport import NativeTransport, NativeTransportLibrary
 from ndm.resilient_pool_runtime import OwnerEndpoint
@@ -161,13 +170,16 @@ def test_frozen_owner_transfer_uses_native_fabric_and_bounds_replay(monkeypatch)
     session._frozen = True
     session.routes = {"node-1": 7}
     session._owner_replays = {}
-    sent = []
+    sent, sent_fds = [], []
 
     class Transport:
         deadline_unix_ns = time.time_ns() + 1_000_000_000
 
         def send(self, peer_id, frame, *, deadline_unix_ns):
             sent.append((peer_id, frame, deadline_unix_ns))
+
+        def send_fd(self, peer_id, fd, *, frame_bytes, deadline_unix_ns):
+            sent_fds.append((peer_id, fd, frame_bytes, deadline_unix_ns))
 
         def receive(self, *, capacity=None):
             return (7, b"native-result")
@@ -185,6 +197,15 @@ def test_frozen_owner_transfer_uses_native_fabric_and_bounds_replay(monkeypatch)
     with pytest.raises(RuntimeError, match="replay limit"):
         session.transfer_frozen_frame("node-1", b"dense-native-frame",
                                       result_root=root)
+    for _ in range(3):
+        session.transfer_frozen_fd(
+            "node-1", 19, frame_bytes=832, result_root=root,
+            replay_identity=b"chunk-7")
+    assert [item[:3] for item in sent_fds] == [(7, 19, 832)] * 3
+    with pytest.raises(RuntimeError, match="replay limit"):
+        session.transfer_frozen_fd(
+            "node-1", 19, frame_bytes=832, result_root=root,
+            replay_identity=b"chunk-7")
     assert session.receive_owner_frame() == ("node-1", b"native-result")
 
     session._frozen = False
@@ -354,7 +375,6 @@ def test_fenced_checkpoint_commit_releases_native_result_exactly_once(tmp_path):
     """The fenced publication approval has one native state transition."""
     import hashlib
     from types import SimpleNamespace
-    from ndm.native_dataplane import Command
 
     publication = tmp_path / "generation.json"
     value = {
@@ -394,3 +414,191 @@ def test_fenced_checkpoint_commit_releases_native_result_exactly_once(tmp_path):
     assert calls == [(Command.COMMIT, 7.0), "close"]
     assert not session._generation_installed and not session._frozen
     assert session._checkpoint_identity is None and not session._owner_replays
+
+
+def test_persistent_service_matches_k40_delta_tokens_for_all_eight_trainers(tmp_path):
+    """Real node topology: eight K40 trainers produce directly into one service."""
+    manifest = json.loads(BUILD_MANIFEST.read_text())
+    library = NativeLibrary(
+        BUILD_MANIFEST.parent / manifest["artifacts"]["local_library"]["path"])
+    controller = Client.open(
+        library=library, role=Role.CONTROLLER, run_key="e97-run", fence_epoch=23,
+        worker_key="node-0-manager", incarnation="manager-boot", deadline_s=10)
+    base_state = {
+        "decoder.weight": torch.tensor(
+            [1024.0, -3.25, 0.5, 7.0, -8192.0], dtype=torch.float64),
+        "embedding.weight": torch.tensor(
+            [1.0, -2.0, 4.0, 8.0], dtype=torch.float32),
+    }
+    total_elements = sum(value.numel() for value in base_state.values())
+    digest = controller.install_flat_layout(
+        total_elements, source_dtype=DType.F32, payload_max=64)
+    base_digest, plan_digest = bytes.fromhex("31" * 32), bytes.fromhex("42" * 32)
+    install = controller.install_generation(
+        7, attempt=1, owner_epoch=1, base_digest=base_digest,
+        plan_digest=plan_digest, deadline_s=10)
+    generation = GenerationMetadata(
+        "e97-run", 23, 7, 1, 1, total_elements, digest.hex(),
+        base_digest.hex(), plan_digest.hex(), controller.generation_deadline_ns,
+        {"provider": "tcp;ofi_rxm", "build_bundle_sha256": manifest["bundle_sha256"]},
+    )
+    atomic_metadata(tmp_path / "native-generation-00000007.json", generation.as_json())
+
+    class Model:
+        def __init__(self, state):
+            self.state = state
+
+        def state_dict(self):
+            return self.state
+
+    weights = [3, 5, 7, 11, 13, 17, 19, 23]
+    trainers, contributions = [], []
+    for rank, tokens in enumerate(weights):
+        trainer = NativeTrainerDataPlane.connect(
+            build_manifest=BUILD_MANIFEST,
+            socket_path=os.environ["EMENDER_NDP_SOCKET"], run_id="e97-run",
+            fence_epoch=23, generation=7, rank=rank,
+            identity=f"node-0-trainer-{rank}", incarnation=f"trainer-boot-{rank}",
+            control_root=tmp_path, deadline=time.monotonic() + 10)
+        trainer.allocate_delta(deadline_s=10)
+        worker_state = {
+            name: base + torch.linspace(
+                rank * 0.125 - 0.5, rank * 0.125 + 0.5, base.numel(),
+                dtype=torch.float64).reshape(base.shape)
+            for name, base in base_state.items()
+        }
+        expected = np.concatenate([
+            (worker_state[name].to(dtype=base_state[name].dtype) - base_state[name])
+            .to(torch.float32).reshape(-1).numpy()
+            for name in sorted(base_state)
+        ])
+        contributions.append(expected)
+        marker = trainer.publish_model_delta(
+            base_state, Model(worker_state), tokens, chunk_elements=2, deadline_s=10)
+        assert marker["tokens"] == tokens and marker["rank"] == rank
+        assert marker["dense_files_written"] == marker["trainer_spool_bytes"] == 0
+        trainers.append(trainer)
+    freeze = controller.control(Command.FREEZE, deadline_s=10)
+    result_operation = controller.control(Command.FINALIZE_OWNERS, deadline_s=10)
+    with controller.result_view(result_operation) as manager_view:
+        expected = exact_weighted_reference(contributions, weights)
+        result_marker = {
+            "schema": "emender-native-e97-result-v1", "run_id": "e97-run",
+            "fence_epoch": 23, "generation": 7, "attempt": 1,
+            "operation_handle": result_operation.handle,
+            "layout_digest": digest.hex(),
+            "result_root": manager_view.result_root.hex(),
+            "global_weight": sum(weights),
+        }
+        atomic_metadata(tmp_path / "native-result-00000007.json", result_marker)
+        for trainer in trainers:
+            with trainer.result_shards(
+                    deadline=time.monotonic() + 10, chunk_elements=3) as (marker, shards):
+                actual = np.concatenate([item.numpy() for item in shards])
+                assert np.array_equal(actual, expected)
+                assert marker["global_weight"] == sum(weights)
+    metrics = controller.metrics
+    assert metrics.trainer_spool_bytes == metrics.python_dense_socket_bytes == 0
+    assert metrics.handoff_full_copy_bytes == 0
+    assert metrics.admitted_shared_bytes >= (len(trainers) + 1) * total_elements * 4
+    controller.control(Command.ABORT, deadline_s=10).close()
+    result_operation.close(); freeze.close(); install.close()
+    for trainer in trainers:
+        trainer.close()
+    controller.close()
+
+
+def test_persistent_service_preserves_exact_global_numerator():
+    """Node exchange keeps f64 numerators; it never divides then reweights."""
+    manifest = json.loads(BUILD_MANIFEST.read_text())
+    library = NativeLibrary(
+        BUILD_MANIFEST.parent / manifest["artifacts"]["local_library"]["path"])
+    controller = Client.open(
+        library=library, role=Role.CONTROLLER, run_key="global-run", fence_epoch=29,
+        worker_key="node-0-manager", incarnation="manager-boot", deadline_s=10)
+    elements = 19
+    digest = controller.install_flat_layout(
+        elements, source_dtype=DType.F32, payload_max=128)
+    first_install = controller.install_generation(
+        5, attempt=1, owner_epoch=1, deadline_s=10)
+    generator = np.random.default_rng(971)
+    node_arrays = [
+        [generator.normal(0, 1e-5, elements).astype(np.float32),
+         generator.normal(0, 1e5, elements).astype(np.float32),
+         generator.normal(0, 1, elements).astype(np.float32)],
+        [generator.normal(0, 1e3, elements).astype(np.float32),
+         generator.normal(0, 1e-3, elements).astype(np.float32)],
+    ]
+    node_weights = [[3, 1_000_003, 29], [71, 101]]
+
+    trainers, local_submissions = [], []
+    for rank, (array, weight) in enumerate(zip(node_arrays[0], node_weights[0])):
+        trainer = Client.open(
+            library=library, role=Role.TRAINER, run_key="global-run", fence_epoch=29,
+            worker_key=f"node-0-trainer-{rank}",
+            incarnation=f"node-0-trainer-boot-{rank}", deadline_s=10)
+        trainer.attach_generation(
+            total_elements=elements, layout_digest=digest, generation=5, attempt=1,
+            owner_epoch=1, source_dtype=DType.F32, deadline_s=10,
+            deadline_unix_ns=controller.generation_deadline_ns,
+            base_digest=controller.base_digest, plan_digest=controller.plan_digest)
+        with trainer.allocate(deadline_s=10) as buffer:
+            with buffer.mapped(DType.F32, write=True) as target:
+                target[:] = array
+            buffer.seal()
+            local_submissions.append(trainer.submit(
+                buffer, trainer_key=f"trainer-{rank}",
+                trainer_incarnation=f"node-0-trainer-boot-{rank}",
+                submission_seq=rank, weight=weight, deadline_s=10))
+        trainers.append(trainer)
+    local_freeze = controller.control(Command.FREEZE, deadline_s=10)
+    local_operation = controller.control(Command.FINALIZE_OWNERS, deadline_s=10)
+    local_view = controller.result_view(local_operation)
+    local_numerator = node_arrays[0][0].astype(np.float64) * node_weights[0][0]
+    for array, weight in zip(node_arrays[0][1:], node_weights[0][1:]):
+        local_numerator += array.astype(np.float64) * weight
+    with local_view.mapped(DType.F64) as actual:
+        assert np.array_equal(actual, local_numerator)
+    assert local_view.dtype is DType.F64
+    assert local_view.global_weight == sum(node_weights[0])
+    local_fd = os.dup(local_view.fd)
+    controller.control(Command.ABORT, deadline_s=10).close()
+    local_view.close(); local_operation.close(); local_freeze.close(); first_install.close()
+    for operation in local_submissions:
+        operation.close()
+    for trainer in trainers:
+        trainer.close()
+
+    node1_numerator = node_arrays[1][0].astype(np.float64) * node_weights[1][0]
+    for array, weight in zip(node_arrays[1][1:], node_weights[1][1:]):
+        node1_numerator += array.astype(np.float64) * weight
+    peer_fd = create_memfd("node-1-numerator", allow_sealing=True)
+    os.ftruncate(peer_fd, node1_numerator.nbytes)
+    os.pwrite(peer_fd, node1_numerator.tobytes(), 0); seal_memfd(peer_fd)
+    controller.source_dtype = DType.F64
+    second_install = controller.install_generation(
+        5, attempt=2, owner_epoch=1, deadline_s=10)
+    reductions = []
+    for sequence, (worker, fd, weight) in enumerate((
+            ("node-0", local_fd, sum(node_weights[0])),
+            ("node-1", peer_fd, sum(node_weights[1])))):
+        with controller.register_memfd(fd, length=elements * 8) as buffer:
+            reductions.append(controller.submit(
+                buffer, trainer_key=worker, trainer_incarnation=f"{worker}-boot",
+                submission_seq=sequence, weight=weight, source_dtype=DType.F64,
+                deadline_s=10))
+    global_freeze = controller.control(Command.FREEZE, deadline_s=10)
+    global_operation = controller.control(Command.FINALIZE_OWNERS, deadline_s=10)
+    with controller.result_view(global_operation) as global_view:
+        expected = ((local_numerator + node1_numerator) /
+                    sum(sum(item) for item in node_weights)).astype(np.float32)
+        with global_view.mapped(DType.F32) as actual:
+            assert np.array_equal(actual, expected)
+        assert global_view.global_weight == sum(sum(item) for item in node_weights)
+        assert global_view.dtype is DType.F32
+    assert controller.metrics.projection_count == 2
+    controller.control(Command.ABORT, deadline_s=10).close()
+    global_operation.close(); global_freeze.close(); second_install.close()
+    for operation in reductions:
+        operation.close()
+    os.close(local_fd); os.close(peer_fd); controller.close()

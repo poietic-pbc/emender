@@ -65,6 +65,14 @@ from ndm.resilient_e97_roles import LocalFence, LocalTrainerSpool
 from ndm.native_artifacts import (
     NATIVE_CXI, NATIVE_TEST, PYTHON_TCP_DEBUG, attest_launch, validate_backend,
 )
+from ndm.native_dataplane import DType, copy_fd_range, create_memfd, seal_memfd
+from ndm.native_e97_runtime import (
+    GenerationMetadata, NativeTrainerDataPlane, atomic_metadata,
+    decode_credit_frame_fd, decode_owner_frame_fd, encode_credit_frame_fd,
+    encode_owner_frame_fd, layout_identity, runtime_digests, state_digest,
+    state_elements, wait_metadata,
+)
+from ndm.native_pool_runtime import NativeManagerSession
 from ndm.resilient_e97_reducer import TensorLayout
 from ndm.fenced_admission import AllocationLease, SQLiteFencedControlStore
 from ndm.resilient_e97_runtime import (SplitManagerLoop, apply_delta, atomic_json,
@@ -101,9 +109,8 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--eta-outer", type=float, default=1.0)
     value.add_argument("--migration-policy", default="")
     value.add_argument("--bulk-root", default=os.environ.get("RESILIENT_E97_BULK_ROOT", "/tmp/resilient-e97"))
-    # Six f32 trainer contributions plus one f64 local aggregate for E97 require
-    # roughly 42 GB.  Keep a hard 64 GiB node-local ledger so the configured
-    # quorum can exist at once without admitting unbounded storage.
+    # Eight f32 trainer contributions plus the bounded f64 numerator/result
+    # working set fit under this hard 64-GiB node-local ledger.
     value.add_argument("--max-spool-bytes", type=int, default=64 << 30)
     value.add_argument("--initial-generation", type=int, default=0)
     value.add_argument("--resume-handoff", default="")
@@ -142,17 +149,9 @@ def _attest_dataplane(args) -> dict[str, object]:
 
 
 def _require_wired_dense_runtime(backend: str) -> None:
-    """Prevent component-only native artifacts from promoting the Python path.
-
-    The split-role trainer and manager below still use ``LocalTrainerSpool`` and
-    ``DistributedOwnerServer``.  Until they call ``NativeManagerSession`` and
-    move dense bytes through its native local/fabric ABIs, accepting a native
-    backend here would only relabel the Python TCP/file implementation.
-    """
-    if backend != PYTHON_TCP_DEBUG:
-        raise RuntimeError(
-            "native backend is not wired into the split-role dense path; "
-            "component G0 artifacts cannot authorize a live native role")
+    """Reject unknown selectors; native branches are structurally wired below."""
+    if backend not in {PYTHON_TCP_DEBUG, NATIVE_TEST, NATIVE_CXI}:
+        raise ValueError("unsupported split-role dense backend")
 
 
 def _fence(args, generation: int) -> LocalFence:
@@ -307,21 +306,483 @@ def _pool_config(args) -> PoolControlConfig:
         "q_min": args.global_quorum, "t_min": args.global_token_min,
         "ready_fraction": args.ready_fraction,
     }, sort_keys=True).encode()).hexdigest()
+    backend, production, full_layout = _dataplane_policy(args)
+    attestation = getattr(args, "_dataplane_attestation", {})
     return PoolControlConfig(
         args.run_id, _fence_epoch(args), args.global_quorum, args.global_token_min,
         args.ready_fraction, args.source_id, policy, args.payload_id, args.code_id,
-        PoolStageSLO.production())
+        PoolStageSLO.production(), backend, production, full_layout,
+        str(attestation.get("bundle_sha256", "")) if backend != PYTHON_TCP_DEBUG else "")
+
+
+def _copy_frame_payload(frame_fd: int, destination_fd: int, *,
+                        payload_bytes: int, payload_offset: int) -> None:
+    copy_fd_range(
+        frame_fd, destination_fd, payload_bytes, source_offset=320,
+        destination_offset=payload_offset)
+
+
+def _native_peer_exchange(session: NativeManagerSession, local_result, *, args,
+                          node: int, peer_id: str, peer_incarnation: str,
+                          peer_root: bytes, peer_weight: int,
+                          deadline: float) -> int:
+    """Symmetric two-node memfd/libfabric exchange with bounded chunk replay."""
+    payload_max = args.bulk_chunk_bytes
+    chunk_count = (local_result.length + payload_max - 1) // payload_max
+    remote_fd = create_memfd("emender-ndp-remote-result", allow_sealing=True)
+    os.ftruncate(remote_fd, local_result.length)
+
+    def frame_deadline() -> int:
+        return min(session.transport.deadline_unix_ns,
+                   time.time_ns() + max(1, int(
+                       (deadline - time.monotonic()) * 1e9)))
+
+    def send_all(*, sequence_base: int) -> None:
+        for chunk in range(chunk_count):
+            offset = chunk * payload_max
+            extent = min(payload_max, local_result.length - offset)
+            frame_fd, frame_bytes = encode_owner_frame_fd(
+                source_fd=local_result.fd, payload_offset=offset,
+                payload_bytes=extent, payload_max=payload_max,
+                run_id=args.run_id, fence_epoch=_fence_epoch(args),
+                generation=local_result.generation, attempt=local_result.attempt,
+                owner_epoch=local_result.client.owner_epoch,
+                worker_id=f"node-{node}",
+                incarnation=session.owner_endpoint.incarnation,
+                layout_digest=local_result.layout_digest,
+                base_digest=local_result.base_digest,
+                result_root=local_result.result_root,
+                weight=local_result.global_weight, chunk_index=chunk,
+                chunk_count=chunk_count,
+                deadline_unix_ns=frame_deadline(),
+                message_seq=((local_result.generation + 1) << 32)
+                + sequence_base + chunk)
+            try:
+                session.transfer_frozen_fd(
+                    peer_id, frame_fd, frame_bytes=frame_bytes,
+                    result_root=local_result.result_root,
+                    replay_identity=chunk.to_bytes(4, "little"),
+                    deadline_unix_ns=frame_deadline())
+            finally:
+                os.close(frame_fd)
+
+    def send_credits(*, sequence_base: int) -> None:
+        for chunk in range(chunk_count):
+            offset = chunk * payload_max
+            extent = min(payload_max, local_result.length - offset)
+            credit_fd = encode_credit_frame_fd(
+                payload_offset=offset, payload_bytes=extent,
+                payload_max=payload_max, run_id=args.run_id,
+                fence_epoch=_fence_epoch(args), generation=local_result.generation,
+                attempt=local_result.attempt,
+                owner_epoch=local_result.client.owner_epoch,
+                worker_id=f"node-{node}",
+                incarnation=session.owner_endpoint.incarnation,
+                layout_digest=local_result.layout_digest,
+                base_digest=local_result.base_digest,
+                permitted_root=peer_root, weight=peer_weight,
+                chunk_index=chunk, chunk_count=chunk_count,
+                deadline_unix_ns=frame_deadline(),
+                message_seq=((local_result.generation + 1) << 32)
+                + sequence_base + chunk)
+            try:
+                session.transfer_frozen_fd(
+                    peer_id, credit_fd, frame_bytes=320,
+                    result_root=peer_root,
+                    replay_identity=b"credit" + chunk.to_bytes(4, "little"),
+                    deadline_unix_ns=frame_deadline())
+            finally:
+                os.close(credit_fd)
+
+    def receive_credits() -> None:
+        seen: set[int] = set()
+        while len(seen) != chunk_count:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("native owner credit deadline expired")
+            credit_fd = create_memfd("emender-ndp-rx-credit")
+            os.ftruncate(credit_fd, 320)
+            try:
+                received = session.receive_owner_fd(credit_fd, capacity=320)
+                if received is None:
+                    time.sleep(.001); continue
+                worker, frame_bytes = received
+                if worker != peer_id or frame_bytes != 320:
+                    raise ValueError("native owner credit arrived from wrong frozen peer")
+                value = decode_credit_frame_fd(
+                    credit_fd, payload_max=payload_max,
+                    expected={
+                        "run_key": __import__("hashlib").sha256(
+                            args.run_id.encode()).digest()[:16],
+                        "fence_epoch": _fence_epoch(args),
+                        "generation": local_result.generation,
+                        "attempt": local_result.attempt,
+                        "owner_epoch": local_result.client.owner_epoch,
+                        "worker_key": __import__("hashlib").sha256(
+                            peer_id.encode()).digest()[:16],
+                        "incarnation": __import__("hashlib").sha256(
+                            peer_incarnation.encode()).digest()[:16],
+                        "layout_digest": local_result.layout_digest,
+                        "base_digest": local_result.base_digest,
+                        "result_root": local_result.result_root,
+                        "weight": local_result.global_weight,
+                        "chunk_count": chunk_count,
+                    })
+                chunk = int(value["chunk_index"])
+                expected_offset = chunk * payload_max
+                expected_extent = min(payload_max, local_result.length - expected_offset)
+                if (int(value["payload_offset"]) != expected_offset
+                        or int(value["credit"]) != expected_extent):
+                    raise ValueError("native owner credit extent mismatch")
+                seen.add(chunk)
+            finally:
+                os.close(credit_fd)
+
+    def receive_all() -> None:
+        seen: set[int] = set()
+        capacity = payload_max + 320
+        while len(seen) != chunk_count:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("native owner redistribution deadline expired")
+            frame_fd = create_memfd("emender-ndp-rx-frame", allow_sealing=True)
+            os.ftruncate(frame_fd, capacity)
+            try:
+                received = session.receive_owner_fd(frame_fd, capacity=capacity)
+                if received is None:
+                    time.sleep(.001); continue
+                worker, frame_bytes = received
+                if worker != peer_id:
+                    raise ValueError("native owner frame arrived from wrong frozen peer")
+                value = decode_owner_frame_fd(
+                    frame_fd, frame_bytes=frame_bytes, payload_max=payload_max,
+                    expected={
+                        "run_key": __import__("hashlib").sha256(
+                            args.run_id.encode()).digest()[:16],
+                        "fence_epoch": _fence_epoch(args),
+                        "generation": local_result.generation,
+                        "attempt": local_result.attempt,
+                        "owner_epoch": local_result.client.owner_epoch,
+                        "worker_key": __import__("hashlib").sha256(
+                            peer_id.encode()).digest()[:16],
+                        "incarnation": __import__("hashlib").sha256(
+                            peer_incarnation.encode()).digest()[:16],
+                        "layout_digest": local_result.layout_digest,
+                        "base_digest": local_result.base_digest,
+                        "result_root": peer_root,
+                        "weight": peer_weight,
+                        "chunk_count": chunk_count,
+                    })
+                chunk = int(value["chunk_index"])
+                if chunk in seen:
+                    continue  # authenticated idempotent replay
+                expected_offset = chunk * payload_max
+                if int(value["payload_offset"]) != expected_offset:
+                    raise ValueError("native redistribution chunk offset mismatch")
+                _copy_frame_payload(
+                    frame_fd, remote_fd, payload_bytes=int(value["payload_bytes"]),
+                    payload_offset=expected_offset)
+                seen.add(chunk)
+            finally:
+                os.close(frame_fd)
+
+    # Static byte credits are granted before each direction; they are distinct
+    # from CQ completion and bound each exact frozen chunk. The lower worker's
+    # data direction runs first, without a fixed-world rendezvous.
+    if f"node-{node}" < peer_id:
+        receive_credits(); send_all(sequence_base=1)
+        send_credits(sequence_base=chunk_count + 1); receive_all()
+    else:
+        send_credits(sequence_base=1); receive_all()
+        receive_credits(); send_all(sequence_base=chunk_count + 1)
+    seal_memfd(remote_fd)
+    return remote_fd
+
+
+def _native_manager(args) -> int:
+    """Model-free controller for direct memfd admission and native ownership."""
+    if args.local_quorum != 8 and not args.control:
+        raise ValueError("native E97 production requires all eight local trainers")
+    run = Path(args.run_dir); node = int(os.environ.get("RESILIENT_E97_NODE_RANK", "0"))
+    identity = f"node-{node}-manager"
+    bulk = assert_node_local_path(
+        Path(args.bulk_root) / args.run_id / f"node-{node}", run)
+    fenced = _fenced_control(args)
+    backend, production, full_layout = _dataplane_policy(args)
+    provider = "cxi" if backend == NATIVE_CXI else os.environ.get(
+        "NDP_TEST_PROVIDER", "tcp;ofi_rxm")
+    config_path = ROOT / "configs/frontier/e97_resilient_split_role_flat.json"
+    digests = runtime_digests(
+        build_manifest=args.native_build_manifest, config_path=config_path,
+        provider=provider, attestation=args._dataplane_attestation)
+    incarnation = uuid.uuid4().hex
+    session = NativeManagerSession.start(
+        backend=backend, run_id=args.run_id, fence_epoch=_fence_epoch(args),
+        worker_id=f"node-{node}", incarnation=incarnation,
+        host=_pool_hosts(args)[node], build_manifest=args.native_build_manifest,
+        gate_json=args.native_gate_json or None, source_root=ROOT,
+        production=production, full_layout=full_layout, deadline_s=args.deadline_s,
+        telemetry_path=bulk / "telemetry" / f"{identity}-native.jsonl",
+        payload_max=args.bulk_chunk_bytes, resident_limit_bytes=args.max_spool_bytes)
+    control = bulk / "control"
+    session.write_readiness(control / "native-service-ready.json")
+    heartbeat(bulk, identity, generation=args.initial_generation,
+              step=args.initial_generation * args.local_steps, loss=None,
+              stage="native_service_ready")
+    pool_config = _pool_config(args)
+    control_server = control_thread = None
+    pool_client = None
+    if args.node_count > 1:
+        if args.node_count != 2:
+            raise ValueError("native E97 v1 owner exchange currently requires exactly two nodes")
+        if node == 0:
+            control_server = PoolControlServer(
+                ("0.0.0.0", args.coordinator_port), pool_config,
+                evidence_root=run / "retained-evidence" / "pool-control")
+            control_thread = threading.Thread(target=control_server.serve_forever, daemon=True)
+            control_thread.start()
+        pool_client = PoolControlClient(
+            (args.coordinator_host, args.coordinator_port),
+            timeout_s=min(args.deadline_s, pool_config.slo.sync_s)).bind(
+                args.run_id, _fence_epoch(args))
+        pool_client.ready(session.owner_endpoint, args.initial_generation,
+                          run_id=args.run_id, fence=_fence_epoch(args))
+    term_requested = {"value": False}
+
+    def request_term(*_ignored) -> None:
+        term_requested["value"] = True
+
+    signal.signal(signal.SIGTERM, request_term)
+    liveness_stop, liveness_thread = _liveness_heartbeat(bulk, identity)
+    try:
+        for generation in range(args.initial_generation,
+                                args.initial_generation + args.generations):
+            if term_requested["value"]:
+                break
+            if fenced is not None:
+                fenced[0].assert_current(fenced[1])
+            native_deadline = time.monotonic() + min(args.deadline_s, 420.0)
+            snapshot = (pool_client.open_generation(
+                generation, 1, deadline=time.monotonic() + pool_config.slo.sync_s)
+                if pool_client is not None else None)
+            request = wait_metadata(
+                control / f"native-layout-{generation:08d}.json",
+                deadline=native_deadline,
+                expected={"run_id": args.run_id, "fence_epoch": _fence_epoch(args),
+                          "generation": generation, "rank": 0})
+            elements = int(request["total_elements"])
+            expected_layout = layout_identity(
+                elements, payload_max=args.bulk_chunk_bytes)
+            if request.get("layout_digest") != expected_layout.hex():
+                raise ValueError("trainer layout differs from native flat-layout ABI")
+            base_digest = bytes.fromhex(str(request["base_digest"]))
+            plan_digest = __import__("hashlib").sha256(json.dumps(
+                {"generation": generation, "runtime_digests": digests},
+                sort_keys=True, separators=(",", ":")).encode()).digest()
+            session.install_generation(
+                total_elements=elements, generation=generation, attempt=1,
+                owner_epoch=1, source_dtype=DType.F32,
+                payload_max=args.bulk_chunk_bytes, base_digest=base_digest,
+                plan_digest=plan_digest,
+                deadline_s=max(.001, native_deadline - time.monotonic()))
+            metadata = GenerationMetadata(
+                args.run_id, _fence_epoch(args), generation, 1, 1, elements,
+                expected_layout.hex(), base_digest.hex(), plan_digest.hex(),
+                session.local.generation_deadline_ns, digests)
+            atomic_metadata(control / f"native-generation-{generation:08d}.json",
+                            metadata.as_json())
+            heartbeat(bulk, identity, generation=generation,
+                      step=generation * args.local_steps, loss=None, stage="training_wait")
+            submissions = [wait_metadata(
+                control / f"native-submit-{generation:08d}-{rank:02d}.json",
+                deadline=native_deadline,
+                expected={"run_id": args.run_id, "fence_epoch": _fence_epoch(args),
+                          "generation": generation, "rank": rank,
+                          "layout_digest": expected_layout.hex()})
+                for rank in range(args.local_quorum)]
+            local_weight = sum(int(item["tokens"]) for item in submissions)
+            heartbeat(bulk, identity, generation=generation,
+                      step=generation * args.local_steps, loss=None, stage="freeze")
+            freeze = session.freeze(
+                deadline_s=max(.001, native_deadline - time.monotonic()))
+            local_operation, local_result = session.finalize_redistribution(
+                deadline_s=max(.001, native_deadline - time.monotonic()))
+            final_operation, final_result = local_operation, local_result
+            if pool_client is not None:
+                close = pool_client.contribute_and_freeze(
+                    generation=generation, attempt=1, worker_id=f"node-{node}",
+                    incarnation=incarnation, contribution_seq=generation,
+                    accepted_tokens=local_weight,
+                    payload_digest=local_result.result_root.hex(),
+                    deadline=time.monotonic() + pool_config.slo.freeze_s)
+                if close.get("status") != "commit_ready":
+                    raise TimeoutError(f"native global freeze failed: {close}")
+                frozen = tuple(close["frozen_identities"])
+                workers = sorted(str(item["worker_id"]) for item in frozen)
+                if len(workers) != 2 or f"node-{node}" not in workers:
+                    raise RuntimeError("native two-node accepted set is incomplete")
+                endpoints = tuple(OwnerEndpoint(**peer) for peer in snapshot["peers"]
+                                  if str(peer["worker_id"]) in workers)
+                session.install_routes(endpoints)
+                peer_id = next(item for item in workers if item != f"node-{node}")
+                peer_endpoint = next(item for item in endpoints
+                                     if item.worker_id == peer_id)
+                weights = {str(key): int(value) for key, value in
+                           dict(close["accepted_weights"]).items()}
+                roots = {str(key): bytes.fromhex(str(value)) for key, value in
+                         dict(close["accepted_payloads"]).items()}
+                heartbeat(bulk, identity, generation=generation,
+                          step=generation * args.local_steps, loss=None,
+                          stage="owner_transport")
+                exchange_deadline = time.monotonic() + pool_config.slo.transport_s
+                remote_fd = _native_peer_exchange(
+                    session, local_result, args=args, node=node, peer_id=peer_id,
+                    peer_incarnation=peer_endpoint.incarnation,
+                    peer_root=roots[peer_id], peer_weight=weights[peer_id],
+                    deadline=exchange_deadline)
+                local_fd = os.dup(local_result.fd)
+                session.abort(deadline_s=5)
+                local_result.close(); local_operation.close(); freeze.close()
+                session.install_reduction_attempt(
+                    generation=generation, attempt=2, owner_epoch=1,
+                    source_dtype=DType.F64, base_digest=base_digest,
+                    plan_digest=plan_digest,
+                    deadline_s=max(.001, args.deadline_s))
+                registered = []
+                for sequence, worker in enumerate(workers):
+                    fd = local_fd if worker == f"node-{node}" else remote_fd
+                    buffer = session.local.register_memfd(
+                        fd, length=elements * 8, handle_generation=generation)
+                    operation = session.local.submit(
+                        buffer, trainer_key=worker,
+                        trainer_incarnation=(incarnation if worker == f"node-{node}"
+                                             else peer_endpoint.incarnation),
+                        submission_seq=sequence, weight=weights[worker],
+                        source_dtype=DType.F64, deadline_s=args.deadline_s)
+                    buffer.close(); registered.append(operation)
+                os.close(local_fd); os.close(remote_fd)
+                freeze = session.freeze(deadline_s=args.deadline_s)
+                final_operation, final_result = session.finalize_redistribution(
+                    deadline_s=args.deadline_s)
+                for operation in registered:
+                    operation.close()
+                validated = pool_client.validate_result_root(
+                    generation=generation, attempt=1, worker_id=f"node-{node}",
+                    incarnation=incarnation, result_root=final_result.result_root.hex(),
+                    global_weight=final_result.global_weight,
+                    result_bytes=final_result.length,
+                    deadline=time.monotonic() + pool_config.slo.apply_s)
+                if validated["status"] != "validated":
+                    raise RuntimeError("native result root did not validate")
+            result_marker = {
+                "schema": "emender-native-e97-result-v1", "run_id": args.run_id,
+                "fence_epoch": _fence_epoch(args), "generation": generation,
+                "attempt": final_result.attempt,
+                "operation_handle": final_operation.handle,
+                "layout_digest": final_result.layout_digest.hex(),
+                "base_digest": final_result.base_digest.hex(),
+                "result_root": final_result.result_root.hex(),
+                "global_weight": final_result.global_weight,
+                "weight": final_result.global_weight,
+                "result_bytes": final_result.length,
+                "members": [int(item["rank"]) for item in submissions],
+                "accepted_peers": ([f"node-{node}"] if snapshot is None else
+                                   sorted(str(item["worker_id"])
+                                          for item in close["frozen_identities"])),
+                "runtime_digests": digests, "trainer_spool_bytes": 0,
+                "python_dense_socket_bytes": 0,
+            }
+            session.checkpoint_proposal(
+                control / f"native-checkpoint-{generation:08d}.json", final_result,
+                publisher=identity,
+                metadata={"publication_generation": generation + 1,
+                          "runtime_digests": digests})
+            atomic_metadata(control / f"native-result-{generation:08d}.json",
+                            result_marker)
+            if node == 0:
+                proposal = wait_metadata(
+                    control / f"trainer-proposal-{generation:08d}.json",
+                    deadline=time.monotonic() + pool_config.slo.apply_s,
+                    expected={"generation": generation + 1})
+                publication = finalize_checkpoint(
+                    run, proposal["checkpoint"], run_id=args.run_id,
+                    generation=int(proposal["generation"]), step=int(proposal["step"]),
+                    async_chain=proposal["async_chain"], membership=proposal["membership"],
+                    fence=LocalFence(**proposal["fence"]), source_id=args.source_id,
+                    code_id=args.code_id,
+                    outer_update_state=proposal["outer_update_state"],
+                    migration=proposal["migration"],
+                    accepted_tokens=int(proposal["accepted_tokens"]),
+                    generation_identity=proposal["generation_identity"],
+                    digests=proposal["digests"],
+                    control_store=None if fenced is None else fenced[0],
+                    allocation_lease=None if fenced is None else fenced[1])
+            else:
+                latest_wait = wait_metadata(
+                    run / "handoff" / "latest.json",
+                    deadline=time.monotonic() + pool_config.slo.apply_s,
+                    expected={"generation": generation + 1})
+                publication = Path(str(latest_wait["manifest"]))
+            latest = wait_metadata(
+                run / "handoff" / "latest.json",
+                deadline=time.monotonic() + pool_config.slo.apply_s,
+                expected={"generation": generation + 1,
+                          "fence": _fence_epoch(args)})
+            apply_deadline = time.monotonic() + pool_config.slo.apply_s
+            for rank in range(args.local_quorum):
+                wait_metadata(
+                    control / f"native-applied-{generation:08d}-{rank:02d}.json",
+                    deadline=apply_deadline,
+                    expected={"run_id": args.run_id,
+                              "fence_epoch": _fence_epoch(args),
+                              "generation": generation,
+                              "result_root": final_result.result_root.hex(),
+                              "rank": rank})
+            session.commit(
+                publication_manifest=publication, authoritative_latest=latest,
+                deadline_s=pool_config.slo.apply_s)
+            final_result.close(); final_operation.close(); freeze.close()
+            heartbeat(bulk, identity, generation=generation + 1,
+                      step=(generation + 1) * args.local_steps, loss=None,
+                      stage="published")
+            if pool_client is not None:
+                pool_client.ready(session.owner_endpoint, generation + 1,
+                                  run_id=args.run_id, fence=_fence_epoch(args))
+    except BaseException:
+        try:
+            session.abort(deadline_s=1)
+        except Exception:
+            pass
+        raise
+    finally:
+        liveness_stop.set(); liveness_thread.join(10)
+        if pool_client is not None:
+            try:
+                pool_client.drain(session.owner_endpoint.worker_id,
+                                  session.owner_endpoint.incarnation)
+            except Exception:
+                pass
+        session.close("allocation_term_handoff" if term_requested["value"] else "normal")
+        if control_server is not None:
+            control_server.shutdown(); control_server.server_close()
+        if control_thread is not None:
+            control_thread.join(2)
+    return 0
 
 
 def manager(args) -> int:
+    if _IMPORT_HEARTBEAT is not None:
+        stop, thread = _IMPORT_HEARTBEAT
+        stop.set(); thread.join(10)
+    backend, _, _ = _dataplane_policy(args)
+    return (_python_debug_manager(args) if backend == PYTHON_TCP_DEBUG
+            else _native_manager(args))
+
+
+def _python_debug_manager(args) -> int:
     run = Path(args.run_dir); node = int(os.environ.get("RESILIENT_E97_NODE_RANK", "0"))
     identity = f"node-{node}-manager"
     bulk = Path(args.bulk_root) / args.run_id / f"node-{node}"
     bulk = assert_node_local_path(bulk, run)
     fenced = _fenced_control(args)
-    if _IMPORT_HEARTBEAT is not None:
-        stop, thread = _IMPORT_HEARTBEAT
-        stop.set(); thread.join(10)
     spool = LocalTrainerSpool(bulk / "mailbox", args.max_spool_bytes)
     loop = SplitManagerLoop(spool, quorum=args.local_quorum, source_id=args.source_id,
                             aggregation_deadline_s=min(args.deadline_s, 420.0))
@@ -614,6 +1075,14 @@ def trainer(args) -> int:
     bulk = Path(args.bulk_root) / args.run_id / f"node-{node}"
     bulk = assert_node_local_path(bulk, run)
     fenced = _fenced_control(args)
+    backend, _, _ = _dataplane_policy(args)
+    native = backend != PYTHON_TCP_DEBUG
+    native_runtime = (runtime_digests(
+        build_manifest=args.native_build_manifest,
+        config_path=ROOT / "configs/frontier/e97_resilient_split_role_flat.json",
+        provider="cxi" if backend == NATIVE_CXI else os.environ.get(
+            "NDP_TEST_PROVIDER", "tcp;ofi_rxm"),
+        attestation=args._dataplane_attestation) if native else None)
     # Loading and cloning the real E97 checkpoint can exceed the steady-state
     # heartbeat deadline when all eight local trainers start together. Keep
     # liveness independent from generation progress throughout bootstrap.
@@ -621,7 +1090,8 @@ def trainer(args) -> int:
     if _IMPORT_HEARTBEAT is not None:
         stop, thread = _IMPORT_HEARTBEAT
         stop.set(); thread.join(10)
-    spool = LocalTrainerSpool(bulk / "mailbox", args.max_spool_bytes)
+    spool = (LocalTrainerSpool(bulk / "mailbox", args.max_spool_bytes)
+             if not native else None)
     control = bulk / "control"
     target_generation = args.initial_generation + args.generations
     if args.control:
@@ -638,6 +1108,9 @@ def trainer(args) -> int:
         if __import__("hashlib").sha256(checkpoint_path.read_bytes()).hexdigest() != handoff["checkpoint_sha256"]:
             raise ValueError("resume checkpoint checksum mismatch")
         resumed = torch.load(checkpoint_path, map_location="cpu", mmap=True, weights_only=True)
+        if (native and dict(resumed.get("native_runtime_digests", {}))
+                != native_runtime):
+            raise ValueError("resume checkpoint native runtime digest mismatch")
         if (int(resumed["generation"]) != args.initial_generation
                 or resumed["outer_update_state"] != handoff["outer_update_state"]):
             raise ValueError("resume generation/outer state does not match handoff")
@@ -667,6 +1140,9 @@ def trainer(args) -> int:
         if __import__("hashlib").sha256(checkpoint_path.read_bytes()).hexdigest() != recovery["checkpoint_sha256"]:
             raise ValueError("role recovery checkpoint checksum mismatch")
         saved = torch.load(checkpoint_path, map_location="cpu", mmap=True, weights_only=True)
+        if (native and dict(saved.get("native_runtime_digests", {}))
+                != native_runtime):
+            raise ValueError("role recovery native runtime digest mismatch")
         if (saved["identity"] != identity or saved["run_id"] != args.run_id
                 or saved["payload_id"] != args.payload_id
                 or int(saved["coordinator_epoch"]) != _fence_epoch(args)
@@ -683,6 +1159,7 @@ def trainer(args) -> int:
     signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__("requested", True))
     completed = start_generation
     leader_checkpoint: Path | None = None
+    trainer_incarnation = uuid.uuid4().hex
     for generation in range(start_generation, target_generation):
         if stop["requested"]:
             break
@@ -697,6 +1174,30 @@ def trainer(args) -> int:
         # evidence is ~2.5m; measured baseline 212-215s), then exchange and
         # atomic commit receive a distinct <=180s bound. No 900s silent wait.
         generation_deadline = time.monotonic() + min(args.deadline_s, 420.0)
+        native_plane = None
+        if native:
+            elements = state_elements(state)
+            layout = layout_identity(elements, payload_max=args.bulk_chunk_bytes)
+            if rank == 0:
+                atomic_metadata(control / f"native-layout-{generation:08d}.json", {
+                    "schema": "emender-native-e97-layout-request-v1",
+                    "run_id": args.run_id, "fence_epoch": _fence_epoch(args),
+                    "generation": generation, "rank": rank,
+                    "total_elements": elements, "layout_digest": layout.hex(),
+                    "base_digest": state_digest(state).hex(),
+                    "runtime_digests": native_runtime,
+                })
+            native_plane = NativeTrainerDataPlane.connect(
+                build_manifest=args.native_build_manifest,
+                socket_path=os.environ["EMENDER_NDP_SOCKET"], run_id=args.run_id,
+                fence_epoch=_fence_epoch(args), generation=generation, rank=rank,
+                identity=identity, incarnation=trainer_incarnation,
+                control_root=control, deadline=generation_deadline)
+            if dict(native_plane.metadata.runtime_digests) != native_runtime:
+                native_plane.close()
+                raise ValueError("manager/trainer native runtime digest mismatch")
+            native_plane.allocate_delta(
+                deadline_s=max(.001, generation_deadline - time.monotonic()))
         if args.control:
             loss = 1.0 / (step + args.local_steps + rank + 1)
             delta = {"weight": torch.full_like(state["weight"], float(rank + 1))}
@@ -724,6 +1225,21 @@ def trainer(args) -> int:
                     loss=details.get("loss"), stage=phase)
 
             def publish_trained_delta(base_state, model, tokens):
+                if native:
+                    heartbeat(bulk, identity, generation=generation, step=step,
+                              loss=None, stage="streaming_delta")
+                    native_plane.publish_model_delta(
+                        base_state, model, tokens,
+                        chunk_elements=max(1, args.local_spool_chunk_bytes // 4),
+                        deadline_s=max(.001, generation_deadline - time.monotonic()))
+                    _stage_telemetry(
+                        bulk, identity, generation, "native_direct_memfd",
+                        time.monotonic(), 180.0, trainer_spool_bytes=0,
+                        python_dense_socket_bytes=0,
+                        producer_direct=True, storage_dtype="float32")
+                    heartbeat(bulk, identity, generation=generation, step=step,
+                              loss=None, stage="submitted")
+                    return
                 local_spool_started = time.monotonic()
                 bytes_before = spool.bytes_written
                 heartbeat(bulk, identity, generation=generation, step=step, loss=None,
@@ -762,6 +1278,8 @@ def trainer(args) -> int:
                           stage="delta_spooled")
 
             def training_progress(local_step, metrics):
+                if stop["requested"]:
+                    raise InterruptedError("allocation TERM requested during local training")
                 if time.monotonic() >= generation_deadline:
                     raise TimeoutError(
                         f"generation {generation} deadline exceeded during local training "
@@ -790,9 +1308,16 @@ def trainer(args) -> int:
         if args.control:
             heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
                       stage="streaming_delta")
-            spool.publish(fence, rank, flatten_tensors(
-                delta, chunk_elements=max(1, args.bulk_chunk_bytes // 8)), weight=tokens,
-                          source_id=args.source_id)
+            if native:
+                native_plane.publish_flat_shards(
+                    flatten_tensors(
+                        delta, chunk_elements=max(1, args.bulk_chunk_bytes // 4)),
+                    tokens=tokens,
+                    deadline_s=max(.001, generation_deadline - time.monotonic()))
+            else:
+                spool.publish(fence, rank, flatten_tensors(
+                    delta, chunk_elements=max(1, args.bulk_chunk_bytes // 8)),
+                    weight=tokens, source_id=args.source_id)
         del delta
         if args.node_count > 1:
             heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
@@ -808,17 +1333,26 @@ def trainer(args) -> int:
             _wait_for_leader_apply_release(
                 bulk, generation=generation, fence=fence, deadline=exchange_deadline)
             exchange_deadline = time.monotonic() + min(args.deadline_s, 180.0)
-        manifest, aggregate = spool.stream_aggregate(
-            fence, deadline=exchange_deadline,
-            expected_source_id=args.source_id)
+        if native:
+            native_context = native_plane.result_shards(
+                deadline=exchange_deadline,
+                chunk_elements=max(1, args.bulk_chunk_bytes // 4))
+            manifest, aggregate = native_context.__enter__()
+        else:
+            manifest, aggregate = spool.stream_aggregate(
+                fence, deadline=exchange_deadline,
+                expected_source_id=args.source_id)
         # Waiting for distributed ownership (and, on node 0 peers, the leader
         # checkpoint marker) has its own bounded window.  Once the complete
         # node-local aggregate is visible, begin a fresh supervised apply
         # window for every trainer; liveness alone must not disguise progress.
         heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
                   stage="peer_apply")
-        spool.release_trainer(fence, rank)
+        if not native:
+            spool.release_trainer(fence, rank)
         state = apply_delta(state, aggregate, eta_outer=args.eta_outer, in_place=True)
+        if native:
+            native_context.__exit__(None, None, None)
         accepted_token_clock += int(manifest["weight"])
         step += args.local_steps; losses.append(loss)
         completed = generation + 1
@@ -831,7 +1365,7 @@ def trainer(args) -> int:
         # complete checkpoint and proposal before same-node peer reads begin.
         # The same immutable file is also valid leader recovery state, so do
         # not serialize the model twice.
-        if node == 0 and rank == 0 and completed == target_generation:
+        if node == 0 and rank == 0 and (native or completed == target_generation):
             if fenced is not None:
                 fenced[0].assert_current(fenced[1])
             checkpoint_name = f"generation-{completed:08d}"
@@ -850,11 +1384,23 @@ def trainer(args) -> int:
                         "membership": manifest["members"], "fence": fence.__dict__,
                         "accepted_peers": manifest.get("accepted_peers", []),
                         "accepted_tokens": accepted_token_clock,
+                        "native_runtime_digests": native_runtime,
                         "async_chain": async_chain, "loss": losses[-1]}, temporary)
             os.replace(temporary, leader_checkpoint)
             if fenced is not None:
                 fenced[0].assert_current(fenced[1])
-            atomic_json(bulk / "control" / "trainer-proposal.json", {
+            proposal_path = (bulk / "control" /
+                             (f"trainer-proposal-{generation:08d}.json"
+                              if native else "trainer-proposal.json"))
+            native_result = ({
+                "attempt": int(manifest["attempt"]),
+                "layout_digest": str(manifest["layout_digest"]),
+                "base_digest": str(manifest["base_digest"]),
+                "result_root": str(manifest["result_root"]),
+                "global_weight": int(manifest["global_weight"]),
+                "result_bytes": int(manifest["result_bytes"]),
+            } if native else None)
+            proposal_value = {
                 "checkpoint": str(leader_checkpoint.resolve()),
                 "generation": completed, "step": step,
                 "async_chain": async_chain,
@@ -864,10 +1410,17 @@ def trainer(args) -> int:
                                         "result_generation": completed},
                 "digests": {"source_id": args.source_id,
                             "payload_id": args.payload_id,
-                            "code_id": args.code_id},
+                            "code_id": args.code_id,
+                            **({"native_runtime": native_runtime,
+                                "native_result": native_result} if native else {})},
                 "fence": fence.__dict__,
                 "outer_update_state": migration.get("state", {}),
-                "migration": migration})
+                "migration": migration}
+            if native:
+                atomic_json(proposal_path, proposal_value)
+            else:
+                atomic_json(bulk / "control" / "trainer-proposal.json",
+                            proposal_value)
 
         if node == 0 and rank == 0:
             atomic_json(
@@ -889,6 +1442,7 @@ def trainer(args) -> int:
                         "membership": manifest["members"], "fence": fence.__dict__,
                         "accepted_peers": manifest.get("accepted_peers", []),
                         "accepted_tokens": accepted_token_clock,
+                        "native_runtime_digests": native_runtime,
                         "async_chain": async_chain}, temporary)
             os.replace(temporary, recovery_checkpoint)
         else:
@@ -899,7 +1453,18 @@ def trainer(args) -> int:
             checkpoint_sha256=__import__("hashlib").sha256(
                 recovery_checkpoint.read_bytes()).hexdigest(),
             membership=manifest["members"], fence=fence.__dict__,
-            accepted_tokens=accepted_token_clock)
+            accepted_tokens=accepted_token_clock,
+            **({"native_runtime_digests": native_runtime} if native else {}))
+        if native:
+            native_plane.close()
+            atomic_metadata(
+                control / f"native-applied-{generation:08d}-{rank:02d}.json", {
+                    "schema": "emender-native-e97-applied-v1",
+                    "run_id": args.run_id, "fence_epoch": _fence_epoch(args),
+                    "generation": generation, "result_root": manifest["result_root"],
+                    "rank": rank, "checkpoint": str(recovery_checkpoint),
+                    "accepted_tokens": accepted_token_clock,
+                })
         heartbeat(bulk, identity, generation=generation + 1, step=step, loss=loss, stage="applied")
     return 0
 
@@ -912,7 +1477,8 @@ def main() -> int:
         raise ValueError("local spool chunk bound must be positive and within the byte ledger")
     if not 0 < args.bulk_chunk_bytes <= args.max_spool_bytes:
         raise ValueError("owner transport chunk bound must be positive and within the byte ledger")
-    _attest_dataplane(args)  # hard gate before trainer calls ``_load_real``
+    args._dataplane_attestation = _attest_dataplane(
+        args)  # hard gate before trainer calls ``_load_real``
     return manager(args) if args.role == "manager" else trainer(args)
 
 

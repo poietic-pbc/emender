@@ -190,14 +190,18 @@ def test_native_exact_weighted_reference_is_arrival_independent(dtype):
     assert np.array_equal(forward, expected)
     assert np.array_equal(reverse, expected)
     assert forward_root == reverse_root
+    # The persistent service exports monotonic service-wide counters.  The
+    # second independent client therefore observes both completed projections,
+    # while each generation still projects exactly once.
+    assert forward_metrics.projection_count == 1
+    assert reverse_metrics.projection_count == 2
+    source_bytes = sum(source_bits(array, dtype).nbytes for array in arrays)
+    assert forward_metrics.prompt_source_released_bytes == source_bytes
+    assert reverse_metrics.prompt_source_released_bytes == 2 * source_bytes
     for metrics in (forward_metrics, reverse_metrics):
-        assert metrics.projection_count == 1
         assert metrics.shared_bytes_current == 0
         assert metrics.released_shared_bytes == metrics.admitted_shared_bytes
         assert metrics.mapped_bytes_current == 0
-        assert metrics.prompt_source_released_bytes == sum(
-            source_bits(array, dtype).nbytes for array in arrays
-        )
         assert metrics.trainer_spool_files == metrics.trainer_spool_bytes == 0
         assert metrics.python_dense_socket_bytes == metrics.handoff_full_copy_bytes == 0
         assert metrics.disk_replay_bytes == 0

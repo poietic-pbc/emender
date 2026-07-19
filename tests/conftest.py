@@ -61,6 +61,8 @@ def compiled_native_service(request: pytest.FixtureRequest, monkeypatch, tmp_pat
         service_environment["EMENDER_NDP_MAX_SHARED_BYTES"] = "31"
     if request.node.name == "test_optional_fallback_materializes_only_one_reduced_numerator":
         service_environment["EMENDER_NDP_FALLBACK_SPOOL_DIR"] = str(tmp_path)
+    if request.node.name == "test_persistent_service_preserves_exact_global_numerator":
+        service_environment["EMENDER_NDP_INTERMEDIATE_F64"] = "1"
     process = subprocess.Popen(
         [
             str(_service_binary()),

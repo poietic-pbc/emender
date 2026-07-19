@@ -367,6 +367,21 @@ class NativeManagerSession:
         self._frozen = self._checkpoint_proposed = False
         return digest
 
+    def install_reduction_attempt(self, *, generation: int, attempt: int,
+                                  owner_epoch: int, source_dtype: DType,
+                                  base_digest: bytes, plan_digest: bytes,
+                                  deadline_s: float) -> None:
+        """Reuse the installed flat layout for the post-transfer f64 attempt."""
+        if self._generation_installed:
+            raise RuntimeError("native generation is already installed")
+        self.local.source_dtype = source_dtype
+        self.local.install_generation(
+            generation, attempt=attempt, owner_epoch=owner_epoch,
+            base_digest=base_digest, plan_digest=plan_digest,
+            deadline_s=deadline_s).close()
+        self._generation_installed = True
+        self._frozen = self._checkpoint_proposed = False
+
     def allocate_trainer_buffer(self, *, deadline_s: float = 30.0) -> Buffer:
         if not self._generation_installed or self._frozen:
             raise RuntimeError("trainer buffer admission is outside LOCAL_COLLECT")
@@ -418,6 +433,29 @@ class NativeManagerSession:
                             deadline_unix_ns=deadline)
         self._owner_replays[key] = sends + 1
 
+    def transfer_frozen_fd(self, worker_id: str, fd: int, *, frame_bytes: int,
+                           result_root: bytes, replay_identity: bytes,
+                           deadline_unix_ns: int | None = None) -> None:
+        """Transfer a sealed owner frame without materializing it in Python bytes."""
+        if not self._frozen:
+            raise RuntimeError("owner transfer requires a frozen accepted set")
+        if worker_id not in self.routes:
+            raise KeyError(f"no current-fence native route for {worker_id}")
+        root = bytes(result_root)
+        if len(root) != 32 or root == bytes(32):
+            raise ValueError("owner transfer requires a full nonzero result root")
+        identity = bytes(replay_identity)
+        if not identity or len(identity) > 64:
+            raise ValueError("native owner frame replay identity is invalid")
+        key = (worker_id, root + identity)
+        sends = self._owner_replays.get(key, 0)
+        if sends >= 3:
+            raise RuntimeError("native owner replay limit exceeded")
+        self.transport.send_fd(
+            self.routes[worker_id], fd, frame_bytes=frame_bytes,
+            deadline_unix_ns=deadline_unix_ns or self.transport.deadline_unix_ns)
+        self._owner_replays[key] = sends + 1
+
     def receive_owner_frame(self, *, capacity: int | None = None
                             ) -> tuple[str, bytes] | None:
         """Receive one compiled-ABI frame and authenticate its installed route."""
@@ -430,6 +468,18 @@ class NativeManagerSession:
         if worker is None:
             raise RuntimeError("native frame arrived from an unfenced route")
         return worker, frame
+
+    def receive_owner_fd(self, fd: int, *, capacity: int
+                         ) -> tuple[str, int] | None:
+        received = self.transport.receive_into_fd(fd, capacity=capacity)
+        if received is None:
+            return None
+        peer_id, frame_bytes = received
+        worker = next((name for name, value in self.routes.items()
+                       if value == peer_id), None)
+        if worker is None:
+            raise RuntimeError("native frame arrived from an unfenced route")
+        return worker, frame_bytes
 
     def finalize_redistribution(self, *, deadline_s: float = 30.0
                                 ) -> tuple[Operation, ResultView]:
@@ -473,7 +523,9 @@ class NativeManagerSession:
         temporary.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
         os.replace(temporary, target)
         self._checkpoint_proposed = True
-        self._proposal_generation = result.generation
+        self._proposal_generation = int(
+            (metadata or {}).get("publication_generation", result.generation))
+        self._result_generation = result.generation
         self._checkpoint_identity = {
             "attempt": result.attempt,
             "layout_digest": result.layout_digest.hex(),
@@ -509,7 +561,9 @@ class NativeManagerSession:
                 or int(publication.get("generation", -1)) != self._proposal_generation
                 or int(fence.get("coordinator_epoch", -1)) != self.fence_epoch):
             raise RuntimeError("native commit publication identity/fence mismatch")
-        if any(publication.get(key) != value
+        publication_identity = publication.get("digests", {}).get(
+            "native_result", publication)
+        if any(publication_identity.get(key) != value
                for key, value in self._checkpoint_identity.items()):
             raise RuntimeError("native commit publication result identity mismatch")
         # This is a state transition, not an idempotent transport receipt.
