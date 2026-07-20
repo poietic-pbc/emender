@@ -932,6 +932,25 @@ def test_manager_liveness_does_not_disguise_stalled_generation_progress(tmp_path
     assert supervisor._deadline_reason(child, 126) == "progress_deadline"
 
 
+def test_thirty_two_node_exchange_safety_scales_without_becoming_perf_target(
+        tmp_path, monkeypatch):
+    child = Child("manager", 0, "node000", None, "python manager.py")
+    supervisor = AllocationSupervisor(tmp_path, [child], heartbeat_s=600,
+                                      progress_s=600, max_restarts=1)
+    child.process = type("Process", (), {"poll": lambda self: None})()
+    state = tmp_path / "supervision" / "node-0-manager.json"
+    state.write_text(json.dumps({"heartbeat_time": 360, "progress_time": 0,
+                                 "generation": 14, "stage": "owner_transport"}))
+    monkeypatch.delenv("RESILIENT_E97_BULK_ROOT", raising=False)
+    monkeypatch.delenv("RESILIENT_E97_RUN_ID", raising=False)
+    monkeypatch.setenv("RESILIENT_E97_NODE_COUNT", "32")
+    monkeypatch.setenv("RESILIENT_E97_INITIAL_GENERATION", "14")
+    monkeypatch.setenv("RESILIENT_E97_ALLOCATION_ADMITTED_AT", "0")
+
+    assert supervisor._deadline_reason(child, 359) is None
+    assert supervisor._deadline_reason(child, 361) == "progress_deadline"
+
+
 def test_all_real_roles_publish_import_liveness_without_generation_progress():
     text = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
     assert 'sys.argv[1] not in {"manager", "trainer"}' in text

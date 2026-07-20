@@ -40,6 +40,20 @@ EXCHANGE_COMMIT_HARD_S = 180.0
 FIRST_COMMIT_HARD_S = 720.0
 
 
+def _exchange_commit_safety_s() -> float:
+    """Scale the fail-closed watchdog with the admitted topology.
+
+    This is an outer safety bound, not the performance acceptance target.
+    Performance is evaluated from emitted stage timings and useful/wire bytes.
+    The square-root factor preserves the established 2/4/8-node bound while
+    allowing the ordered 32-node all-peer exchange to finish atomically.
+    """
+    node_count = int(os.environ.get("RESILIENT_E97_NODE_COUNT", "2"))
+    if node_count not in {2, 4, 8, 32}:
+        raise ValueError("exchange safety requires an admitted node-count rung")
+    return EXCHANGE_COMMIT_HARD_S * max(1.0, (node_count / 8.0) ** 0.5)
+
+
 class AllocationLeaseGuard:
     """Renew the sole allocation fence while roles run beneath this process."""
 
@@ -124,7 +138,7 @@ def _allocation_admission(run_dir: Path) -> AllocationLeaseGuard | None | bool:
         "fence": lease.fence, "protocol": POOL_PROTOCOL_ID,
         "generation_baseline_s": list(GENERATION_BASELINE_S),
         "ready_hard_s": READY_HARD_S, "k40_hard_s": K40_HARD_S,
-        "exchange_commit_hard_s": EXCHANGE_COMMIT_HARD_S,
+        "exchange_commit_hard_s": _exchange_commit_safety_s(),
         "first_commit_hard_s": FIRST_COMMIT_HARD_S,
         "lease_ttl_s": ttl_s,
     }, sort_keys=True) + "\n")
@@ -384,6 +398,10 @@ class AllocationSupervisor:
             "redistribution": EXCHANGE_COMMIT_HARD_S,
             "checkpoint_commit": EXCHANGE_COMMIT_HARD_S,
         }.get(stage, self.progress_s)
+        if stage in {
+                "streaming_delta", "leader_apply_wait", "peer_apply", "submitted",
+                "owner_transport", "freeze", "redistribution", "checkpoint_commit"}:
+            stage_budget = _exchange_commit_safety_s()
         if now - float(state.get("progress_time", 0)) > min(self.progress_s, stage_budget):
             return "progress_deadline"
         admitted_at = float(os.environ.get("RESILIENT_E97_ALLOCATION_ADMITTED_AT", now))
