@@ -19,18 +19,22 @@ set(NDP_FABRIC_RUNTIME_DIR "" CACHE PATH
   "Reviewed Frontier libfabric runtime directory embedded in Frontier binaries")
 set(_emender_native_install_rpath "\$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 if(NDP_ROCM_RUNTIME_DIR)
+  if(NOT IS_ABSOLUTE "${NDP_ROCM_RUNTIME_DIR}")
+    message(FATAL_ERROR "NDP_ROCM_RUNTIME_DIR must be absolute")
+  endif()
   get_filename_component(NDP_ROCM_RUNTIME_DIR "${NDP_ROCM_RUNTIME_DIR}" REALPATH)
-  if(NOT IS_ABSOLUTE "${NDP_ROCM_RUNTIME_DIR}" OR
-     NOT EXISTS "${NDP_ROCM_RUNTIME_DIR}/libamdhip64.so.7")
+  if(NOT EXISTS "${NDP_ROCM_RUNTIME_DIR}/libamdhip64.so.7")
     message(FATAL_ERROR
       "NDP_ROCM_RUNTIME_DIR must be an absolute directory containing libamdhip64.so.7")
   endif()
   list(APPEND _emender_native_install_rpath "${NDP_ROCM_RUNTIME_DIR}")
 endif()
 if(NDP_FABRIC_RUNTIME_DIR)
+  if(NOT IS_ABSOLUTE "${NDP_FABRIC_RUNTIME_DIR}")
+    message(FATAL_ERROR "NDP_FABRIC_RUNTIME_DIR must be absolute")
+  endif()
   get_filename_component(NDP_FABRIC_RUNTIME_DIR "${NDP_FABRIC_RUNTIME_DIR}" REALPATH)
-  if(NOT IS_ABSOLUTE "${NDP_FABRIC_RUNTIME_DIR}" OR
-     NOT EXISTS "${NDP_FABRIC_RUNTIME_DIR}/libfabric.so.1")
+  if(NOT EXISTS "${NDP_FABRIC_RUNTIME_DIR}/libfabric.so.1")
     message(FATAL_ERROR
       "NDP_FABRIC_RUNTIME_DIR must be an absolute directory containing libfabric.so.1")
   endif()

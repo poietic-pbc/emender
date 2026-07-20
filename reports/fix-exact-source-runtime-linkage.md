@@ -8,7 +8,9 @@ the canonical ROCm module nor rejected inherited loader paths.
 The canonical build now resolves the ROCm 7.1.1 and Cray libfabric runtime
 directories from the reviewed module stack and embeds both alongside the
 origin-relative bundle directory.  Configuration fails if either absolute
-directory lacks its required SONAME.  The G2 batch payload clears inherited
+directory lacks its required SONAME; caller-supplied relative cache paths are
+rejected before canonicalization so they cannot resolve against an unreviewed
+host working directory.  The G2 batch payload clears inherited
 `LD_LIBRARY_PATH`, loads the canonical modules, reconstructs the loader path
 from the bundle and reviewed module directories, and fails before `srun` if
 `ldd` reports any unresolved library or if `libamdhip64.so.7` resolves outside

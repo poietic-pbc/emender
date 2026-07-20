@@ -28,6 +28,20 @@ def test_rocm_runtime_resolution_is_clean_environment_and_fail_closed(tmp_path):
     assert "did not set an absolute ROCM_PATH/ROCM_HOME" in unresolved.stderr
 
 
+def test_native_cmake_rejects_host_relative_runtime_overrides():
+    cmake = (ROOT / "native/CMakeLists.txt").read_text()
+    rocm_check = cmake.index('if(NOT IS_ABSOLUTE "${NDP_ROCM_RUNTIME_DIR}")')
+    rocm_realpath = cmake.index(
+        'get_filename_component(NDP_ROCM_RUNTIME_DIR "${NDP_ROCM_RUNTIME_DIR}" REALPATH)'
+    )
+    fabric_check = cmake.index('if(NOT IS_ABSOLUTE "${NDP_FABRIC_RUNTIME_DIR}")')
+    fabric_realpath = cmake.index(
+        'get_filename_component(NDP_FABRIC_RUNTIME_DIR "${NDP_FABRIC_RUNTIME_DIR}" REALPATH)'
+    )
+    assert rocm_check < rocm_realpath
+    assert fabric_check < fabric_realpath
+
+
 def test_canonical_frontier_environment_loads_modules_and_approved_python():
     activation = (ROOT / "scripts/frontier/activate_emender_frontier.sh").read_text()
     build = (ROOT / "scripts/frontier/build_native_resilient_dataplane.sh").read_text()
