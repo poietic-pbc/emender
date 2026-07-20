@@ -2187,6 +2187,14 @@ def trainer(args) -> int:
         run_id=args.run_id, fence=_fence_epoch(args),
         incarnation=trainer_incarnation) if native else None)
     for generation in range(start_generation, target_generation):
+        # This timestamp belongs to the trainer generation lifecycle, not to
+        # any individual data-plane stage.  Initialize it at the sole loop
+        # entry so fresh, resumed, and supervisor-restarted trainers all have
+        # a valid monotonic origin before a result is delayed, rejected, or
+        # admitted at the safe boundary.  Job 5037971 reached commit_ready and
+        # then crashed in native_generation_pipeline telemetry because this
+        # origin previously existed only in the manager loop.
+        generation_started = time.monotonic()
         if stop["requested"]:
             break
         if fenced is not None:
