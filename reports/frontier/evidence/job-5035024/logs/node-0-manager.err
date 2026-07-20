@@ -1,0 +1,480 @@
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-18b3d6826d/scripts/frontier/resilient_e97_role.py", line 1885, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-18b3d6826d/scripts/frontier/resilient_e97_role.py", line 1881, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-18b3d6826d/scripts/frontier/resilient_e97_role.py", line 1140, in manager
+    else _native_manager(args))
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-18b3d6826d/scripts/frontier/resilient_e97_role.py", line 934, in _native_manager
+    route_ready = pool_client.await_peer_route_ready(
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-18b3d6826d/ndm/resilient_pool_runtime.py", line 554, in await_peer_route_ready
+    raise TimeoutError(f"native peer route-readiness deadline expired: {last}")
+TimeoutError: native peer route-readiness deadline expired: {'status': 'waiting'}
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-18b3d6826d/scripts/frontier/resilient_e97_role.py", line 1885, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-18b3d6826d/scripts/frontier/resilient_e97_role.py", line 1881, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-18b3d6826d/scripts/frontier/resilient_e97_role.py", line 1140, in manager
+    else _native_manager(args))
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-18b3d6826d/scripts/frontier/resilient_e97_role.py", line 860, in _native_manager
+    session.install_generation(
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-18b3d6826d/ndm/native_pool_runtime.py", line 362, in install_generation
+    digest = self.local.install_flat_layout(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-18b3d6826d/ndm/native_dataplane.py", line 859, in install_flat_layout
+    self.native.check(self.native.library.ndp_layout_install_v1(
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-18b3d6826d/ndm/native_dataplane.py", line 532, in check
+    raise error_type(code, operation, detail)
+ndm.native_dataplane.NativeDataplaneError: ndp_layout_install_v1: native service is draining or stopped (-16)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-18b3d6826d/scripts/frontier/resilient_e97_role.py", line 1885, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-18b3d6826d/scripts/frontier/resilient_e97_role.py", line 1881, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-18b3d6826d/scripts/frontier/resilient_e97_role.py", line 1140, in manager
+    else _native_manager(args))
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-18b3d6826d/scripts/frontier/resilient_e97_role.py", line 860, in _native_manager
+    session.install_generation(
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-18b3d6826d/ndm/native_pool_runtime.py", line 362, in install_generation
+    digest = self.local.install_flat_layout(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-18b3d6826d/ndm/native_dataplane.py", line 859, in install_flat_layout
+    self.native.check(self.native.library.ndp_layout_install_v1(
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-18b3d6826d/ndm/native_dataplane.py", line 532, in check
+    raise error_type(code, operation, detail)
+ndm.native_dataplane.NativeDataplaneError: ndp_layout_install_v1: native service is draining or stopped (-16)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/scripts/frontier/resilient_e97_role.py", line 2130, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/scripts/frontier/resilient_e97_role.py", line 2126, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/scripts/frontier/resilient_e97_role.py", line 1380, in manager
+    else _native_manager(args))
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/scripts/frontier/resilient_e97_role.py", line 1186, in _native_manager
+    raise failures[0]
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/scripts/frontier/resilient_e97_role.py", line 1180, in _native_manager
+    outcomes[peer_id] = future.result()
+                        ^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/concurrent/futures/_base.py", line 456, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/concurrent/futures/_base.py", line 401, in __get_result
+    raise self._exception
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/scripts/frontier/resilient_e97_role.py", line 930, in _native_peer_exchange
+    receive_credits(); send_all(sequence_base=1)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/scripts/frontier/resilient_e97_role.py", line 776, in send_all
+    session.transfer_frozen_fd(
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/ndm/native_pool_runtime.py", line 550, in transfer_frozen_fd
+    self.transport.send_fd(
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/ndm/native_transport.py", line 437, in send_fd
+    self.library.check(self.library.lib.ndp_transport_send_v1(
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/ndm/native_transport.py", line 323, in check
+    raise TransportError(int(code), operation,
+ndm.native_transport.TransportError: transport_send_fd: deadline expired (-11)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/scripts/frontier/resilient_e97_role.py", line 2130, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/scripts/frontier/resilient_e97_role.py", line 2126, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/scripts/frontier/resilient_e97_role.py", line 1380, in manager
+    else _native_manager(args))
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/scripts/frontier/resilient_e97_role.py", line 1073, in _native_manager
+    freeze = session.freeze(
+             ^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/ndm/native_pool_runtime.py", line 501, in freeze
+    operation = self.local.control(Command.FREEZE, deadline_s=deadline_s)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/ndm/native_dataplane.py", line 892, in control
+    self.native.check(self.native.library.ndp_control_v1(
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/ndm/native_dataplane.py", line 532, in check
+    raise error_type(code, operation, detail)
+ndm.native_dataplane.NativeDataplaneError: ndp_control_v1(FREEZE): invalid lifecycle state (-3)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/scripts/frontier/resilient_e97_role.py", line 2130, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/scripts/frontier/resilient_e97_role.py", line 2126, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/scripts/frontier/resilient_e97_role.py", line 1380, in manager
+    else _native_manager(args))
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/scripts/frontier/resilient_e97_role.py", line 1073, in _native_manager
+    freeze = session.freeze(
+             ^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/ndm/native_pool_runtime.py", line 501, in freeze
+    operation = self.local.control(Command.FREEZE, deadline_s=deadline_s)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/ndm/native_dataplane.py", line 892, in control
+    self.native.check(self.native.library.ndp_control_v1(
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-4ec9e770bd/ndm/native_dataplane.py", line 532, in check
+    raise error_type(code, operation, detail)
+ndm.native_dataplane.NativeDataplaneError: ndp_control_v1(FREEZE): invalid lifecycle state (-3)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-9504924141/scripts/frontier/resilient_e97_role.py", line 2531, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-9504924141/scripts/frontier/resilient_e97_role.py", line 2527, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-9504924141/scripts/frontier/resilient_e97_role.py", line 1781, in manager
+    else _native_manager(args))
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-9504924141/scripts/frontier/resilient_e97_role.py", line 1735, in _native_manager
+    session.commit(
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-9504924141/ndm/native_pool_runtime.py", line 668, in commit
+    self.local.control(Command.COMMIT, deadline_s=deadline_s).close()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-9504924141/ndm/native_dataplane.py", line 892, in control
+    self.native.check(self.native.library.ndp_control_v1(
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-9504924141/ndm/native_dataplane.py", line 532, in check
+    raise error_type(code, operation, detail)
+ndm.native_dataplane.NativeDataplaneError: ndp_control_v1(COMMIT): absolute deadline expired (-11)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-9504924141/scripts/frontier/resilient_e97_role.py", line 2531, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-9504924141/scripts/frontier/resilient_e97_role.py", line 2527, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-9504924141/scripts/frontier/resilient_e97_role.py", line 1781, in manager
+    else _native_manager(args))
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-9504924141/scripts/frontier/resilient_e97_role.py", line 1735, in _native_manager
+    session.commit(
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-9504924141/ndm/native_pool_runtime.py", line 668, in commit
+    self.local.control(Command.COMMIT, deadline_s=deadline_s).close()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-9504924141/ndm/native_dataplane.py", line 892, in control
+    self.native.check(self.native.library.ndp_control_v1(
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-9504924141/ndm/native_dataplane.py", line 532, in check
+    raise error_type(code, operation, detail)
+ndm.native_dataplane.NativeDataplaneError: ndp_control_v1(COMMIT): absolute deadline expired (-11)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+----------------------------------------
+Exception occurred during processing of request from ('10.128.63.133', 44144)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_pool_runtime.py", line 174, in handle
+    header, payload = recv_frame(self.rfile, max_payload_bytes=MAX_CONTROL_PAYLOAD)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 129, in recv_frame
+    header_size = _U32.unpack(_recv_exact(stream, _U32.size))[0]
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_pool_runtime.py", line 178, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 123, in send_frame
+    _write_all(stream, encoded)
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 106, in _write_all
+    written = stream.write(remaining)
+              ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.65.120', 56502)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_pool_runtime.py", line 174, in handle
+    header, payload = recv_frame(self.rfile, max_payload_bytes=MAX_CONTROL_PAYLOAD)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 129, in recv_frame
+    header_size = _U32.unpack(_recv_exact(stream, _U32.size))[0]
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_pool_runtime.py", line 178, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 123, in send_frame
+    _write_all(stream, encoded)
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 106, in _write_all
+    written = stream.write(remaining)
+              ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.51.164', 60214)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_pool_runtime.py", line 174, in handle
+    header, payload = recv_frame(self.rfile, max_payload_bytes=MAX_CONTROL_PAYLOAD)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 129, in recv_frame
+    header_size = _U32.unpack(_recv_exact(stream, _U32.size))[0]
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_pool_runtime.py", line 178, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 123, in send_frame
+    _write_all(stream, encoded)
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 106, in _write_all
+    written = stream.write(remaining)
+              ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 2543, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 2539, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 1793, in manager
+    else _native_manager(args))
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 1658, in _native_manager
+    final_operation, final_result, freeze = _native_sharded_owner_reduce(
+                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 1267, in _native_sharded_owner_reduce
+    with session.import_reduction_sources(
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/contextlib.py", line 137, in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/native_pool_runtime.py", line 417, in import_reduction_sources
+    raise RuntimeError("imported reduction sources are outside LOCAL_COLLECT")
+RuntimeError: imported reduction sources are outside LOCAL_COLLECT
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 2543, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 2539, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 1793, in manager
+    else _native_manager(args))
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 1590, in _native_manager
+    freeze = session.freeze(
+             ^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/native_pool_runtime.py", line 507, in freeze
+    operation = self.local.control(Command.FREEZE, deadline_s=deadline_s)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/native_dataplane.py", line 892, in control
+    self.native.check(self.native.library.ndp_control_v1(
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/native_dataplane.py", line 532, in check
+    raise error_type(code, operation, detail)
+ndm.native_dataplane.NativeDataplaneError: ndp_control_v1(FREEZE): invalid lifecycle state (-3)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+----------------------------------------
+Exception occurred during processing of request from ('10.128.23.193', 54966)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_pool_runtime.py", line 174, in handle
+    header, payload = recv_frame(self.rfile, max_payload_bytes=MAX_CONTROL_PAYLOAD)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 129, in recv_frame
+    header_size = _U32.unpack(_recv_exact(stream, _U32.size))[0]
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_pool_runtime.py", line 178, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 123, in send_frame
+    _write_all(stream, encoded)
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 106, in _write_all
+    written = stream.write(remaining)
+              ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.25.192', 43174)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_pool_runtime.py", line 174, in handle
+    header, payload = recv_frame(self.rfile, max_payload_bytes=MAX_CONTROL_PAYLOAD)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 129, in recv_frame
+    header_size = _U32.unpack(_recv_exact(stream, _U32.size))[0]
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_pool_runtime.py", line 178, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 123, in send_frame
+    _write_all(stream, encoded)
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 106, in _write_all
+    written = stream.write(remaining)
+              ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('10.128.51.164', 42346)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_pool_runtime.py", line 174, in handle
+    header, payload = recv_frame(self.rfile, max_payload_bytes=MAX_CONTROL_PAYLOAD)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 129, in recv_frame
+    header_size = _U32.unpack(_recv_exact(stream, _U32.size))[0]
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 89, in _recv_exact
+    raise EOFError("peer closed framed transport")
+EOFError: peer closed framed transport
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 766, in __init__
+    self.handle()
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_pool_runtime.py", line 178, in handle
+    send_frame(self.wfile, {"op": "error", "error": str(error)})
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 123, in send_frame
+    _write_all(stream, encoded)
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_node_transport.py", line 106, in _write_all
+    written = stream.write(remaining)
+              ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
