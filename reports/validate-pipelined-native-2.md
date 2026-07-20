@@ -4,6 +4,32 @@ Date: 2026-07-20
 Task: `validate-pipelined-native-2`  
 Result: **exact two-node clean phase submitted; multi-phase chain blocked by the debug-QoS submit limit**
 
+## Sixth concrete attempt: repaired linkage, controller fix, and live G2 performance blocker
+
+Authoritative `main` first resolved to `692d0292`.  From a clean clone, the
+canonical Frontier activation built the exact native bundle and passed CTest
+10/10.  Exact-source G2 job `5036978` completed on exactly two nodes in 2:57
+and produced a passing full-layout CXI gate.  The serial acceptance controller
+then failed closed before `sbatch` because its plan omitted the top-level
+`authoritative_stage` consumed by `advance()`.  A regression fix was committed
+as `bb5cd54f`, cherry-picked and pushed to authoritative main as `09eac436`;
+the focused launcher/runtime suite passed (26 collected, plus 8 passed/1
+platform skip in the native gate selector).
+
+Because that source change invalidated the earlier gate identity, the exact
+`09eac436` bundle was rebuilt (CTest 10/10) and G2 job `5037046` was concretely
+submitted on exactly two nodes.  Both native node payloads passed, but the
+authoritative validator rejected publication because observed clean throughput
+did not reach 4x the retained Python gate.  Slurm records `FAILED 1:0`, 3:00,
+two nodes (`frontier[07388,07408]`).  Therefore no real K40 phase was admitted:
+five generations, overlap/idle timing, fault/rejoin, invalid-result rejection,
+and checkpoint restart remain unproven.  No 4-node-or-larger job was submitted.
+
+Conformance was checked against Compute Pool v1 R01-R16 and native data plane
+v1 NDP01-NDP17.  The source/bundle/G2 fences and exactly-two-node/no-overlap
+guards behaved fail closed; NDP17 blocks scale-out until the exact-source G2
+performance gate passes.
+
 ## Fifth concrete attempt: authoritative rebuild exposes G2 runtime-linkage blocker
 
 On reassignment after the serial launcher fix merged, authoritative `main` and
