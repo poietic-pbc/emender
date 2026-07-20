@@ -36,6 +36,7 @@ def test_dry_run_renders_exact_real_k40_fenced_acceptance_without_submission(tmp
     assert "sbatch" not in result.stdout
     plan = json.loads(output.read_text())
     assert plan["node_count"] == 2 and plan["k_local_steps"] == 40
+    assert plan["authoritative_stage"] is None
     assert plan["forbidden_node_counts"] == [4, 8, 32, 64, 256]
     assert [p["name"] for p in plan["phases"]] == [
         "clean-overlap", "fault-rejoin", "invalid-result-rejection",
