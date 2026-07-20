@@ -107,3 +107,19 @@ This admission decision conforms to *Resilient DiLoCo Compute Pool*, version
   central-broker evidence because no scale job was launched.
 
 This record is an admission artifact, not a passing scale artifact.
+
+## Retry audit
+
+The task was automatically retried at 2026-07-20 11:41 UTC while the newly
+created `prereq-integrate-and` task was still open.  The retry did not weaken
+the admission rule or submit a scale rung.  At 11:44 UTC, the scheduler showed
+job `5035341` (`native-ndp-g2-fault`) running on exactly two nodes.  A running
+prerequisite job is not an accepted two-node artifact: its five committed
+generations, overlap and cadence gates, fault/rejoin behavior, checkpoint
+restart, telemetry, source identity, commit, and push must all be verified
+before this task may submit four nodes.
+
+The prerequisite is recorded as a graph dependency of this ladder.  An
+accidental reciprocal edge visible at the start of the retry was reconciled
+by WG before mutation, leaving `prereq-integrate-and` able to run ahead of this
+task.  No 4-, 8-, 32-, or 64-node job was submitted during this retry audit.
