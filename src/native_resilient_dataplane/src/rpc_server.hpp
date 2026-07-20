@@ -14,8 +14,7 @@ namespace emender_ndp {
 struct LocalRpcServerConfig {
     std::string socket_path;
     std::array<std::uint8_t, 32> admission_token{};
-    // One controller plus the 64 bounded compact reduction sources.
-    std::uint32_t max_clients = 65;
+    std::uint32_t max_clients = 64;
 };
 
 class LocalRpcServer {

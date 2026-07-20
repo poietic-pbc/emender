@@ -36,11 +36,11 @@ from ndm.native_transport import (
 from ndm.resilient_pool_runtime import OwnerEndpoint
 
 
-# One compact source consumes one of the native service's bounded local-buffer
-# slots until freeze/finalize.  The v1 service admits 64 such buffers; this
-# lower deployment bound is valid beneath the protocol's 4,096-contribution
-# ceiling and covers both ordered 32- and 64-node rungs.
-MAX_PARALLEL_REDUCTION_SOURCES = 64
+# One compact source consumes one native RPC connection and one bounded local
+# buffer until freeze/finalize.  Reserve the service's 64th connection for the
+# controller.  This lower deployment bound is valid beneath the protocol's
+# 4,096-contribution ceiling and admits the ordered 32-node rung.
+MAX_PARALLEL_REDUCTION_SOURCES = 63
 
 
 @dataclass(frozen=True)
