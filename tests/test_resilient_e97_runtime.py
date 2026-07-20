@@ -570,6 +570,62 @@ def test_native_apply_lane_excludes_durable_recovery_checkpoint_io():
     assert timer_reset > wait, "the APPLY SLO must measure apply, not lane waiting"
 
 
+def test_native_trainer_generation_timer_covers_every_result_lifecycle_path():
+    """Regression for job 5037971's post-commit_ready NameError.
+
+    Generation entry is shared by fresh, handoff-resumed, local-recovery, and
+    supervisor-restarted trainers.  Result delay/rejection and successful
+    commit-ready admission all occur below this initialization.
+    """
+    trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args) -> int:"):]
+    loop = trainer.index("for generation in range(start_generation, target_generation):")
+    started = trainer.index("generation_started = time.monotonic()", loop)
+    stop = trainer.index('if stop["requested"]:', loop)
+    publish = trainer.index("native_plane.publish_flat_shards(", loop)
+    rejected = trainer.index("if not pipeline.publish_committed(", publish)
+    safe_boundary = trainer.index("pipeline.take_at_boundary(", rejected)
+    telemetry = trainer.index('"native_generation_pipeline"', safe_boundary)
+
+    assert loop < started < stop < publish < rejected < safe_boundary < telemetry
+    assert trainer[started:telemetry].count("generation_started =") == 1
+
+
+def test_native_pipeline_commit_ready_advances_without_foreground_blocking():
+    """Deterministic generation-0 commit/apply then generation-1 handoff path."""
+    from ndm.native_pipeline import (
+        CommittedResult, GenerationIdentity, NativeGenerationPipeline,
+        finite_result_verifier)
+
+    digest = "a" * 64
+    root = "b" * 64
+    pipe = NativeGenerationPipeline(run_id="production-path", fence=9,
+                                    incarnation="restart-a")
+
+    def identity(generation):
+        return GenerationIdentity(
+            "production-path", 9, generation, 1, "restart-a", digest, digest)
+
+    generation_0 = identity(0)
+    token_0 = pipe.handoff(pipe.reserve(), generation_0, "sealed-g0",
+                           weight=5_245_440, digest=digest)
+    pipe.release(token_0)
+    committed_0 = CommittedResult(
+        generation_0, {"status": "commit_ready"}, root, root, 5_245_440,
+        time.monotonic_ns())
+    assert pipe.publish_committed(committed_0, verify=finite_result_verifier)
+    assert pipe.take_at_boundary(
+        trainer_generation=0, fence=9, incarnation="restart-a",
+        base_digest=digest) is committed_0
+
+    started = time.monotonic()
+    token_1 = pipe.handoff(pipe.reserve(deadline=started + .05), identity(1),
+                           "sealed-g1", weight=1, digest=digest)
+    assert time.monotonic() - started < .05
+    assert token_1.identity.generation == 1
+    assert pipe.metrics.applied_results == 1
+    pipe.release(token_1)
+
+
 def test_manager_uses_exchange_commit_bound_for_all_recovery_receipts():
     """Eight durable checkpoints are an aggregate commit phase, not one apply."""
     source = ROLE.read_text()
