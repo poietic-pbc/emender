@@ -1,0 +1,109 @@
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 2543, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 2539, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 1793, in manager
+    else _native_manager(args))
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 1658, in _native_manager
+    final_operation, final_result, freeze = _native_sharded_owner_reduce(
+                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 1267, in _native_sharded_owner_reduce
+    with session.import_reduction_sources(
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/contextlib.py", line 137, in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/native_pool_runtime.py", line 417, in import_reduction_sources
+    raise RuntimeError("imported reduction sources are outside LOCAL_COLLECT")
+RuntimeError: imported reduction sources are outside LOCAL_COLLECT
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 2543, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 2539, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 1793, in manager
+    else _native_manager(args))
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 1548, in _native_manager
+    snapshot = (pool_client.open_generation(
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/resilient_pool_runtime.py", line 557, in open_generation
+    raise TimeoutError(f"READY snapshot deadline expired: {last}")
+TimeoutError: READY snapshot deadline expired: READY floor is not yet available
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 2543, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 2539, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 1793, in manager
+    else _native_manager(args))
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 1498, in _native_manager
+    start_generation, sync_evidence = _native_manager_resume_point(
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 373, in _native_manager_resume_point
+    raise ValueError("manager rejoin manifest identity mismatch")
+ValueError: manager rejoin manifest identity mismatch
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 2543, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 2539, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 1793, in manager
+    else _native_manager(args))
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 1498, in _native_manager
+    start_generation, sync_evidence = _native_manager_resume_point(
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 373, in _native_manager_resume_point
+    raise ValueError("manager rejoin manifest identity mismatch")
+ValueError: manager rejoin manifest identity mismatch
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 2543, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 2539, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 1793, in manager
+    else _native_manager(args))
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 1498, in _native_manager
+    start_generation, sync_evidence = _native_manager_resume_point(
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 373, in _native_manager_resume_point
+    raise ValueError("manager rejoin manifest identity mismatch")
+ValueError: manager rejoin manifest identity mismatch
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
