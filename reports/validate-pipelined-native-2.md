@@ -4,6 +4,16 @@ Date: 2026-07-20
 Task: `validate-pipelined-native-2`  
 Result: **blocked before submission by the fail-closed allocation-overlap guard**
 
+Retry note (agent-1346): the retry on the same date re-read both normative
+design authorities, verified that the authoritative checkout still resolved
+`HEAD`, `main`, and `origin/main` to `176ae0bc11db5bf1cad51008d6891d209867004c`,
+and performed a fresh scheduler preflight.  Job `5035539` was still RUNNING on
+32 nodes (`validate-native-pool-32n-late-ready-fixed`), so the no-overlap
+condition had not changed and no `sbatch` call was permissible.
+The exact canonical activation and approved clean-gate command were invoked
+again; the launcher exited 69 with `refusing to overlap another user
+allocation`, proving that the retry also stopped before `sbatch`.
+
 ## Concrete attempt
 
 The canonical Frontier environment was activated with:
@@ -74,6 +84,16 @@ generations plus checkpoint/failure behavior. The real K40 split-role path is
 `scripts/frontier/resilient_e97_true_2n.sbatch`; a retry must use a reviewed,
 fail-closed two-node submit artifact for that path rather than treating three
 synthetic data-plane generations as the requested live training proof.
+
+The merged real-model batch artifact has a second hard mismatch.  Its
+supervisor bounds each K40 stage at 420 seconds, while the batch script admits
+only 20- or 30-minute non-startup gates.  Five worst-case K40 windows alone are
+35 minutes, before foreground handoff/apply, integrity, redistribution, and
+checkpoint publication.  Submitting that payload with five generations would
+therefore not be a fail-closed way to establish the requested acceptance
+artifact.  A reviewed launcher must provide a bounded walltime sufficient for
+five K40 generations and must explicitly orchestrate and validate all requested
+fault/restart phases; those controls are not present in the named submitter.
 
 ## Architecture conformance
 
