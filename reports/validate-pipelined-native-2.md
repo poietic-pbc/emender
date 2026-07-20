@@ -4,6 +4,73 @@ Date: 2026-07-20
 Task: `validate-pipelined-native-2`  
 Result: **exact two-node clean phase submitted; multi-phase chain blocked by the debug-QoS submit limit**
 
+## Fifth concrete attempt: authoritative rebuild exposes G2 runtime-linkage blocker
+
+On reassignment after the serial launcher fix merged, authoritative `main` and
+`origin/main` resolved to
+`d25c78b4b414e1a41c5ec2764f6307f93f64b316`.  Because the shared main checkout
+contains retained untracked run evidence, the submission was prepared from a
+fresh local `main` clone at:
+
+```text
+/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-20260720T142140Z/source
+```
+
+The clone was clean, on branch `main`, and exactly matched `origin/main`.  The
+canonical `scripts/frontier/activate_emender_frontier.sh` activation selected
+the approved Python 3.12 environment and Frontier GNU 14.2/Cray MPICH 9.1
+module stack.  The reviewed exact acceptance renderer was invoked with
+`--submit`, `--state`, and `--native-stage-root`.  Its first canonical native
+build initially failed closed because inherited `FI_PROVIDER=cxi` forced five
+local socket CTests onto CXI.  The build was repeated without fabric override
+variables; all 10 native CTests then passed and the immutable bundle was
+installed at:
+
+```text
+/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-20260720T142140Z/native-stage/d25c78b4b414e1a41c5ec2764f6307f93f64b316/install/native-artifacts.json
+```
+
+Production attestation correctly rejected the retained job-5033120 G2 gate:
+
+```text
+source_commit: 85cf5a09... != d25c78b4...
+bundle_sha256: f2ac884e... != 7b4c7769...
+```
+
+No real-model job was admitted with mismatched evidence.  To concretely obtain
+the required exact-source precursor, the canonical G2 launcher was then run
+against the rebuilt bundle:
+
+```text
+NDP_BUILD_MANIFEST=.../d25c78b4.../install/native-artifacts.json \
+NDP_ARTIFACT_ROOT=.../g2-artifacts \
+bash scripts/frontier/submit_native_dataplane_2n_gate.sh clean
+```
+
+Slurm accepted job `5036108` on exactly two nodes.  It ran on
+`frontier[09074-09075]` and terminated `FAILED 1:0` after 80 seconds, before a
+G2 generation or full-layout gate was produced.  Both node tasks reported:
+
+```text
+ndp_frontier_2n_gate: error while loading shared libraries:
+libamdhip64.so.7: cannot open shared object file: No such file or directory
+```
+
+The scheduler record and `g2-artifacts/5036108/submission.json` are retained
+under the execution root above.  The exact K40 acceptance remains fail-closed:
+without an exact-source G2 gate, five live generations and the fault/restart
+phases cannot be admitted.  A follow-up must make the canonical native G2
+batch runtime expose the approved ROCm 7.1 library path (or install a complete
+self-contained runtime), rerun the two-node G2 clean gate, then resume the
+serial acceptance controller.  No 4-node-or-larger job was submitted.
+
+Conformance checked against *Resilient DiLoCo Compute Pool* version 1,
+requirements R01-R16, and native data plane requirements NDP01-NDP17.  This
+attempt demonstrates fail-closed source/bundle/G2 identity enforcement
+(R13/R16, NDP13/NDP17), bounded exactly-two-node scheduler mutation, and no
+acceptance claim from a partial or unattested run.  Runtime-only overlap,
+timing, rejection, loss/rejoin, and atomic restart criteria remain unproven.
+
 ## Fourth concrete attempt: reviewed exact acceptance launcher
 
 After the prerequisite launcher merged, authoritative `main` and
