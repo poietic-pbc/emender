@@ -166,6 +166,7 @@ def build_plan(repo: Path, commit: str, manifest: Path, gate: Path, run_root: Pa
     return {
         "schema": "emender-real-e97-exact-2n-acceptance-v1",
         "source_commit": commit, "node_count": 2, "k_local_steps": 40,
+        "authoritative_stage": stage,
         "walltime_per_phase": WALLTIME, "phases": phases,
         "forbidden_node_counts": [4, 8, 32, 64, 256],
         "conformance": {"authority": "RESILIENT_DILOCO_COMPUTE_POOL.md version 1",
