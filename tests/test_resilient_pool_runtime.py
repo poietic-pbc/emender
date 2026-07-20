@@ -250,6 +250,82 @@ def test_ready_token_floor_distributed_owner_loss_and_late_join(tmp_path):
                 pass
 
 
+def test_four_owner_round_robin_route_readiness_is_reciprocal(tmp_path):
+    from scripts.frontier import resilient_e97_role as role
+
+    slo = PoolStageSLO(1, 3, 1, 1, 1, 1, 1, 1)
+    control = PoolControlServer(
+        ("127.0.0.1", _port()),
+        PoolControlConfig("run-4", 3, q_min=4, t_min=4,
+                          ready_fraction=None, base_digest="base",
+                          policy_digest="policy", layout_digest="layout",
+                          code_digest="code", slo=slo),
+        evidence_root=tmp_path / "evidence")
+    threading.Thread(target=control.serve_forever, daemon=True).start()
+    clients = [PoolControlClient(control.server_address, timeout_s=1).bind(
+        "run-4", 3) for _ in range(4)]
+    endpoints = tuple(
+        OwnerEndpoint(f"node-{index}", f"inc-{index}", "127.0.0.1", 30000 + index)
+        for index in range(4)
+    )
+    try:
+        for index, endpoint in enumerate(endpoints):
+            assert clients[index].ready(
+                endpoint, generation=5, run_id="run-4", fence=3)["status"] == "READY"
+        for client in clients:
+            snapshot = client.open_generation(5, attempt=1,
+                                              deadline=time.monotonic() + 1)
+            assert len(snapshot["peers"]) == 4
+
+        closes = {}
+
+        def contribute(index):
+            closes[index] = clients[index].contribute_and_freeze(
+                generation=5, attempt=1, worker_id=f"node-{index}",
+                incarnation=f"inc-{index}", contribution_seq=5,
+                accepted_tokens=1, payload_digest=f"payload-{index}",
+                deadline=time.monotonic() + 2)
+
+        contributors = [threading.Thread(target=contribute, args=(index,))
+                        for index in range(4)]
+        for thread in contributors:
+            thread.start()
+        for thread in contributors:
+            thread.join()
+        assert {close["status"] for close in closes.values()} == {"commit_ready"}
+
+        schedules = {
+            index: role._native_remote_endpoints(
+                endpoints, local_worker_id=f"node-{index}",
+                minimum_contributions=4)
+            for index in range(4)
+        }
+        for round_index in range(3):
+            ready = {}
+
+            def report(index):
+                peer = schedules[index][round_index]
+                ready[index] = clients[index].await_peer_route_ready(
+                    generation=5, attempt=1, worker_id=f"node-{index}",
+                    incarnation=f"inc-{index}",
+                    peer_worker_id=peer.worker_id,
+                    peer_incarnation=peer.incarnation,
+                    deadline=time.monotonic() + 2)
+
+            reporters = [threading.Thread(target=report, args=(index,))
+                         for index in range(4)]
+            for thread in reporters:
+                thread.start()
+            for thread in reporters:
+                thread.join()
+            assert {result["status"] for result in ready.values()} == {"ready"}
+
+        assert len(control.route_readiness) == 6
+    finally:
+        control.shutdown()
+        control.server_close()
+
+
 def test_stale_duplicate_and_corrupt_contribution_receipts(tmp_path):
     slo = PoolStageSLO(1, 3, 1, 1, 1, 1, 1, 1)
     server = PoolControlServer(("127.0.0.1", _port()), PoolControlConfig(

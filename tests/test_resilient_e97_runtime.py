@@ -73,6 +73,54 @@ def test_native_manager_endpoint_lifetime_spans_all_configured_generations():
     assert "deadline_s=_native_manager_session_lifetime_s(args)" in manager
 
 
+def test_restarted_trainer_resolves_newer_authoritative_handoff(tmp_path):
+    from scripts.frontier import resilient_e97_role as role
+
+    handoff_root = tmp_path / "handoff"
+    handoff_root.mkdir()
+    configured = handoff_root / "generation-00000005-fence-00000002.json"
+    configured.write_text('{"generation":5}\n')
+    committed = handoff_root / "generation-00000006-fence-00000004.json"
+    committed.write_text('{"generation":6}\n')
+    digest = hashlib.sha256(committed.read_bytes()).hexdigest()
+    (handoff_root / "latest.json").write_text(json.dumps({
+        "generation": 6, "fence": 4, "manifest": str(committed),
+        "manifest_sha256": digest,
+    }))
+
+    class Store:
+        def assert_current(self, lease):
+            assert lease == "lease"
+
+        def read_publication(self, run_id, namespace, key):
+            assert (run_id, namespace, key) == ("run", "latest", "authoritative")
+            return {"generation": 6, "fence": 4,
+                    "manifest_sha256": digest}
+
+    args = SimpleNamespace(
+        resume_handoff=str(configured), run_id="run",
+        initial_generation=5, generations=3,
+    )
+    assert role._authoritative_trainer_resume_handoff(
+        tmp_path, args, (Store(), "lease")) == committed.resolve()
+
+    (handoff_root / "latest.json").write_text(json.dumps({
+        "generation": 6, "fence": 4, "manifest": str(committed),
+        "manifest_sha256": "0" * 64,
+    }))
+    with pytest.raises(ValueError, match="not authoritative"):
+        role._authoritative_trainer_resume_handoff(
+            tmp_path, args, (Store(), "lease"))
+
+
+def test_native_apply_lanes_receive_fresh_post_exchange_deadline():
+    source = ROLE.read_text()
+    trainer = source[source.index("def trainer(args)"):]
+    reset = "apply_lane_deadline = (\n                time.monotonic() + min(args.deadline_s, 180.0))"
+    assert reset in trainer
+    assert "deadline=apply_lane_deadline" in trainer
+
+
 def test_owner_endpoint_snapshot_filters_control_only_lease_metadata():
     from scripts.frontier import resilient_e97_role as role
 
@@ -93,11 +141,104 @@ def test_native_owner_credits_follow_reciprocal_pair_route_readiness():
                      source.index("def manager(args)")]
     install = manager.index("session.install_routes(endpoints)")
     reciprocal_ready = manager.index("pool_client.await_peer_route_ready(")
-    exchange = manager.index("_native_peer_exchange(")
+    exchange = manager.index("_native_peer_exchange,")
 
     assert install < reciprocal_ready < exchange
     assert '"native_route_readiness"' in manager
     assert "pairwise=True" in manager
+    assert 'thread_name_prefix="native-route-ready"' in manager
+    assert 'thread_name_prefix="native-peer-exchange"' in manager
+    assert "_NativePeerInbox(" in manager
+
+
+def test_native_peer_inbox_demultiplexes_with_fixed_queue_bound():
+    from scripts.frontier import resilient_e97_role as role
+
+    class FakeSession:
+        def __init__(self):
+            self.frames = [
+                ("node-2", 320), ("node-1", 640), ("node-3", 320),
+                ("node-2", 640), ("node-3", 640), ("node-1", 320),
+            ]
+            self.lock = threading.Lock()
+
+        def receive_owner_fd(self, _fd, *, capacity):
+            assert capacity == 960
+            with self.lock:
+                return self.frames.pop(0) if self.frames else None
+
+    session = FakeSession()
+    observed = {}
+    with role._NativePeerInbox(
+            session, peer_ids=("node-1", "node-2", "node-3"),
+            capacity=960, frames_per_peer=2,
+            deadline=time.monotonic() + 2, queue_slots=1) as inbox:
+        def consume(peer):
+            values = []
+            for _ in range(2):
+                frame_fd, frame_bytes = inbox.receive(
+                    peer, deadline=time.monotonic() + 2)
+                try:
+                    values.append(frame_bytes)
+                finally:
+                    os.close(frame_fd)
+            observed[peer] = values
+
+        consumers = [threading.Thread(target=consume, args=(peer,))
+                     for peer in ("node-1", "node-2", "node-3")]
+        for thread in consumers:
+            thread.start()
+        for thread in consumers:
+            thread.join()
+
+    assert session.frames == []
+    assert inbox.queued_frames == 0
+    assert 1 <= inbox.high_water_frames <= 3
+    assert observed == {
+        "node-1": [640, 320],
+        "node-2": [320, 640],
+        "node-3": [320, 640],
+    }
+
+
+def test_native_four_node_peer_schedule_is_bounded_and_deterministic():
+    from ndm.resilient_pool_runtime import OwnerEndpoint
+    from scripts.frontier import resilient_e97_role as role
+
+    endpoints = tuple(
+        OwnerEndpoint(f"node-{index}", f"inc-{index}", "host", 29571 + index)
+        for index in (3, 0, 2, 1)
+    )
+    peers = role._native_remote_endpoints(
+        endpoints, local_worker_id="node-2", minimum_contributions=4)
+
+    assert [peer.worker_id for peer in peers] == ["node-1", "node-0", "node-3"]
+    schedules = {
+        worker: [peer.worker_id for peer in role._native_remote_endpoints(
+            endpoints, local_worker_id=worker, minimum_contributions=4)]
+        for worker in ("node-0", "node-1", "node-2", "node-3")
+    }
+    all_pairs = set()
+    for round_index in range(3):
+        pairs = {
+            tuple(sorted((worker, schedule[round_index])))
+            for worker, schedule in schedules.items()
+        }
+        assert len(pairs) == 2
+        all_pairs.update(pairs)
+    assert len(all_pairs) == 6
+    with pytest.raises(ValueError, match="unique stable worker"):
+        role._native_remote_endpoints(
+            endpoints + (endpoints[0],), local_worker_id="node-2",
+            minimum_contributions=4)
+    with pytest.raises(ValueError, match="below explicit contribution floor"):
+        role._native_remote_endpoints(
+            endpoints[:3], local_worker_id="node-2", minimum_contributions=4)
+
+    manager = ROLE.read_text()[ROLE.read_text().index("def _native_manager(args)"):]
+    assert "native E97 v1 owner exchange currently requires exactly two nodes" not in manager
+    assert "for peer_endpoint in remote_endpoints" in manager
+    assert "remote_fds" in manager
 
 
 def test_terminal_native_follower_reuses_fenced_authoritative_checkpoint(tmp_path):
@@ -172,7 +313,7 @@ def test_native_trainer_apply_lanes_are_serialized_by_local_rank(tmp_path):
     lane = trainer.index("_wait_for_native_apply_lane(", visible)
     apply = trainer.index("state = apply_delta(", lane)
     assert visible < lane < apply
-    assert "deadline=exchange_deadline" in trainer[lane:apply]
+    assert "deadline=apply_lane_deadline" in trainer[lane:apply]
 
 
 def test_native_apply_lane_excludes_durable_recovery_checkpoint_io():

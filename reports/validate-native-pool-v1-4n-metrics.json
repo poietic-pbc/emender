@@ -1,0 +1,301 @@
+{
+  "schema": "emender-validate-native-pool-v1-4n-metrics-v1",
+  "status": "passed-live-acceptance",
+  "task_id": "validate-native-pool-v1-4n",
+  "captured_utc": "2026-07-20T00:12:00Z",
+  "authoritative_source_commit": "d57c7dbea7038e44afdf93ba9fab875474a7ac45",
+  "source_branch": "wg/agent-1324/validate-native-pool-v1-4n",
+  "source_tree_dirty_at_submission": false,
+  "scope": {
+    "validation_only": true,
+    "frontier_nodes": 4,
+    "maximum_nodes_submitted": 4,
+    "jobs_with_eight_or_more_nodes_submitted": 0,
+    "partition": "batch",
+    "qos": "debug",
+    "walltime": "00:30:00",
+    "backend": "native-cxi",
+    "provider": "cxi",
+    "endpoint_type": "FI_EP_RDM"
+  },
+  "authorities": {
+    "two_node_restart_task": "validate-native-pool-v1-2n-restart",
+    "two_node_restart_final_commit": "39de56fb",
+    "production_policy_task": "define-native-pool-v1-production-policy",
+    "production_policy_final_commit": "f9b44727",
+    "compute_pool_design": "docs/RESILIENT_DILOCO_COMPUTE_POOL.md",
+    "gap_matrix": "docs/RESILIENT_DILOCO_GAP_MATRIX.md",
+    "native_data_plane_design": "docs/NATIVE_RESILIENT_DILOCO_DATAPLANE.md",
+    "predecessors_authoritative": true
+  },
+  "normalized_payload": {
+    "path": "reports/frontier/validate-native-pool-v1-4n-normalized-payload.json",
+    "canonical_workload_sha256": "0493ba1ebc6f28c3244b6845bffb2de722639ee8e9df7d6ffa1918742e0691f4",
+    "run_id": "npv1f-progress-20260719T223459Z-f56e27a",
+    "payload_id": "f56e27a-20260719T223459Z-native-pool-v1-failures-progress-2n30m-k40",
+    "source_id": "step-1525000-sha256-1da27d2e09bc6c6f5ffc30e3e4476df1cebd807267431c8524de1a5b0dc5bca9",
+    "config_sha256": "afc2a65fd8c73499e74e21cb9531c978206c3a9c898e42d18cc58bb93eb9fe9c",
+    "tokenizer_sha256": "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069",
+    "native_bundle_sha256": "7b4c77696011cfc2b68fce541a34f9a1072ef767e13cce94ed2a4e2befc57d04",
+    "trainers_per_node": 8,
+    "local_steps": 40,
+    "scale_controls": {
+      "nodes": 4,
+      "q_min": 4,
+      "t_min": 3934080,
+      "owners": 4,
+      "real_trainers": 32
+    },
+    "allowed_differences_from_accepted_two_node_payload": [
+      "node_count",
+      "explicit_quorum_policy",
+      "run_identity",
+      "recorded_queue_and_walltime"
+    ],
+    "model_optimizer_numerical_layout_transport_and_k40_payload_unchanged": true
+  },
+  "accepted_jobs": [
+    {
+      "job_id": 5034117,
+      "purpose": "two generations plus bounded peer loss and fresh rejoin",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed_seconds": 839,
+      "nodes": 4,
+      "nodelist": "frontier[00218,00244,00249,00251]",
+      "fence": 7,
+      "generations_committed": [9, 10],
+      "source_commit": "d57c7dbea7038e44afdf93ba9fab875474a7ac45"
+    },
+    {
+      "job_id": 5034180,
+      "purpose": "same-code third generation and newer-fence checkpoint reload",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed_seconds": 448,
+      "nodes": 4,
+      "nodelist": "frontier[05242,05602,06512,06893]",
+      "fence": 9,
+      "generations_committed": [11],
+      "source_commit": "d57c7dbea7038e44afdf93ba9fab875474a7ac45"
+    }
+  ],
+  "atomic_generations": [
+    {
+      "generation": 9,
+      "fence": 7,
+      "step": 1525360,
+      "accepted_tokens": 68190720,
+      "token_increment": 10490880,
+      "manifest_sha256": "3c9f4735c703f24fe378225b3b158a5708a68407f919d98296d29346bf377ba1",
+      "checkpoint_sha256": "c619f9044bebf99384789209b30e833934359fbec74d1d648f8ff64a607d6983",
+      "source_commit": "d57c7dbea7038e44afdf93ba9fab875474a7ac45",
+      "manager_published_receipts": 4,
+      "unique_trainer_apply_receipts": 32,
+      "partial_commit": false,
+      "duplicate_commit": false,
+      "duplicate_application": false
+    },
+    {
+      "generation": 10,
+      "fence": 7,
+      "step": 1525400,
+      "accepted_tokens": 78681600,
+      "token_increment": 10490880,
+      "manifest_sha256": "dc53a24b2b723463e8a5fab0640285d10543db93852989461ae5de339ecb88f7",
+      "checkpoint_sha256": "89058e658b5a21ce1aa87fdbc93d83d38928cf4976f4a4c76f75d888ea81cb37",
+      "source_commit": "d57c7dbea7038e44afdf93ba9fab875474a7ac45",
+      "manager_published_receipts": 4,
+      "unique_trainer_apply_receipts": 32,
+      "partial_commit": false,
+      "duplicate_commit": false,
+      "duplicate_application": false
+    },
+    {
+      "generation": 11,
+      "fence": 9,
+      "step": 1525440,
+      "accepted_tokens": 89172480,
+      "token_increment": 10490880,
+      "manifest_sha256": "c1896f28f805ca9cf519f470d9e5f1b5132eae33d6decec232abac43b0f16a1e",
+      "checkpoint_sha256": "5084db3032037ab511aed09296c77f6d120eed5b7e15b758f9f4dcbf09bb158c",
+      "source_commit": "d57c7dbea7038e44afdf93ba9fab875474a7ac45",
+      "manager_published_receipts": 4,
+      "unique_trainer_apply_receipts": 32,
+      "partial_commit": false,
+      "duplicate_commit": false,
+      "duplicate_application": false
+    }
+  ],
+  "peer_loss_rejoin": {
+    "job_id": 5034117,
+    "injection_count": 1,
+    "target": "node-3-manager",
+    "injected_after_generation": 9,
+    "observed_stage": "published",
+    "old_manager_exit_code": 0,
+    "old_native_service_exit_code": 0,
+    "manager_restart": 1,
+    "native_service_restart": 1,
+    "replacement_ready_generation": 9,
+    "replacement_terminal_generation": 10,
+    "replacement_terminal_stage": "published",
+    "delayed_ready_seconds": 30,
+    "partial_commit": false,
+    "duplicate_commit": false,
+    "duplicate_application": false,
+    "unplanned_evictions": 0,
+    "status": "passed"
+  },
+  "fencing": {
+    "input_generation": 8,
+    "input_fence": 6,
+    "peer_loss_job_fence": 7,
+    "nonpublishing_socket_attempt_fence": 8,
+    "final_job_fence": 9,
+    "terminal_last_fence": 9,
+    "terminal_active_leases": 0,
+    "terminal_commit_rows": 11,
+    "terminal_checkpoint_rows": 11,
+    "terminal_authoritative_latest_rows": 1,
+    "terminal_generation": 11,
+    "sqlite_integrity": "ok",
+    "strictly_newer_restart_fence": true,
+    "fence_downgrade_observed": false
+  },
+  "checkpoint_reloads": [
+    {
+      "generation": 8,
+      "source_fence": 6,
+      "loaded_under_fence": 7,
+      "bytes": 7899873779,
+      "checkpoint_sha256": "664a5d3b4e592656edd5ce1f26ef69471fbb4634c50f08808e1245fcbbcdaa20",
+      "model_state_digest": "85314e43ac3e0a1ae7652048e50efa5a1eabdae186de9c777efe4848863e3e3b",
+      "status": "passed"
+    },
+    {
+      "generation": 10,
+      "source_fence": 7,
+      "loaded_under_fence": 9,
+      "bytes": 7899873907,
+      "checkpoint_sha256": "89058e658b5a21ce1aa87fdbc93d83d38928cf4976f4a4c76f75d888ea81cb37",
+      "model_state_digest": "2e3eef16a6fb2394b4538fbcde4fa8618d0543871882c7e1a3cba237ce656614",
+      "status": "passed"
+    },
+    {
+      "generation": 11,
+      "source_fence": 9,
+      "loaded_under_fence": null,
+      "bytes": 7899874035,
+      "checkpoint_sha256": "5084db3032037ab511aed09296c77f6d120eed5b7e15b758f9f4dcbf09bb158c",
+      "model_state_digest": "217258beececb4ad6c31e49acc63470807be90962accb9d46eb4a4eef635074c",
+      "status": "passed-post-job"
+    }
+  ],
+  "native_telemetry": {
+    "peer_loss_job": {
+      "job_id": 5034117,
+      "stage_samples": {
+        "native_local_reduction": {"count": 8, "minimum_seconds": 17.007626353995875, "maximum_seconds": 17.91078211198328, "hard_seconds": 180},
+        "native_route_readiness": {"count": 24, "minimum_seconds": 0.0006106619839556515, "maximum_seconds": 0.20940468000480905, "hard_seconds": 15},
+        "native_owner_exchange": {"count": 8, "minimum_seconds": 81.52035606198478, "maximum_seconds": 84.02875629998744, "hard_seconds": 90},
+        "native_redistribution": {"count": 8, "minimum_seconds": 19.92393352801446, "maximum_seconds": 20.70311825000681, "hard_seconds": 60},
+        "native_trainer_apply": {"count": 64, "minimum_seconds": 3.174242292996496, "maximum_seconds": 13.064937612973154, "hard_seconds": 60}
+      },
+      "minimum_terminal_throughput_bytes_per_second": 173715000,
+      "maximum_in_flight_high_water_bytes": 268436736,
+      "maximum_retained_high_water_bytes": 268436736,
+      "terminal_in_flight_bytes": 0,
+      "terminal_retained_bytes": 0,
+      "terminal_replay_bytes": 0,
+      "terminal_route_errors": 0
+    },
+    "final_job": {
+      "job_id": 5034180,
+      "stage_samples": {
+        "native_local_reduction": {"count": 4, "minimum_seconds": 17.368879, "maximum_seconds": 17.444736, "hard_seconds": 180},
+        "native_route_readiness": {"count": 12, "minimum_seconds": 0.003752, "maximum_seconds": 1.324764, "hard_seconds": 15},
+        "native_owner_exchange": {"count": 4, "minimum_seconds": 86.348915, "maximum_seconds": 87.459884, "hard_seconds": 90},
+        "native_redistribution": {"count": 4, "minimum_seconds": 19.528705, "maximum_seconds": 20.62009, "hard_seconds": 60},
+        "native_trainer_apply": {"count": 32, "minimum_seconds": 3.196499, "maximum_seconds": 11.183712, "hard_seconds": 60}
+      },
+      "minimum_terminal_throughput_bytes_per_second": 178912000,
+      "maximum_in_flight_high_water_bytes": 268436736,
+      "maximum_retained_high_water_bytes": 268436736,
+      "total_useful_tx_bytes": 132162491904,
+      "total_useful_rx_bytes": 132162491904,
+      "total_released_bytes": 264327518208,
+      "terminal_in_flight_bytes": 0,
+      "terminal_retained_bytes": 0,
+      "terminal_replay_bytes": 0,
+      "terminal_route_errors": 0
+    },
+    "all_stage_slos_passed": true,
+    "shutdown_cq_cancellations_only": true
+  },
+  "exact_source_g2": {
+    "job_id": 5034114,
+    "nodes": 2,
+    "provider": "cxi",
+    "exact_generations": 3,
+    "seconds": [25.690951818, 23.648376788, 23.423865534],
+    "median_seconds": 23.648376788,
+    "logical_bytes_per_second": 931441603,
+    "speedup_over_independent_python": 4.18470356,
+    "post_release_bytes": 0,
+    "route_errors": 0,
+    "cq_errors_during_operation": 0,
+    "status": "passed"
+  },
+  "prohibited_paths": {
+    "python_dense_socket_bytes": 0,
+    "trainer_spool_bytes": 0,
+    "trainer_lustre_dense_hot_path_bytes": 0,
+    "disk_replay_bytes": 0,
+    "global_mpi_collectives": 0,
+    "all_rank_barriers": 0,
+    "central_full_model_broker": false,
+    "eight_or_more_node_jobs_submitted": 0
+  },
+  "preflight": {
+    "selected_python_tests": {"passed": 102, "failed": 0, "elapsed_seconds": 184.14},
+    "native_ctest": {"passed": 10, "failed": 0},
+    "source_snapshot_clean": true,
+    "exact_source_snapshot": "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-d57c7dbe10"
+  },
+  "production_policy": {
+    "status": "defined-no-submission-authority",
+    "production_qualified_rungs": [],
+    "four_node_rung_validation_only": true,
+    "normal_qos_authorized": false,
+    "eight_node_validation_submission_authorized_by_this_task": false
+  },
+  "acceptance": {
+    "authoritative_predecessors_used": true,
+    "payload_preserved_with_only_recorded_scale_identity_queue_differences": true,
+    "at_least_three_same_code_atomic_generations": true,
+    "native_throughput_high_water_and_release_recorded": true,
+    "one_bounded_peer_loss_rejoin": true,
+    "no_partial_or_duplicate_commit": true,
+    "no_duplicate_trainer_application": true,
+    "checkpoint_reload_under_newer_fence": true,
+    "immutable_job_evidence_committed": true,
+    "no_eight_or_more_node_submission": true
+  },
+  "compute_pool_requirement_ids": ["R01", "R02", "R03", "R04", "R05", "R06", "R07", "R08", "R09", "R10", "R11", "R12", "R13", "R14", "R15", "R16"],
+  "native_requirement_ids": ["NDP01", "NDP02", "NDP03", "NDP04", "NDP05", "NDP06", "NDP07", "NDP08", "NDP09", "NDP10", "NDP11", "NDP12", "NDP13", "NDP14", "NDP15", "NDP16", "NDP17"],
+  "evidence": {
+    "report": "reports/validate-native-pool-v1-4n.md",
+    "frontier_report": "reports/frontier/validate-native-pool-v1-4n.md",
+    "peer_loss_job": "reports/frontier/evidence/job-5034117",
+    "final_job": "reports/frontier/evidence/job-5034180",
+    "fail_closed_attempt": "reports/frontier/evidence/job-5034173",
+    "attempt_accounting": "reports/frontier/evidence/validate-native-pool-v1-4n-attempts-sacct.txt",
+    "exact_source_g2": "reports/frontier/native-dataplane/5034114",
+    "normalized_payload": "reports/frontier/validate-native-pool-v1-4n-normalized-payload.json",
+    "submit_recipes_glob": "reports/frontier/validate-native-pool-v1-4n-*.sh",
+    "top_level_sha256sums": "reports/validate-native-pool-v1-4n-SHA256SUMS",
+    "checkpoint_dense_files_excluded_from_repository": true,
+    "checkpoint_files_retained_at_immutable_run_path": true
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "schema": "emender-native-pool-4n-noncompute-attempt-v1",
+  "status": "failed-closed-before-model-load",
+  "job_id": 5034173,
+  "nodes": 4,
+  "state": "FAILED",
+  "exit_code": "143:0",
+  "derived_exit_code": "1:0",
+  "elapsed_seconds": 61,
+  "fence_acquired": 8,
+  "source_generation": 10,
+  "source_fence": 7,
+  "roles_started": {"native_service": 1, "manager": 0, "trainer": 0},
+  "failure": "node-0 native local RPC socket path exceeded its bounded AF_UNIX path",
+  "durable_generation_before": 10,
+  "durable_generation_after": 10,
+  "active_leases_after": 0,
+  "partial_commit": false,
+  "duplicate_commit": false,
+  "checkpoint_created": false,
+  "model_loaded": false
+}

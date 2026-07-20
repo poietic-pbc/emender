@@ -1,0 +1,21 @@
+PRAGMA integrity_check: ok
+lease_epochs.last_fence: 7
+active leases after completion: 0
+publication primary key: (run_id, kind, name)
+commit rows: 10
+checkpoint rows: 10
+authoritative latest rows: 1
+
+Four-node scale-rung commit rows:
+generation=6 fence=4 accepted_tokens=36718080 manifest_sha256=94ac4c7c4155f985d6bfbc96596433f32ed512e4b1c3d38ada72c8b242bf0f2c
+generation=7 fence=5 accepted_tokens=47208960 manifest_sha256=9fb5bc22aa5afca24cabcf1bcabafac40d7e63edda80757d8015f0903e771bc7
+generation=8 fence=6 accepted_tokens=57699840 manifest_sha256=59c1bd051b1f9888283724a0c19d8c999e96f446361481450e0b0baf00293de9
+generation=9 fence=7 accepted_tokens=68190720 manifest_sha256=3c9f4735c703f24fe378225b3b158a5708a68407f919d98296d29346bf377ba1
+generation=10 fence=7 accepted_tokens=78681600 manifest_sha256=dc53a24b2b723463e8a5fab0640285d10543db93852989461ae5de339ecb88f7
+
+authoritative latest:
+generation=10 fence=7 accepted_tokens=78681600 manifest_sha256=dc53a24b2b723463e8a5fab0640285d10543db93852989461ae5de339ecb88f7
+
+There is exactly one commit row and one checkpoint row per generation, and
+exactly one mutable authoritative pointer. No partial or duplicate publication
+was present after the bounded node-3 manager/native-service loss and rejoin.

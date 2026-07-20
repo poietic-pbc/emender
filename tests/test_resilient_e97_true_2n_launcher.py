@@ -47,7 +47,8 @@ def test_true_launcher_is_exact_debug_twenty_minute_topology_without_sentinels()
     assert '"CUDA_VISIBLE_DEVICES="' in supervisor
     assert '"--overlap", "--no-kill", "--exact"' in supervisor
     assert '"ASYNC_LOCAL_STEPS=40"' in supervisor
-    assert "topology managers=2 real_trainers=16 trainers_per_node=8 local_steps=40 collective=none" in text
+    assert "topology managers=%s real_trainers=%s" in text
+    assert '"$((RESILIENT_E97_NODE_COUNT * 8))"' in text
     assert "resilient_e97_rank_lane.py" not in text
     assert "sentinel ranks" in text
 
@@ -82,6 +83,23 @@ def test_launcher_discovers_coordinator_and_wires_exact_restart_handoff():
     assert 'RESILIENT_E97_COORDINATOR_HOST:-${ALLOCATION_NODES[0]}' in text
     assert "--initial-generation $RESILIENT_E97_INITIAL_GENERATION" in text
     assert '--resume-handoff "$RESILIENT_E97_RESUME_HANDOFF"' in text
+
+
+def test_scale_launcher_and_supervisor_admit_only_ordered_two_or_four_node_rungs():
+    launcher = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
+    supervisor = (
+        ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py"
+    ).read_text()
+
+    assert "RESILIENT_E97_NODE_COUNT=${RESILIENT_E97_NODE_COUNT:-2}" in launcher
+    assert '[[ $RESILIENT_E97_NODE_COUNT == 2 || $RESILIENT_E97_NODE_COUNT == 4 ]]' in launcher
+    assert '[[ ${SLURM_JOB_NUM_NODES:?} == "$RESILIENT_E97_NODE_COUNT" ]]' in launcher
+    assert "--nodes=$RESILIENT_E97_NODE_COUNT --ntasks=$RESILIENT_E97_NODE_COUNT" in launcher
+    assert "--node-count $RESILIENT_E97_NODE_COUNT" in launcher
+    assert 'RESILIENT_E97_NODE_COUNT", "2"' in supervisor
+    assert "node_count not in {2, 4}" in supervisor
+    assert 'f"-N{node_count}", f"-n{node_count}"' in supervisor
+    assert "exactly two physical nodes" not in supervisor
 
 
 def test_launcher_omits_empty_resume_argument(tmp_path):
@@ -310,7 +328,7 @@ def test_launcher_stages_verified_p50k_cache_to_each_node_before_roles_start():
     assert "RESILIENT_E97_TIKTOKEN_CACHE_FILE:?" in script
     assert "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069" in script
     assert "ec7223a39ce59f226a68acc30dc1af2788490e15" in script
-    assert "--nodes=2 --ntasks=2 --ntasks-per-node=1" in script
+    assert "--nodes=$RESILIENT_E97_NODE_COUNT --ntasks=$RESILIENT_E97_NODE_COUNT" in script
     assert "export TIKTOKEN_CACHE_DIR=$RESILIENT_E97_NODE_TIKTOKEN_CACHE" in script
     assert script.index("export TIKTOKEN_CACHE_DIR=") < script.index("RESILIENT_E97_TRAINER_COMMAND=")
 
@@ -382,6 +400,7 @@ def test_node_local_native_service_uses_pinned_cxi_domain_without_hostname_bind(
     supervisor = AllocationSupervisor(
         tmp_path, [child], heartbeat_s=2, progress_s=3, max_restarts=0,
         launch_backend="node-local-child")
+    os.lseek(supervisor.native_token_fd, 0, os.SEEK_END)
     supervisor.start(child)
 
     argv, kwargs = launched[0]
@@ -390,6 +409,46 @@ def test_node_local_native_service_uses_pinned_cxi_domain_without_hostname_bind(
     assert argv[argv.index("--admission-token-fd") + 1] == str(
         supervisor.native_token_fd)
     assert supervisor.native_token_fd in kwargs["pass_fds"]
+    assert os.lseek(supervisor.native_token_fd, 0, os.SEEK_CUR) == 0
+
+
+def test_manager_rejoin_restarts_same_node_native_service(tmp_path, monkeypatch):
+    service = Child("native-service", 2, "node002", None, "service")
+    manager = Child("manager", 2, "node002", None, "manager")
+    supervisor = AllocationSupervisor(
+        tmp_path, [service, manager], heartbeat_s=2, progress_s=3,
+        max_restarts=2, startup_s=1, poll_s=.001,
+        launch_backend="node-local-child")
+    service.process = type(
+        "Process", (), {"poll": lambda self: None, "pid": 123})()
+    manager.restarts = 0
+    socket_path = tmp_path / "ndp.sock"
+    monkeypatch.setenv("EMENDER_NDP_SOCKET", str(socket_path))
+    monkeypatch.setattr(Path, "is_socket", lambda self: self == socket_path)
+    actions = []
+
+    def fake_stop(child, reason):
+        actions.append(("stop", child.identity, reason))
+
+    def fake_start(child):
+        actions.append(("start", child.identity, child.restarts))
+        child.process = type(
+            "Process", (), {"poll": lambda self: None, "pid": 124})()
+
+    monkeypatch.setattr(supervisor, "stop_child", fake_stop)
+    monkeypatch.setattr(supervisor, "start", fake_start)
+    assert supervisor._restart_native_service_for_manager(
+        [service], manager, "injected_generation_gate")
+    assert service.restarts == 1
+    assert actions == [
+        ("stop", "node-2-native-service",
+         "manager_rejoin:injected_generation_gate"),
+        ("start", "node-2-native-service", 1),
+    ]
+    event = json.loads(
+        (tmp_path / "supervision/events.jsonl").read_text().splitlines()[-1])
+    assert event["event"] == "native_service_rejoin"
+    assert event["manager_identity"] == manager.identity
 
 
 def test_node_local_supervisor_waits_for_manager_ready_before_cold_trainers(
@@ -1099,4 +1158,4 @@ def test_frontier_default_keeps_supervision_state_node_local():
     assert 'os.environ.get("RESILIENT_E97_LAUNCH_MODE", "node-local")' in text
     assert 'launch_backend="node-local-child"' in text
     assert 'sys.executable, __file__, "--node-local"' in text
-    assert '"-N2", "-n2"' in text
+    assert 'f"-N{node_count}", f"-n{node_count}"' in text

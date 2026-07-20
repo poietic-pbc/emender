@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Supervise the 2-manager/16-trainer Frontier allocation without a job-wide step.
+"""Supervise a bounded 2/4-node Frontier allocation without a job-wide step.
 
 Each child owns an independent ``srun --no-kill`` step.  A failed child is
 restarted without waiting for, signalling, or recreating healthy siblings.
@@ -297,6 +297,11 @@ class AllocationSupervisor:
         stderr = (log.with_suffix(".err")).open("ab", buffering=0)
         pass_fds = ((self.native_token_fd,) if self.launch_backend == "node-local-child"
                     and self.native_token_fd >= 0 else ())
+        if child.role == "native-service" and self.native_token_fd >= 0:
+            # The service consumes the sealed admission token with read(2).
+            # A replacement service inherits the same open-file description,
+            # including its advanced offset, so rewind before every spawn.
+            os.lseek(self.native_token_fd, 0, os.SEEK_SET)
         child.process = subprocess.Popen(
             argv, stdout=stdout, stderr=stderr, env=env,
             start_new_session=True, pass_fds=pass_fds)
@@ -473,6 +478,44 @@ class AllocationSupervisor:
         assert child.process is not None
         self.stop_children([child], reason)
 
+    def _restart_native_service_for_manager(
+            self, services: list[Child], manager: Child, reason: str) -> bool:
+        """Give a rejoining manager a fresh native service incarnation.
+
+        The persistent service owns the generation lifecycle, memfd result,
+        and CXI endpoint.  A manager that disappears after a completed
+        generation cannot safely adopt those process-local handles.  Restart
+        the one same-node service under the existing allocation admission
+        token before admitting the manager's new incarnation.
+        """
+        matches = [service for service in services
+                   if service.node_rank == manager.node_rank]
+        if not matches:
+            return True
+        if len(matches) != 1:
+            raise RuntimeError("manager must own exactly one native service")
+        service = matches[0]
+        self.stop_child(service, f"manager_rejoin:{reason}")
+        service.restarts += 1
+        socket_value = os.environ.get("EMENDER_NDP_SOCKET", "")
+        if not socket_value:
+            raise RuntimeError("native service rejoin requires its socket path")
+        socket_path = Path(socket_value)
+        socket_path.unlink(missing_ok=True)
+        self._event(
+            "native_service_rejoin", service,
+            manager_identity=manager.identity, manager_restart=manager.restarts + 1,
+            reason=reason, service_restart=service.restarts)
+        self.start(service)
+        deadline = time.monotonic() + self.startup_s
+        while time.monotonic() < deadline:
+            if service.process is None or service.process.poll() is not None:
+                return False
+            if socket_path.is_socket():
+                return True
+            time.sleep(self.poll_s)
+        return False
+
     def run(self) -> int:
         if self.launch_backend == "node-local-child":
             services = [child for child in self.children
@@ -569,6 +612,11 @@ class AllocationSupervisor:
                 if child.restarts >= self.max_restarts:
                     self._event("restart_exhausted", child, reason=reason)
                     return 1
+                if (child.role == "manager"
+                        and not self._restart_native_service_for_manager(
+                            services, child, reason)):
+                    self._event("native_service_rejoin_failed", child, reason=reason)
+                    return 1
                 child.restarts += 1
                 self.start(child)
             if len(completed) == len(monitored):
@@ -632,8 +680,11 @@ def _allocation_main() -> int:
     nodes = subprocess.check_output(
         ["scontrol", "show", "hostnames", os.environ["SLURM_JOB_NODELIST"]], text=True
     ).splitlines()
-    if len(nodes) != 2:
-        raise SystemExit("true resilient gate requires exactly two physical nodes")
+    node_count = int(os.environ.get("RESILIENT_E97_NODE_COUNT", "2"))
+    if node_count not in {2, 4}:
+        raise SystemExit("ordered native scale gate permits only 2 or 4 physical nodes")
+    if len(nodes) != node_count:
+        raise SystemExit("Slurm allocation differs from explicit resilient-pool capacity")
     manager = os.environ["RESILIENT_E97_MANAGER_COMMAND"]
     trainer = os.environ["RESILIENT_E97_TRAINER_COMMAND"]
     children: list[Child] = []
@@ -644,10 +695,11 @@ def _allocation_main() -> int:
     launch_mode = os.environ.get("RESILIENT_E97_LAUNCH_MODE", "node-local")
     if launch_mode == "node-local":
         # The batch allocation already owns all eight GPUs on each node.  A
-        # single two-node step inherits that device cgroup; asking Slurm for
+        # single bounded multi-node step inherits that device cgroup; asking Slurm for
         # ``--gpus-per-node`` again attempts a second GRES allocation and
         # leaves the step pending with "Requested nodes are busy".
-        argv = ["srun", "--overlap", "--no-kill", "--exact", "-N2", "-n2",
+        argv = ["srun", "--overlap", "--no-kill", "--exact",
+                f"-N{node_count}", f"-n{node_count}",
                 "--ntasks-per-node=1", "-c56",
                 sys.executable, __file__, "--node-local"]
         return subprocess.call(argv)

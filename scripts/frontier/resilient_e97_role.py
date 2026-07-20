@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import queue
 import signal
 import subprocess
 import sys
@@ -94,6 +95,43 @@ def _owner_endpoint_from_snapshot(peer: dict[str, object]) -> OwnerEndpoint:
     return OwnerEndpoint(**{
         name: peer[name] for name in endpoint_fields if name in peer
     })
+
+
+def _native_remote_endpoints(
+        endpoints: tuple[OwnerEndpoint, ...], *, local_worker_id: str,
+        minimum_contributions: int) -> tuple[OwnerEndpoint, ...]:
+    """Validate a frozen owner set and return its deterministic peer order.
+
+    Every manager derives the same round-robin tournament from the frozen
+    worker identities. Each round contains disjoint bounded point-to-point
+    pairs, so four peers finish in three transfer waves without a launched-rank
+    collective. The explicit contribution floor remains control-plane policy
+    and can therefore be lower than allocation capacity in later rungs.
+    """
+    ordered = tuple(sorted(endpoints, key=lambda item: item.worker_id))
+    workers = [item.worker_id for item in ordered]
+    if len(set(workers)) != len(workers):
+        raise ValueError("native frozen endpoints require a unique stable worker identity")
+    if local_worker_id not in workers:
+        raise ValueError("native frozen endpoints exclude the local worker")
+    if len(ordered) < minimum_contributions:
+        raise ValueError("native frozen endpoint set is below explicit contribution floor")
+    if len(ordered) % 2:
+        raise ValueError("native v1 round-robin owner schedule requires an even peer set")
+    by_worker = {item.worker_id: item for item in ordered}
+    rotation = list(workers)
+    peers: list[OwnerEndpoint] = []
+    for _ in range(len(rotation) - 1):
+        pairs = tuple(zip(rotation[:len(rotation) // 2],
+                          reversed(rotation[len(rotation) // 2:])))
+        peer = next((right if left == local_worker_id else left
+                     for left, right in pairs
+                     if local_worker_id in {left, right}), None)
+        if peer is None:
+            raise RuntimeError("native round-robin schedule omitted local worker")
+        peers.append(by_worker[peer])
+        rotation = [rotation[0], rotation[-1], *rotation[1:-1]]
+    return tuple(peers)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -303,6 +341,52 @@ def _native_manager_resume_point(
     if source_code_id != args.code_id:
         evidence["source_code_id"] = source_code_id
     return generation, evidence
+
+
+def _authoritative_trainer_resume_handoff(
+        run: Path, args,
+        fenced: tuple[SQLiteFencedControlStore, AllocationLease] | None,
+        ) -> Path:
+    """Resolve a trainer restart to the latest exact committed handoff.
+
+    The submit-time handoff remains the cold-start anchor.  Once this
+    allocation commits a generation, however, a supervised trainer restart
+    must reload that newer publication instead of replaying the anchor.  The
+    fenced publication and immutable latest pointer must agree exactly before
+    the newer handoff is accepted.
+    """
+    configured = Path(args.resume_handoff).resolve()
+    if fenced is None:
+        return configured
+    store, lease = fenced
+    store.assert_current(lease)
+    authoritative = store.read_publication(
+        args.run_id, "latest", "authoritative")
+    if authoritative is None:
+        raise ValueError("resume handoff has no authoritative fenced latest")
+    generation = int(authoritative.get("generation", -1))
+    initial = int(args.initial_generation)
+    target = initial + int(args.generations)
+    if generation < initial or generation > target:
+        raise ValueError("authoritative trainer generation is outside this run bound")
+    if generation == initial:
+        return configured
+
+    latest_path = run / "handoff" / "latest.json"
+    latest = json.loads(latest_path.read_text())
+    manifest = Path(str(latest.get("manifest", ""))).resolve()
+    try:
+        manifest.relative_to((run / "handoff").resolve())
+    except ValueError as error:
+        raise ValueError("trainer resume manifest escapes the handoff root") from error
+    manifest_sha256 = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    source_fence = int(latest.get("fence", -1))
+    if (int(latest.get("generation", -1)) != generation
+            or int(authoritative.get("fence", -1)) != source_fence
+            or latest.get("manifest_sha256") != manifest_sha256
+            or authoritative.get("manifest_sha256") != manifest_sha256):
+        raise ValueError("trainer resume latest pointer is not authoritative")
+    return manifest
 
 
 def _native_ready_delay(*, node: int, generation: int) -> float:
@@ -527,10 +611,136 @@ def _copy_frame_payload(frame_fd: int, destination_fd: int, *,
         destination_offset=payload_offset)
 
 
+class _NativePeerInbox:
+    """Demultiplex one bounded native RX queue across concurrent peers.
+
+    The compiled endpoint owns four fixed receive slots.  One Python receiver
+    drains those slots and hands descriptors to peer workers through queues
+    capped at the same four-frame credit bound.  Dense bytes stay in memfds;
+    Python handles only descriptors and frame metadata.
+    """
+
+    def __init__(self, session: NativeManagerSession, *, peer_ids: tuple[str, ...],
+                 capacity: int, frames_per_peer: int, deadline: float,
+                 queue_slots: int = 4):
+        if (not peer_ids or len(set(peer_ids)) != len(peer_ids)
+                or capacity <= 320 or frames_per_peer <= 0 or queue_slots <= 0):
+            raise ValueError("native peer inbox bounds are invalid")
+        self.session = session
+        self.capacity = int(capacity)
+        self.frames_per_peer = int(frames_per_peer)
+        self.deadline = float(deadline)
+        self.queues = {
+            peer: queue.Queue(maxsize=queue_slots) for peer in peer_ids
+        }
+        self.received = {peer: 0 for peer in peer_ids}
+        self._queue_lock = threading.Lock()
+        self.queued_frames = 0
+        self.high_water_frames = 0
+        self.stop = threading.Event()
+        self.done = threading.Event()
+        self.failure: BaseException | None = None
+        self.thread = threading.Thread(
+            target=self._run, name="native-owner-rx-demux", daemon=True)
+
+    def __enter__(self) -> "_NativePeerInbox":
+        self.thread.start()
+        return self
+
+    def _put(self, peer: str, item: tuple[int, int]) -> bool:
+        while not self.stop.is_set() and time.monotonic() < self.deadline:
+            try:
+                self.queues[peer].put(item, timeout=.01)
+                with self._queue_lock:
+                    self.queued_frames += 1
+                    self.high_water_frames = max(
+                        self.high_water_frames, self.queued_frames)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def _run(self) -> None:
+        expected = len(self.queues) * self.frames_per_peer
+        total = 0
+        try:
+            while (total < expected and not self.stop.is_set()
+                   and time.monotonic() < self.deadline):
+                frame_fd = create_memfd("emender-ndp-rx-demux", allow_sealing=True)
+                os.ftruncate(frame_fd, self.capacity)
+                keep = False
+                try:
+                    received = self.session.receive_owner_fd(
+                        frame_fd, capacity=self.capacity)
+                    if received is None:
+                        time.sleep(.001)
+                        continue
+                    peer, frame_bytes = received
+                    if peer not in self.queues:
+                        raise ValueError("native owner frame arrived from an unfenced peer")
+                    if self.received[peer] >= self.frames_per_peer:
+                        raise ValueError("native owner peer exceeded its fixed frame budget")
+                    keep = self._put(peer, (frame_fd, int(frame_bytes)))
+                    if not keep:
+                        raise TimeoutError("native peer inbox backpressure deadline expired")
+                    self.received[peer] += 1
+                    total += 1
+                finally:
+                    if not keep:
+                        os.close(frame_fd)
+            if not self.stop.is_set() and total != expected:
+                raise TimeoutError("native peer inbox receive deadline expired")
+        except BaseException as error:
+            self.failure = error
+        finally:
+            self.done.set()
+
+    def receive(self, peer_id: str, *, deadline: float) -> tuple[int, int]:
+        if peer_id not in self.queues:
+            raise KeyError(f"no native inbox for {peer_id}")
+        inbox = self.queues[peer_id]
+        while time.monotonic() < deadline:
+            if self.failure is not None:
+                raise self.failure
+            try:
+                item = inbox.get(
+                    timeout=min(.01, max(.001, deadline - time.monotonic())))
+                with self._queue_lock:
+                    self.queued_frames -= 1
+                return item
+            except queue.Empty:
+                if self.done.is_set() and inbox.empty():
+                    break
+        if self.failure is not None:
+            raise self.failure
+        raise TimeoutError(f"native peer inbox deadline expired for {peer_id}")
+
+    def close(self) -> None:
+        self.stop.set()
+        self.thread.join(2)
+        for inbox in self.queues.values():
+            while True:
+                try:
+                    frame_fd, _frame_bytes = inbox.get_nowait()
+                except queue.Empty:
+                    break
+                with self._queue_lock:
+                    self.queued_frames -= 1
+                os.close(frame_fd)
+        if self.thread.is_alive():
+            raise RuntimeError("native peer inbox did not stop within its bound")
+
+    def __exit__(self, exception_type, _exception, _traceback) -> None:
+        self.close()
+        if exception_type is None and self.failure is not None:
+            raise self.failure
+
+
 def _native_peer_exchange(session: NativeManagerSession, local_result, *, args,
                           node: int, peer_id: str, peer_incarnation: str,
                           peer_root: bytes, peer_weight: int,
-                          deadline: float) -> tuple[int, bytes, bytes]:
+                          deadline: float, inbox: _NativePeerInbox | None = None,
+                          local_digest_future=None) -> tuple[int, bytes, bytes]:
     """Symmetric two-node memfd/libfabric exchange with bounded chunk replay."""
     payload_max = args.bulk_chunk_bytes
     chunk_count = (local_result.length + payload_max - 1) // payload_max
@@ -604,13 +814,19 @@ def _native_peer_exchange(session: NativeManagerSession, local_result, *, args,
         while len(seen) != chunk_count:
             if time.monotonic() >= deadline:
                 raise TimeoutError("native owner credit deadline expired")
-            credit_fd = create_memfd("emender-ndp-rx-credit")
-            os.ftruncate(credit_fd, 320)
-            try:
+            if inbox is None:
+                credit_fd = create_memfd("emender-ndp-rx-credit")
+                os.ftruncate(credit_fd, 320)
                 received = session.receive_owner_fd(credit_fd, capacity=320)
                 if received is None:
-                    time.sleep(.001); continue
+                    os.close(credit_fd)
+                    time.sleep(.001)
+                    continue
                 worker, frame_bytes = received
+            else:
+                credit_fd, frame_bytes = inbox.receive(peer_id, deadline=deadline)
+                worker = peer_id
+            try:
                 if worker != peer_id or frame_bytes != 320:
                     raise ValueError("native owner credit arrived from wrong frozen peer")
                 value = decode_credit_frame_fd(
@@ -648,13 +864,19 @@ def _native_peer_exchange(session: NativeManagerSession, local_result, *, args,
         while len(seen) != chunk_count:
             if time.monotonic() >= deadline:
                 raise TimeoutError("native owner redistribution deadline expired")
-            frame_fd = create_memfd("emender-ndp-rx-frame", allow_sealing=True)
-            os.ftruncate(frame_fd, capacity)
-            try:
+            if inbox is None:
+                frame_fd = create_memfd("emender-ndp-rx-frame", allow_sealing=True)
+                os.ftruncate(frame_fd, capacity)
                 received = session.receive_owner_fd(frame_fd, capacity=capacity)
                 if received is None:
-                    time.sleep(.001); continue
+                    os.close(frame_fd)
+                    time.sleep(.001)
+                    continue
                 worker, frame_bytes = received
+            else:
+                frame_fd, frame_bytes = inbox.receive(peer_id, deadline=deadline)
+                worker = peer_id
+            try:
                 if worker != peer_id:
                     raise ValueError("native owner frame arrived from wrong frozen peer")
                 value = decode_owner_frame_fd(
@@ -697,7 +919,9 @@ def _native_peer_exchange(session: NativeManagerSession, local_result, *, args,
         with ThreadPoolExecutor(
                 max_workers=1, thread_name_prefix="native-local-result-digest"
                 ) as digest_executor:
-            local_digest = digest_executor.submit(local_result.sha256)
+            local_digest = (local_digest_future
+                            if local_digest_future is not None
+                            else digest_executor.submit(local_result.sha256))
             # Static byte credits are granted before each direction; they are
             # distinct from CQ completion and bound each exact frozen chunk.
             # The lower worker's data direction runs first, without a
@@ -776,8 +1000,8 @@ def _native_manager(args) -> int:
     control_server = control_thread = None
     pool_client = None
     if args.node_count > 1:
-        if args.node_count != 2:
-            raise ValueError("native E97 v1 owner exchange currently requires exactly two nodes")
+        if args.node_count not in {2, 4}:
+            raise ValueError("ordered native E97 scale runtime permits only 2 or 4 nodes")
         if node == 0:
             control_server = PoolControlServer(
                 ("0.0.0.0", args.coordinator_port), pool_config,
@@ -866,33 +1090,13 @@ def _native_manager(args) -> int:
                     raise TimeoutError(f"native global freeze failed: {close}")
                 frozen = tuple(close["frozen_identities"])
                 workers = sorted(str(item["worker_id"]) for item in frozen)
-                if len(workers) != 2 or f"node-{node}" not in workers:
-                    raise RuntimeError("native two-node accepted set is incomplete")
                 endpoints = tuple(_owner_endpoint_from_snapshot(peer)
                                   for peer in snapshot["peers"]
                                   if str(peer["worker_id"]) in workers)
-                peer_id = next(item for item in workers if item != f"node-{node}")
-                peer_endpoint = next(item for item in endpoints
-                                     if item.worker_id == peer_id)
-                # A bound fabric endpoint can receive before its current-fence
-                # AV route exists.  Reciprocally confirm this one peer pair
-                # after both sides install routes, so the first exact credit
-                # cannot be rejected in ROUTE_IDLE.  This metadata rendezvous
-                # is pairwise; it is not a fixed-world/all-rank collective.
-                route_ready_started = time.monotonic()
+                remote_endpoints = _native_remote_endpoints(
+                    endpoints, local_worker_id=f"node-{node}",
+                    minimum_contributions=args.global_quorum)
                 session.install_routes(endpoints)
-                route_ready = pool_client.await_peer_route_ready(
-                    generation=generation, attempt=1,
-                    worker_id=f"node-{node}", incarnation=incarnation,
-                    peer_worker_id=peer_id,
-                    peer_incarnation=peer_endpoint.incarnation,
-                    deadline=min(native_deadline, time.monotonic()
-                                 + pool_config.slo.freeze_s))
-                _stage_telemetry(
-                    bulk, identity, generation, "native_route_readiness",
-                    route_ready_started, pool_config.slo.freeze_s,
-                    peer_id=peer_id, participants=route_ready["workers"],
-                    pairwise=True, python_dense_socket_bytes=0)
                 weights = {str(key): int(value) for key, value in
                            dict(close["accepted_weights"]).items()}
                 roots = {str(key): bytes.fromhex(str(value)) for key, value in
@@ -902,17 +1106,109 @@ def _native_manager(args) -> int:
                           stage="owner_transport")
                 owner_transport_started = time.monotonic()
                 exchange_deadline = time.monotonic() + pool_config.slo.transport_s
-                remote_fd, local_source_sha256, remote_source_sha256 = \
-                    _native_peer_exchange(
-                    session, local_result, args=args, node=node, peer_id=peer_id,
-                    peer_incarnation=peer_endpoint.incarnation,
-                    peer_root=roots[peer_id], peer_weight=weights[peer_id],
-                    deadline=exchange_deadline)
+                remote_fds: dict[str, int] = {}
+                remote_source_sha256: dict[str, bytes] = {}
+                local_source_sha256: bytes | None = None
+                try:
+                    # Every reciprocal readiness call remains pairwise: no
+                    # call depends on an unrelated peer.  Launch the calls
+                    # together so all bounded point-to-point transfers can
+                    # use the four fixed provider slots inside the unchanged
+                    # 90-second owner-transport deadline.
+                    def await_route(peer_endpoint: OwnerEndpoint):
+                        peer_id = peer_endpoint.worker_id
+                        route_ready_started = time.monotonic()
+                        route_ready = pool_client.await_peer_route_ready(
+                            generation=generation, attempt=1,
+                            worker_id=f"node-{node}", incarnation=incarnation,
+                            peer_worker_id=peer_id,
+                            peer_incarnation=peer_endpoint.incarnation,
+                            deadline=min(exchange_deadline, time.monotonic()
+                                         + pool_config.slo.freeze_s))
+                        return peer_endpoint, route_ready, (
+                            time.monotonic() - route_ready_started)
+
+                    with ThreadPoolExecutor(
+                            max_workers=len(remote_endpoints),
+                            thread_name_prefix="native-route-ready") as route_executor:
+                        route_futures = [
+                            route_executor.submit(await_route, peer_endpoint)
+                            for peer_endpoint in remote_endpoints]
+                        routes = [future.result() for future in route_futures]
+                    for peer_endpoint, route_ready, route_ready_elapsed in routes:
+                        peer_id = peer_endpoint.worker_id
+                        _stage_telemetry(
+                            bulk, identity, generation, "native_route_readiness",
+                            time.monotonic() - route_ready_elapsed,
+                            pool_config.slo.freeze_s,
+                            peer_id=peer_id, participants=route_ready["workers"],
+                            pairwise=True, python_dense_socket_bytes=0)
+                    chunk_count = ((local_result.length + args.bulk_chunk_bytes - 1)
+                                   // args.bulk_chunk_bytes)
+                    with ThreadPoolExecutor(
+                            max_workers=1,
+                            thread_name_prefix="native-local-result-digest") as digest_executor:
+                        local_digest_future = digest_executor.submit(local_result.sha256)
+                        with _NativePeerInbox(
+                                session,
+                                peer_ids=tuple(item.worker_id
+                                               for item in remote_endpoints),
+                                capacity=args.bulk_chunk_bytes + 320,
+                                frames_per_peer=2 * chunk_count,
+                                deadline=exchange_deadline,
+                                queue_slots=4) as inbox:
+                            with ThreadPoolExecutor(
+                                    max_workers=len(remote_endpoints),
+                                    thread_name_prefix="native-peer-exchange") as exchange_executor:
+                                futures = {
+                                    peer_endpoint.worker_id: exchange_executor.submit(
+                                        _native_peer_exchange,
+                                        session, local_result, args=args, node=node,
+                                        peer_id=peer_endpoint.worker_id,
+                                        peer_incarnation=peer_endpoint.incarnation,
+                                        peer_root=roots[peer_endpoint.worker_id],
+                                        peer_weight=weights[peer_endpoint.worker_id],
+                                        deadline=exchange_deadline, inbox=inbox,
+                                        local_digest_future=local_digest_future)
+                                    for peer_endpoint in remote_endpoints
+                                }
+                                outcomes = {}
+                                failures = []
+                                for peer_id, future in futures.items():
+                                    try:
+                                        outcomes[peer_id] = future.result()
+                                    except BaseException as error:
+                                        failures.append(error)
+                                if failures:
+                                    for remote_fd, _local_sha, _remote_sha in outcomes.values():
+                                        os.close(remote_fd)
+                                    raise failures[0]
+                    for peer_id, outcome in outcomes.items():
+                        remote_fd, observed_local_sha256, observed_remote_sha256 = outcome
+                        remote_fds[peer_id] = remote_fd
+                        remote_source_sha256[peer_id] = observed_remote_sha256
+                        if (local_source_sha256 is not None
+                                and observed_local_sha256 != local_source_sha256):
+                            raise ValueError(
+                                "immutable local numerator digest changed between peers")
+                        local_source_sha256 = observed_local_sha256
+                except BaseException:
+                    for remote_fd in remote_fds.values():
+                        os.close(remote_fd)
+                    raise
+                if local_source_sha256 is None:
+                    raise RuntimeError("native frozen generation has no remote peer")
                 _stage_telemetry(
                     bulk, identity, generation, "native_owner_exchange",
                     owner_transport_started, pool_config.slo.transport_s,
-                    sent_bytes=local_result.length,
-                    received_bytes=local_result.length,
+                    sent_bytes=local_result.length * len(remote_endpoints),
+                    received_bytes=local_result.length * len(remote_endpoints),
+                    peer_count=len(remote_endpoints),
+                    concurrent_peer_limit=len(remote_endpoints),
+                    receive_queue_slots_per_peer=4,
+                    receive_queue_high_water_frames=inbox.high_water_frames,
+                    receive_queue_high_water_bytes=(
+                        inbox.high_water_frames * (args.bulk_chunk_bytes + 320)),
                     python_dense_socket_bytes=0)
                 local_fd = os.dup(local_result.fd)
                 session.abort(deadline_s=5)
@@ -927,13 +1223,14 @@ def _native_manager(args) -> int:
                           stage="redistribution")
                 redistribution_started = time.monotonic()
                 imported_sources = tuple(
-                    (local_fd if worker == f"node-{node}" else remote_fd,
+                    (local_fd if worker == f"node-{node}" else remote_fds[worker],
                      worker,
                      incarnation if worker == f"node-{node}"
-                     else peer_endpoint.incarnation,
+                     else next(item.incarnation for item in remote_endpoints
+                               if item.worker_id == worker),
                      sequence, weights[worker],
                      local_source_sha256 if worker == f"node-{node}"
-                     else remote_source_sha256)
+                     else remote_source_sha256[worker])
                     for sequence, worker in enumerate(workers))
                 try:
                     with session.import_reduction_sources(
@@ -943,7 +1240,9 @@ def _native_manager(args) -> int:
                         final_operation, final_result = session.finalize_redistribution(
                             deadline_s=args.deadline_s)
                 finally:
-                    os.close(local_fd); os.close(remote_fd)
+                    os.close(local_fd)
+                    for remote_fd in remote_fds.values():
+                        os.close(remote_fd)
                 _stage_telemetry(
                     bulk, identity, generation, "native_redistribution",
                     redistribution_started, pool_config.slo.apply_s,
@@ -1405,8 +1704,11 @@ def trainer(args) -> int:
         train_args, state, optimizer_state, step, migration = _load_real(args)
     async_chain = [args.seed] if args.seed else []
     accepted_token_clock = 0
+    resume_generation = int(args.initial_generation)
     if args.resume_handoff:
-        handoff = json.loads(Path(args.resume_handoff).read_text())
+        resume_handoff = _authoritative_trainer_resume_handoff(run, args, fenced)
+        handoff = json.loads(resume_handoff.read_text())
+        resume_generation = int(handoff["generation"])
         checkpoint_path = Path(handoff["checkpoint"])
         if __import__("hashlib").sha256(checkpoint_path.read_bytes()).hexdigest() != handoff["checkpoint_sha256"]:
             raise ValueError("resume checkpoint checksum mismatch")
@@ -1416,7 +1718,7 @@ def trainer(args) -> int:
         if (native and not _native_runtime_resume_compatible(
                 recorded_runtime, native_runtime)):
             raise ValueError("resume checkpoint native runtime digest mismatch")
-        if (int(resumed["generation"]) != args.initial_generation
+        if (int(resumed["generation"]) != resume_generation
                 or resumed["outer_update_state"] != handoff["outer_update_state"]):
             raise ValueError("resume generation/outer state does not match handoff")
         state = {name: value.clone() for name, value in resumed["model_state_dict"].items()}
@@ -1424,7 +1726,7 @@ def trainer(args) -> int:
         migration = {"status": "restored", "state": resumed["outer_update_state"],
                      "policy": "new-harness-handoff"}
         accepted_token_clock = int(handoff.get("accepted_tokens", 0))
-        async_chain = list(handoff.get("async_chain", ())) + [str(Path(args.resume_handoff).resolve())]
+        async_chain = list(handoff.get("async_chain", ())) + [str(resume_handoff)]
         if (handoff.get("run_id") != args.run_id or handoff.get("payload_id") != args.payload_id
                 or handoff.get("source_id") != args.source_id
                 or (native and handoff.get("code_id")
@@ -1434,9 +1736,9 @@ def trainer(args) -> int:
             raise ValueError("resume handoff membership/identity/fence mismatch")
         if fenced is not None:
             latest = fenced[0].read_publication(args.run_id, "latest", "authoritative")
-            if (latest is None or int(latest["generation"]) != args.initial_generation
+            if (latest is None or int(latest["generation"]) != resume_generation
                     or latest["manifest_sha256"] != __import__("hashlib").sha256(
-                        Path(args.resume_handoff).read_bytes()).hexdigest()):
+                        resume_handoff.read_bytes()).hexdigest()):
                 raise ValueError("resume handoff is not the authoritative fenced latest")
     recovery_manifest = control / "recovery" / f"{identity}.json"
     recovery = json.loads(recovery_manifest.read_text()) if recovery_manifest.exists() else None
@@ -1460,7 +1762,7 @@ def trainer(args) -> int:
         step, async_chain = int(saved["step"]), list(saved["async_chain"])
         accepted_token_clock = int(saved.get("accepted_tokens", 0))
     else:
-        start_generation = args.initial_generation
+        start_generation = resume_generation
     losses = []
     stop = {"requested": False}
     signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__("requested", True))
@@ -1656,10 +1958,12 @@ def trainer(args) -> int:
         heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
                   stage="peer_apply")
         if native:
+            apply_lane_deadline = (
+                time.monotonic() + min(args.deadline_s, 180.0))
             _wait_for_native_apply_lane(
                 control, args, generation=generation, rank=rank,
                 result_root=str(manifest["result_root"]),
-                deadline=exchange_deadline)
+                deadline=apply_lane_deadline)
         # Waiting for the preceding local reader is bounded by the complete
         # exchange window, but is not itself APPLY work.  Start the per-reader
         # APPLY SLO only after this trainer owns the shared-result read lane.

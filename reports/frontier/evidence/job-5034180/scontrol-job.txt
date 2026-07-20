@@ -1,0 +1,16 @@
+JobId=5034180 JobName=validate-native-pool-4n
+   Account=bif148 QOS=debug Partition=batch
+   JobState=COMPLETED Reason=None ExitCode=0:0 DerivedExitCode=0:0
+   RunTime=00:07:28 TimeLimit=00:30:00
+   SubmitTime=2026-07-19T23:54:51 StartTime=2026-07-19T23:55:30 EndTime=2026-07-20T00:02:58
+   NodeList=frontier[05242,05602,06512,06893]
+   BatchHost=frontier05242 NumNodes=4 NumCPUs=448 JOB_GRES=gpu:32
+   Network=job_vni
+   Command=/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-d57c7dbe10/scripts/frontier/resilient_e97_true_2n.sbatch
+   WorkDir=/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-d57c7dbe10
+   StdOut=/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-d57c7dbe10/logs/frontier/trainpy_async_quorum/validate-native-pool-4n-5034180.out
+   StdErr=/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-d57c7dbe10/logs/frontier/trainpy_async_quorum/validate-native-pool-4n-5034180.err
+
+Captured from `scontrol show job -dd 5034180` after terminal completion. The full
+immutable submission payload is retained verbatim in
+`reports/frontier/validate-native-pool-v1-4n-finalize2-20260720T035451Z.sh`.

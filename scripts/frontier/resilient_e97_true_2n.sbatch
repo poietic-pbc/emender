@@ -1,5 +1,7 @@
 #!/bin/bash
-# True resilient E97 two-node gate: 2 CPU managers + 16 real GPU trainers.
+# True resilient E97 bounded scale gate: one manager and eight real trainers
+# per node.  The accepted 2-node rung remains the default; this source admits
+# only the next ordered 4-node rung and deliberately rejects 8+ nodes.
 # Managers and trainers are separate srun steps; --overlap and --no-kill keep a
 # failed step from cancelling healthy siblings. There are no sentinel ranks;
 # every GPU step is a real trainer. The debug QoS bounds this G3 admission
@@ -22,6 +24,10 @@ APPROVED_EMENDER_CONDA_ENV=/lustre/orion/bif148/scratch/erikgarrison/emender/.en
 : "${EMENDER_CONDA_ENV:?immutable submit payload must export EMENDER_CONDA_ENV=$APPROVED_EMENDER_CONDA_ENV}"
 [[ $(realpath "$EMENDER_CONDA_ENV") == $(realpath "$APPROVED_EMENDER_CONDA_ENV") ]] || {
   echo "EMENDER_CONDA_ENV must resolve to $APPROVED_EMENDER_CONDA_ENV" >&2; exit 64;
+}
+RESILIENT_E97_NODE_COUNT=${RESILIENT_E97_NODE_COUNT:-2}
+[[ $RESILIENT_E97_NODE_COUNT == 2 || $RESILIENT_E97_NODE_COUNT == 4 ]] || {
+  echo "ordered native scale gate permits only 2 or 4 nodes" >&2; exit 64;
 }
 export EMENDER_CONDA_ENV
 source "$REPO/scripts/frontier/frontier_runtime_env.sh"
@@ -103,7 +109,9 @@ export EMENDER_NDP_MAX_SHARED_BYTES=${RESILIENT_E97_MAX_SHARED_BYTES:-6871947673
 export EMENDER_NDP_INTERMEDIATE_F64=1
 export NDP_SERVICE_COMMAND="$NDP_SERVICE_BINARY --provider cxi --require-provider cxi --production --serve --domain cxi0 --payload-max ${RESILIENT_E97_BULK_CHUNK_BYTES:-67108864} --resident-limit ${EMENDER_NDP_MAX_SHARED_BYTES} --tx-slots 4 --rx-slots 4"
 
-[[ ${SLURM_JOB_NUM_NODES:?} == 2 ]] || { echo "requires exactly two nodes" >&2; exit 64; }
+[[ ${SLURM_JOB_NUM_NODES:?} == "$RESILIENT_E97_NODE_COUNT" ]] || {
+  echo "Slurm node count differs from explicit resilient-pool capacity" >&2; exit 64;
+}
 [[ ${SLURM_JOB_QOS:?} == debug ]] || { echo "requires debug QoS" >&2; exit 64; }
 if [[ ${RESILIENT_E97_STARTUP_SMOKE:-0} == 1 ]]; then
   # Frontier does not consistently export SLURM_TIMELIMIT into batch jobs.
@@ -147,7 +155,18 @@ APPROVED_TRAIN_ARGS="$REPO/configs/frontier/e97_resilient_split_role_flat.json"
   exit 64
 }
 mapfile -t ALLOCATION_NODES < <(scontrol show hostnames "$SLURM_JOB_NODELIST")
-[[ ${#ALLOCATION_NODES[@]} == 2 ]] || { echo "allocation discovery did not resolve two nodes" >&2; exit 64; }
+[[ ${#ALLOCATION_NODES[@]} == "$RESILIENT_E97_NODE_COUNT" ]] || {
+  echo "allocation discovery differs from explicit resilient-pool capacity" >&2; exit 64;
+}
+RESILIENT_E97_GLOBAL_QUORUM=${RESILIENT_E97_GLOBAL_QUORUM:-2}
+RESILIENT_E97_GLOBAL_TOKEN_MIN=${RESILIENT_E97_GLOBAL_TOKEN_MIN:-3934080}
+((RESILIENT_E97_GLOBAL_QUORUM >= 2
+  && RESILIENT_E97_GLOBAL_QUORUM <= RESILIENT_E97_NODE_COUNT)) || {
+  echo "global quorum must be between two and the bounded node capacity" >&2; exit 64;
+}
+((RESILIENT_E97_GLOBAL_TOKEN_MIN > 0)) || {
+  echo "global token floor must be positive" >&2; exit 64;
+}
 RESILIENT_E97_COORDINATOR_HOST=${RESILIENT_E97_COORDINATOR_HOST:-${ALLOCATION_NODES[0]}}
 RESILIENT_E97_INITIAL_GENERATION=${RESILIENT_E97_INITIAL_GENERATION:-0}
 RESILIENT_E97_RESUME_HANDOFF=${RESILIENT_E97_RESUME_HANDOFF:-}
@@ -155,12 +174,12 @@ RESILIENT_E97_RESUME_HANDOFF=${RESILIENT_E97_RESUME_HANDOFF:-}
 # Stage the immutable, checksum-verified p50k input once per node before roles
 # start; all tokenizer reads after this point are node-local.
 RESILIENT_E97_NODE_TIKTOKEN_CACHE=${RESILIENT_E97_NODE_TIKTOKEN_CACHE:-/tmp/resilient-e97-tiktoken-$RESILIENT_E97_PAYLOAD_ID}
-srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task=1 --gpus-per-task=0 \
+srun --nodes=$RESILIENT_E97_NODE_COUNT --ntasks=$RESILIENT_E97_NODE_COUNT --ntasks-per-node=1 --cpus-per-task=1 --gpus-per-task=0 \
   bash -c 'set -euo pipefail; mkdir -p "$1"; cp "$2" "$1/ec7223a39ce59f226a68acc30dc1af2788490e15"; echo "$3  $1/ec7223a39ce59f226a68acc30dc1af2788490e15" | sha256sum --check --status' \
   bash "$RESILIENT_E97_NODE_TIKTOKEN_CACHE" "$RESILIENT_E97_TIKTOKEN_CACHE_FILE" "$RESILIENT_E97_TIKTOKEN_SHA256"
 export TIKTOKEN_CACHE_DIR=$RESILIENT_E97_NODE_TIKTOKEN_CACHE
 ROLE="$REPO/scripts/frontier/resilient_e97_role.py"
-COMMON="--run-dir $RUN_DIR --run-id $RESILIENT_E97_RUN_ID --generations ${RESILIENT_E97_GENERATIONS:-1} --initial-generation $RESILIENT_E97_INITIAL_GENERATION --local-steps 40 --node-count 2 --global-quorum ${RESILIENT_E97_GLOBAL_QUORUM:-2} --coordinator-host $RESILIENT_E97_COORDINATOR_HOST --coordinator-port ${RESILIENT_E97_COORDINATOR_PORT:-29571} --deadline-s ${RESILIENT_E97_GENERATION_DEADLINE_S:-600} --source-id $RESILIENT_E97_SOURCE_ID --payload-id $RESILIENT_E97_PAYLOAD_ID --code-id ${RESILIENT_E97_CODE_ID:-unknown} --coordinator-epoch ${RESILIENT_E97_COORDINATOR_EPOCH:-1} --bulk-root ${RESILIENT_E97_BULK_ROOT:-/tmp/resilient-e97} --max-spool-bytes ${RESILIENT_E97_MAX_SPOOL_BYTES:-68719476736} --bulk-chunk-bytes ${RESILIENT_E97_BULK_CHUNK_BYTES:-67108864} --local-spool-chunk-bytes ${RESILIENT_E97_LOCAL_SPOOL_CHUNK_BYTES:-67108864} --dataplane-backend $DILOCO_DATAPLANE --native-build-manifest $NDP_BUILD_MANIFEST --native-gate-json $NDP_FULL_LAYOUT_GATE_JSON"
+COMMON="--run-dir $RUN_DIR --run-id $RESILIENT_E97_RUN_ID --generations ${RESILIENT_E97_GENERATIONS:-1} --initial-generation $RESILIENT_E97_INITIAL_GENERATION --local-steps 40 --node-count $RESILIENT_E97_NODE_COUNT --global-quorum $RESILIENT_E97_GLOBAL_QUORUM --global-token-min $RESILIENT_E97_GLOBAL_TOKEN_MIN --coordinator-host $RESILIENT_E97_COORDINATOR_HOST --coordinator-port ${RESILIENT_E97_COORDINATOR_PORT:-29571} --deadline-s ${RESILIENT_E97_GENERATION_DEADLINE_S:-600} --source-id $RESILIENT_E97_SOURCE_ID --payload-id $RESILIENT_E97_PAYLOAD_ID --code-id ${RESILIENT_E97_CODE_ID:-unknown} --coordinator-epoch ${RESILIENT_E97_COORDINATOR_EPOCH:-1} --bulk-root ${RESILIENT_E97_BULK_ROOT:-/tmp/resilient-e97} --max-spool-bytes ${RESILIENT_E97_MAX_SPOOL_BYTES:-68719476736} --bulk-chunk-bytes ${RESILIENT_E97_BULK_CHUNK_BYTES:-67108864} --local-spool-chunk-bytes ${RESILIENT_E97_LOCAL_SPOOL_CHUNK_BYTES:-67108864} --dataplane-backend $DILOCO_DATAPLANE --native-build-manifest $NDP_BUILD_MANIFEST --native-gate-json $NDP_FULL_LAYOUT_GATE_JSON"
 export RESILIENT_E97_MANAGER_COMMAND="$TRAIN_PYTHON_BIN $ROLE manager $COMMON --local-quorum 8"
 RESUME_ARGS=()
 [[ -z $RESILIENT_E97_RESUME_HANDOFF ]] || RESUME_ARGS=(--resume-handoff "$RESILIENT_E97_RESUME_HANDOFF")
@@ -169,5 +188,6 @@ if ((${#RESUME_ARGS[@]})); then
   printf -v RESUME_COMMAND ' %q' "${RESUME_ARGS[@]}"
 fi
 export RESILIENT_E97_TRAINER_COMMAND="$TRAIN_PYTHON_BIN $ROLE trainer $COMMON --seed $RESILIENT_E97_SEED --train-args-json $RESILIENT_E97_TRAIN_ARGS_JSON --data $RESILIENT_E97_DATA --migration-policy initialize-from-approved-config$RESUME_COMMAND"
-printf 'topology managers=2 real_trainers=16 trainers_per_node=8 local_steps=40 collective=none\n'
+printf 'topology managers=%s real_trainers=%s trainers_per_node=8 local_steps=40 collective=none\n' \
+  "$RESILIENT_E97_NODE_COUNT" "$((RESILIENT_E97_NODE_COUNT * 8))"
 exec "$TRAIN_PYTHON_BIN" "$REPO/scripts/frontier/resilient_e97_allocation_supervisor.py"

@@ -1,0 +1,26 @@
+Independent verification environment:
+  executable: /lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/bin/python
+  load: torch.load(path, map_location="cpu", mmap=True, weights_only=True)
+  digest: streaming SHA-256, 16 MiB chunks
+
+generation=8 fence=6 bytes=7899873779
+expected_sha256=664a5d3b4e592656edd5ce1f26ef69471fbb4634c50f08808e1245fcbbcdaa20
+recomputed_sha256=664a5d3b4e592656edd5ce1f26ef69471fbb4634c50f08808e1245fcbbcdaa20
+loaded_generation=8 loaded_step=1525320 loaded_accepted_tokens=57699840
+model_tensor_count=146 model_state_digest=85314e43ac3e0a1ae7652048e50efa5a1eabdae186de9c777efe4848863e3e3b
+inner_optimizer_state_entries=145 inner_optimizer_param_groups=1
+outer_update_state={"algorithm":"weighted-mean","eta_outer":1.0}
+membership=["node-0","node-1","node-2","node-3"] reload_status=passed
+
+generation=10 fence=7 bytes=7899873907
+expected_sha256=89058e658b5a21ce1aa87fdbc93d83d38928cf4976f4a4c76f75d888ea81cb37
+recomputed_sha256=89058e658b5a21ce1aa87fdbc93d83d38928cf4976f4a4c76f75d888ea81cb37
+loaded_generation=10 loaded_step=1525400 loaded_accepted_tokens=78681600
+model_tensor_count=146 model_state_digest=2e3eef16a6fb2394b4538fbcde4fa8618d0543871882c7e1a3cba237ce656614
+inner_optimizer_state_entries=145 inner_optimizer_param_groups=1
+outer_update_state={"algorithm":"weighted-mean","eta_outer":1.0}
+membership=["node-0","node-1","node-2","node-3"] reload_status=passed
+
+Both recomputed digests equal the immutable handoff values. Generation 8/fence
+6 was independently reloaded before job 5034117 acquired fence 7; generation
+10/fence 7 was independently reloaded after the allocation completed.
