@@ -4,6 +4,42 @@ Date: 2026-07-20
 Task: `validate-pipelined-native-2`  
 Result: **exact two-node clean phase submitted; multi-phase chain blocked by the debug-QoS submit limit**
 
+## Seventh concrete attempt: refreshed G2 passed and real K40 queued
+
+Authoritative source `87365c5f846a950d7aaa01fec441982c79fc5e50` is merged
+and pushed. Its canonical native build passed CTest 10/10. Exact-source G2 job
+`5037939` completed `0:0` in 2:51 on exactly `frontier08123` and
+`frontier08127`. The retained gate is
+`/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-retry-stage-20260720T180500Z/g2-artifacts/5037939/full-layout-gate.json`.
+
+G2 exact-reference correctness/integrity passed with zero CQ/route errors and
+zero retries. It reported 44,322,599,424 useful TX and RX bytes, 44,323,138,304
+wire TX and RX bytes, and timed intervals 23.353392370, 22.742834860, and
+23.261179257 seconds. Median native logical throughput was 946,946,057.23 B/s
+versus retained Python 222,582,457.59 B/s (4.254x). The ratio is telemetry, not
+K40 admission; correctness/integrity admitted the real phase.
+
+Initial K40 job `5037915` failed closed before model load because the serial
+renderer used a caller-relative batch path and omitted the G2/runtime exports.
+The controller now uses an absolute authoritative launcher and `--chdir`, and
+binds source, seed, data, tokenizer, bundle, G2, and fence identities. The
+focused canonical suite passed 62/62; fix `d3ee23f2` was pushed and merged into
+the authoritative commit above.
+
+The corrected controller submitted clean-overlap job `5037971` for exactly two
+nodes and five K40 generations. It remains `PENDING (Priority)` at handoff, so
+no K40 overlap/cadence claim is made. Controller state and the immutable source
+inventory/acceptance manifest are under
+`/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-final-artifacts-20260720T181000Z/`.
+No overlapping, later-phase, or 4-node-or-larger job was submitted.
+
+Conformance: *Resilient DiLoCo Compute Pool* v1 R01-R16 and *Native resilient
+DiLoCo data plane* v1 NDP01-NDP17. G2 establishes exact fenced identities,
+bounded point-to-point CXI, exact weighted math, integrity/rejection, bounded
+release, and no MPI/all-rank or Python-dense fallback. The queued K40 phase
+retains `Q_min=2` and `T_min=3,934,080`; live timing, loss/rejoin,
+invalid-result rejection, and checkpoint failure/restart remain pending.
+
 ## Sixth concrete attempt: repaired linkage, controller fix, and live G2 performance blocker
 
 Authoritative `main` first resolved to `692d0292`.  From a clean clone, the
