@@ -32,10 +32,16 @@ clean-overlap=5035685
 ```
 
 Thus this attempt concretely submitted exactly two nodes.  It submitted no
-4-node-or-larger job.  At `2026-07-20T13:16:06Z`, job `5035685` remained
-RUNNING at 2:29 elapsed and was still in canonical environment/runtime
-startup; its stdout/stderr contained module activation only, so no completed
-K40 generation was yet available to claim.
+4-node-or-larger job.  Job `5035685` reached the approved Python/Torch/ROCm
+runtime identity check, then failed closed after 2:48 with exit `1:0`, before
+model admission or any K40 generation:
+
+```text
+ValueError: native build does not match the launched source commit
+```
+
+This is the expected enforcement of the source/bundle mismatch noted below;
+no runtime-only acceptance claim can be made from this job.
 
 The renderer immediately attempted to enqueue `fault-rejoin` behind the clean
 job.  Slurm rejected that second submission before assigning a job ID:
@@ -53,14 +59,16 @@ phases must then be submitted serially as the QoS slot becomes free.  The
 current all-at-once dependency-chain implementation cannot establish the full
 acceptance sequence on a QoS configured with a one-job-per-user submit limit.
 
-Two additional lineage issues remain fail-closed validation points for the
-live job: the installed native manifest records source `176ae0bc...` rather
-than the submitted source `08a26a0f...`, and the renderer's phase-specific
+Two additional lineage issues were exposed by the attempt: the installed
+native manifest records source `176ae0bc...` rather than the submitted source
+`08a26a0f...`, which caused job `5035685` to fail attestation, and the
+renderer's phase-specific
 `run_dir`/`restart_from` values are recorded in JSON but are not exported as
 `RUN_DIR`/`RESILIENT_E97_RESUME_HANDOFF` to each `sbatch` command.  Runtime
 attestation and restart evidence must not be claimed unless the job artifacts
-prove those bindings.  These observations do not justify cancelling or
-mutating the accepted job.
+prove those bindings.  A retry requires a canonical native rebuild from the
+authoritative commit and a serial phase submit/harvest path compatible with
+the one-job debug-QoS limit.
 
 Retry note (agent-1347): at `2026-07-20T12:50:12Z`, a third concrete attempt
 fetched `origin/main`, confirmed that the authoritative checkout's `HEAD`,
