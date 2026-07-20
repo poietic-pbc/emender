@@ -2,7 +2,60 @@
 
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
-Result: **exact two-node clean phase submitted; multi-phase chain blocked by the debug-QoS submit limit**
+Result: **existing exact two-node clean phase executed and failed before its first atomic commit; no replacement submitted**
+
+## Terminal harvest of job 5037971
+
+The existing job was monitored without a duplicate submission.  Slurm accounting
+records that `5037971` left the queue, started at `2026-07-20T14:15:45` on
+exactly two nodes (`frontier[02939-02940]`), and terminated `FAILED 1:0` at
+`14:24:26` after `00:08:41`.  The Python step ran for `00:07:53`; therefore the
+job did execute and does not satisfy the narrowly authorized condition for a
+replacement submission.
+
+The immutable execution root is
+`/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-final-artifacts-20260720T181000Z/`.
+Its retained pool-control record proves that generation 0 froze both READY node
+incarnations, met `Q_min=2`, and reached `commit_ready` with 5,245,440 accepted
+tokens.  Both node result records agree on result root
+`63b3fef285173902e0ee4b54f4e7cab61fac8860c7427d9ef2c3750b9c641477`.
+Trainer timestamps include generation-0 K40 work through step 39 on
+`node-0-trainer-0` (final timestamp `1784571845.7019308`, loss
+`2.5740623474121094`, 8,196 tokens for that step).  This is useful live K40
+evidence, but generation 0 never became an atomic committed generation and no
+generation 1 training exists.  It consequently cannot establish g/g+1 overlap,
+steady-state foreground idle or cadence, five atomic generations, or the later
+fault/rejection/restart phases.
+
+The decisive failure sequence is retained in the per-role stderr and
+supervision event stream:
+
+- trainer leaders raised `NameError: name 'generation_started' is not defined`
+  while calculating the post-generation deadline;
+- another trainer failed `ndp_buffer_seal_v1` with route failure `-12`, while
+  followers later expired waiting for checkpoint-leader apply release;
+- both managers then failed `ndp_control_v1(FREEZE)` with invalid lifecycle
+  state `-3`; supervisor restart attempts were exhausted.
+
+No later phase and no 4-node-or-larger job was submitted.  The existing G2 job
+`5037939` remains the reused exact-source correctness/integrity and throughput
+telemetry gate because submission source identity did not change.
+
+Key immutable SHA-256 identities are:
+
+- acceptance manifest: `adbe2c8108bdfe4a4b538cf0a562e06dfea1dcf97535e5ef5b79f0a380ea14a7`
+- runtime identity: `5c0fa27593fa1b173a57512eaee13e8dcb8bfadfb1c1b3783fae4457e02c6805`
+- native launch attestation: `a50087225c6b85be4b6d7304582605385ae63de448e3438e9d97eac76d3d4153`
+- generation-0 pool-control record: `832467298478d6669d0722268ab6e5cbc454925f029d0b46380e6458236d1440`
+
+Conformance was checked against *Resilient DiLoCo Compute Pool* v1 R01-R16
+and *Native resilient DiLoCo data plane* v1 NDP01-NDP17.  The live run confirms
+exactly-two-node capacity, leased READY membership, fenced generation identity,
+bounded execution, exact-source native launch attestation, contribution freeze,
+and fail-closed behavior without an all-rank wait.  It does not satisfy R07,
+R11, R12, R14, R16 or the corresponding NDP10/NDP13/NDP15/NDP16/NDP17 live
+acceptance evidence because no atomic commit, safe apply, later generation,
+failure phase, or fresh restart completed.
 
 ## Seventh concrete attempt: refreshed G2 passed and real K40 queued
 
