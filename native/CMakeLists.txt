@@ -13,7 +13,30 @@ include(GNUInstallDirs)
 # same.  Use an origin-relative build RPATH and one fixed installed RPATH so
 # differently shaped clean build directories produce identical package bytes.
 set(CMAKE_BUILD_RPATH_USE_ORIGIN ON)
-set(CMAKE_INSTALL_RPATH "\$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+set(NDP_ROCM_RUNTIME_DIR "" CACHE PATH
+  "Reviewed ROCm runtime library directory embedded in Frontier binaries")
+set(NDP_FABRIC_RUNTIME_DIR "" CACHE PATH
+  "Reviewed Frontier libfabric runtime directory embedded in Frontier binaries")
+set(_emender_native_install_rpath "\$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+if(NDP_ROCM_RUNTIME_DIR)
+  get_filename_component(NDP_ROCM_RUNTIME_DIR "${NDP_ROCM_RUNTIME_DIR}" REALPATH)
+  if(NOT IS_ABSOLUTE "${NDP_ROCM_RUNTIME_DIR}" OR
+     NOT EXISTS "${NDP_ROCM_RUNTIME_DIR}/libamdhip64.so.7")
+    message(FATAL_ERROR
+      "NDP_ROCM_RUNTIME_DIR must be an absolute directory containing libamdhip64.so.7")
+  endif()
+  list(APPEND _emender_native_install_rpath "${NDP_ROCM_RUNTIME_DIR}")
+endif()
+if(NDP_FABRIC_RUNTIME_DIR)
+  get_filename_component(NDP_FABRIC_RUNTIME_DIR "${NDP_FABRIC_RUNTIME_DIR}" REALPATH)
+  if(NOT IS_ABSOLUTE "${NDP_FABRIC_RUNTIME_DIR}" OR
+     NOT EXISTS "${NDP_FABRIC_RUNTIME_DIR}/libfabric.so.1")
+    message(FATAL_ERROR
+      "NDP_FABRIC_RUNTIME_DIR must be an absolute directory containing libfabric.so.1")
+  endif()
+  list(APPEND _emender_native_install_rpath "${NDP_FABRIC_RUNTIME_DIR}")
+endif()
+set(CMAKE_INSTALL_RPATH "${_emender_native_install_rpath}")
 
 # RelWithDebInfo is the retained Frontier package configuration.  Without
 # prefix maps, DWARF records CMAKE_BINARY_DIR and otherwise-identical clean

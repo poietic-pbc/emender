@@ -1,7 +1,31 @@
+import os
 from pathlib import Path
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_rocm_runtime_resolution_is_clean_environment_and_fail_closed(tmp_path):
+    rocm = tmp_path / "reviewed-rocm"
+    library = rocm / "lib" / "libamdhip64.so.7"
+    library.parent.mkdir(parents=True)
+    library.write_bytes(b"fixture")
+    helper = ROOT / "scripts/frontier/frontier_runtime_env.sh"
+    command = f'source "{helper}"; frontier_resolve_rocm_runtime_dir'
+
+    clean = subprocess.run(
+        ["env", "-i", f"PATH={os.environ['PATH']}", f"ROCM_PATH={rocm}",
+         "bash", "-c", command], text=True, capture_output=True, check=True,
+    )
+    assert clean.stdout.strip() == str(library.parent.resolve())
+
+    unresolved = subprocess.run(
+        ["env", "-i", f"PATH={os.environ['PATH']}", "bash", "-c", command],
+        text=True, capture_output=True,
+    )
+    assert unresolved.returncode == 66
+    assert "did not set an absolute ROCM_PATH/ROCM_HOME" in unresolved.stderr
 
 
 def test_canonical_frontier_environment_loads_modules_and_approved_python():
@@ -17,6 +41,8 @@ def test_canonical_frontier_environment_loads_modules_and_approved_python():
     assert "sys.version_info < (3, 12)" in activation
     assert "--git-common-dir" in activation
     assert "activate_emender_frontier.sh" in build
+    assert 'ROCM_RUNTIME_DIR=$(frontier_resolve_rocm_runtime_dir)' in build
+    assert '-DNDP_ROCM_RUNTIME_DIR="$ROCM_RUNTIME_DIR"' in build
     assert "python3.11" not in build
 
 
