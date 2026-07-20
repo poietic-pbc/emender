@@ -207,7 +207,7 @@ def test_node_local_topology_starts_persistent_service_before_model_free_manager
 def test_launcher_activates_approved_frontier_python_before_any_role():
     text = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
     activation = text.index("frontier_activate_emender_conda_env")
-    supervisor = text.index('exec "$TRAIN_PYTHON_BIN"')
+    supervisor = text.index('"$TRAIN_PYTHON_BIN" "$REPO/scripts/frontier/resilient_e97_allocation_supervisor.py"')
     assert 'source "$REPO/scripts/frontier/frontier_runtime_env.sh"' in text
     assert "frontier_load_default_modules" in text
     assert "frontier_assert_emender_conda_env" in text
