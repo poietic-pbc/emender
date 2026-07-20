@@ -478,6 +478,40 @@ def _wait_native_ready_delay(control: Path, args, *, node: int, generation: int,
     return not term_requested["value"]
 
 
+def _wait_native_late_ready_commit(run: Path, args, *, generation: int,
+                                   close: dict, fenced,
+                                   deadline: float) -> dict:
+    """Wait for the cohort that excluded this late peer to commit atomically.
+
+    A Q-min freeze can close after a sufficient READY subset contributes.  A
+    launched-but-late manager is then deliberately absent from the immutable
+    generation snapshot.  Retrying that already-closed generation immediately
+    only burns the node-local restart bound and can make an elastic cohort look
+    like a fixed Slurm world.  Keep the old local service alive until the
+    authoritative publication exists; the manager then exits through the
+    normal supervised rejoin path, which replaces the service incarnation and
+    reloads the newer checkpoint.
+    """
+    if close.get("status") != "rejected_not_ready":
+        raise TimeoutError(f"native global freeze failed: {close}")
+    latest = wait_metadata(
+        run / "handoff" / "latest.json", deadline=deadline,
+        expected={"generation": generation + 1,
+                  "fence": _fence_epoch(args)})
+    if fenced is not None:
+        store, lease = fenced
+        store.assert_current(lease)
+        authoritative = store.read_publication(
+            args.run_id, "latest", "authoritative")
+        if (authoritative is None
+                or int(authoritative.get("generation", -1)) != generation + 1
+                or int(authoritative.get("fence", -1)) != _fence_epoch(args)
+                or authoritative.get("manifest_sha256")
+                != latest.get("manifest_sha256")):
+            raise ValueError("late READY catch-up is not authoritative")
+    return latest
+
+
 def _terminal_native_checkpoint(run: Path, args, *, completed: int,
                                 deadline: float) -> Path:
     """Resolve the already-fenced final checkpoint for a disposable follower.
@@ -1605,7 +1639,16 @@ def _native_manager(args) -> int:
                     payload_digest=local_result.result_root.hex(),
                     deadline=time.monotonic() + pool_config.slo.freeze_s)
                 if close.get("status") != "commit_ready":
-                    raise TimeoutError(f"native global freeze failed: {close}")
+                    heartbeat(bulk, identity, generation=generation,
+                              step=generation * args.local_steps, loss=None,
+                              stage="late_ready_catchup")
+                    latest = _wait_native_late_ready_commit(
+                        run, args, generation=generation, close=close,
+                        fenced=fenced, deadline=native_deadline)
+                    raise RuntimeError(
+                        "late READY peer excluded from frozen generation; "
+                        f"atomic generation {latest['generation']} is ready "
+                        "for supervised node-local rejoin")
                 frozen = tuple(close["frozen_identities"])
                 workers = sorted(str(item["worker_id"]) for item in frozen)
                 endpoints = tuple(_owner_endpoint_from_snapshot(peer)

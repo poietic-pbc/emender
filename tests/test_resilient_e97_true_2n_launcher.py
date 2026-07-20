@@ -905,6 +905,40 @@ def test_rejoining_manager_delays_ready_before_advertising(tmp_path, monkeypatch
     assert manager.rfind("_wait_native_ready_delay(", 0, initial_ready) >= 0
 
 
+def test_late_ready_manager_waits_for_atomic_commit_before_local_rejoin(tmp_path):
+    """A peer excluded by Q_min must not race through restart exhaustion."""
+    from types import SimpleNamespace
+    from scripts.frontier import resilient_e97_role as role
+
+    handoff = tmp_path / "handoff"
+    handoff.mkdir()
+    role.atomic_metadata(handoff / "latest.json", {
+        "generation": 6,
+        "fence": 12,
+        "manifest": str(handoff / "generation-00000006.json"),
+        "manifest_sha256": "a" * 64,
+    })
+    args = SimpleNamespace(coordinator_epoch=12)
+    observed = role._wait_native_late_ready_commit(
+        tmp_path, args, generation=5,
+        close={"status": "rejected_not_ready"}, fenced=None,
+        deadline=time.monotonic() + 1.0)
+    assert observed["generation"] == 6
+
+    with pytest.raises(TimeoutError, match="native global freeze failed"):
+        role._wait_native_late_ready_commit(
+            tmp_path, args, generation=5,
+            close={"status": "rejected_corrupt"}, fenced=None,
+            deadline=time.monotonic() + 1.0)
+
+    source = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    manager = source[source.index("def _native_manager(args)"):]
+    rejected = manager.index('close.get("status") != "commit_ready"')
+    catchup = manager.index("_wait_native_late_ready_commit(", rejected)
+    owner_transport = manager.index('stage="owner_transport"', rejected)
+    assert rejected < catchup < owner_transport
+
+
 def test_child_without_first_heartbeat_hits_startup_deadline(tmp_path):
     child = Child("manager", 0, "node000", None, "python manager.py")
     supervisor = AllocationSupervisor(tmp_path, [child], heartbeat_s=60,
