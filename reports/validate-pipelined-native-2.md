@@ -2,7 +2,53 @@
 
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
-Result: **existing exact two-node clean phase executed and failed before its first atomic commit; no replacement submitted**
+Result: **authorized lifecycle-fix replacement submitted once as job 5039258; terminal validation pending**
+
+## Lifecycle-fix replacement (active)
+
+Authoritative `main` and `origin/main` resolve to
+`3cfed722beb086d015cff254f473af2a63eaa492`, which contains the reviewed
+generation-start lifecycle repair.  A clean authoritative clone was built in
+the canonical Frontier environment.  The native build passed CTest 10/10 and
+recorded bundle digest
+`59fa632b98999e522be6fee3cda98d095a0fc4c85b0b3a95286b0eb61c19fa6d`.
+
+Because this source differs from the historical job-5037939 source, G2 was
+refreshed.  Job `5039166` failed in batch preflight before launching the native
+payload because the clean clone did not contain the default clone-local Python
+environment; it produced no gate.  After explicitly binding the canonical
+approved Python 3.12 interpreter and confirming the user queue was empty, G2
+retry `5039234` completed `0:0` in 3:01 on exactly
+`frontier[05865,05870]`.  Its exact-source correctness/integrity attestation
+passed.  The gate is retained at
+`/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-lifecycle-fix-20260720T202500Z/g2-artifacts/5039234/full-layout-gate.json`
+with SHA-256
+`d6300536df887cf71f4393214707d9ffab68c89527ce31e981d043d5e304d449`.
+G2 telemetry reports 22.792855478, 22.901945645, and 23.460527776 seconds,
+961,799,592.29 logical B/s, and 4.321x the retained Python baseline; this ratio
+is telemetry rather than K40 admission.
+
+After job 5039234 cleared and a second empty-queue check, the exact serial
+launcher rebuilt and re-attested the same source/bundle (CTest 10/10) and
+submitted the single authorized replacement K40 clean-overlap job `5039258`.
+The immutable controller root is
+`/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-lifecycle-fix-20260720T202500Z/`.
+Its acceptance manifest requires exactly two nodes, five K40 generations,
+background-g/compute-(g+1) overlap, foreground idle below 10%, and cadence no
+worse than 1.25x raw K40 compute when background work fits.  At this report
+checkpoint the job is `PENDING (Priority)` with an estimated start of
+`2026-07-21T02:38:00-04:00`.  No duplicate K40 job and no 4-node-or-larger job
+has been submitted.  The task remains active for terminal monitoring and live
+artifact harvest.
+
+Conformance for this replacement is checked against *Resilient DiLoCo Compute
+Pool* v1 R01-R16 and *Native resilient DiLoCo data plane* v1 NDP01-NDP17.
+Exact-source identity, G2 correctness/integrity, two-node admission,
+point-to-point CXI selection, and no-overlap/no-scale guards currently pass.
+Atomic five-generation progress, overlap/cadence timing, bounded latest-only
+queue behavior, fault/rejoin, invalid-result rejection, failed-publication
+retention, and fresh restart remain pending live evidence from the serial
+acceptance phases.
 
 ## Terminal harvest of job 5037971
 
