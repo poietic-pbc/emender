@@ -26,6 +26,42 @@ frontier_load_default_modules() {
   export LD_LIBRARY_PATH="${CRAY_LD_LIBRARY_PATH:-}:${LD_LIBRARY_PATH:-}"
 }
 
+frontier_resolve_rocm_runtime_dir() {
+  local root="${ROCM_PATH:-${ROCM_HOME:-}}"
+  local candidate
+  [[ -n "$root" && "$root" == /* ]] || {
+    echo "the reviewed ROCm module did not set an absolute ROCM_PATH/ROCM_HOME" >&2
+    return 66
+  }
+  root=$(readlink -f "$root") || return
+  for candidate in "$root/lib" "$root/lib64"; do
+    if [[ -r "$candidate/libamdhip64.so.7" ]]; then
+      readlink -f "$candidate"
+      return 0
+    fi
+  done
+  echo "libamdhip64.so.7 is absent from reviewed ROCm root $root" >&2
+  return 66
+}
+
+frontier_resolve_libfabric_runtime_dir() {
+  local directory
+  directory=$(pkg-config --variable=libdir libfabric 2>/dev/null) || {
+    echo "reviewed Frontier modules did not expose libfabric through pkg-config" >&2
+    return 66
+  }
+  [[ "$directory" == /* ]] || {
+    echo "libfabric pkg-config returned a non-absolute library directory" >&2
+    return 66
+  }
+  directory=$(readlink -f "$directory") || return
+  [[ -r "$directory/libfabric.so.1" ]] || {
+    echo "libfabric.so.1 is absent from reviewed module directory $directory" >&2
+    return 66
+  }
+  printf '%s\n' "$directory"
+}
+
 frontier_assert_emender_conda_env() {
   local expected_prefix="${EMENDER_CONDA_ENV:-}"
   local active_prefix

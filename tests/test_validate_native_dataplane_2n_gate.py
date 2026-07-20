@@ -3,6 +3,9 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +17,7 @@ RUNNER = ROOT / "native/dataplane/src/frontier_2n_gate.cpp"
 PROTOCOL = ROOT / "native/dataplane/src/protocol.cpp"
 OWNER = ROOT / "native/dataplane/src/owner.cpp"
 JOB_5031115 = ROOT / "reports/frontier/native-dataplane/5031115"
+NATIVE_MANIFEST = ROOT / "build/native-resilient-dataplane/native-artifacts.json"
 
 
 def _module():
@@ -92,6 +96,17 @@ def test_frontier_payload_is_exactly_two_node_debug_cxi_and_fault_is_gated():
     assert "FI_PROVIDER=cxi" in submit
     assert "--nodes=2 --ntasks=2 --ntasks-per-node=1" in payload
     assert "NDP_CLEAN_GATE_JSON" in submit
+    assert 'source "$REPO/scripts/frontier/frontier_runtime_env.sh"' in payload
+    assert "frontier_load_default_modules" in payload
+    assert "unset LD_LIBRARY_PATH" in payload
+    assert "MODULE_RUNTIME_PATH=${LD_LIBRARY_PATH:-}" in payload
+    assert "frontier_resolve_rocm_runtime_dir" in payload
+    assert "frontier_resolve_libfabric_runtime_dir" in payload
+    assert 'export LD_LIBRARY_PATH="$INSTALL_DIR/lib:$INSTALL_DIR/lib64:$ROCM_RUNTIME_DIR' in payload
+    assert "ldd \"$GATE_BINARY\"" in payload
+    assert "native gate has unresolved runtime libraries" in payload
+    assert "libamdhip64.so.7 did not resolve from the reviewed ROCm module" in payload
+    assert "resolved_library=%s sha256=%s" in payload
     assert "fault payload ID is unchanged" in submit
     assert (
         '"$NDP_PYTHON_BIN" "$REPO/scripts/frontier/attest_native_dataplane.py" verify'
@@ -99,6 +114,35 @@ def test_frontier_payload_is_exactly_two_node_debug_cxi_and_fault_is_gated():
     )
     forbidden = ("mpirun", "MPI_Allreduce", "torchrun", "gpus-per-node")
     assert all(term not in payload for term in forbidden)
+
+
+def test_installed_gate_resolves_rocm_from_clean_loader_environment():
+    if not NATIVE_MANIFEST.is_file():
+        pytest.skip("canonical native bundle has not been built")
+    gate = NATIVE_MANIFEST.parent / "bin/ndp_frontier_2n_gate"
+    dynamic = subprocess.run(
+        ["readelf", "-d", gate], check=True, text=True, capture_output=True
+    ).stdout
+    assert "RUNPATH" in dynamic or "RPATH" in dynamic
+    helper = ROOT / "scripts/frontier/frontier_runtime_env.sh"
+    loader_command = f'''set -euo pipefail
+source "{helper}"
+unset LD_LIBRARY_PATH
+frontier_load_default_modules >/dev/null
+rocm_runtime=$(frontier_resolve_rocm_runtime_dir)
+fabric_runtime=$(frontier_resolve_libfabric_runtime_dir)
+loader_path="$rocm_runtime:$fabric_runtime${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"
+env -i PATH=/usr/bin:/bin LD_LIBRARY_PATH="$loader_path" ldd "{gate}"
+'''
+    loader = subprocess.run(
+        ["bash", "-c", loader_command],
+        check=True, text=True, capture_output=True,
+    ).stdout
+    assert "libamdhip64.so.7" in loader
+    assert "not found" not in loader
+    hip_line = next(line for line in loader.splitlines() if "libamdhip64.so.7" in line)
+    hip_path = Path(hip_line.split("=>", 1)[1].split("(", 1)[0].strip()).resolve()
+    assert str(hip_path).startswith(("/opt/rocm-", "/opt/rocm/"))
 
 
 def test_native_cxi_setup_uses_provider_mr_contract():

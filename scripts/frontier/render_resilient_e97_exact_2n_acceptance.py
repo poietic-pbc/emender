@@ -1,0 +1,319 @@
+#!/usr/bin/env python3
+"""Render the authoritative real-E97 two-node pipelined acceptance sequence.
+
+Rendering is deliberately the default.  Submission requires ``--submit`` and
+passes through the same fail-closed source/allocation checks, which makes this
+file safe to use in CI without accidentally creating a Frontier allocation.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from typing import Any
+
+
+WALLTIME = "02:00:00"
+STAGE_DEADLINES = {
+    "handoff_s": 180,
+    "apply_s": 180,
+    "quorum_s": 420,
+    "integrity_s": 120,
+    "publication_s": 180,
+    "progress_s": 420,
+}
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def git(repo: Path, *args: str) -> str:
+    return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+
+
+def require_authoritative_source(repo: Path, *, check_allocation: bool) -> str:
+    if git(repo, "branch", "--show-current") != "main":
+        raise ValueError("authoritative acceptance must be rendered from main")
+    if git(repo, "status", "--porcelain", "--untracked-files=all"):
+        raise ValueError("authoritative acceptance requires a clean tracked source tree")
+    commit = git(repo, "rev-parse", "HEAD")
+    if git(repo, "rev-parse", "origin/main") != commit:
+        raise ValueError("authoritative main must be merged and pushed to origin/main")
+    if check_allocation:
+        queued = subprocess.check_output(
+            ["squeue", "-u", os.environ["USER"], "-h", "-o", "%i"], text=True
+        ).strip()
+        if queued:
+            raise ValueError("refusing to overlap another user allocation")
+    return commit
+
+
+def source_identity(repo: Path, commit: str) -> dict[str, Any]:
+    """Record every tracked source byte, not merely the symbolic Git revision."""
+    records = []
+    for relative in git(repo, "ls-files", "-z").split("\0"):
+        if not relative:
+            continue
+        path = repo / relative
+        if path.is_file():
+            records.append({"path": relative, "sha256": sha256(path), "bytes": path.stat().st_size})
+    tree = git(repo, "rev-parse", "HEAD^{tree}")
+    encoded = json.dumps(records, sort_keys=True, separators=(",", ":")).encode()
+    return {"commit": commit, "tree": tree, "files": records,
+            "files_sha256": hashlib.sha256(encoded).hexdigest()}
+
+
+def verify_source_identity(repo: Path, expected: dict[str, Any]) -> None:
+    commit = require_authoritative_source(repo, check_allocation=False)
+    actual = source_identity(repo, commit)
+    if actual != expected:
+        raise ValueError("authoritative source changed after native bundle attestation")
+
+
+def build_authoritative_bundle(repo: Path, commit: str, stage_root: Path) -> tuple[Path, dict[str, Any]]:
+    """Clean-build an immutable installation and bind it to the source inventory."""
+    source = source_identity(repo, commit)
+    stage = (stage_root / commit).resolve()
+    if stage.exists():
+        shutil.rmtree(stage)
+    build, install = stage / "build", stage / "install"
+    stage.mkdir(parents=True)
+    env = {**os.environ, "REPO": str(repo.resolve()), "SOURCE_DIR": str((repo / "native").resolve()),
+           "BUILD_DIR": str(build), "INSTALL_DIR": str(install)}
+    subprocess.run([str(repo / "scripts/frontier/build_native_resilient_dataplane.sh")],
+                   cwd=repo, env=env, check=True)
+    manifest = install / "native-artifacts.json"
+    native = native_identity(manifest)
+    value = json.loads(manifest.read_text())
+    if value.get("source_commit") != commit or value.get("source_tree_dirty") is not False:
+        raise ValueError("rebuilt native bundle is not bound to clean authoritative main")
+    attestation = {"schema": "emender-authoritative-native-stage-v1", "source": source,
+                   "build_manifest": str(manifest), "build_manifest_sha256": sha256(manifest),
+                   "native_bundle": native}
+    target = stage / "authoritative-stage.json"
+    target.write_text(json.dumps(attestation, indent=2, sort_keys=True) + "\n")
+    attestation["attestation"] = str(target)
+    attestation["attestation_sha256"] = sha256(target)
+    verify_source_identity(repo, source)
+    return manifest, attestation
+
+
+def native_identity(manifest: Path) -> dict[str, Any]:
+    value = json.loads(manifest.read_text())
+    artifacts: dict[str, str] = {}
+    for name in ("service_binary", "local_library", "transport_library"):
+        relative = value["artifacts"][name]["path"]
+        path = (manifest.parent / relative).resolve()
+        path.relative_to(manifest.parent.resolve())
+        if not path.is_file() or (name == "service_binary" and not os.access(path, os.X_OK)):
+            raise ValueError(f"required native artifact is missing: {name}")
+        actual = sha256(path)
+        expected = value["artifacts"][name].get("sha256")
+        if expected and expected != actual:
+            raise ValueError(f"native artifact digest mismatch: {name}")
+        artifacts[name] = actual
+    return {"manifest": str(manifest.resolve()), "manifest_sha256": sha256(manifest),
+            "artifacts": artifacts, "bundle_sha256": value.get("bundle_sha256", "")}
+
+
+def build_plan(repo: Path, commit: str, manifest: Path, gate: Path, run_root: Path,
+               stage: dict[str, Any] | None = None) -> dict[str, Any]:
+    native = native_identity(manifest)
+    recorded_source = json.loads(manifest.read_text()).get("source_commit")
+    if recorded_source != commit:
+        raise ValueError("native build does not match the launched source commit")
+    if not gate.is_file():
+        raise ValueError("retained exact-code G2 full-layout gate is missing")
+    common = {
+        "nodes": 2, "trainers_per_node": 8, "local_steps": 40,
+        "dataplane": "native-cxi", "provider": "cxi", "walltime": WALLTIME,
+        "source_commit": commit, "native_bundle": native,
+        "authoritative_stage": stage,
+        "full_layout_gate": str(gate.resolve()), "full_layout_gate_sha256": sha256(gate),
+        "stage_deadlines": STAGE_DEADLINES,
+        "launcher": "scripts/frontier/resilient_e97_true_2n.sbatch",
+    }
+    # Every phase has a distinct allocation/fence.  Restart phases consume only
+    # the preceding authoritative handoff; source and bundle remain immutable.
+    specs = [
+        ("clean-overlap", 5, 0, None, {}),
+        ("fault-rejoin", 3, 5, "clean-overlap", {"RESILIENT_E97_INJECT_NATIVE_SERVICE": "1:-1:6"}),
+        ("invalid-result-rejection", 2, 8, "fault-rejoin", {"RESILIENT_E97_INJECT_INVALID_RESULT": "1:9"}),
+        ("checkpoint-publication-failure", 1, 10, "invalid-result-rejection", {"RESILIENT_E97_INJECT_PUBLICATION_FAILURE": "10"}),
+        ("fresh-restart", 2, 10, "checkpoint-publication-failure", {"RESILIENT_E97_FRESH_RESTART": "1"}),
+    ]
+    phases = []
+    for fence, (name, generations, initial, restart_from, injection) in enumerate(specs, 1):
+        phase = dict(common)
+        phase.update({"name": name, "fence_ordinal": fence, "generations": generations,
+                      "initial_generation": initial, "final_generation": initial + generations,
+                      "restart_from": restart_from, "run_dir": str((run_root / name).resolve()),
+                      "injection": injection})
+        phases.append(phase)
+    return {
+        "schema": "emender-real-e97-exact-2n-acceptance-v1",
+        "source_commit": commit, "node_count": 2, "k_local_steps": 40,
+        "walltime_per_phase": WALLTIME, "phases": phases,
+        "forbidden_node_counts": [4, 8, 32, 64, 256],
+        "conformance": {"authority": "RESILIENT_DILOCO_COMPUTE_POOL.md version 1",
+                        "requirements": [f"R{i:02d}" for i in range(1, 17)],
+                        "native_requirements": [f"NDP{i:02d}" for i in range(1, 18)]},
+    }
+
+
+TERMINAL_STATES = {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "PREEMPTED", "BOOT_FAIL"}
+EXPECTED_FAILURES = {"checkpoint-publication-failure"}
+
+
+def _atomic_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+    os.replace(temporary, path)
+
+
+def _scheduler_state(job_id: str) -> dict[str, str]:
+    queued = subprocess.check_output(["squeue", "-h", "-j", job_id, "-o", "%T"], text=True).strip()
+    if queued:
+        return {"state": queued.splitlines()[0], "exit_code": ""}
+    line = subprocess.check_output(
+        ["sacct", "-n", "-X", "-j", job_id, "--format=State,ExitCode", "-P"], text=True
+    ).strip().splitlines()
+    if not line:
+        return {"state": "ACCOUNTING_PENDING", "exit_code": ""}
+    fields = line[0].split("|")
+    return {"state": fields[0].split("+")[0], "exit_code": fields[1] if len(fields) > 1 else ""}
+
+
+def advance(plan: dict[str, Any], output: Path, state_path: Path, repo: Path) -> int:
+    """Advance by at most one submission; return 75 while a job must be awaited."""
+    state = json.loads(state_path.read_text()) if state_path.exists() else {
+        "schema": "emender-exact-2n-serial-state-v1", "next_phase": 0, "active": None, "history": []}
+    active = state.get("active")
+    if active:
+        result = _scheduler_state(active["job_id"])
+        if result["state"] not in TERMINAL_STATES:
+            state["wait"] = {"kind": "slurm-terminal", "job_id": active["job_id"],
+                             "observed_state": result["state"], "resumable": True}
+            _atomic_json(state_path, state)
+            print(f"WAIT phase={active['phase']} job_id={active['job_id']} state={result['state']}")
+            return 75
+        phase = active["phase"]
+        successful = result["state"] == "COMPLETED"
+        if successful == (phase in EXPECTED_FAILURES):
+            raise ValueError(f"phase {phase} had unexpected terminal state {result['state']}")
+        run_dir = Path(active["run_dir"])
+        harvest = run_dir / "scheduler-terminal.json"
+        _atomic_json(harvest, {**result, "job_id": active["job_id"], "phase": phase,
+                               "harvested_unix_seconds": int(time.time())})
+        state["history"].append({**active, **result, "terminal_artifact": str(harvest),
+                                 "terminal_artifact_sha256": sha256(harvest)})
+        state["active"] = None
+        state.pop("wait", None)
+        state["next_phase"] += 1
+        _atomic_json(state_path, state)
+    index = state["next_phase"]
+    if index >= len(plan["phases"]):
+        state["complete"] = True
+        _atomic_json(state_path, state)
+        print("acceptance phases complete")
+        return 0
+    # This check is intentionally immediately adjacent to sbatch. It detects
+    # tracked or untracked repository mutation after the build attestation.
+    verify_source_identity(repo, plan["authoritative_stage"]["source"])
+    queued = subprocess.check_output(["squeue", "-u", os.environ["USER"], "-h", "-o", "%i"], text=True).strip()
+    if queued:
+        raise ValueError("refusing to overlap another user allocation")
+    phase = plan["phases"][index]
+    run_dir = Path(phase["run_dir"]); run_dir.mkdir(parents=True, exist_ok=True)
+    exports = {
+        "RESILIENT_E97_ACCEPTANCE_MANIFEST": str(output.resolve()),
+        "RESILIENT_E97_ACCEPTANCE_PHASE": phase["name"], "RUN_DIR": str(run_dir),
+        "NDP_BUILD_MANIFEST": plan["authoritative_stage"]["build_manifest"],
+        "RESILIENT_E97_NODE_COUNT": "2", "RESILIENT_E97_GENERATIONS": str(phase["generations"]),
+        "RESILIENT_E97_INITIAL_GENERATION": str(phase["initial_generation"]),
+        "RESILIENT_E97_GENERATION_DEADLINE_S": str(STAGE_DEADLINES["quorum_s"]), **phase["injection"],
+    }
+    if state["history"]:
+        exports["RESILIENT_E97_RESUME_HANDOFF"] = state["history"][-1]["terminal_artifact"]
+    command = ["sbatch", "--parsable", "-N", "2", "-t", WALLTIME, "--qos=debug", "--network=job_vni",
+               "--export=ALL," + ",".join(f"{k}={v}" for k, v in exports.items()), phase["launcher"]]
+    job_id = subprocess.check_output(command, text=True).strip().split(";")[0]
+    state["active"] = {"phase": phase["name"], "job_id": job_id, "run_dir": str(run_dir),
+                       "submitted_unix_seconds": int(time.time())}
+    state["wait"] = {"kind": "slurm-terminal", "job_id": job_id, "observed_state": "SUBMITTED", "resumable": True}
+    _atomic_json(state_path, state)
+    print(f"SUBMITTED phase={phase['name']} job_id={job_id}; rerun to wait/advance")
+    return 75
+
+
+def submit(plan: dict[str, Any], output: Path, state_path: Path, repo: Path) -> int:
+    # Kept as a named entry point for callers; unlike the former dependency
+    # loop, one invocation can never submit more than one job.
+    return advance(plan, output, state_path, repo)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--repo", type=Path, default=Path.cwd())
+    parser.add_argument("--native-build-manifest", type=Path, required=True)
+    parser.add_argument("--full-layout-gate", type=Path, required=True)
+    parser.add_argument("--run-root", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--submit", action="store_true")
+    parser.add_argument("--state", type=Path, help="resumable serial submission state")
+    parser.add_argument("--native-stage-root", type=Path,
+                        help="clean authoritative build/stage root (required with --submit)")
+    parser.add_argument("--allow-non-authoritative-dry-run", action="store_true",
+                        help="test/review only; never allowed with --submit")
+    args = parser.parse_args(argv)
+    if args.submit and args.allow_non_authoritative_dry_run:
+        parser.error("--allow-non-authoritative-dry-run cannot be submitted")
+    try:
+        commit = (git(args.repo, "rev-parse", "HEAD") if args.allow_non_authoritative_dry_run
+                  else require_authoritative_source(args.repo, check_allocation=args.submit))
+        stage = None
+        manifest = args.native_build_manifest
+        if args.submit and args.state and args.state.exists():
+            if not args.output.is_file():
+                raise ValueError("serial state exists but acceptance manifest is missing")
+            plan = json.loads(args.output.read_text())
+            if plan.get("source_commit") != commit or not plan.get("authoritative_stage"):
+                raise ValueError("serial state does not match authoritative main")
+            return submit(plan, args.output, args.state, args.repo)
+        if args.submit:
+            if not args.native_stage_root or not args.state:
+                parser.error("--submit requires --native-stage-root and --state")
+            manifest, stage = build_authoritative_bundle(args.repo, commit, args.native_stage_root)
+            subprocess.run([sys.executable, str(args.repo / "scripts/frontier/attest_native_dataplane.py"),
+                            "verify", "--backend", "native-cxi", "--production", "--full-layout",
+                            "--build-manifest", str(manifest), "--gate-json", str(args.full_layout_gate),
+                            "--source-root", str(args.repo)], check=True)
+        plan = build_plan(args.repo, commit, manifest, args.full_layout_gate, args.run_root, stage)
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
+        if args.submit:
+            return submit(plan, args.output, args.state, args.repo)
+        else:
+            print(args.output)
+        return 0
+    except (KeyError, OSError, subprocess.CalledProcessError, ValueError) as error:
+        print(f"acceptance launcher refused: {error}", file=sys.stderr)
+        return 64
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

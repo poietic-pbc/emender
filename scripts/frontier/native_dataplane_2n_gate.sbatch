@@ -14,6 +14,17 @@
 set -euo pipefail
 
 REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
+# A batch allocation is a clean runtime boundary. Load the reviewed module
+# stack here; never depend on the submit/login shell's loader state.
+# shellcheck source=frontier_runtime_env.sh
+source "$REPO/scripts/frontier/frontier_runtime_env.sh"
+# Discard submit-shell loader state before Lmod constructs the canonical batch
+# runtime. Everything captured after this point came from reviewed modules.
+unset LD_LIBRARY_PATH
+frontier_load_default_modules
+ROCM_RUNTIME_DIR=$(frontier_resolve_rocm_runtime_dir)
+FABRIC_RUNTIME_DIR=$(frontier_resolve_libfabric_runtime_dir)
+MODULE_RUNTIME_PATH=${LD_LIBRARY_PATH:-}
 : "${NDP_BUILD_MANIFEST:?set the one retained clean native build manifest}"
 : "${NDP_ARTIFACT_ROOT:?set retained Frontier artifact root}"
 : "${NDP_RUN_ID:?set fenced synthetic run identity}"
@@ -63,7 +74,34 @@ PY
 INSTALL_DIR=$(dirname "$NDP_BUILD_MANIFEST")
 GATE_BINARY="$INSTALL_DIR/bin/ndp_frontier_2n_gate"
 [[ -x $GATE_BINARY ]] || { echo "installed hashed gate binary is missing" >&2; exit 66; }
-export LD_LIBRARY_PATH="$INSTALL_DIR/lib:$INSTALL_DIR/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# Use only bundle and module-reviewed runtime paths. In particular, do not
+# admit arbitrary directories inherited through --export=ALL.
+export LD_LIBRARY_PATH="$INSTALL_DIR/lib:$INSTALL_DIR/lib64:$ROCM_RUNTIME_DIR:$FABRIC_RUNTIME_DIR${MODULE_RUNTIME_PATH:+:$MODULE_RUNTIME_PATH}"
+
+LOADER_PREFLIGHT="$ARTIFACT_DIR/loader-preflight.txt"
+{
+  printf 'gate_binary=%s\nrocm_runtime_dir=%s\nfabric_runtime_dir=%s\n' \
+    "$(readlink -f "$GATE_BINARY")" "$ROCM_RUNTIME_DIR" "$FABRIC_RUNTIME_DIR"
+  readelf -d "$GATE_BINARY" | grep -E 'RPATH|RUNPATH'
+  ldd "$GATE_BINARY"
+} >"$LOADER_PREFLIGHT"
+! grep -q 'not found' "$LOADER_PREFLIGHT" || {
+  cat "$LOADER_PREFLIGHT" >&2
+  echo "native gate has unresolved runtime libraries" >&2
+  exit 66
+}
+HIP_RESOLVED=$(sed -n 's/^[[:space:]]*libamdhip64\.so\.7 => \([^ ]*\).*/\1/p' "$LOADER_PREFLIGHT")
+[[ -n "$HIP_RESOLVED" && $(readlink -f "$HIP_RESOLVED") == "$ROCM_RUNTIME_DIR"/* ]] || {
+  cat "$LOADER_PREFLIGHT" >&2
+  echo "libamdhip64.so.7 did not resolve from the reviewed ROCm module" >&2
+  exit 66
+}
+while read -r library; do
+  [[ -r "$library" ]] || continue
+  printf 'resolved_library=%s sha256=%s\n' "$(readlink -f "$library")" \
+    "$(sha256sum "$library" | awk '{print $1}')"
+done < <(sed -n 's/^[[:space:]]*[^ ]* => \([^ ]*\).*/\1/p' "$LOADER_PREFLIGHT") \
+  >>"$LOADER_PREFLIGHT"
 
 mapfile -t NODES < <(scontrol show hostnames "$SLURM_JOB_NODELIST")
 [[ ${#NODES[@]} == 2 ]] || { echo "Slurm allocation did not resolve two nodes" >&2; exit 64; }

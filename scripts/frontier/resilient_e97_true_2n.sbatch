@@ -131,9 +131,19 @@ if [[ ${RESILIENT_E97_STARTUP_SMOKE:-0} == 1 ]]; then
     echo "startup smoke forbids failure injection" >&2; exit 64;
   }
 else
-  [[ ${SLURM_TIMELIMIT:-00:20:00} == 00:20:00 || ${SLURM_TIMELIMIT:-} == 20 || ${SLURM_TIMELIMIT:-} == 00:30:00 || ${SLURM_TIMELIMIT:-} == 30 ]] || {
-    echo "requires a bounded 00:20:00 restart/startup or 00:30:00 resilience gate" >&2; exit 64;
-  }
+  if [[ -n ${RESILIENT_E97_ACCEPTANCE_MANIFEST:-} ]]; then
+    [[ ${RESILIENT_E97_NODE_COUNT} == 2 ]] || {
+      echo "exact acceptance manifest requires exactly two nodes" >&2; exit 64;
+    }
+    [[ ${SLURM_TIMELIMIT:-02:00:00} == 02:00:00 || ${SLURM_TIMELIMIT:-} == 120 ]] || {
+      echo "exact acceptance phase requires the honest 02:00:00 debug walltime" >&2; exit 64;
+    }
+    : "${RESILIENT_E97_ACCEPTANCE_PHASE:?acceptance manifest requires a named phase}"
+  else
+    [[ ${SLURM_TIMELIMIT:-00:20:00} == 00:20:00 || ${SLURM_TIMELIMIT:-} == 20 || ${SLURM_TIMELIMIT:-} == 00:30:00 || ${SLURM_TIMELIMIT:-} == 30 ]] || {
+      echo "requires a bounded 00:20:00 restart/startup or 00:30:00 resilience gate" >&2; exit 64;
+    }
+  fi
 fi
 [[ ${ASYNC_LOCAL_STEPS:-40} == 40 ]] || { echo "E97 gate requires local_steps=40" >&2; exit 64; }
 RUN_DIR=${RUN_DIR:?set immutable run directory}
