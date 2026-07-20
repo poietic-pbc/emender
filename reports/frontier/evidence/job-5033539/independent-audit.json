@@ -1,0 +1,198 @@
+{
+  "schema": "emender-native-pool-restart-independent-audit-v1",
+  "status": "passed",
+  "job_id": 5033539,
+  "run_id": "npv1f-progress-20260719T223459Z-f56e27a",
+  "source_commit": "56237c05d39eea23ee2e5818ce931c0ea3e81f06",
+  "nodes": 2,
+  "nodelist": "frontier[03099,03394]",
+  "requested_walltime": "00:20:00",
+  "slurm_state": "COMPLETED",
+  "exit_code": "0:0",
+  "elapsed_seconds": 722,
+  "last_fence": 2,
+  "active_leases_after_completion": 0,
+  "sqlite_integrity": "ok",
+  "publication_counts": {
+    "commit": 5,
+    "checkpoint": 5,
+    "authoritative_latest": 1
+  },
+  "authoritative_latest": {
+    "generation": 5,
+    "fence": 2,
+    "accepted_tokens": 26227200,
+    "manifest_sha256": "0b0ed65a87a796c56ff267db52dff4fd2f843b7ac9c9ffc8211c97fba770c51c"
+  },
+  "independent_reloads": [
+    {
+      "generation": 3,
+      "fence": 1,
+      "step": 1525120,
+      "accepted_tokens": 15736320,
+      "global_membership": ["node-0", "node-1"],
+      "local_membership_ranks": [0, 1, 2, 3, 4, 5, 6, 7],
+      "checkpoint_path": "/lustre/orion/bif148/proj-shared/emender/runs/npv1f-progress-20260719T223459Z-f56e27a/checkpoints/generation-00000003-fence-00000001.pt",
+      "checkpoint_bytes": 7899873331,
+      "checkpoint_sha256_expected": "03a51ea4e065b902c825ad78d987acaff32f0f5b52ed6f713b05a16b445fd753",
+      "checkpoint_sha256_recomputed": "03a51ea4e065b902c825ad78d987acaff32f0f5b52ed6f713b05a16b445fd753",
+      "manifest_sha256_recomputed": "1b7b06d7af106fbb86305d1bda6ee7e5a7f52a1ecbd9d48e230b3446843eb8cd",
+      "model_tensor_count": 146,
+      "model_state_digest": "2e59f874572b356439154cc6b781d13eaf4187c58fe8ad6e3f4845ecb75b6c23",
+      "inner_optimizer_state_entries": 145,
+      "inner_optimizer_param_groups": 1,
+      "outer_update_state": {"algorithm": "weighted-mean", "eta_outer": 1.0},
+      "outer_state_sha256_recomputed": "79661b97a27fce6f9057a16642b0cabdc6f6f7ab7782315e12da17a3a136c712",
+      "native_source_commit": "f56e27a53c9985e95c4ab7d0fcfa28b8a2c513e6",
+      "reload_status": "passed"
+    },
+    {
+      "generation": 4,
+      "fence": 2,
+      "step": 1525160,
+      "accepted_tokens": 20981760,
+      "global_membership": ["node-0", "node-1"],
+      "local_membership_ranks": [0, 1, 2, 3, 4, 5, 6, 7],
+      "checkpoint_path": "/lustre/orion/bif148/proj-shared/emender/runs/npv1f-progress-20260719T223459Z-f56e27a/checkpoints/generation-00000004-fence-00000002.pt",
+      "checkpoint_bytes": 7899873331,
+      "checkpoint_sha256_expected": "94c259b4acb9a908ee7da2178c2e3f99d5be5946bcb566e73b8f7aa71254514e",
+      "checkpoint_sha256_recomputed": "94c259b4acb9a908ee7da2178c2e3f99d5be5946bcb566e73b8f7aa71254514e",
+      "manifest_sha256_recomputed": "44d18271f7b61f887b13dde866cf111b77f06e6231050f0fafc09506e2ab54bc",
+      "model_tensor_count": 146,
+      "model_state_digest": "9972f590ad25ab062c16511abbae55a877df2034f778957d02966df1268da548",
+      "inner_optimizer_state_entries": 145,
+      "inner_optimizer_param_groups": 1,
+      "outer_update_state": {"algorithm": "weighted-mean", "eta_outer": 1.0},
+      "outer_state_sha256_recomputed": "79661b97a27fce6f9057a16642b0cabdc6f6f7ab7782315e12da17a3a136c712",
+      "native_source_commit": "56237c05d39eea23ee2e5818ce931c0ea3e81f06",
+      "reload_status": "passed"
+    },
+    {
+      "generation": 5,
+      "fence": 2,
+      "step": 1525200,
+      "accepted_tokens": 26227200,
+      "global_membership": ["node-0", "node-1"],
+      "local_membership_ranks": [0, 1, 2, 3, 4, 5, 6, 7],
+      "checkpoint_path": "/lustre/orion/bif148/proj-shared/emender/runs/npv1f-progress-20260719T223459Z-f56e27a/checkpoints/generation-00000005-fence-00000002.pt",
+      "checkpoint_bytes": 7899873331,
+      "checkpoint_sha256_expected": "1e68333f6392b4fbd11e17fa19da8fcbbe5b688ffecbe2b1200e3b1fa110c828",
+      "checkpoint_sha256_recomputed": "1e68333f6392b4fbd11e17fa19da8fcbbe5b688ffecbe2b1200e3b1fa110c828",
+      "manifest_sha256_recomputed": "0b0ed65a87a796c56ff267db52dff4fd2f843b7ac9c9ffc8211c97fba770c51c",
+      "model_tensor_count": 146,
+      "model_state_digest": "7243f1bebb7553d024c6dd999931853f94dec996f380e07c203114a5b589dc91",
+      "inner_optimizer_state_entries": 145,
+      "inner_optimizer_param_groups": 1,
+      "outer_update_state": {"algorithm": "weighted-mean", "eta_outer": 1.0},
+      "outer_state_sha256_recomputed": "79661b97a27fce6f9057a16642b0cabdc6f6f7ab7782315e12da17a3a136c712",
+      "native_source_commit": "56237c05d39eea23ee2e5818ce931c0ea3e81f06",
+      "reload_status": "passed"
+    }
+  ],
+  "model_chain_checks": [
+    {
+      "source_generation": 3,
+      "consumed_by_input_generation": 3,
+      "model_state_digest": "2e59f874572b356439154cc6b781d13eaf4187c58fe8ad6e3f4845ecb75b6c23",
+      "native_base_digest": "2e59f874572b356439154cc6b781d13eaf4187c58fe8ad6e3f4845ecb75b6c23",
+      "status": "passed"
+    },
+    {
+      "source_generation": 4,
+      "consumed_by_input_generation": 4,
+      "model_state_digest": "9972f590ad25ab062c16511abbae55a877df2034f778957d02966df1268da548",
+      "native_base_digest": "9972f590ad25ab062c16511abbae55a877df2034f778957d02966df1268da548",
+      "status": "passed"
+    }
+  ],
+  "runtime_compatibility": {
+    "equal_fields": ["schema", "provider", "provider_sha256", "build_bundle_sha256", "config_sha256", "artifacts"],
+    "provenance_only_differences": ["source_commit", "build_manifest_sha256"],
+    "old_source_commit": "f56e27a53c9985e95c4ab7d0fcfa28b8a2c513e6",
+    "new_source_commit": "56237c05d39eea23ee2e5818ce931c0ea3e81f06",
+    "old_build_manifest_sha256": "206d6d098a9343091cc75451c77146fcc16ebd53c408dc8c9124a40eaad80e37",
+    "new_build_manifest_sha256": "bc40d57e1ebbf105424d4e153da5d43bd182e08cc7d51c6b3f9597b4cdba3ab3",
+    "artifact_bundle_sha256": "7b4c77696011cfc2b68fce541a34f9a1072ef767e13cce94ed2a4e2befc57d04",
+    "status": "passed"
+  },
+  "fresh_manager_sync": [
+    {
+      "worker_id": "node-0",
+      "incarnation": "60894d6f56db4b1283febd91517b041a",
+      "fence": 2,
+      "source_fence": 1,
+      "generation": 3,
+      "source_code_id": "f56e27a53c9985e95c4ab7d0fcfa28b8a2c513e6",
+      "manifest_sha256": "1b7b06d7af106fbb86305d1bda6ee7e5a7f52a1ecbd9d48e230b3446843eb8cd",
+      "status": "synchronized"
+    },
+    {
+      "worker_id": "node-1",
+      "incarnation": "558d53135a7e445b9b8b79bfbee4150c",
+      "fence": 2,
+      "source_fence": 1,
+      "generation": 3,
+      "source_code_id": "f56e27a53c9985e95c4ab7d0fcfa28b8a2c513e6",
+      "manifest_sha256": "1b7b06d7af106fbb86305d1bda6ee7e5a7f52a1ecbd9d48e230b3446843eb8cd",
+      "status": "synchronized"
+    }
+  ],
+  "new_generation_receipts": {
+    "input_generations": [3, 4],
+    "pool_closes": 2,
+    "native_submissions": 32,
+    "native_results": 4,
+    "native_result_lane_releases": 32,
+    "native_durable_applies": 32,
+    "duplicate_application": false,
+    "fresh_incarnations_only": true
+  },
+  "terminal_transport": [
+    {
+      "node": 0,
+      "provider": "cxi",
+      "endpoint_type": "FI_EP_RDM",
+      "useful_tx_bytes": 22027081984,
+      "useful_rx_bytes": 22027081984,
+      "in_flight_bytes": 0,
+      "retained_bytes": 0,
+      "replay_bytes": 0,
+      "route_errors": 0,
+      "owner_state": "DRAINING"
+    },
+    {
+      "node": 1,
+      "provider": "cxi",
+      "endpoint_type": "FI_EP_RDM",
+      "useful_tx_bytes": 22027081984,
+      "useful_rx_bytes": 22027081984,
+      "in_flight_bytes": 0,
+      "retained_bytes": 0,
+      "replay_bytes": 0,
+      "route_errors": 0,
+      "owner_state": "DRAINING"
+    }
+  ],
+  "local_snapshot_policy": {
+    "source_prefix": "/tmp/resilient-e97-restart-20260720T000459Z/",
+    "included": ["supervision/**/*.json", "telemetry/**/*.jsonl", "control/**/*.json", "control/**/*.jsonl"],
+    "excluded": ["mailbox", "*.data", "*.pt", "kernel-cache"],
+    "dense_or_spool_state_treated_as_authoritative": false
+  },
+  "stale_fence_probe": {
+    "old_allocation": "5033384",
+    "old_fence": 1,
+    "current_allocation": "5033539",
+    "current_fence": 2,
+    "renew_rejected": true,
+    "contribution_rejected": true,
+    "commit_publication_rejected": true,
+    "checkpoint_publication_rejected": true,
+    "latest_publication_rejected": true,
+    "publication_rows_before": 7,
+    "publication_rows_after": 7,
+    "authoritative_latest_unchanged": true,
+    "durable_mutation_by_stale_owner": false,
+    "status": "passed"
+  }
+}

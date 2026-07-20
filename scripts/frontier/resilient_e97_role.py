@@ -172,6 +172,27 @@ def _fence_epoch(args) -> int:
     return int(os.environ.get("RESILIENT_E97_FENCE_EPOCH", args.coordinator_epoch))
 
 
+def _native_runtime_resume_compatible(
+        recorded: object, current: object) -> bool:
+    """Allow a control-only source advance without weakening native identity.
+
+    The fresh-allocation fix necessarily changes the repository commit and the
+    digest of the build manifest that records it.  Every substantive native
+    runtime field remains exact: schema, bundle, artifacts, provider, and
+    training configuration.  Unknown fields are compared too, so this narrow
+    provenance exception cannot silently authorize a new runtime capability.
+    """
+    if not isinstance(recorded, dict) or not isinstance(current, dict):
+        return False
+    provenance = {"source_commit", "build_manifest_sha256"}
+    if not provenance <= recorded.keys() or not provenance <= current.keys():
+        return False
+    return ({key: value for key, value in recorded.items()
+             if key not in provenance}
+            == {key: value for key, value in current.items()
+                if key not in provenance})
+
+
 def _fenced_control(args) -> tuple[SQLiteFencedControlStore, AllocationLease] | None:
     database = os.environ.get("RESILIENT_E97_FENCE_DB")
     encoded = os.environ.get("RESILIENT_E97_ALLOCATION_LEASE")
@@ -215,6 +236,7 @@ def _publish_role_recovery(control: Path, identity: str, args, generation: int,
 def _native_manager_resume_point(
         run: Path, args,
         fenced: tuple[SQLiteFencedControlStore, AllocationLease] | None,
+        *, native_runtime: dict[str, object] | None = None,
         ) -> tuple[int, dict[str, object]]:
     """Resolve a restarted model-free manager against fenced committed state.
 
@@ -232,11 +254,12 @@ def _native_manager_resume_point(
                          "fence": _fence_epoch(args)}
     latest = json.loads(latest_path.read_text())
     generation = int(latest.get("generation", -1))
-    fence_epoch = int(latest.get("fence", -1))
+    source_fence = int(latest.get("fence", -1))
+    current_fence = _fence_epoch(args)
     if generation < initial or generation > target:
         raise ValueError("authoritative latest generation is outside this run bound")
-    if fence_epoch != _fence_epoch(args):
-        raise ValueError("manager rejoin latest fence differs from allocation fence")
+    if source_fence <= 0 or source_fence > current_fence:
+        raise ValueError("manager rejoin latest fence is invalid or newer than allocation")
     manifest = Path(str(latest.get("manifest", ""))).resolve()
     try:
         manifest.relative_to((run / "handoff").resolve())
@@ -247,13 +270,20 @@ def _native_manager_resume_point(
     if manifest_sha256 != latest.get("manifest_sha256"):
         raise ValueError("manager rejoin manifest checksum mismatch")
     value = json.loads(encoded)
+    source_code_id = str(value.get("code_id", ""))
+    recorded_runtime = dict(value.get("digests", {})).get("native_runtime")
+    code_compatible = source_code_id == args.code_id
+    if not code_compatible:
+        code_compatible = (native_runtime is not None
+                           and _native_runtime_resume_compatible(
+                               recorded_runtime, native_runtime))
     if (not value.get("finalized") or value.get("run_id") != args.run_id
             or value.get("payload_id") != args.payload_id
             or value.get("source_id") != args.source_id
-            or value.get("code_id") != args.code_id
+            or not code_compatible
             or int(value.get("generation", -1)) != generation
             or int(value.get("fence", {}).get("coordinator_epoch", -1))
-            != fence_epoch):
+            != source_fence):
         raise ValueError("manager rejoin manifest identity mismatch")
     if fenced is not None:
         fenced[0].assert_current(fenced[1])
@@ -261,13 +291,18 @@ def _native_manager_resume_point(
             args.run_id, "latest", "authoritative")
         if (authoritative is None
                 or int(authoritative.get("generation", -1)) != generation
+                or int(authoritative.get("fence", -1)) != source_fence
                 or authoritative.get("manifest_sha256") != manifest_sha256):
             raise ValueError("manager rejoin handoff is not authoritative")
-    return generation, {
+    evidence = {
         "status": "synchronized", "generation": generation,
-        "fence": fence_epoch, "manifest": str(manifest),
+        "fence": current_fence, "source_fence": source_fence,
+        "manifest": str(manifest),
         "manifest_sha256": manifest_sha256,
     }
+    if source_code_id != args.code_id:
+        evidence["source_code_id"] = source_code_id
+    return generation, evidence
 
 
 def _native_ready_delay(*, node: int, generation: int) -> float:
@@ -720,7 +755,7 @@ def _native_manager(args) -> int:
     control = bulk / "control"
     session.write_readiness(control / "native-service-ready.json")
     start_generation, sync_evidence = _native_manager_resume_point(
-        run, args, fenced)
+        run, args, fenced, native_runtime=digests)
     atomic_metadata(
         control / f"native-manager-sync-{incarnation}.json", {
             "schema": "emender-native-manager-sync-v1",
@@ -1376,8 +1411,10 @@ def trainer(args) -> int:
         if __import__("hashlib").sha256(checkpoint_path.read_bytes()).hexdigest() != handoff["checkpoint_sha256"]:
             raise ValueError("resume checkpoint checksum mismatch")
         resumed = torch.load(checkpoint_path, map_location="cpu", mmap=True, weights_only=True)
-        if (native and dict(resumed.get("native_runtime_digests", {}))
-                != native_runtime):
+        recorded_runtime = dict(
+            (resumed.get("native_runtime_digests") or {}) if native else {})
+        if (native and not _native_runtime_resume_compatible(
+                recorded_runtime, native_runtime)):
             raise ValueError("resume checkpoint native runtime digest mismatch")
         if (int(resumed["generation"]) != args.initial_generation
                 or resumed["outer_update_state"] != handoff["outer_update_state"]):
@@ -1390,6 +1427,8 @@ def trainer(args) -> int:
         async_chain = list(handoff.get("async_chain", ())) + [str(Path(args.resume_handoff).resolve())]
         if (handoff.get("run_id") != args.run_id or handoff.get("payload_id") != args.payload_id
                 or handoff.get("source_id") != args.source_id
+                or (native and handoff.get("code_id")
+                    != recorded_runtime.get("source_commit"))
                 or int(handoff["fence"]["coordinator_epoch"]) > _fence_epoch(args)
                 or not handoff.get("finalized")):
             raise ValueError("resume handoff membership/identity/fence mismatch")

@@ -707,7 +707,8 @@ def test_native_manager_rejoin_syncs_authoritative_latest_generation(tmp_path):
     assert generation == 2
     assert evidence == {
         "status": "synchronized", "generation": 2, "fence": 1,
-        "manifest": str(manifest.resolve()), "manifest_sha256": digest,
+        "source_fence": 1, "manifest": str(manifest.resolve()),
+        "manifest_sha256": digest,
     }
 
     (handoff / "latest.json").write_text(json.dumps({
@@ -716,6 +717,95 @@ def test_native_manager_rejoin_syncs_authoritative_latest_generation(tmp_path):
     }))
     with pytest.raises(ValueError, match="manifest checksum"):
         role._native_manager_resume_point(tmp_path, args, None)
+
+
+def test_fresh_allocation_manager_syncs_older_authoritative_handoff(
+        tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from ndm.fenced_admission import SQLiteFencedControlStore
+    from scripts.frontier import resilient_e97_role as role
+
+    handoff = tmp_path / "handoff"
+    handoff.mkdir()
+    manifest = handoff / "generation-00000003-fence-00000001.json"
+    old_runtime = {
+        "schema": "emender-native-e97-runtime-digests-v1",
+        "source_commit": "old-code", "build_manifest_sha256": "old-manifest",
+        "build_bundle_sha256": "bundle", "config_sha256": "config",
+        "provider": "cxi", "provider_sha256": "provider",
+        "artifacts": {"service_binary": "service", "local_library": "local",
+                      "transport_library": "transport",
+                      "synthetic_gate_binary": "gate"},
+    }
+    current_runtime = {
+        **old_runtime, "source_commit": "new-code",
+        "build_manifest_sha256": "new-manifest",
+    }
+    manifest.write_text(json.dumps({
+        "finalized": True, "run_id": "run", "payload_id": "payload",
+        "source_id": "source", "code_id": "old-code", "generation": 3,
+        "fence": {"coordinator_epoch": 1},
+        "digests": {"native_runtime": old_runtime},
+    }, sort_keys=True))
+    digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    latest = {
+        "generation": 3, "fence": 1, "manifest": str(manifest),
+        "manifest_sha256": digest,
+    }
+    (handoff / "latest.json").write_text(json.dumps(latest, sort_keys=True))
+
+    store = SQLiteFencedControlStore(tmp_path / "control.sqlite3")
+    old = store.acquire(
+        run_id="run", allocation_id="job-old", incarnation="old",
+        protocol_id="pool-v1", config_id="config", ttl_s=60)
+    store.publish(old, kind="latest", name="authoritative", payload=latest)
+    store.release(old)
+    current = store.acquire(
+        run_id="run", allocation_id="job-fresh", incarnation="fresh",
+        protocol_id="pool-v1", config_id="config", ttl_s=60)
+    assert current.fence == 2
+    monkeypatch.setenv("RESILIENT_E97_FENCE_EPOCH", str(current.fence))
+    args = SimpleNamespace(
+        initial_generation=3, generations=2, run_id="run",
+        payload_id="payload", source_id="source", code_id="new-code",
+        coordinator_epoch=current.fence)
+
+    generation, evidence = role._native_manager_resume_point(
+        tmp_path, args, (store, current), native_runtime=current_runtime)
+
+    assert generation == 3
+    assert evidence == {
+        "status": "synchronized", "generation": 3, "fence": 2,
+        "source_fence": 1, "source_code_id": "old-code",
+        "manifest": str(manifest.resolve()),
+        "manifest_sha256": digest,
+    }
+
+
+def test_native_restart_runtime_compatibility_rejects_substantive_digest_change():
+    from scripts.frontier import resilient_e97_role as role
+
+    recorded = {
+        "schema": "emender-native-e97-runtime-digests-v1",
+        "source_commit": "old", "build_manifest_sha256": "old-manifest",
+        "build_bundle_sha256": "bundle", "config_sha256": "config",
+        "provider": "cxi", "provider_sha256": "provider",
+        "artifacts": {"service_binary": "service", "local_library": "local",
+                      "transport_library": "transport",
+                      "synthetic_gate_binary": "gate"},
+    }
+    current = {
+        **recorded, "source_commit": "new",
+        "build_manifest_sha256": "new-manifest",
+    }
+
+    assert role._native_runtime_resume_compatible(recorded, current)
+    assert not role._native_runtime_resume_compatible(
+        recorded, {**current, "build_bundle_sha256": "changed"})
+    assert not role._native_runtime_resume_compatible(
+        recorded, {**current, "artifacts": {**current["artifacts"],
+                                              "service_binary": "changed"}})
 
 
 def test_delayed_ready_injection_is_exact_and_bounded(monkeypatch):

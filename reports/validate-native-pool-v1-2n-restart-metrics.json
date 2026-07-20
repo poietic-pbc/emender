@@ -1,0 +1,260 @@
+{
+  "schema": "emender-validate-native-pool-v1-2n-restart-metrics-v1",
+  "status": "passed-live-acceptance",
+  "captured_utc": "2026-07-20T00:26:53Z",
+  "task_id": "validate-native-pool-v1-2n-restart",
+  "authoritative_source_commit": "56237c05d39eea23ee2e5818ce931c0ea3e81f06",
+  "source_branch": "wg/agent-1320/validate-native-pool-v1-2n-restart",
+  "source_tree_dirty_at_submission": false,
+  "scope": {
+    "maximum_nodes_submitted": 2,
+    "four_or_more_node_jobs_submitted": 0,
+    "requested_walltime": "00:20:00",
+    "partition": "batch",
+    "qos": "debug",
+    "gpus_per_node": 8,
+    "trainers_per_node": 8,
+    "backend": "native-cxi",
+    "provider": "cxi",
+    "endpoint_type": "FI_EP_RDM",
+    "local_steps_per_generation": 40,
+    "q_min": 2,
+    "t_min": 3934080
+  },
+  "restart_run": {
+    "job_id": 5033539,
+    "run_id": "npv1f-progress-20260719T223459Z-f56e27a",
+    "payload_id": "f56e27a-20260719T223459Z-native-pool-v1-failures-progress-2n30m-k40",
+    "state": "COMPLETED",
+    "exit_code": "0:0",
+    "elapsed_seconds": 722,
+    "nodes": 2,
+    "nodelist": "frontier[03099,03394]",
+    "requested_generations": 2,
+    "source_generation": 3,
+    "committed_generations": [4, 5],
+    "old_fence": 1,
+    "new_fence": 2,
+    "allocation_incarnation": "c4eac01c344d43819dd9f1982a1d7f4f",
+    "generation_weights": [5245440, 5245440],
+    "accepted_token_clocks": [15736320, 20981760, 26227200],
+    "steps": [1525120, 1525160, 1525200],
+    "manifest_sha256": [
+      "1b7b06d7af106fbb86305d1bda6ee7e5a7f52a1ecbd9d48e230b3446843eb8cd",
+      "44d18271f7b61f887b13dde866cf111b77f06e6231050f0fafc09506e2ab54bc",
+      "0b0ed65a87a796c56ff267db52dff4fd2f843b7ac9c9ffc8211c97fba770c51c"
+    ],
+    "checkpoint_sha256": [
+      "03a51ea4e065b902c825ad78d987acaff32f0f5b52ed6f713b05a16b445fd753",
+      "94c259b4acb9a908ee7da2178c2e3f99d5be5946bcb566e73b8f7aa71254514e",
+      "1e68333f6392b4fbd11e17fa19da8fcbbe5b688ffecbe2b1200e3b1fa110c828"
+    ],
+    "checkpoint_bytes_each": 7899873331,
+    "checkpoint_digests_recomputed": true,
+    "checkpoints_independently_reloaded": 3,
+    "model_state_digests": [
+      "2e59f874572b356439154cc6b781d13eaf4187c58fe8ad6e3f4845ecb75b6c23",
+      "9972f590ad25ab062c16511abbae55a877df2034f778957d02966df1268da548",
+      "7243f1bebb7553d024c6dd999931853f94dec996f380e07c203114a5b589dc91"
+    ],
+    "model_tensors_each": 146,
+    "inner_optimizer_state_entries_each": 145,
+    "inner_optimizer_param_groups_each": 1,
+    "outer_state": {
+      "algorithm": "weighted-mean",
+      "eta_outer": 1.0,
+      "sha256": "79661b97a27fce6f9057a16642b0cabdc6f6f7ab7782315e12da17a3a136c712",
+      "restored_exactly_in_all_reloads": true
+    },
+    "membership": {
+      "global": ["node-0", "node-1"],
+      "local_ranks_per_node": [0, 1, 2, 3, 4, 5, 6, 7],
+      "restored_exactly_in_all_reloads": true
+    },
+    "sqlite_integrity": "ok",
+    "sqlite_commit_rows": 5,
+    "sqlite_checkpoint_rows": 5,
+    "sqlite_authoritative_latest_rows": 1,
+    "active_leases_after_completion": 0,
+    "final_latest": {
+      "generation": 5,
+      "accepted_tokens": 26227200,
+      "fence": 2,
+      "manifest_sha256": "0b0ed65a87a796c56ff267db52dff4fd2f843b7ac9c9ffc8211c97fba770c51c"
+    },
+    "role_accounting": {
+      "role_starts": 20,
+      "role_restarts": 0,
+      "unplanned_evictions": 0,
+      "completed_trainers_exit_zero": 16,
+      "completed_managers_exit_zero": 2,
+      "native_services_drained_exit_zero": 2
+    },
+    "receipts": {
+      "native_submissions": 32,
+      "native_results": 4,
+      "native_result_lane_releases": 32,
+      "native_durable_applies": 32,
+      "pool_closes": 2,
+      "ranks_zero_through_seven_per_node_generation": true,
+      "duplicate_application": false
+    }
+  },
+  "fresh_reconstruction": {
+    "source_handoff_generation": 3,
+    "source_handoff_fence": 1,
+    "source_handoff_sha256": "1b7b06d7af106fbb86305d1bda6ee7e5a7f52a1ecbd9d48e230b3446843eb8cd",
+    "source_checkpoint_sha256": "03a51ea4e065b902c825ad78d987acaff32f0f5b52ed6f713b05a16b445fd753",
+    "source_checkpoint_model_digest": "2e59f874572b356439154cc6b781d13eaf4187c58fe8ad6e3f4845ecb75b6c23",
+    "source_checkpoint_outer_state_sha256": "79661b97a27fce6f9057a16642b0cabdc6f6f7ab7782315e12da17a3a136c712",
+    "manager_sync": [
+      {
+        "worker_id": "node-0",
+        "incarnation": "60894d6f56db4b1283febd91517b041a",
+        "endpoint_epoch": 1784506032964477041,
+        "status": "synchronized"
+      },
+      {
+        "worker_id": "node-1",
+        "incarnation": "558d53135a7e445b9b8b79bfbee4150c",
+        "endpoint_epoch": 1784506036429441374,
+        "status": "synchronized"
+      }
+    ],
+    "model_digest_matches_generation_4_native_base": true,
+    "generation_4_model_digest_matches_generation_5_native_base": true,
+    "new_manager_incarnations_only_in_fence_2_pool_closes": true,
+    "fresh_native_service_endpoints": true,
+    "manager_ready_before_trainers": true
+  },
+  "fencing": {
+    "live_probe_unix": 1784506086.6396925,
+    "old_allocation_id": 5033384,
+    "old_allocation_incarnation": "3eb3153d576f4ed2b14f1025c79d75a3",
+    "old_fence": 1,
+    "current_allocation_id": 5033539,
+    "current_allocation_incarnation": "c4eac01c344d43819dd9f1982a1d7f4f",
+    "current_fence": 2,
+    "old_renew_rejected": true,
+    "old_contribution_rejected": true,
+    "old_commit_publication_rejected": true,
+    "old_checkpoint_publication_rejected": true,
+    "old_latest_publication_rejected": true,
+    "publication_rows_before": 7,
+    "publication_rows_after": 7,
+    "authoritative_latest_unchanged_during_probe": true,
+    "durable_mutation_by_stale_owner": false,
+    "fence_1_native_messages_in_new_generation_controls": 0,
+    "old_manager_incarnations_in_new_pool_closes": 0
+  },
+  "local_state_authority": {
+    "fresh_bulk_root": "/tmp/resilient-e97-restart-20260720T000459Z",
+    "fresh_kernel_cache_root": "/tmp/resilient-e97-restart-kernel-cache-20260720T000459Z",
+    "previous_allocation_local_root_reused": false,
+    "retained_snapshot_includes": [
+      "supervision/**/*.json",
+      "telemetry/**/*.jsonl",
+      "control/**/*.json",
+      "control/**/*.jsonl"
+    ],
+    "retained_snapshot_excludes": ["mailbox", "*.data", "*.pt", "kernel-cache"],
+    "unfinished_dense_or_spool_state_authoritative": false,
+    "trainer_spool_bytes": 0,
+    "disk_replay_bytes": 0,
+    "python_dense_socket_bytes": 0
+  },
+  "transport": {
+    "node_0_useful_tx_bytes": 22027081984,
+    "node_0_useful_rx_bytes": 22027081984,
+    "node_1_useful_tx_bytes": 22027081984,
+    "node_1_useful_rx_bytes": 22027081984,
+    "replay_bytes": 0,
+    "route_errors": 0,
+    "retained_bytes_at_each_shutdown": 0,
+    "in_flight_bytes_at_each_shutdown": 0,
+    "shutdown_cq_cancellations_per_manager": 2,
+    "shutdown_provider_errno": 125,
+    "shutdown_owner_state": "DRAINING"
+  },
+  "native_runtime": {
+    "old_source_commit": "f56e27a53c9985e95c4ab7d0fcfa28b8a2c513e6",
+    "new_source_commit": "56237c05d39eea23ee2e5818ce931c0ea3e81f06",
+    "old_build_manifest_sha256": "206d6d098a9343091cc75451c77146fcc16ebd53c408dc8c9124a40eaad80e37",
+    "new_build_manifest_sha256": "bc40d57e1ebbf105424d4e153da5d43bd182e08cc7d51c6b3f9597b4cdba3ab3",
+    "provenance_only_differences": ["source_commit", "build_manifest_sha256"],
+    "bundle_sha256": "7b4c77696011cfc2b68fce541a34f9a1072ef767e13cce94ed2a4e2befc57d04",
+    "service_sha256": "c8eaf574cf4e68adc52aecdb14f989685cfa9ab9f508f86c58720d9b34c46b06",
+    "local_library_sha256": "482c30cc88828e2dece7a2b1a6fe524e00f19922eb94ae3904d4b9320dffefd2",
+    "transport_library_sha256": "7c0637fdc93f0391a7a8ba969f8ab2ef95cc478eec1d248baf9ffc89fc7985d3",
+    "synthetic_gate_binary_sha256": "69a3c471699e26cc0fd0dda35d4c86e4bac1e47a79b4997beeb4801d0dcab9cd",
+    "config_sha256": "afc2a65fd8c73499e74e21cb9531c978206c3a9c898e42d18cc58bb93eb9fe9c",
+    "provider_sha256": "9f78e6ad1221d69097239d1f29df35d87d62a2ab7f1051875c561c3f7b4bc6a4",
+    "substantive_runtime_fields_equal": true,
+    "ctest_passed": 10,
+    "ctest_failed": 0
+  },
+  "preflight": {
+    "selected_test_count": 95,
+    "selected_test_passed": 95,
+    "selected_test_failed": 0,
+    "selected_test_seconds": 131.99,
+    "g2_job_id": 5033529,
+    "g2_state": "COMPLETED",
+    "g2_exit_code": "0:0",
+    "g2_nodes": 2,
+    "g2_nodelist": "frontier[06841,06907]",
+    "g2_elapsed_seconds": 170,
+    "g2_timed_generations": 3,
+    "g2_exact_reference_matches": true,
+    "g2_median_seconds": 23.830168329,
+    "g2_speedup_over_python": 4.15278000569625,
+    "g2_required_speedup_over_python": 4.0,
+    "g2_mpi_collectives": 0,
+    "g2_all_rank_barriers": 0,
+    "g2_python_dense_socket_bytes": 0,
+    "g2_disk_replay_bytes": 0,
+    "g2_trainer_spool_bytes": 0,
+    "g2_cq_errors": 0,
+    "g2_route_errors": 0,
+    "g2_post_release_transport_bytes": 0
+  },
+  "non_compute_attempts": [
+    {
+      "job_id": 5033516,
+      "state": "CANCELLED",
+      "elapsed_seconds": 0,
+      "nodes_requested": 2,
+      "nodelist": "None assigned",
+      "fence_acquired": false,
+      "durable_state_mutated": false,
+      "reason": "cancelled while pending after the fresh-fence resume defect was found by source review and a failing regression test"
+    }
+  ],
+  "prohibited_paths": {
+    "python_tcp_dense_payload_bytes": 0,
+    "global_mpi_collectives": 0,
+    "trainer_lustre_dense_hot_path_bytes": 0,
+    "trainer_spool_bytes": 0,
+    "disk_replay_bytes": 0,
+    "central_full_model_broker": false,
+    "four_or_more_node_jobs_submitted": 0
+  },
+  "compute_pool_requirement_ids": [
+    "R01", "R02", "R03", "R04", "R05", "R06", "R07", "R08",
+    "R09", "R10", "R11", "R12", "R13", "R14", "R15", "R16"
+  ],
+  "native_requirement_ids": [
+    "NDP01", "NDP02", "NDP03", "NDP04", "NDP05", "NDP06",
+    "NDP07", "NDP08", "NDP09", "NDP10", "NDP11", "NDP12",
+    "NDP13", "NDP14", "NDP15", "NDP16", "NDP17"
+  ],
+  "evidence": {
+    "restart_repository_path": "reports/frontier/evidence/job-5033539",
+    "cancelled_attempt_repository_path": "reports/frontier/evidence/job-5033516",
+    "g2_repository_path": "reports/frontier/native-dataplane/5033529",
+    "restart_run_path": "/lustre/orion/bif148/proj-shared/emender/runs/npv1f-progress-20260719T223459Z-f56e27a",
+    "checkpoint_dense_files_excluded_from_repository": true,
+    "checkpoint_files_retained_at_run_path": true,
+    "submit_recipe": "reports/frontier/validate-native-pool-v1-2n-restart-submit-20260720T000459Z.sh"
+  }
+}

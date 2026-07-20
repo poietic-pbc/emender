@@ -1,0 +1,42 @@
+{
+  "schema": "emender-native-pool-live-stale-fence-probe-v1",
+  "status": "passed",
+  "probed_at_unix": 1784506086.6396925,
+  "run_id": "npv1f-progress-20260719T223459Z-f56e27a",
+  "old_allocation": {
+    "allocation_id": "5033384",
+    "fence": 1,
+    "incarnation": "3eb3153d576f4ed2b14f1025c79d75a3"
+  },
+  "current_allocation": {
+    "allocation_id": "5033539",
+    "fence": 2,
+    "incarnation": "c4eac01c344d43819dd9f1982a1d7f4f"
+  },
+  "results": {
+    "renew": "rejected: stale or expired allocation lease renewal",
+    "contribute": "rejected: operation rejected by newer or expired fence",
+    "commit_publish": "rejected: stale commit publication",
+    "checkpoint_publish": "rejected: stale checkpoint publication",
+    "latest_publish": "rejected: stale latest publication"
+  },
+  "authoritative_latest_before": {
+    "accepted_tokens": 15736320,
+    "fence": 1,
+    "generation": 3,
+    "manifest": "/lustre/orion/bif148/proj-shared/emender/runs/npv1f-progress-20260719T223459Z-f56e27a/handoff/generation-00000003-fence-00000001.json",
+    "manifest_sha256": "1b7b06d7af106fbb86305d1bda6ee7e5a7f52a1ecbd9d48e230b3446843eb8cd",
+    "row_fence": 1
+  },
+  "authoritative_latest_after": {
+    "accepted_tokens": 15736320,
+    "fence": 1,
+    "generation": 3,
+    "manifest": "/lustre/orion/bif148/proj-shared/emender/runs/npv1f-progress-20260719T223459Z-f56e27a/handoff/generation-00000003-fence-00000001.json",
+    "manifest_sha256": "1b7b06d7af106fbb86305d1bda6ee7e5a7f52a1ecbd9d48e230b3446843eb8cd",
+    "row_fence": 1
+  },
+  "publication_rows_before": 7,
+  "publication_rows_after": 7,
+  "durable_mutation_by_stale_owner": false
+}
