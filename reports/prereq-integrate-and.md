@@ -95,3 +95,27 @@ The independent no-overlap precondition also remains false: Slurm job
 `5035347` (`validate-native-pool-32n-third-atomic`) is still running on 32
 nodes. The wrapper was allowed to fail closed; it was not modified or bypassed,
 and no new Slurm job (including no job at four or more nodes) was submitted.
+
+## Retry after allocation clearance on 2026-07-20
+
+The exact approved command was attempted once more from committed source
+`58bc6a30` after the unrelated allocation completed:
+
+```text
+NDP_BUILD_MANIFEST="$PWD/build/native-resilient-dataplane/native-artifacts.json" \
+  bash scripts/frontier/submit_native_dataplane_2n_gate.sh clean
+exit 64: authoritative Frontier gate must be submitted from main
+```
+
+The accompanying `squeue -u "$USER"` output contained no jobs, so the
+no-overlap prerequisite is now satisfied. The remaining blocker is narrowly
+the authoritative-source rule: this isolated worktree is on
+`wg/agent-1337/prereq-integrate-and`, and the accepted launcher deliberately
+permits submission only after the integration commits have merged to `main`.
+The rule was not bypassed. The command exited before `sbatch`; therefore no
+two-node job, and no job of four or more nodes, was submitted in this retry.
+
+This change in scheduler state does not supply the missing live evidence. Five
+committed K40 generations, pipeline overlap/idle/cadence measurements, live
+failure/rejoin/replay, and newer-fence checkpoint restart remain pending a
+main-branch runner using this exact source and retained native manifest.
