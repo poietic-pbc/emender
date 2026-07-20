@@ -1,0 +1,110 @@
+{
+  "schema": "emender-native-pool-v1-normalized-payload-v1",
+  "status": "bound",
+  "normalized_workload_sha256": "0493ba1ebc6f28c3244b6845bffb2de722639ee8e9df7d6ffa1918742e0691f4",
+  "normalization": {
+    "included": "All model, optimizer, K40, native-layout, provider, memory, replay, and baseline deadline fields that define the training/data-plane payload.",
+    "excluded_dynamic_identity": [
+      "slurm_job_id",
+      "allocation_incarnation",
+      "run_id",
+      "run_directory",
+      "fence",
+      "initial_generation",
+      "resume_handoff",
+      "failure_target_identity",
+      "node_local_paths"
+    ],
+    "excluded_scale_controls": [
+      "node_count",
+      "q_min",
+      "owner_count",
+      "owner_shard_mapping",
+      "scale_stage_deadline",
+      "supervisor_outer_safety_bound"
+    ],
+    "excluded_queue_controls": [
+      "partition",
+      "qos",
+      "walltime",
+      "nodelist"
+    ]
+  },
+  "normalized_workload": {
+    "protocol": "resilient-diloco-compute-pool-v1",
+    "payload_id": "f56e27a-20260719T223459Z-native-pool-v1-failures-progress-2n30m-k40",
+    "source_id": "step-1525000-sha256-1da27d2e09bc6c6f5ffc30e3e4476df1cebd807267431c8524de1a5b0dc5bca9",
+    "seed_sha256": "1da27d2e09bc6c6f5ffc30e3e4476df1cebd807267431c8524de1a5b0dc5bca9",
+    "train_config_sha256": "afc2a65fd8c73499e74e21cb9531c978206c3a9c898e42d18cc58bb93eb9fe9c",
+    "tokenizer_sha256": "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069",
+    "data": "/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt",
+    "trainers_per_node": 8,
+    "local_complete_trainers": 8,
+    "local_steps_per_generation": 40,
+    "staleness_tau": 0,
+    "inner_optimizer": "schedulefree",
+    "outer_optimizer": {
+      "algorithm": "weighted-mean",
+      "eta_outer": 1
+    },
+    "backend": "native-cxi",
+    "provider": "cxi",
+    "endpoint_type": "FI_EP_RDM",
+    "network": "job_vni",
+    "fi_mr_cache_monitor": "kdreg2",
+    "fi_cxi_ats": 0,
+    "native_bundle_sha256": "7b4c77696011cfc2b68fce541a34f9a1072ef767e13cce94ed2a4e2befc57d04",
+    "native_config_sha256": "afc2a65fd8c73499e74e21cb9531c978206c3a9c898e42d18cc58bb93eb9fe9c",
+    "layout_bytes": 5506770496,
+    "shards": 83,
+    "frame_payload_bytes_max": 67108864,
+    "max_shared_bytes_per_node": 68719476736,
+    "max_spool_bytes_per_node": 68719476736,
+    "transport_slots_tx": 4,
+    "transport_slots_rx": 4,
+    "manager_or_trainer_restarts_per_role": 2,
+    "owner_reassignments": 2,
+    "disk_replay_bytes_max": 0,
+    "checkpoint_every_committed_generations": 1,
+    "deadlines_seconds": {
+      "allocation_lease_ttl": 60,
+      "manager_ready": 180,
+      "heartbeat": 60,
+      "trainer_k40": 420,
+      "route_ready": 15,
+      "owner_exchange": 90,
+      "redistribution": 60,
+      "trainer_apply": 60,
+      "exchange_commit": 180,
+      "steady_generation_end_to_end": 600,
+      "first_atomic_commit_from_allocation_start": 720
+    }
+  },
+  "authoritative_eight_node_gate": {
+    "task_id": "validate-native-pool-v1-8n",
+    "final_commit": "3cea50e8",
+    "completed_utc": "2026-07-20T09:30:11Z",
+    "terminal_generation": 14,
+    "terminal_fence": 16,
+    "terminal_accepted_tokens": 152117760,
+    "manifest_sha256": "31693c27af8b9eb18616dfb9c41cc71e5b6d5410288ca7c37a2a94f00550405a",
+    "authoritative_before_first_thirty_two_node_submission": true
+  },
+  "thirty_two_node_scale_controls": {
+    "nodes": 32,
+    "full_cohort_q_min": 32,
+    "late_ready_q_min": 31,
+    "t_min": 3934080,
+    "owner_count": 32,
+    "real_trainers": 256,
+    "run_id": "npv1f-progress-20260719T223459Z-f56e27a",
+    "payload_id": "f56e27a-20260719T223459Z-native-pool-v1-failures-progress-2n30m-k40",
+    "qos": "debug",
+    "walltime": "00:30:00",
+    "owner_layout": "round-robin compact shards over the byte-identical 5,506,770,496-byte layout",
+    "scale_stage_deadline_seconds": 180,
+    "supervisor_outer_safety_bound_seconds": 360,
+    "performance_target_uses_outer_safety_bound": false,
+    "failure_event": "one node-local native peer is made unavailable during owner transport, bounded to two local restarts; a strictly newer-fence continuation reloads the last authoritative checkpoint"
+  }
+}
