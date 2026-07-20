@@ -1,0 +1,193 @@
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 2543, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 2539, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 1793, in manager
+    else _native_manager(args))
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 1658, in _native_manager
+    final_operation, final_result, freeze = _native_sharded_owner_reduce(
+                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 1267, in _native_sharded_owner_reduce
+    with session.import_reduction_sources(
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/contextlib.py", line 137, in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/native_pool_runtime.py", line 417, in import_reduction_sources
+    raise RuntimeError("imported reduction sources are outside LOCAL_COLLECT")
+RuntimeError: imported reduction sources are outside LOCAL_COLLECT
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 2543, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 2539, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 1793, in manager
+    else _native_manager(args))
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 1590, in _native_manager
+    freeze = session.freeze(
+             ^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/native_pool_runtime.py", line 507, in freeze
+    operation = self.local.control(Command.FREEZE, deadline_s=deadline_s)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/native_dataplane.py", line 892, in control
+    self.native.check(self.native.library.ndp_control_v1(
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/native_dataplane.py", line 532, in check
+    raise error_type(code, operation, detail)
+ndm.native_dataplane.NativeDataplaneError: ndp_control_v1(FREEZE): invalid lifecycle state (-3)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 2543, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 2539, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 1793, in manager
+    else _native_manager(args))
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 1498, in _native_manager
+    start_generation, sync_evidence = _native_manager_resume_point(
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 373, in _native_manager_resume_point
+    raise ValueError("manager rejoin manifest identity mismatch")
+ValueError: manager rejoin manifest identity mismatch
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 2543, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 2539, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 1793, in manager
+    else _native_manager(args))
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 1498, in _native_manager
+    start_generation, sync_evidence = _native_manager_resume_point(
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 373, in _native_manager_resume_point
+    raise ValueError("manager rejoin manifest identity mismatch")
+ValueError: manager rejoin manifest identity mismatch
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 2543, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 2539, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 1793, in manager
+    else _native_manager(args))
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 1498, in _native_manager
+    start_generation, sync_evidence = _native_manager_resume_point(
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-19ad08c6a4/scripts/frontier/resilient_e97_role.py", line 373, in _native_manager_resume_point
+    raise ValueError("manager rejoin manifest identity mismatch")
+ValueError: manager rejoin manifest identity mismatch
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/site-packages/fla/utils/_device.py:100: UserWarning: Triton is not supported on current platform, roll back to CPU.
+  _cpu_device_warning()
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/ndm/native_pool_runtime.py", line 479, in import_reduction_sources
+    yield tuple(operation for _client, operation in admitted)
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/scripts/frontier/resilient_e97_role.py", line 1271, in _native_sharded_owner_reduce
+    owner_operation, owner_result = session.finalize_redistribution(
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/ndm/native_pool_runtime.py", line 599, in finalize_redistribution
+    operation = self.local.control(Command.FINALIZE_OWNERS, deadline_s=deadline_s)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/ndm/native_dataplane.py", line 892, in control
+    self.native.check(self.native.library.ndp_control_v1(
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/ndm/native_dataplane.py", line 532, in check
+    raise error_type(code, operation, detail)
+ndm.native_dataplane.NativeDataplaneError: ndp_control_v1(FINALIZE_OWNERS): native service is draining or stopped (-16)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/scripts/frontier/resilient_e97_role.py", line 1658, in _native_manager
+    final_operation, final_result, freeze = _native_sharded_owner_reduce(
+                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/scripts/frontier/resilient_e97_role.py", line 1267, in _native_sharded_owner_reduce
+    with session.import_reduction_sources(
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/contextlib.py", line 158, in __exit__
+    self.gen.throw(value)
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/ndm/native_pool_runtime.py", line 492, in import_reduction_sources
+    operation.close()
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/ndm/native_dataplane.py", line 593, in close
+    self.client.native.check(code, "ndp_op_release_v1")
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/ndm/native_dataplane.py", line 532, in check
+    raise error_type(code, operation, detail)
+ndm.native_dataplane.NativeDataplaneError: ndp_op_release_v1: route failure (-12)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/ndm/native_pool_runtime.py", line 746, in close
+    final = self.telemetry(terminal_reason)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/ndm/native_pool_runtime.py", line 695, in telemetry
+    local = asdict(self.local.metrics)
+                   ^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/ndm/native_dataplane.py", line 1021, in metrics
+    self.native.check(self.native.library.ndp_client_metrics_v1(
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/ndm/native_dataplane.py", line 532, in check
+    raise error_type(code, operation, detail)
+ndm.native_dataplane.NativeDataplaneError: ndp_client_metrics_v1: route failure (-12)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/scripts/frontier/resilient_e97_role.py", line 2543, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/scripts/frontier/resilient_e97_role.py", line 2539, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+           ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/scripts/frontier/resilient_e97_role.py", line 1793, in manager
+    else _native_manager(args))
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/scripts/frontier/resilient_e97_role.py", line 1779, in _native_manager
+    session.close("allocation_term_handoff" if term_requested["value"] else "normal")
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/ndm/native_pool_runtime.py", line 749, in close
+    self.local.close()
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/ndm/native_dataplane.py", line 1037, in close
+    operation.close()
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/ndm/native_dataplane.py", line 593, in close
+    self.client.native.check(code, "ndp_op_release_v1")
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-6d2a62269a/ndm/native_dataplane.py", line 532, in check
+    raise error_type(code, operation, detail)
+ndm.native_dataplane.NativeDataplaneError: ndp_op_release_v1: route failure (-12)
