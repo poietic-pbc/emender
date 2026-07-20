@@ -1155,6 +1155,20 @@ def test_pool_wiring_preserves_exact_e97_trainer_model_data_optimizer_and_k40():
     assert "RESILIENT_E97_GENERATION_DEADLINE_S:-900" not in launcher
 
 
+def test_frontier_native_trainer_constructs_and_exercises_generation_pipeline():
+    """The production role, rather than a fixture, owns the pipeline policy."""
+    role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    trainer = role[role.index("def trainer(args) -> int:"):]
+
+    assert "NativeGenerationPipeline(" in trainer
+    assert "pipeline.reserve(" in trainer
+    assert "pipeline.handoff(" in trainer
+    assert "pipeline.release(" in trainer
+    assert "pipeline.publish_committed(" in trainer
+    assert "pipeline.take_at_boundary(" in trainer
+    assert '"native_generation_pipeline"' in trainer
+
+
 def test_frontier_default_keeps_supervision_state_node_local():
     text = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
     assert 'os.environ.get("RESILIENT_E97_LAUNCH_MODE", "node-local")' in text
