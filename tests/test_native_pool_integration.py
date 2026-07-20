@@ -197,6 +197,77 @@ def test_native_manager_imports_owner_results_on_independent_rpc_sessions(monkey
     assert all(operation.closed for operation in operations)
 
 
+def test_native_manager_imports_thirty_two_frozen_owner_results(monkeypatch):
+    """The ordered 32-node rung must not inherit the old 16-source gate."""
+    session = object.__new__(NativeManagerSession)
+    session._generation_installed = True
+    session._frozen = False
+    session.run_id = "run-32n"
+    session.fence_epoch = 17
+
+    class Local:
+        native = object()
+        total_elements = 1
+        layout_digest = bytes.fromhex("11" * 32)
+        generation = 14
+        attempt = 2
+        owner_epoch = 1
+        generation_deadline_ns = time.time_ns() + 10_000_000_000
+        base_digest = bytes.fromhex("22" * 32)
+        plan_digest = bytes.fromhex("33" * 32)
+
+    session.local = Local()
+    opened, closed = [], []
+
+    class FakeBuffer:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_ignored):
+            return None
+
+    class FakeOperation:
+        def __init__(self, worker):
+            self.worker = worker
+
+        def close(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, worker):
+            self.worker = worker
+            opened.append(worker)
+
+        def attach_generation(self, **metadata):
+            assert metadata["attempt"] == 2
+
+        def register_memfd(self, fd, *, length, handle_generation):
+            assert length == 8 and handle_generation == 14
+            return FakeBuffer()
+
+        def submit(self, _buffer, **metadata):
+            assert metadata["trainer_key"] == self.worker
+            return FakeOperation(self.worker)
+
+        def close(self):
+            closed.append(self.worker)
+
+    monkeypatch.setattr(
+        Client, "open",
+        lambda **values: FakeClient(values["worker_key"].split(":")[-2]))
+    sources = tuple(
+        (100 + index, f"node-{index}", f"node-{index}-boot", index, 1,
+         bytes([index]) * 32)
+        for index in range(32))
+    with session.import_reduction_sources(
+            sources, source_dtype=DType.F64, deadline_s=10) as operations:
+        assert len(operations) == 32
+        assert {operation.worker for operation in operations} == {
+            f"node-{index}" for index in range(32)}
+    assert sorted(opened) == sorted(f"node-{index}" for index in range(32))
+    assert sorted(closed) == sorted(opened)
+
+
 def test_native_manager_binds_both_abis_before_ready_installs_routes_and_drains(tmp_path):
     manifest = json.loads(BUILD_MANIFEST.read_text())
     transport_library = (

@@ -36,6 +36,13 @@ from ndm.native_transport import (
 from ndm.resilient_pool_runtime import OwnerEndpoint
 
 
+# One compact source consumes one of the native service's bounded local-buffer
+# slots until freeze/finalize.  The v1 service admits 64 such buffers; this
+# lower deployment bound is valid beneath the protocol's 4,096-contribution
+# ceiling and covers both ordered 32- and 64-node rungs.
+MAX_PARALLEL_REDUCTION_SOURCES = 64
+
+
 @dataclass(frozen=True)
 class NativeServiceTelemetry:
     backend: str
@@ -413,7 +420,8 @@ class NativeManagerSession:
         freeze/finalize window and are closed on every exit path.
         """
         if (not self._generation_installed or self._frozen
-                or not sources or len(sources) > 16 or deadline_s <= 0):
+                or not sources or len(sources) > MAX_PARALLEL_REDUCTION_SOURCES
+                or deadline_s <= 0):
             raise RuntimeError("imported reduction sources are outside LOCAL_COLLECT")
         if len({(worker, incarnation, sequence)
                 for _fd, worker, incarnation, sequence, _weight, _digest in sources}) \
