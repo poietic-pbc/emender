@@ -104,9 +104,11 @@ def _native_remote_endpoints(
 
     Every manager derives the same round-robin tournament from the frozen
     worker identities. Each round contains disjoint bounded point-to-point
-    pairs, so four peers finish in three transfer waves without a launched-rank
-    collective. The explicit contribution floor remains control-plane policy
-    and can therefore be lower than allocation capacity in later rungs.
+    pairs. An odd cohort receives one deterministic bye per round; the bye is
+    omitted from the returned peer list because each pair is executed under
+    its own deadline, not as a round barrier. The explicit contribution floor
+    remains control-plane policy and can therefore be lower than allocation
+    capacity in later rungs.
     """
     ordered = tuple(sorted(endpoints, key=lambda item: item.worker_id))
     workers = [item.worker_id for item in ordered]
@@ -116,10 +118,11 @@ def _native_remote_endpoints(
         raise ValueError("native frozen endpoints exclude the local worker")
     if len(ordered) < minimum_contributions:
         raise ValueError("native frozen endpoint set is below explicit contribution floor")
-    if len(ordered) % 2:
-        raise ValueError("native v1 round-robin owner schedule requires an even peer set")
     by_worker = {item.worker_id: item for item in ordered}
     rotation = list(workers)
+    bye = None
+    if len(rotation) % 2:
+        rotation.append(bye)
     peers: list[OwnerEndpoint] = []
     for _ in range(len(rotation) - 1):
         pairs = tuple(zip(rotation[:len(rotation) // 2],
@@ -127,10 +130,11 @@ def _native_remote_endpoints(
         peer = next((right if left == local_worker_id else left
                      for left, right in pairs
                      if local_worker_id in {left, right}), None)
-        if peer is None:
-            raise RuntimeError("native round-robin schedule omitted local worker")
-        peers.append(by_worker[peer])
+        if peer is not bye:
+            peers.append(by_worker[peer])
         rotation = [rotation[0], rotation[-1], *rotation[1:-1]]
+    if len(peers) != len(workers) - 1 or len(set(peers)) != len(peers):
+        raise RuntimeError("native round-robin schedule omitted or repeated a peer")
     return tuple(peers)
 
 
@@ -1513,9 +1517,9 @@ def _native_manager(args) -> int:
     control_server = control_thread = None
     pool_client = None
     if args.node_count > 1:
-        if args.node_count not in {2, 4, 8}:
+        if args.node_count not in {2, 4, 8, 32}:
             raise ValueError(
-                "ordered native E97 scale runtime permits only 2, 4, or 8 nodes")
+                "ordered native E97 scale runtime permits only 2, 4, 8, or 32 nodes")
         if node == 0:
             control_server = PoolControlServer(
                 ("0.0.0.0", args.coordinator_port), pool_config,

@@ -270,6 +270,31 @@ def test_native_eight_node_peer_schedule_balances_every_pair_once():
     assert len(all_pairs) == 28
 
 
+def test_native_thirty_one_ready_peer_schedule_names_every_survivor_once():
+    """One late 32-node peer must not turn READY membership into world size."""
+    from ndm.resilient_pool_runtime import OwnerEndpoint
+    from scripts.frontier import resilient_e97_role as role
+
+    workers = tuple(f"node-{index}" for index in range(31))
+    endpoints = tuple(
+        OwnerEndpoint(worker, f"inc-{worker}", "host", 29571 + index)
+        for index, worker in enumerate(reversed(workers))
+    )
+    schedules = {
+        worker: tuple(peer.worker_id for peer in role._native_remote_endpoints(
+            endpoints, local_worker_id=worker, minimum_contributions=31))
+        for worker in workers
+    }
+
+    assert all(len(schedule) == 30 for schedule in schedules.values())
+    for worker, schedule in schedules.items():
+        assert len(set(schedule)) == 30
+        assert set(schedule) == set(workers) - {worker}
+    for left in workers:
+        for right in schedules[left]:
+            assert left in schedules[right]
+
+
 def test_native_eight_node_shard_ranges_are_balanced_and_byte_bounded():
     from scripts.frontier import resilient_e97_role as role
 
