@@ -1,0 +1,974 @@
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342162.668031462, "phase": "model_build_start", "step": 680, "timestamp": 1784551251.9983554}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342173.211543317, "phase": "model_device_ready", "step": 680, "timestamp": 1784551262.5418649}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342183.241505447, "phase": "model_state_loaded", "step": 680, "timestamp": 1784551272.571829}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342183.282864181, "phase": "model_dtype_ready", "step": 680, "timestamp": 1784551272.6131876}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342183.28410963, "phase": "optimizer_built", "step": 680, "timestamp": 1784551272.6144335}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342190.494790057, "phase": "optimizer_state_loaded", "step": 680, "timestamp": 1784551279.8251133}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342190.495680459, "phase": "data_iterator_ready", "step": 680, "timestamp": 1784551279.8260045}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342190.496795406, "phase": "optimizer_step_start", "step": 680, "timestamp": 1784551279.8271194}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342190.496976837, "phase": "data_load_start", "step": 680, "timestamp": 1784551279.8273008}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342190.517800663, "phase": "data_load_end", "step": 680, "timestamp": 1784551279.8481245, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342190.518026169, "phase": "forward_start", "step": 680, "timestamp": 1784551279.8483503}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342192.711343445, "phase": "forward_end", "step": 680, "timestamp": 1784551282.0416636}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342193.109252341, "phase": "backward_start", "step": 680, "timestamp": 1784551282.4395754}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342195.957257768, "phase": "backward_end", "step": 680, "timestamp": 1784551285.287581}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342195.957745982, "phase": "loss_sync_start", "step": 680, "timestamp": 1784551285.2880702}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.09338797628879547, "micro_step": 0, "monotonic_s": 342196.400943884, "phase": "loss_sync_end", "step": 680, "timestamp": 1784551285.7312677}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342196.527710547, "phase": "optimizer_update_start", "step": 680, "timestamp": 1784551285.8580341}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342196.629448291, "phase": "optimizer_update_end", "step": 680, "timestamp": 1784551285.9597716}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.09338797628879547, "monotonic_s": 342196.69465534, "phase": "optimizer_step_end", "step": 680, "timestamp": 1784551286.0249794, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342196.696117407, "phase": "optimizer_step_start", "step": 681, "timestamp": 1784551286.0264416}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342196.696293568, "phase": "data_load_start", "step": 681, "timestamp": 1784551286.0266175}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342196.70467543, "phase": "data_load_end", "step": 681, "timestamp": 1784551286.0349996, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342196.704869936, "phase": "forward_start", "step": 681, "timestamp": 1784551286.0351942}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342196.727691385, "phase": "forward_end", "step": 681, "timestamp": 1784551286.0580153}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342197.218851852, "phase": "backward_start", "step": 681, "timestamp": 1784551286.5491757}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342197.241119772, "phase": "backward_end", "step": 681, "timestamp": 1784551286.5714438}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342197.241396527, "phase": "loss_sync_start", "step": 681, "timestamp": 1784551286.5717206}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.12329325079917908, "micro_step": 0, "monotonic_s": 342198.125436353, "phase": "loss_sync_end", "step": 681, "timestamp": 1784551287.4557605}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342198.144151631, "phase": "optimizer_update_start", "step": 681, "timestamp": 1784551287.4744756}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342198.218658537, "phase": "optimizer_update_end", "step": 681, "timestamp": 1784551287.5489826}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.12329325079917908, "monotonic_s": 342198.285452595, "phase": "optimizer_step_end", "step": 681, "timestamp": 1784551287.6157765, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342198.286807044, "phase": "optimizer_step_start", "step": 682, "timestamp": 1784551287.617131}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342198.286974238, "phase": "data_load_start", "step": 682, "timestamp": 1784551287.6172984}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342198.294860561, "phase": "data_load_end", "step": 682, "timestamp": 1784551287.6251845, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342198.295055778, "phase": "forward_start", "step": 682, "timestamp": 1784551287.6253798}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342198.317249625, "phase": "forward_end", "step": 682, "timestamp": 1784551287.6475735}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342198.816625912, "phase": "backward_start", "step": 682, "timestamp": 1784551288.1469495}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342198.838610954, "phase": "backward_end", "step": 682, "timestamp": 1784551288.1689348}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342198.838897679, "phase": "loss_sync_start", "step": 682, "timestamp": 1784551288.1692219}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.32889729738235474, "micro_step": 0, "monotonic_s": 342199.725146317, "phase": "loss_sync_end", "step": 682, "timestamp": 1784551289.05547}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342199.743985865, "phase": "optimizer_update_start", "step": 682, "timestamp": 1784551289.0743096}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342199.816084373, "phase": "optimizer_update_end", "step": 682, "timestamp": 1784551289.1464086}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.32889729738235474, "monotonic_s": 342199.885231953, "phase": "optimizer_step_end", "step": 682, "timestamp": 1784551289.2155561, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342199.88647637, "phase": "optimizer_step_start", "step": 683, "timestamp": 1784551289.2168005}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342199.886642511, "phase": "data_load_start", "step": 683, "timestamp": 1784551289.2169666}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342199.89468152, "phase": "data_load_end", "step": 683, "timestamp": 1784551289.2250056, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342199.894875415, "phase": "forward_start", "step": 683, "timestamp": 1784551289.2251995}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342199.919298241, "phase": "forward_end", "step": 683, "timestamp": 1784551289.2496223}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342200.403485632, "phase": "backward_start", "step": 683, "timestamp": 1784551289.7338097}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342200.4259136, "phase": "backward_end", "step": 683, "timestamp": 1784551289.7562375}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342200.42618762, "phase": "loss_sync_start", "step": 683, "timestamp": 1784551289.7565117}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.2615633010864258, "micro_step": 0, "monotonic_s": 342201.311152114, "phase": "loss_sync_end", "step": 683, "timestamp": 1784551290.6414762}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342201.329781857, "phase": "optimizer_update_start", "step": 683, "timestamp": 1784551290.6601057}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342201.40008367, "phase": "optimizer_update_end", "step": 683, "timestamp": 1784551290.7304077}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.2615633010864258, "monotonic_s": 342201.471187353, "phase": "optimizer_step_end", "step": 683, "timestamp": 1784551290.8015115, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342201.472432331, "phase": "optimizer_step_start", "step": 684, "timestamp": 1784551290.8027563}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342201.47262804, "phase": "data_load_start", "step": 684, "timestamp": 1784551290.8029523}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342201.480618955, "phase": "data_load_end", "step": 684, "timestamp": 1784551290.8109426, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342201.480815796, "phase": "forward_start", "step": 684, "timestamp": 1784551290.8111398}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342201.503703023, "phase": "forward_end", "step": 684, "timestamp": 1784551290.834027}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342202.009515448, "phase": "backward_start", "step": 684, "timestamp": 1784551291.3398395}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342202.032124528, "phase": "backward_end", "step": 684, "timestamp": 1784551291.3624485}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342202.032409198, "phase": "loss_sync_start", "step": 684, "timestamp": 1784551291.3627334}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.06534594297409058, "micro_step": 0, "monotonic_s": 342202.917477243, "phase": "loss_sync_end", "step": 684, "timestamp": 1784551292.2478013}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342202.936161841, "phase": "optimizer_update_start", "step": 684, "timestamp": 1784551292.2664857}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342203.003998757, "phase": "optimizer_update_end", "step": 684, "timestamp": 1784551292.3343227}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.06534594297409058, "monotonic_s": 342203.077371899, "phase": "optimizer_step_end", "step": 684, "timestamp": 1784551292.4076958, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342203.078667555, "phase": "optimizer_step_start", "step": 685, "timestamp": 1784551292.4089916}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342203.078833967, "phase": "data_load_start", "step": 685, "timestamp": 1784551292.4091582}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342203.087002817, "phase": "data_load_end", "step": 685, "timestamp": 1784551292.417327, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342203.087196071, "phase": "forward_start", "step": 685, "timestamp": 1784551292.41752}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342203.109420987, "phase": "forward_end", "step": 685, "timestamp": 1784551292.439745}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342203.603141746, "phase": "backward_start", "step": 685, "timestamp": 1784551292.9334655}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342203.625645641, "phase": "backward_end", "step": 685, "timestamp": 1784551292.9559696}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342203.625933548, "phase": "loss_sync_start", "step": 685, "timestamp": 1784551292.9562576}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.23972828686237335, "micro_step": 0, "monotonic_s": 342204.511114481, "phase": "loss_sync_end", "step": 685, "timestamp": 1784551293.8414385}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342204.529858244, "phase": "optimizer_update_start", "step": 685, "timestamp": 1784551293.860182}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342204.595722454, "phase": "optimizer_update_end", "step": 685, "timestamp": 1784551293.9260464}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.23972828686237335, "monotonic_s": 342204.671028456, "phase": "optimizer_step_end", "step": 685, "timestamp": 1784551294.0013525, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342204.672415478, "phase": "optimizer_step_start", "step": 686, "timestamp": 1784551294.0027394}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342204.672613732, "phase": "data_load_start", "step": 686, "timestamp": 1784551294.0029378}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342204.681315271, "phase": "data_load_end", "step": 686, "timestamp": 1784551294.0116394, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342204.681508004, "phase": "forward_start", "step": 686, "timestamp": 1784551294.011832}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342204.703959729, "phase": "forward_end", "step": 686, "timestamp": 1784551294.0342839}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342205.204146281, "phase": "backward_start", "step": 686, "timestamp": 1784551294.53447}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342205.226664338, "phase": "backward_end", "step": 686, "timestamp": 1784551294.5569882}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342205.226951534, "phase": "loss_sync_start", "step": 686, "timestamp": 1784551294.5572755}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.13447034358978271, "micro_step": 0, "monotonic_s": 342206.112707005, "phase": "loss_sync_end", "step": 686, "timestamp": 1784551295.443031}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342206.131455091, "phase": "optimizer_update_start", "step": 686, "timestamp": 1784551295.4617789}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342206.195310588, "phase": "optimizer_update_end", "step": 686, "timestamp": 1784551295.5256345}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.13447034358978271, "monotonic_s": 342206.272705002, "phase": "optimizer_step_end", "step": 686, "timestamp": 1784551295.603029, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342206.274157699, "phase": "optimizer_step_start", "step": 687, "timestamp": 1784551295.6044817}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342206.274353448, "phase": "data_load_start", "step": 687, "timestamp": 1784551295.6046777}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342206.281823641, "phase": "data_load_end", "step": 687, "timestamp": 1784551295.6121478, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342206.282021274, "phase": "forward_start", "step": 687, "timestamp": 1784551295.6123455}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342206.304438063, "phase": "forward_end", "step": 687, "timestamp": 1784551295.634762}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342206.824597604, "phase": "backward_start", "step": 687, "timestamp": 1784551296.1549215}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342206.846985949, "phase": "backward_end", "step": 687, "timestamp": 1784551296.17731}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342206.847258988, "phase": "loss_sync_start", "step": 687, "timestamp": 1784551296.1775832}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.1707887053489685, "micro_step": 0, "monotonic_s": 342207.732730639, "phase": "loss_sync_end", "step": 687, "timestamp": 1784551297.0630546}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342207.751608086, "phase": "optimizer_update_start", "step": 687, "timestamp": 1784551297.081932}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342207.831869168, "phase": "optimizer_update_end", "step": 687, "timestamp": 1784551297.162193}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.1707887053489685, "monotonic_s": 342207.89307613, "phase": "optimizer_step_end", "step": 687, "timestamp": 1784551297.2234, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342207.894319691, "phase": "optimizer_step_start", "step": 688, "timestamp": 1784551297.224644}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342207.894492215, "phase": "data_load_start", "step": 688, "timestamp": 1784551297.2248163}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342207.902593621, "phase": "data_load_end", "step": 688, "timestamp": 1784551297.2329175, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342207.90278889, "phase": "forward_start", "step": 688, "timestamp": 1784551297.233113}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342207.924963449, "phase": "forward_end", "step": 688, "timestamp": 1784551297.2552874}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342208.418582146, "phase": "backward_start", "step": 688, "timestamp": 1784551297.7489061}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342208.441177071, "phase": "backward_end", "step": 688, "timestamp": 1784551297.771501}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342208.441456523, "phase": "loss_sync_start", "step": 688, "timestamp": 1784551297.7717805}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.17884430289268494, "micro_step": 0, "monotonic_s": 342209.327842335, "phase": "loss_sync_end", "step": 688, "timestamp": 1784551298.6581662}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342209.346574521, "phase": "optimizer_update_start", "step": 688, "timestamp": 1784551298.6768985}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342209.424512549, "phase": "optimizer_update_end", "step": 688, "timestamp": 1784551298.7548366}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.17884430289268494, "monotonic_s": 342209.487808661, "phase": "optimizer_step_end", "step": 688, "timestamp": 1784551298.8181326, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342209.4891077, "phase": "optimizer_step_start", "step": 689, "timestamp": 1784551298.8194318}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342209.489279343, "phase": "data_load_start", "step": 689, "timestamp": 1784551298.8196034}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342209.496892833, "phase": "data_load_end", "step": 689, "timestamp": 1784551298.8272169, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342209.497088231, "phase": "forward_start", "step": 689, "timestamp": 1784551298.8274121}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342209.519297559, "phase": "forward_end", "step": 689, "timestamp": 1784551298.8496215}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342210.006328564, "phase": "backward_start", "step": 689, "timestamp": 1784551299.3366523}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342210.028641902, "phase": "backward_end", "step": 689, "timestamp": 1784551299.3589659}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342210.028931524, "phase": "loss_sync_start", "step": 689, "timestamp": 1784551299.3592556}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.10695960372686386, "micro_step": 0, "monotonic_s": 342210.915071821, "phase": "loss_sync_end", "step": 689, "timestamp": 1784551300.245396}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342210.933876096, "phase": "optimizer_update_start", "step": 689, "timestamp": 1784551300.2642002}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342211.009228963, "phase": "optimizer_update_end", "step": 689, "timestamp": 1784551300.339553}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.10695960372686386, "monotonic_s": 342211.075121188, "phase": "optimizer_step_end", "step": 689, "timestamp": 1784551300.405445, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342211.076413403, "phase": "optimizer_step_start", "step": 690, "timestamp": 1784551300.4067373}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342211.076583453, "phase": "data_load_start", "step": 690, "timestamp": 1784551300.4069076}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342211.084327807, "phase": "data_load_end", "step": 690, "timestamp": 1784551300.4146516, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342211.084522845, "phase": "forward_start", "step": 690, "timestamp": 1784551300.414847}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342211.106867223, "phase": "forward_end", "step": 690, "timestamp": 1784551300.4371912}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342211.607287306, "phase": "backward_start", "step": 690, "timestamp": 1784551300.9376113}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342211.629597609, "phase": "backward_end", "step": 690, "timestamp": 1784551300.9599214}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342211.629888243, "phase": "loss_sync_start", "step": 690, "timestamp": 1784551300.9602125}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.167802095413208, "micro_step": 0, "monotonic_s": 342212.517541433, "phase": "loss_sync_end", "step": 690, "timestamp": 1784551301.8478653}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342212.536325098, "phase": "optimizer_update_start", "step": 690, "timestamp": 1784551301.8666492}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342212.609399978, "phase": "optimizer_update_end", "step": 690, "timestamp": 1784551301.939724}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.167802095413208, "monotonic_s": 342212.67757031, "phase": "optimizer_step_end", "step": 690, "timestamp": 1784551302.0078943, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342212.678981185, "phase": "optimizer_step_start", "step": 691, "timestamp": 1784551302.009305}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342212.679187766, "phase": "data_load_start", "step": 691, "timestamp": 1784551302.009512}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342212.68823791, "phase": "data_load_end", "step": 691, "timestamp": 1784551302.0185618, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342212.688435814, "phase": "forward_start", "step": 691, "timestamp": 1784551302.01876}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342212.710789351, "phase": "forward_end", "step": 691, "timestamp": 1784551302.0411134}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342213.2107327, "phase": "backward_start", "step": 691, "timestamp": 1784551302.5410569}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342213.233128278, "phase": "backward_end", "step": 691, "timestamp": 1784551302.5634522}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342213.23341845, "phase": "loss_sync_start", "step": 691, "timestamp": 1784551302.5637424}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.16031590104103088, "micro_step": 0, "monotonic_s": 342214.119797219, "phase": "loss_sync_end", "step": 691, "timestamp": 1784551303.4501212}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342214.138500319, "phase": "optimizer_update_start", "step": 691, "timestamp": 1784551303.4688244}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342214.209201837, "phase": "optimizer_update_end", "step": 691, "timestamp": 1784551303.539526}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.16031590104103088, "monotonic_s": 342214.279564429, "phase": "optimizer_step_end", "step": 691, "timestamp": 1784551303.6098886, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342214.280826706, "phase": "optimizer_step_start", "step": 692, "timestamp": 1784551303.6111507}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342214.281020502, "phase": "data_load_start", "step": 692, "timestamp": 1784551303.6113446}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342214.288824161, "phase": "data_load_end", "step": 692, "timestamp": 1784551303.619148, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342214.289018779, "phase": "forward_start", "step": 692, "timestamp": 1784551303.6193428}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342214.311151316, "phase": "forward_end", "step": 692, "timestamp": 1784551303.6414754}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342214.798606424, "phase": "backward_start", "step": 692, "timestamp": 1784551304.12893}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342214.821102096, "phase": "backward_end", "step": 692, "timestamp": 1784551304.151426}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342214.821380336, "phase": "loss_sync_start", "step": 692, "timestamp": 1784551304.1517043}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.12810571491718292, "micro_step": 0, "monotonic_s": 342215.709560036, "phase": "loss_sync_end", "step": 692, "timestamp": 1784551305.039884}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342215.728283305, "phase": "optimizer_update_start", "step": 692, "timestamp": 1784551305.0586073}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342215.79695072, "phase": "optimizer_update_end", "step": 692, "timestamp": 1784551305.1272748}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.12810571491718292, "monotonic_s": 342215.869494982, "phase": "optimizer_step_end", "step": 692, "timestamp": 1784551305.199819, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342215.870781145, "phase": "optimizer_step_start", "step": 693, "timestamp": 1784551305.201105}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342215.870953379, "phase": "data_load_start", "step": 693, "timestamp": 1784551305.2012775}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342215.879579301, "phase": "data_load_end", "step": 693, "timestamp": 1784551305.2099035, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342215.879775081, "phase": "forward_start", "step": 693, "timestamp": 1784551305.2100992}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342215.901946766, "phase": "forward_end", "step": 693, "timestamp": 1784551305.232271}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342216.389125808, "phase": "backward_start", "step": 693, "timestamp": 1784551305.7194498}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342216.41157512, "phase": "backward_end", "step": 693, "timestamp": 1784551305.741899}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342216.411866715, "phase": "loss_sync_start", "step": 693, "timestamp": 1784551305.7421908}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.10503433644771576, "micro_step": 0, "monotonic_s": 342217.298913389, "phase": "loss_sync_end", "step": 693, "timestamp": 1784551306.6292372}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342217.317684841, "phase": "optimizer_update_start", "step": 693, "timestamp": 1784551306.6480086}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342217.384347269, "phase": "optimizer_update_end", "step": 693, "timestamp": 1784551306.7146714}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.10503433644771576, "monotonic_s": 342217.459084722, "phase": "optimizer_step_end", "step": 693, "timestamp": 1784551306.7894087, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342217.460372158, "phase": "optimizer_step_start", "step": 694, "timestamp": 1784551306.7906961}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342217.46054327, "phase": "data_load_start", "step": 694, "timestamp": 1784551306.7908676}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342217.468330357, "phase": "data_load_end", "step": 694, "timestamp": 1784551306.7986543, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342217.468525596, "phase": "forward_start", "step": 694, "timestamp": 1784551306.7988496}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342217.490942666, "phase": "forward_end", "step": 694, "timestamp": 1784551306.8212667}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342217.978604714, "phase": "backward_start", "step": 694, "timestamp": 1784551307.3089287}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342218.000905499, "phase": "backward_end", "step": 694, "timestamp": 1784551307.3312294}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342218.001195481, "phase": "loss_sync_start", "step": 694, "timestamp": 1784551307.3315196}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.12980332970619202, "micro_step": 0, "monotonic_s": 342218.888278896, "phase": "loss_sync_end", "step": 694, "timestamp": 1784551308.2186027}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342218.90710325, "phase": "optimizer_update_start", "step": 694, "timestamp": 1784551308.2374272}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342218.971110451, "phase": "optimizer_update_end", "step": 694, "timestamp": 1784551308.3014343}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.12980332970619202, "monotonic_s": 342219.048386917, "phase": "optimizer_step_end", "step": 694, "timestamp": 1784551308.3787107, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342219.04980705, "phase": "optimizer_step_start", "step": 695, "timestamp": 1784551308.380131}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342219.049977029, "phase": "data_load_start", "step": 695, "timestamp": 1784551308.380301}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342219.057464926, "phase": "data_load_end", "step": 695, "timestamp": 1784551308.3877888, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342219.057660575, "phase": "forward_start", "step": 695, "timestamp": 1784551308.3879848}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342219.079884611, "phase": "forward_end", "step": 695, "timestamp": 1784551308.4102085}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342219.587330665, "phase": "backward_start", "step": 695, "timestamp": 1784551308.9176545}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342219.609606882, "phase": "backward_end", "step": 695, "timestamp": 1784551308.939931}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342219.609880643, "phase": "loss_sync_start", "step": 695, "timestamp": 1784551308.9402049}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.1823444664478302, "micro_step": 0, "monotonic_s": 342220.498351497, "phase": "loss_sync_end", "step": 695, "timestamp": 1784551309.8286753}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342220.517208475, "phase": "optimizer_update_start", "step": 695, "timestamp": 1784551309.8475325}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342220.597691458, "phase": "optimizer_update_end", "step": 695, "timestamp": 1784551309.9280155}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.1823444664478302, "monotonic_s": 342220.658356969, "phase": "optimizer_step_end", "step": 695, "timestamp": 1784551309.988681, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342220.659602534, "phase": "optimizer_step_start", "step": 696, "timestamp": 1784551309.9899266}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342220.659768356, "phase": "data_load_start", "step": 696, "timestamp": 1784551309.9900925}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342220.668009072, "phase": "data_load_end", "step": 696, "timestamp": 1784551309.998333, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342220.668201656, "phase": "forward_start", "step": 696, "timestamp": 1784551309.9985256}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342220.690266933, "phase": "forward_end", "step": 696, "timestamp": 1784551310.0205908}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342221.19852484, "phase": "backward_start", "step": 696, "timestamp": 1784551310.528849}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342221.221038518, "phase": "backward_end", "step": 696, "timestamp": 1784551310.5513625}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342221.221324883, "phase": "loss_sync_start", "step": 696, "timestamp": 1784551310.551649}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.08794675022363663, "micro_step": 0, "monotonic_s": 342222.109579629, "phase": "loss_sync_end", "step": 696, "timestamp": 1784551311.4399035}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342222.128127127, "phase": "optimizer_update_start", "step": 696, "timestamp": 1784551311.458451}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342222.206242008, "phase": "optimizer_update_end", "step": 696, "timestamp": 1784551311.536566}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.08794675022363663, "monotonic_s": 342222.269386185, "phase": "optimizer_step_end", "step": 696, "timestamp": 1784551311.5997102, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342222.27066766, "phase": "optimizer_step_start", "step": 697, "timestamp": 1784551311.6009917}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342222.270833722, "phase": "data_load_start", "step": 697, "timestamp": 1784551311.601158}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342222.279522176, "phase": "data_load_end", "step": 697, "timestamp": 1784551311.6098464, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342222.279716052, "phase": "forward_start", "step": 697, "timestamp": 1784551311.61004}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342222.301773695, "phase": "forward_end", "step": 697, "timestamp": 1784551311.6320975}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342222.802820142, "phase": "backward_start", "step": 697, "timestamp": 1784551312.133144}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342222.825165162, "phase": "backward_end", "step": 697, "timestamp": 1784551312.155489}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342222.825459332, "phase": "loss_sync_start", "step": 697, "timestamp": 1784551312.1557834}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.2121063470840454, "micro_step": 0, "monotonic_s": 342223.713061232, "phase": "loss_sync_end", "step": 697, "timestamp": 1784551313.0433853}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342223.731869276, "phase": "optimizer_update_start", "step": 697, "timestamp": 1784551313.0621932}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342223.807383194, "phase": "optimizer_update_end", "step": 697, "timestamp": 1784551313.1377072}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.2121063470840454, "monotonic_s": 342223.873026596, "phase": "optimizer_step_end", "step": 697, "timestamp": 1784551313.2033505, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342223.874335093, "phase": "optimizer_step_start", "step": 698, "timestamp": 1784551313.2046592}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342223.874506255, "phase": "data_load_start", "step": 698, "timestamp": 1784551313.2048304}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342223.88228221, "phase": "data_load_end", "step": 698, "timestamp": 1784551313.2126062, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342223.882477799, "phase": "forward_start", "step": 698, "timestamp": 1784551313.212802}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342223.904749348, "phase": "forward_end", "step": 698, "timestamp": 1784551313.2350733}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342224.392182332, "phase": "backward_start", "step": 698, "timestamp": 1784551313.7225063}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342224.414401799, "phase": "backward_end", "step": 698, "timestamp": 1784551313.7447257}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342224.41469155, "phase": "loss_sync_start", "step": 698, "timestamp": 1784551313.7450156}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.16247868537902832, "micro_step": 0, "monotonic_s": 342225.30313405, "phase": "loss_sync_end", "step": 698, "timestamp": 1784551314.6334577}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342225.321944087, "phase": "optimizer_update_start", "step": 698, "timestamp": 1784551314.652268}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342225.394986695, "phase": "optimizer_update_end", "step": 698, "timestamp": 1784551314.7253108}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.16247868537902832, "monotonic_s": 342225.46323638, "phase": "optimizer_step_end", "step": 698, "timestamp": 1784551314.7935603, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342225.464638689, "phase": "optimizer_step_start", "step": 699, "timestamp": 1784551314.7949626}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342225.464805803, "phase": "data_load_start", "step": 699, "timestamp": 1784551314.7951298}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342225.472287939, "phase": "data_load_end", "step": 699, "timestamp": 1784551314.802612, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342225.472481754, "phase": "forward_start", "step": 699, "timestamp": 1784551314.8028057}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342225.494713585, "phase": "forward_end", "step": 699, "timestamp": 1784551314.8250375}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342225.975761731, "phase": "backward_start", "step": 699, "timestamp": 1784551315.3060856}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342225.998093866, "phase": "backward_end", "step": 699, "timestamp": 1784551315.3284178}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342225.998382396, "phase": "loss_sync_start", "step": 699, "timestamp": 1784551315.3287065}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.10706298053264618, "micro_step": 0, "monotonic_s": 342226.886624176, "phase": "loss_sync_end", "step": 699, "timestamp": 1784551316.2169483}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342226.905403735, "phase": "optimizer_update_start", "step": 699, "timestamp": 1784551316.2357275}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342226.976343716, "phase": "optimizer_update_end", "step": 699, "timestamp": 1784551316.3066678}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.10706298053264618, "monotonic_s": 342227.046694734, "phase": "optimizer_step_end", "step": 699, "timestamp": 1784551316.3770187, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342227.047931492, "phase": "optimizer_step_start", "step": 700, "timestamp": 1784551316.3782556}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342227.048100369, "phase": "data_load_start", "step": 700, "timestamp": 1784551316.3784246}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342227.058129403, "phase": "data_load_end", "step": 700, "timestamp": 1784551316.3884535, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342227.0583239, "phase": "forward_start", "step": 700, "timestamp": 1784551316.388648}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342227.080474444, "phase": "forward_end", "step": 700, "timestamp": 1784551316.4107983}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342227.588669409, "phase": "backward_start", "step": 700, "timestamp": 1784551316.9189935}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342227.611187224, "phase": "backward_end", "step": 700, "timestamp": 1784551316.9415112}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342227.611480542, "phase": "loss_sync_start", "step": 700, "timestamp": 1784551316.9418046}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.08222677558660507, "micro_step": 0, "monotonic_s": 342228.498651608, "phase": "loss_sync_end", "step": 700, "timestamp": 1784551317.8289757}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342228.517255575, "phase": "optimizer_update_start", "step": 700, "timestamp": 1784551317.8475797}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342228.586099473, "phase": "optimizer_update_end", "step": 700, "timestamp": 1784551317.9164233}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.08222677558660507, "monotonic_s": 342228.658756673, "phase": "optimizer_step_end", "step": 700, "timestamp": 1784551317.9890807, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342228.660017588, "phase": "optimizer_step_start", "step": 701, "timestamp": 1784551317.9903417}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342228.660186726, "phase": "data_load_start", "step": 701, "timestamp": 1784551317.990511}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342228.668086831, "phase": "data_load_end", "step": 701, "timestamp": 1784551317.9984107, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342228.66828213, "phase": "forward_start", "step": 701, "timestamp": 1784551317.9986064}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342228.69046695, "phase": "forward_end", "step": 701, "timestamp": 1784551318.0207908}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342229.191841592, "phase": "backward_start", "step": 701, "timestamp": 1784551318.5221655}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342229.21452039, "phase": "backward_end", "step": 701, "timestamp": 1784551318.5448444}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342229.214799451, "phase": "loss_sync_start", "step": 701, "timestamp": 1784551318.5451236}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.18070268630981445, "micro_step": 0, "monotonic_s": 342230.103108261, "phase": "loss_sync_end", "step": 701, "timestamp": 1784551319.4334323}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342230.12180547, "phase": "optimizer_update_start", "step": 701, "timestamp": 1784551319.4521296}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342230.188385849, "phase": "optimizer_update_end", "step": 701, "timestamp": 1784551319.5187094}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.18070268630981445, "monotonic_s": 342230.263186925, "phase": "optimizer_step_end", "step": 701, "timestamp": 1784551319.5935109, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342230.264485563, "phase": "optimizer_step_start", "step": 702, "timestamp": 1784551319.5948095}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342230.26465422, "phase": "data_load_start", "step": 702, "timestamp": 1784551319.5949783}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342230.272157687, "phase": "data_load_end", "step": 702, "timestamp": 1784551319.6024816, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342230.272352124, "phase": "forward_start", "step": 702, "timestamp": 1784551319.6026762}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342230.294608472, "phase": "forward_end", "step": 702, "timestamp": 1784551319.6249323}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342230.802656903, "phase": "backward_start", "step": 702, "timestamp": 1784551320.1329808}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342230.824927049, "phase": "backward_end", "step": 702, "timestamp": 1784551320.155251}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342230.825219706, "phase": "loss_sync_start", "step": 702, "timestamp": 1784551320.1555438}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.12458279728889465, "micro_step": 0, "monotonic_s": 342231.71376763, "phase": "loss_sync_end", "step": 702, "timestamp": 1784551321.0440915}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342231.732530025, "phase": "optimizer_update_start", "step": 702, "timestamp": 1784551321.0628538}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342231.796560381, "phase": "optimizer_update_end", "step": 702, "timestamp": 1784551321.1268845}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.12458279728889465, "monotonic_s": 342231.873858859, "phase": "optimizer_step_end", "step": 702, "timestamp": 1784551321.2041829, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342231.875291947, "phase": "optimizer_step_start", "step": 703, "timestamp": 1784551321.2056158}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342231.875462107, "phase": "data_load_start", "step": 703, "timestamp": 1784551321.2057862}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342231.88443877, "phase": "data_load_end", "step": 703, "timestamp": 1784551321.2147627, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342231.884637696, "phase": "forward_start", "step": 703, "timestamp": 1784551321.214962}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342231.906955203, "phase": "forward_end", "step": 703, "timestamp": 1784551321.2372792}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342232.401648282, "phase": "backward_start", "step": 703, "timestamp": 1784551321.7319725}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342232.423883309, "phase": "backward_end", "step": 703, "timestamp": 1784551321.7542071}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342232.424176918, "phase": "loss_sync_start", "step": 703, "timestamp": 1784551321.754501}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.0616961270570755, "micro_step": 0, "monotonic_s": 342233.313798975, "phase": "loss_sync_end", "step": 703, "timestamp": 1784551322.6441228}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342233.332560007, "phase": "optimizer_update_start", "step": 703, "timestamp": 1784551322.662884}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342233.413071164, "phase": "optimizer_update_end", "step": 703, "timestamp": 1784551322.743395}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.0616961270570755, "monotonic_s": 342233.473943406, "phase": "optimizer_step_end", "step": 703, "timestamp": 1784551322.8042674, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342233.475185455, "phase": "optimizer_step_start", "step": 704, "timestamp": 1784551322.8055093}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342233.475351026, "phase": "data_load_start", "step": 704, "timestamp": 1784551322.8056753}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342233.483899378, "phase": "data_load_end", "step": 704, "timestamp": 1784551322.8142233, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342233.484093123, "phase": "forward_start", "step": 704, "timestamp": 1784551322.8144171}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342233.506224901, "phase": "forward_end", "step": 704, "timestamp": 1784551322.8365488}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342234.014497387, "phase": "backward_start", "step": 704, "timestamp": 1784551323.3448212}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342234.036983189, "phase": "backward_end", "step": 704, "timestamp": 1784551323.3673072}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342234.037282089, "phase": "loss_sync_start", "step": 704, "timestamp": 1784551323.3676062}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.16267584264278412, "micro_step": 0, "monotonic_s": 342234.926234537, "phase": "loss_sync_end", "step": 704, "timestamp": 1784551324.2565584}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342234.944943929, "phase": "optimizer_update_start", "step": 704, "timestamp": 1784551324.2752678}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342235.023363771, "phase": "optimizer_update_end", "step": 704, "timestamp": 1784551324.3536878}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.16267584264278412, "monotonic_s": 342235.086345885, "phase": "optimizer_step_end", "step": 704, "timestamp": 1784551324.4166698, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342235.087660203, "phase": "optimizer_step_start", "step": 705, "timestamp": 1784551324.4179842}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342235.087829501, "phase": "data_load_start", "step": 705, "timestamp": 1784551324.4181538}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342235.096278811, "phase": "data_load_end", "step": 705, "timestamp": 1784551324.4266028, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342235.096476665, "phase": "forward_start", "step": 705, "timestamp": 1784551324.426801}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342235.118656425, "phase": "forward_end", "step": 705, "timestamp": 1784551324.4489806}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342235.620143826, "phase": "backward_start", "step": 705, "timestamp": 1784551324.9504678}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342235.642561738, "phase": "backward_end", "step": 705, "timestamp": 1784551324.9728858}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342235.642860588, "phase": "loss_sync_start", "step": 705, "timestamp": 1784551324.9731846}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.1988164186477661, "micro_step": 0, "monotonic_s": 342236.530260867, "phase": "loss_sync_end", "step": 705, "timestamp": 1784551325.8605847}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342236.548930922, "phase": "optimizer_update_start", "step": 705, "timestamp": 1784551325.8792548}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342236.624508846, "phase": "optimizer_update_end", "step": 705, "timestamp": 1784551325.9548328}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.1988164186477661, "monotonic_s": 342236.690206643, "phase": "optimizer_step_end", "step": 705, "timestamp": 1784551326.0205307, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342236.691481104, "phase": "optimizer_step_start", "step": 706, "timestamp": 1784551326.021805}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342236.691689277, "phase": "data_load_start", "step": 706, "timestamp": 1784551326.0220134}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342236.698734917, "phase": "data_load_end", "step": 706, "timestamp": 1784551326.029059, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342236.698930326, "phase": "forward_start", "step": 706, "timestamp": 1784551326.0292544}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342236.721218356, "phase": "forward_end", "step": 706, "timestamp": 1784551326.0515423}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342237.222767397, "phase": "backward_start", "step": 706, "timestamp": 1784551326.5530913}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342237.245122186, "phase": "backward_end", "step": 706, "timestamp": 1784551326.5754461}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342237.245415424, "phase": "loss_sync_start", "step": 706, "timestamp": 1784551326.5757394}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.18227966129779816, "micro_step": 0, "monotonic_s": 342238.133092922, "phase": "loss_sync_end", "step": 706, "timestamp": 1784551327.4634168}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342238.151848603, "phase": "optimizer_update_start", "step": 706, "timestamp": 1784551327.4821727}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342238.224745458, "phase": "optimizer_update_end", "step": 706, "timestamp": 1784551327.5550694}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.18227966129779816, "monotonic_s": 342238.292727555, "phase": "optimizer_step_end", "step": 706, "timestamp": 1784551327.6230514, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342238.294110916, "phase": "optimizer_step_start", "step": 707, "timestamp": 1784551327.624435}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342238.294301536, "phase": "data_load_start", "step": 707, "timestamp": 1784551327.6246257}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342238.302666643, "phase": "data_load_end", "step": 707, "timestamp": 1784551327.6329908, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342238.302863996, "phase": "forward_start", "step": 707, "timestamp": 1784551327.633188}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342238.325133109, "phase": "forward_end", "step": 707, "timestamp": 1784551327.655457}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342238.846838828, "phase": "backward_start", "step": 707, "timestamp": 1784551328.1771626}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342238.869156124, "phase": "backward_end", "step": 707, "timestamp": 1784551328.19948}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342238.869449503, "phase": "loss_sync_start", "step": 707, "timestamp": 1784551328.1997738}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.13978366553783417, "micro_step": 0, "monotonic_s": 342239.757608183, "phase": "loss_sync_end", "step": 707, "timestamp": 1784551329.087932}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342239.776416045, "phase": "optimizer_update_start", "step": 707, "timestamp": 1784551329.10674}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342239.84715131, "phase": "optimizer_update_end", "step": 707, "timestamp": 1784551329.1774752}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.13978366553783417, "monotonic_s": 342239.917557586, "phase": "optimizer_step_end", "step": 707, "timestamp": 1784551329.2478814, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342239.918822939, "phase": "optimizer_step_start", "step": 708, "timestamp": 1784551329.249147}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342239.918989472, "phase": "data_load_start", "step": 708, "timestamp": 1784551329.2493136}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342239.926373737, "phase": "data_load_end", "step": 708, "timestamp": 1784551329.2566977, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342239.926568746, "phase": "forward_start", "step": 708, "timestamp": 1784551329.256893}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342239.948775638, "phase": "forward_end", "step": 708, "timestamp": 1784551329.2790997}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342240.437297604, "phase": "backward_start", "step": 708, "timestamp": 1784551329.7676215}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342240.459741566, "phase": "backward_end", "step": 708, "timestamp": 1784551329.7900655}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342240.460035205, "phase": "loss_sync_start", "step": 708, "timestamp": 1784551329.7903593}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.1143806129693985, "micro_step": 0, "monotonic_s": 342241.347878864, "phase": "loss_sync_end", "step": 708, "timestamp": 1784551330.6782029}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342241.366558399, "phase": "optimizer_update_start", "step": 708, "timestamp": 1784551330.6968825}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342241.435111632, "phase": "optimizer_update_end", "step": 708, "timestamp": 1784551330.7654357}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.1143806129693985, "monotonic_s": 342241.507652166, "phase": "optimizer_step_end", "step": 708, "timestamp": 1784551330.837976, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342241.508914142, "phase": "optimizer_step_start", "step": 709, "timestamp": 1784551330.8392382}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342241.50909846, "phase": "data_load_start", "step": 709, "timestamp": 1784551330.8394227}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342241.51676868, "phase": "data_load_end", "step": 709, "timestamp": 1784551330.8470926, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342241.516961955, "phase": "forward_start", "step": 709, "timestamp": 1784551330.847286}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342241.539073282, "phase": "forward_end", "step": 709, "timestamp": 1784551330.8693972}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342242.040662912, "phase": "backward_start", "step": 709, "timestamp": 1784551331.3709867}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342242.063112715, "phase": "backward_end", "step": 709, "timestamp": 1784551331.3934367}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342242.063412497, "phase": "loss_sync_start", "step": 709, "timestamp": 1784551331.3937364}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.16100357472896576, "micro_step": 0, "monotonic_s": 342242.951842212, "phase": "loss_sync_end", "step": 709, "timestamp": 1784551332.2821662}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342242.970527126, "phase": "optimizer_update_start", "step": 709, "timestamp": 1784551332.300851}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342243.037157382, "phase": "optimizer_update_end", "step": 709, "timestamp": 1784551332.3674812}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.16100357472896576, "monotonic_s": 342243.111978247, "phase": "optimizer_step_end", "step": 709, "timestamp": 1784551332.4423022, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342243.113261635, "phase": "optimizer_step_start", "step": 710, "timestamp": 1784551332.4435856}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342243.113430041, "phase": "data_load_start", "step": 710, "timestamp": 1784551332.4437542}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342243.121492092, "phase": "data_load_end", "step": 710, "timestamp": 1784551332.4518158, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342243.121688172, "phase": "forward_start", "step": 710, "timestamp": 1784551332.4520123}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342243.14399135, "phase": "forward_end", "step": 710, "timestamp": 1784551332.4743152}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342243.626234463, "phase": "backward_start", "step": 710, "timestamp": 1784551332.9565582}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342243.648534476, "phase": "backward_end", "step": 710, "timestamp": 1784551332.9788585}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342243.648808127, "phase": "loss_sync_start", "step": 710, "timestamp": 1784551332.9791322}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.1880352944135666, "micro_step": 0, "monotonic_s": 342244.538318747, "phase": "loss_sync_end", "step": 710, "timestamp": 1784551333.8686426}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342244.557188911, "phase": "optimizer_update_start", "step": 710, "timestamp": 1784551333.887513}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342244.621236941, "phase": "optimizer_update_end", "step": 710, "timestamp": 1784551333.951561}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.1880352944135666, "monotonic_s": 342244.698405237, "phase": "optimizer_step_end", "step": 710, "timestamp": 1784551334.0287294, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342244.699857252, "phase": "optimizer_step_start", "step": 711, "timestamp": 1784551334.0301814}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342244.700024236, "phase": "data_load_start", "step": 711, "timestamp": 1784551334.0303483}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342244.708500117, "phase": "data_load_end", "step": 711, "timestamp": 1784551334.038824, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342244.708695787, "phase": "forward_start", "step": 711, "timestamp": 1784551334.03902}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342244.731038733, "phase": "forward_end", "step": 711, "timestamp": 1784551334.0613627}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342245.232484083, "phase": "backward_start", "step": 711, "timestamp": 1784551334.562808}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342245.254845596, "phase": "backward_end", "step": 711, "timestamp": 1784551334.5851693}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342245.255137001, "phase": "loss_sync_start", "step": 711, "timestamp": 1784551334.585461}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.13777665793895721, "micro_step": 0, "monotonic_s": 342246.144011786, "phase": "loss_sync_end", "step": 711, "timestamp": 1784551335.4743357}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342246.162792729, "phase": "optimizer_update_start", "step": 711, "timestamp": 1784551335.4931166}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342246.243296915, "phase": "optimizer_update_end", "step": 711, "timestamp": 1784551335.573621}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.13777665793895721, "monotonic_s": 342246.303996093, "phase": "optimizer_step_end", "step": 711, "timestamp": 1784551335.63432, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342246.306139935, "phase": "optimizer_step_start", "step": 712, "timestamp": 1784551335.6364639}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342246.306368548, "phase": "data_load_start", "step": 712, "timestamp": 1784551335.6366928}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342246.315484804, "phase": "data_load_end", "step": 712, "timestamp": 1784551335.6458087, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342246.315682536, "phase": "forward_start", "step": 712, "timestamp": 1784551335.6460066}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342246.338084414, "phase": "forward_end", "step": 712, "timestamp": 1784551335.6684084}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342246.832942075, "phase": "backward_start", "step": 712, "timestamp": 1784551336.163266}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342246.855153302, "phase": "backward_end", "step": 712, "timestamp": 1784551336.185477}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342246.855449475, "phase": "loss_sync_start", "step": 712, "timestamp": 1784551336.1857736}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.25921475887298584, "micro_step": 0, "monotonic_s": 342247.744354313, "phase": "loss_sync_end", "step": 712, "timestamp": 1784551337.074678}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342247.76333799, "phase": "optimizer_update_start", "step": 712, "timestamp": 1784551337.093662}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342247.841430925, "phase": "optimizer_update_end", "step": 712, "timestamp": 1784551337.171755}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.25921475887298584, "monotonic_s": 342247.904594136, "phase": "optimizer_step_end", "step": 712, "timestamp": 1784551337.234918, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342247.905843466, "phase": "optimizer_step_start", "step": 713, "timestamp": 1784551337.2361674}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342247.906031059, "phase": "data_load_start", "step": 713, "timestamp": 1784551337.236355}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342247.914054018, "phase": "data_load_end", "step": 713, "timestamp": 1784551337.244378, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342247.914251169, "phase": "forward_start", "step": 713, "timestamp": 1784551337.2445753}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342247.936424754, "phase": "forward_end", "step": 713, "timestamp": 1784551337.2667487}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342248.431621061, "phase": "backward_start", "step": 713, "timestamp": 1784551337.761945}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342248.454181695, "phase": "backward_end", "step": 713, "timestamp": 1784551337.7845056}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342248.454476626, "phase": "loss_sync_start", "step": 713, "timestamp": 1784551337.7848008}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.19562187790870667, "micro_step": 0, "monotonic_s": 342249.344171805, "phase": "loss_sync_end", "step": 713, "timestamp": 1784551338.6744957}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342249.362831163, "phase": "optimizer_update_start", "step": 713, "timestamp": 1784551338.693155}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342249.438412835, "phase": "optimizer_update_end", "step": 713, "timestamp": 1784551338.7687368}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.19562187790870667, "monotonic_s": 342249.504138088, "phase": "optimizer_step_end", "step": 713, "timestamp": 1784551338.834462, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342249.505394852, "phase": "optimizer_step_start", "step": 714, "timestamp": 1784551338.8357189}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342249.505593607, "phase": "data_load_start", "step": 714, "timestamp": 1784551338.8359177}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342249.512530763, "phase": "data_load_end", "step": 714, "timestamp": 1784551338.8428547, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342249.512728435, "phase": "forward_start", "step": 714, "timestamp": 1784551338.8430526}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342249.535052, "phase": "forward_end", "step": 714, "timestamp": 1784551338.865376}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342250.023322513, "phase": "backward_start", "step": 714, "timestamp": 1784551339.3536463}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342250.045506639, "phase": "backward_end", "step": 714, "timestamp": 1784551339.3758304}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342250.045799296, "phase": "loss_sync_start", "step": 714, "timestamp": 1784551339.3761234}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.18783754110336304, "micro_step": 0, "monotonic_s": 342250.935672649, "phase": "loss_sync_end", "step": 714, "timestamp": 1784551340.2659965}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342250.954444846, "phase": "optimizer_update_start", "step": 714, "timestamp": 1784551340.2847688}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342251.027686075, "phase": "optimizer_update_end", "step": 714, "timestamp": 1784551340.3580098}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.18783754110336304, "monotonic_s": 342251.095671426, "phase": "optimizer_step_end", "step": 714, "timestamp": 1784551340.4259956, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342251.096917549, "phase": "optimizer_step_start", "step": 715, "timestamp": 1784551340.4272418}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342251.097127025, "phase": "data_load_start", "step": 715, "timestamp": 1784551340.4274511}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342251.104756721, "phase": "data_load_end", "step": 715, "timestamp": 1784551340.4350808, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342251.104957791, "phase": "forward_start", "step": 715, "timestamp": 1784551340.435282}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342251.127304631, "phase": "forward_end", "step": 715, "timestamp": 1784551340.4576287}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342251.62916841, "phase": "backward_start", "step": 715, "timestamp": 1784551340.9594924}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342251.651500131, "phase": "backward_end", "step": 715, "timestamp": 1784551340.981824}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342251.651770404, "phase": "loss_sync_start", "step": 715, "timestamp": 1784551340.9820945}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.1482143998146057, "micro_step": 0, "monotonic_s": 342252.540969944, "phase": "loss_sync_end", "step": 715, "timestamp": 1784551341.871294}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342252.55975753, "phase": "optimizer_update_start", "step": 715, "timestamp": 1784551341.8900816}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342252.630627117, "phase": "optimizer_update_end", "step": 715, "timestamp": 1784551341.960951}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.1482143998146057, "monotonic_s": 342252.700973449, "phase": "optimizer_step_end", "step": 715, "timestamp": 1784551342.0312972, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342252.702413929, "phase": "optimizer_step_start", "step": 716, "timestamp": 1784551342.032738}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342252.702583257, "phase": "data_load_start", "step": 716, "timestamp": 1784551342.0329072}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342252.710446687, "phase": "data_load_end", "step": 716, "timestamp": 1784551342.0407705, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342252.710645181, "phase": "forward_start", "step": 716, "timestamp": 1784551342.0409691}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342252.733041056, "phase": "forward_end", "step": 716, "timestamp": 1784551342.0633652}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342253.24107235, "phase": "backward_start", "step": 716, "timestamp": 1784551342.5713964}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342253.263298096, "phase": "backward_end", "step": 716, "timestamp": 1784551342.593622}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342253.263588909, "phase": "loss_sync_start", "step": 716, "timestamp": 1784551342.593913}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.2534596920013428, "micro_step": 0, "monotonic_s": 342254.153730523, "phase": "loss_sync_end", "step": 716, "timestamp": 1784551343.4840546}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342254.17248213, "phase": "optimizer_update_start", "step": 716, "timestamp": 1784551343.502806}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342254.241143519, "phase": "optimizer_update_end", "step": 716, "timestamp": 1784551343.5714676}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.2534596920013428, "monotonic_s": 342254.313717776, "phase": "optimizer_step_end", "step": 716, "timestamp": 1784551343.6440418, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342254.314991783, "phase": "optimizer_step_start", "step": 717, "timestamp": 1784551343.645316}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342254.315158737, "phase": "data_load_start", "step": 717, "timestamp": 1784551343.6454828}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342254.323739376, "phase": "data_load_end", "step": 717, "timestamp": 1784551343.6540635, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342254.323935456, "phase": "forward_start", "step": 717, "timestamp": 1784551343.6542594}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342254.346113719, "phase": "forward_end", "step": 717, "timestamp": 1784551343.6764379}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342254.841523469, "phase": "backward_start", "step": 717, "timestamp": 1784551344.1718473}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342254.863923522, "phase": "backward_end", "step": 717, "timestamp": 1784551344.1942475}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342254.864220086, "phase": "loss_sync_start", "step": 717, "timestamp": 1784551344.194544}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.2030646800994873, "micro_step": 0, "monotonic_s": 342255.752988882, "phase": "loss_sync_end", "step": 717, "timestamp": 1784551345.083313}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342255.771696263, "phase": "optimizer_update_start", "step": 717, "timestamp": 1784551345.1020203}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342255.838228287, "phase": "optimizer_update_end", "step": 717, "timestamp": 1784551345.1685522}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.2030646800994873, "monotonic_s": 342255.913006473, "phase": "optimizer_step_end", "step": 717, "timestamp": 1784551345.2433305, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342255.91429057, "phase": "optimizer_step_start", "step": 718, "timestamp": 1784551345.2446146}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342255.914461181, "phase": "data_load_start", "step": 718, "timestamp": 1784551345.244785}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342255.922655972, "phase": "data_load_end", "step": 718, "timestamp": 1784551345.25298, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342255.922848956, "phase": "forward_start", "step": 718, "timestamp": 1784551345.2531729}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342255.945129739, "phase": "forward_end", "step": 718, "timestamp": 1784551345.2754538}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342256.45382577, "phase": "backward_start", "step": 718, "timestamp": 1784551345.7841496}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342256.476035775, "phase": "backward_end", "step": 718, "timestamp": 1784551345.8063598}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342256.476326578, "phase": "loss_sync_start", "step": 718, "timestamp": 1784551345.8066506}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.1962222307920456, "micro_step": 0, "monotonic_s": 342257.365360256, "phase": "loss_sync_end", "step": 718, "timestamp": 1784551346.6956842}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342257.384211597, "phase": "optimizer_update_start", "step": 718, "timestamp": 1784551346.7145355}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342257.448402367, "phase": "optimizer_update_end", "step": 718, "timestamp": 1784551346.7787263}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.1962222307920456, "monotonic_s": 342257.525427725, "phase": "optimizer_step_end", "step": 718, "timestamp": 1784551346.8557518, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342257.526743003, "phase": "optimizer_step_start", "step": 719, "timestamp": 1784551346.857067}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342257.526910858, "phase": "data_load_start", "step": 719, "timestamp": 1784551346.857235}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342257.533512062, "phase": "data_load_end", "step": 719, "timestamp": 1784551346.8638358, "tokens": 8196}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342257.53370678, "phase": "forward_start", "step": 719, "timestamp": 1784551346.864031}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342257.556178262, "phase": "forward_end", "step": 719, "timestamp": 1784551346.886502}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342258.044549029, "phase": "backward_start", "step": 719, "timestamp": 1784551347.374873}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342258.066806085, "phase": "backward_end", "step": 719, "timestamp": 1784551347.39713}
+{"generation": 17, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342258.067096217, "phase": "loss_sync_start", "step": 719, "timestamp": 1784551347.3974204}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.18552809953689575, "micro_step": 0, "monotonic_s": 342258.956893022, "phase": "loss_sync_end", "step": 719, "timestamp": 1784551348.2872162}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342258.976045545, "phase": "optimizer_update_start", "step": 719, "timestamp": 1784551348.3063693}
+{"generation": 17, "identity": "node-1-trainer-4", "monotonic_s": 342259.064244815, "phase": "optimizer_update_end", "step": 719, "timestamp": 1784551348.394568}
+{"generation": 17, "identity": "node-1-trainer-4", "loss": 0.18552809953689575, "monotonic_s": 342259.117495939, "phase": "optimizer_step_end", "step": 719, "timestamp": 1784551348.4478192, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342536.771769836, "phase": "model_build_start", "step": 720, "timestamp": 1784551626.102094}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342546.553011509, "phase": "model_device_ready", "step": 720, "timestamp": 1784551635.8833349}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342556.544466273, "phase": "model_state_loaded", "step": 720, "timestamp": 1784551645.8747895}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342556.565316922, "phase": "model_dtype_ready", "step": 720, "timestamp": 1784551645.8956401}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342556.566367859, "phase": "optimizer_built", "step": 720, "timestamp": 1784551645.8966918}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342556.567338951, "phase": "optimizer_state_loaded", "step": 720, "timestamp": 1784551645.8976629}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342556.568001384, "phase": "data_iterator_ready", "step": 720, "timestamp": 1784551645.8983254}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342556.568761096, "phase": "optimizer_step_start", "step": 720, "timestamp": 1784551645.899085}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342556.568933961, "phase": "data_load_start", "step": 720, "timestamp": 1784551645.8992581}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342556.57581344, "phase": "data_load_end", "step": 720, "timestamp": 1784551645.9061372, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342556.576142227, "phase": "forward_start", "step": 720, "timestamp": 1784551645.9064662}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342556.601860678, "phase": "forward_end", "step": 720, "timestamp": 1784551645.9321845}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342557.069910263, "phase": "backward_start", "step": 720, "timestamp": 1784551646.4002333}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342557.094705755, "phase": "backward_end", "step": 720, "timestamp": 1784551646.4250293}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342557.09526079, "phase": "loss_sync_start", "step": 720, "timestamp": 1784551646.4255848}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.088250532746315, "micro_step": 0, "monotonic_s": 342557.976611374, "phase": "loss_sync_end", "step": 720, "timestamp": 1784551647.306935}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342557.996850568, "phase": "optimizer_update_start", "step": 720, "timestamp": 1784551647.3271744}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342558.075836626, "phase": "optimizer_update_end", "step": 720, "timestamp": 1784551647.4061606}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.088250532746315, "monotonic_s": 342558.141625225, "phase": "optimizer_step_end", "step": 720, "timestamp": 1784551647.4719493, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342558.143138577, "phase": "optimizer_step_start", "step": 721, "timestamp": 1784551647.4734626}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342558.143327092, "phase": "data_load_start", "step": 721, "timestamp": 1784551647.4736512}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342558.148759859, "phase": "data_load_end", "step": 721, "timestamp": 1784551647.4790838, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342558.14895183, "phase": "forward_start", "step": 721, "timestamp": 1784551647.479276}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342558.171674486, "phase": "forward_end", "step": 721, "timestamp": 1784551647.5019984}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342558.663083101, "phase": "backward_start", "step": 721, "timestamp": 1784551647.993407}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342558.686821936, "phase": "backward_end", "step": 721, "timestamp": 1784551648.0171456}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342558.687355129, "phase": "loss_sync_start", "step": 721, "timestamp": 1784551648.0176792}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.11536603420972824, "micro_step": 0, "monotonic_s": 342559.571101274, "phase": "loss_sync_end", "step": 721, "timestamp": 1784551648.9014251}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342559.591225686, "phase": "optimizer_update_start", "step": 721, "timestamp": 1784551648.9215496}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342559.668409553, "phase": "optimizer_update_end", "step": 721, "timestamp": 1784551648.9987335}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.11536603420972824, "monotonic_s": 342559.736358506, "phase": "optimizer_step_end", "step": 721, "timestamp": 1784551649.0666823, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342559.737770783, "phase": "optimizer_step_start", "step": 722, "timestamp": 1784551649.0680947}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342559.737963526, "phase": "data_load_start", "step": 722, "timestamp": 1784551649.0682878}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342559.743593174, "phase": "data_load_end", "step": 722, "timestamp": 1784551649.0739172, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342559.743785407, "phase": "forward_start", "step": 722, "timestamp": 1784551649.0741096}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342559.766471662, "phase": "forward_end", "step": 722, "timestamp": 1784551649.0967956}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342560.245021792, "phase": "backward_start", "step": 722, "timestamp": 1784551649.5753458}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342560.268630866, "phase": "backward_end", "step": 722, "timestamp": 1784551649.5989544}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342560.269180671, "phase": "loss_sync_start", "step": 722, "timestamp": 1784551649.5995047}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.30709874629974365, "micro_step": 0, "monotonic_s": 342561.152101186, "phase": "loss_sync_end", "step": 722, "timestamp": 1784551650.4824255}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342561.172301936, "phase": "optimizer_update_start", "step": 722, "timestamp": 1784551650.5026257}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342561.246963536, "phase": "optimizer_update_end", "step": 722, "timestamp": 1784551650.5772874}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.30709874629974365, "monotonic_s": 342561.317246762, "phase": "optimizer_step_end", "step": 722, "timestamp": 1784551650.6475706, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342561.318817946, "phase": "optimizer_step_start", "step": 723, "timestamp": 1784551650.649142}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342561.318986112, "phase": "data_load_start", "step": 723, "timestamp": 1784551650.64931}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342561.324953795, "phase": "data_load_end", "step": 723, "timestamp": 1784551650.6552777, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342561.325146629, "phase": "forward_start", "step": 723, "timestamp": 1784551650.6554708}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342561.34772752, "phase": "forward_end", "step": 723, "timestamp": 1784551650.6780515}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342561.840184526, "phase": "backward_start", "step": 723, "timestamp": 1784551651.1705084}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342561.863843446, "phase": "backward_end", "step": 723, "timestamp": 1784551651.1941671}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342561.864409963, "phase": "loss_sync_start", "step": 723, "timestamp": 1784551651.1947339}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.2414916455745697, "micro_step": 0, "monotonic_s": 342562.748532518, "phase": "loss_sync_end", "step": 723, "timestamp": 1784551652.0788565}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342562.76874479, "phase": "optimizer_update_start", "step": 723, "timestamp": 1784551652.0990686}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342562.841124278, "phase": "optimizer_update_end", "step": 723, "timestamp": 1784551652.1714482}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.2414916455745697, "monotonic_s": 342562.913744593, "phase": "optimizer_step_end", "step": 723, "timestamp": 1784551652.2440686, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342562.915168852, "phase": "optimizer_step_start", "step": 724, "timestamp": 1784551652.2454927}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342562.915364111, "phase": "data_load_start", "step": 724, "timestamp": 1784551652.2456884}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342562.920506955, "phase": "data_load_end", "step": 724, "timestamp": 1784551652.250831, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342562.920699768, "phase": "forward_start", "step": 724, "timestamp": 1784551652.2510238}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342562.943822139, "phase": "forward_end", "step": 724, "timestamp": 1784551652.274146}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342563.449635052, "phase": "backward_start", "step": 724, "timestamp": 1784551652.7799587}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342563.473083244, "phase": "backward_end", "step": 724, "timestamp": 1784551652.803407}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342563.473639863, "phase": "loss_sync_start", "step": 724, "timestamp": 1784551652.803964}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.06189287453889847, "micro_step": 0, "monotonic_s": 342564.358478895, "phase": "loss_sync_end", "step": 724, "timestamp": 1784551653.6888027}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342564.378531427, "phase": "optimizer_update_start", "step": 724, "timestamp": 1784551653.7088554}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342564.448238818, "phase": "optimizer_update_end", "step": 724, "timestamp": 1784551653.7785628}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.06189287453889847, "monotonic_s": 342564.523494058, "phase": "optimizer_step_end", "step": 724, "timestamp": 1784551653.8538182, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342564.524921745, "phase": "optimizer_step_start", "step": 725, "timestamp": 1784551653.8552458}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342564.525106943, "phase": "data_load_start", "step": 725, "timestamp": 1784551653.855431}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342564.531252511, "phase": "data_load_end", "step": 725, "timestamp": 1784551653.8615766, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342564.531450003, "phase": "forward_start", "step": 725, "timestamp": 1784551653.861774}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342564.553869021, "phase": "forward_end", "step": 725, "timestamp": 1784551653.884193}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342565.04020156, "phase": "backward_start", "step": 725, "timestamp": 1784551654.3705254}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342565.064055559, "phase": "backward_end", "step": 725, "timestamp": 1784551654.3943794}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342565.064616225, "phase": "loss_sync_start", "step": 725, "timestamp": 1784551654.3949401}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.2176845520734787, "micro_step": 0, "monotonic_s": 342565.948028272, "phase": "loss_sync_end", "step": 725, "timestamp": 1784551655.278352}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342565.968117235, "phase": "optimizer_update_start", "step": 725, "timestamp": 1784551655.2984412}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342566.03566412, "phase": "optimizer_update_end", "step": 725, "timestamp": 1784551655.365988}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.2176845520734787, "monotonic_s": 342566.113100336, "phase": "optimizer_step_end", "step": 725, "timestamp": 1784551655.4434242, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342566.114524114, "phase": "optimizer_step_start", "step": 726, "timestamp": 1784551655.444848}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342566.114713872, "phase": "data_load_start", "step": 726, "timestamp": 1784551655.445038}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342566.119933826, "phase": "data_load_end", "step": 726, "timestamp": 1784551655.450258, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342566.120123203, "phase": "forward_start", "step": 726, "timestamp": 1784551655.4504473}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342566.14260385, "phase": "forward_end", "step": 726, "timestamp": 1784551655.4729278}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342566.615560012, "phase": "backward_start", "step": 726, "timestamp": 1784551655.945884}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342566.639132414, "phase": "backward_end", "step": 726, "timestamp": 1784551655.969456}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342566.639691748, "phase": "loss_sync_start", "step": 726, "timestamp": 1784551655.9700158}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.12500371038913727, "micro_step": 0, "monotonic_s": 342567.523223448, "phase": "loss_sync_end", "step": 726, "timestamp": 1784551656.8535476}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342567.543448925, "phase": "optimizer_update_start", "step": 726, "timestamp": 1784551656.8737729}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342567.608385272, "phase": "optimizer_update_end", "step": 726, "timestamp": 1784551656.9387093}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.12500371038913727, "monotonic_s": 342567.68862513, "phase": "optimizer_step_end", "step": 726, "timestamp": 1784551657.018949, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342567.690102633, "phase": "optimizer_step_start", "step": 727, "timestamp": 1784551657.0204268}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342567.690311387, "phase": "data_load_start", "step": 727, "timestamp": 1784551657.0206354}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342567.69545333, "phase": "data_load_end", "step": 727, "timestamp": 1784551657.0257773, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342567.695645903, "phase": "forward_start", "step": 727, "timestamp": 1784551657.02597}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342567.718347659, "phase": "forward_end", "step": 727, "timestamp": 1784551657.0486715}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342568.224759893, "phase": "backward_start", "step": 727, "timestamp": 1784551657.5550838}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342568.248424674, "phase": "backward_end", "step": 727, "timestamp": 1784551657.5787485}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342568.248939161, "phase": "loss_sync_start", "step": 727, "timestamp": 1784551657.5792632}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.157663032412529, "micro_step": 0, "monotonic_s": 342569.134083475, "phase": "loss_sync_end", "step": 727, "timestamp": 1784551658.4644074}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342569.154312249, "phase": "optimizer_update_start", "step": 727, "timestamp": 1784551658.484636}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342569.23657677, "phase": "optimizer_update_end", "step": 727, "timestamp": 1784551658.5669007}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.157663032412529, "monotonic_s": 342569.299397297, "phase": "optimizer_step_end", "step": 727, "timestamp": 1784551658.6297214, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342569.300969273, "phase": "optimizer_step_start", "step": 728, "timestamp": 1784551658.6312933}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342569.301184089, "phase": "data_load_start", "step": 728, "timestamp": 1784551658.631508}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342569.306939381, "phase": "data_load_end", "step": 728, "timestamp": 1784551658.6372633, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342569.307132074, "phase": "forward_start", "step": 728, "timestamp": 1784551658.6374562}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342569.329738109, "phase": "forward_end", "step": 728, "timestamp": 1784551658.6600618}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342569.829695537, "phase": "backward_start", "step": 728, "timestamp": 1784551659.1600194}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342569.853289323, "phase": "backward_end", "step": 728, "timestamp": 1784551659.1836133}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342569.853848837, "phase": "loss_sync_start", "step": 728, "timestamp": 1784551659.1841729}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.1426043063402176, "micro_step": 0, "monotonic_s": 342570.739091939, "phase": "loss_sync_end", "step": 728, "timestamp": 1784551660.069416}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342570.759310548, "phase": "optimizer_update_start", "step": 728, "timestamp": 1784551660.0896347}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342570.838962681, "phase": "optimizer_update_end", "step": 728, "timestamp": 1784551660.1692865}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.1426043063402176, "monotonic_s": 342570.904235509, "phase": "optimizer_step_end", "step": 728, "timestamp": 1784551660.2345595, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342570.905644208, "phase": "optimizer_step_start", "step": 729, "timestamp": 1784551660.2359684}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342570.905811322, "phase": "data_load_start", "step": 729, "timestamp": 1784551660.2361355}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342570.911183759, "phase": "data_load_end", "step": 729, "timestamp": 1784551660.2415078, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342570.911378055, "phase": "forward_start", "step": 729, "timestamp": 1784551660.241702}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342570.933774733, "phase": "forward_end", "step": 729, "timestamp": 1784551660.2640986}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342571.427143558, "phase": "backward_start", "step": 729, "timestamp": 1784551660.7574677}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342571.451122841, "phase": "backward_end", "step": 729, "timestamp": 1784551660.7814467}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342571.451683316, "phase": "loss_sync_start", "step": 729, "timestamp": 1784551660.7820072}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.09620558470487595, "micro_step": 0, "monotonic_s": 342572.336905568, "phase": "loss_sync_end", "step": 729, "timestamp": 1784551661.6672294}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342572.356968585, "phase": "optimizer_update_start", "step": 729, "timestamp": 1784551661.6872923}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342572.434230228, "phase": "optimizer_update_end", "step": 729, "timestamp": 1784551661.7645543}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.09620558470487595, "monotonic_s": 342572.502090468, "phase": "optimizer_step_end", "step": 729, "timestamp": 1784551661.8324144, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342572.503542491, "phase": "optimizer_step_start", "step": 730, "timestamp": 1784551661.8338666}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342572.503711518, "phase": "data_load_start", "step": 730, "timestamp": 1784551661.8340354}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342572.509496896, "phase": "data_load_end", "step": 730, "timestamp": 1784551661.8398209, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342572.509688457, "phase": "forward_start", "step": 730, "timestamp": 1784551661.8400126}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342572.532327954, "phase": "forward_end", "step": 730, "timestamp": 1784551661.8626518}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342573.019241825, "phase": "backward_start", "step": 730, "timestamp": 1784551662.3495657}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342573.042796946, "phase": "backward_end", "step": 730, "timestamp": 1784551662.3731208}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342573.043324899, "phase": "loss_sync_start", "step": 730, "timestamp": 1784551662.373649}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.1392240971326828, "micro_step": 0, "monotonic_s": 342573.929923517, "phase": "loss_sync_end", "step": 730, "timestamp": 1784551663.2602472}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342573.950130182, "phase": "optimizer_update_start", "step": 730, "timestamp": 1784551663.2804542}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342574.025322957, "phase": "optimizer_update_end", "step": 730, "timestamp": 1784551663.355647}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.1392240971326828, "monotonic_s": 342574.095195185, "phase": "optimizer_step_end", "step": 730, "timestamp": 1784551663.425519, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342574.096604425, "phase": "optimizer_step_start", "step": 731, "timestamp": 1784551663.4269283}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342574.09681878, "phase": "data_load_start", "step": 731, "timestamp": 1784551663.4271429}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342574.102579821, "phase": "data_load_end", "step": 731, "timestamp": 1784551663.432904, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342574.102769408, "phase": "forward_start", "step": 731, "timestamp": 1784551663.4330935}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342574.125283292, "phase": "forward_end", "step": 731, "timestamp": 1784551663.4556074}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342574.625222906, "phase": "backward_start", "step": 731, "timestamp": 1784551663.9555469}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342574.648804298, "phase": "backward_end", "step": 731, "timestamp": 1784551663.9791281}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342574.649358833, "phase": "loss_sync_start", "step": 731, "timestamp": 1784551663.979683}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.14887386560440063, "micro_step": 0, "monotonic_s": 342575.535079059, "phase": "loss_sync_end", "step": 731, "timestamp": 1784551664.865403}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342575.555341722, "phase": "optimizer_update_start", "step": 731, "timestamp": 1784551664.885666}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342575.627932276, "phase": "optimizer_update_end", "step": 731, "timestamp": 1784551664.9582562}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.14887386560440063, "monotonic_s": 342575.700230544, "phase": "optimizer_step_end", "step": 731, "timestamp": 1784551665.0305545, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342575.701796388, "phase": "optimizer_step_start", "step": 732, "timestamp": 1784551665.0321202}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342575.702010011, "phase": "data_load_start", "step": 732, "timestamp": 1784551665.032334}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342575.708029693, "phase": "data_load_end", "step": 732, "timestamp": 1784551665.0383537, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342575.708225151, "phase": "forward_start", "step": 732, "timestamp": 1784551665.0385492}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342575.730838388, "phase": "forward_end", "step": 732, "timestamp": 1784551665.0611622}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342576.251002561, "phase": "backward_start", "step": 732, "timestamp": 1784551665.5813262}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342576.274705309, "phase": "backward_end", "step": 732, "timestamp": 1784551665.605029}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342576.275266045, "phase": "loss_sync_start", "step": 732, "timestamp": 1784551665.60559}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.12426257878541946, "micro_step": 0, "monotonic_s": 342577.160519768, "phase": "loss_sync_end", "step": 732, "timestamp": 1784551666.490844}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342577.180742122, "phase": "optimizer_update_start", "step": 732, "timestamp": 1784551666.5110662}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342577.251016871, "phase": "optimizer_update_end", "step": 732, "timestamp": 1784551666.581341}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.12426257878541946, "monotonic_s": 342577.325885858, "phase": "optimizer_step_end", "step": 732, "timestamp": 1784551666.65621, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342577.327289337, "phase": "optimizer_step_start", "step": 733, "timestamp": 1784551666.6576133}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342577.327499535, "phase": "data_load_start", "step": 733, "timestamp": 1784551666.6578238}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342577.333473618, "phase": "data_load_end", "step": 733, "timestamp": 1784551666.6637976, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342577.333662113, "phase": "forward_start", "step": 733, "timestamp": 1784551666.6639862}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342577.356056385, "phase": "forward_end", "step": 733, "timestamp": 1784551666.6863804}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342577.842944926, "phase": "backward_start", "step": 733, "timestamp": 1784551667.1732688}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342577.866855416, "phase": "backward_end", "step": 733, "timestamp": 1784551667.197179}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342577.867416924, "phase": "loss_sync_start", "step": 733, "timestamp": 1784551667.1977408}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.09643823653459549, "micro_step": 0, "monotonic_s": 342578.752931202, "phase": "loss_sync_end", "step": 733, "timestamp": 1784551668.0832553}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342578.773049375, "phase": "optimizer_update_start", "step": 733, "timestamp": 1784551668.1033733}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342578.840775635, "phase": "optimizer_update_end", "step": 733, "timestamp": 1784551668.1710997}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.09643823653459549, "monotonic_s": 342578.917985037, "phase": "optimizer_step_end", "step": 733, "timestamp": 1784551668.248309, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342578.919418234, "phase": "optimizer_step_start", "step": 734, "timestamp": 1784551668.2497423}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342578.919584356, "phase": "data_load_start", "step": 734, "timestamp": 1784551668.2499084}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342578.925179946, "phase": "data_load_end", "step": 734, "timestamp": 1784551668.255504, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342578.925369984, "phase": "forward_start", "step": 734, "timestamp": 1784551668.2556942}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342578.947897164, "phase": "forward_end", "step": 734, "timestamp": 1784551668.2782211}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342579.441573213, "phase": "backward_start", "step": 734, "timestamp": 1784551668.771897}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342579.46515137, "phase": "backward_end", "step": 734, "timestamp": 1784551668.7954752}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342579.465711425, "phase": "loss_sync_start", "step": 734, "timestamp": 1784551668.7960353}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.11986149847507477, "micro_step": 0, "monotonic_s": 342580.352862974, "phase": "loss_sync_end", "step": 734, "timestamp": 1784551669.683187}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342580.373126839, "phase": "optimizer_update_start", "step": 734, "timestamp": 1784551669.703451}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342580.43842702, "phase": "optimizer_update_end", "step": 734, "timestamp": 1784551669.768751}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.11986149847507477, "monotonic_s": 342580.518169318, "phase": "optimizer_step_end", "step": 734, "timestamp": 1784551669.8484933, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342580.519639356, "phase": "optimizer_step_start", "step": 735, "timestamp": 1784551669.8499632}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342580.519807983, "phase": "data_load_start", "step": 735, "timestamp": 1784551669.8501322}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342580.524861503, "phase": "data_load_end", "step": 735, "timestamp": 1784551669.8551855, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342580.525052372, "phase": "forward_start", "step": 735, "timestamp": 1784551669.8553765}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342580.547610864, "phase": "forward_end", "step": 735, "timestamp": 1784551669.877935}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342581.048024295, "phase": "backward_start", "step": 735, "timestamp": 1784551670.3783484}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342581.071564899, "phase": "backward_end", "step": 735, "timestamp": 1784551670.4018888}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342581.072039408, "phase": "loss_sync_start", "step": 735, "timestamp": 1784551670.4023635}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.16202445328235626, "micro_step": 0, "monotonic_s": 342581.957560939, "phase": "loss_sync_end", "step": 735, "timestamp": 1784551671.287885}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342581.977778465, "phase": "optimizer_update_start", "step": 735, "timestamp": 1784551671.3081024}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342582.060271762, "phase": "optimizer_update_end", "step": 735, "timestamp": 1784551671.390596}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.16202445328235626, "monotonic_s": 342582.122763763, "phase": "optimizer_step_end", "step": 735, "timestamp": 1784551671.4530878, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342582.124316261, "phase": "optimizer_step_start", "step": 736, "timestamp": 1784551671.4546404}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342582.12453249, "phase": "data_load_start", "step": 736, "timestamp": 1784551671.4548566}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342582.130842794, "phase": "data_load_end", "step": 736, "timestamp": 1784551671.4611669, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342582.131035738, "phase": "forward_start", "step": 736, "timestamp": 1784551671.46136}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342582.153625129, "phase": "forward_end", "step": 736, "timestamp": 1784551671.483949}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342582.647507338, "phase": "backward_start", "step": 736, "timestamp": 1784551671.9778314}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342582.671260693, "phase": "backward_end", "step": 736, "timestamp": 1784551672.0015845}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342582.671815668, "phase": "loss_sync_start", "step": 736, "timestamp": 1784551672.0021396}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.07728923112154007, "micro_step": 0, "monotonic_s": 342583.558268334, "phase": "loss_sync_end", "step": 736, "timestamp": 1784551672.8885925}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342583.578473486, "phase": "optimizer_update_start", "step": 736, "timestamp": 1784551672.9087975}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342583.658446401, "phase": "optimizer_update_end", "step": 736, "timestamp": 1784551672.9887702}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.07728923112154007, "monotonic_s": 342583.723438445, "phase": "optimizer_step_end", "step": 736, "timestamp": 1784551673.0537627, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342583.724859137, "phase": "optimizer_step_start", "step": 737, "timestamp": 1784551673.0551832}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342583.725028315, "phase": "data_load_start", "step": 737, "timestamp": 1784551673.0553522}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342583.731889997, "phase": "data_load_end", "step": 737, "timestamp": 1784551673.062214, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342583.732081057, "phase": "forward_start", "step": 737, "timestamp": 1784551673.062405}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342583.75448548, "phase": "forward_end", "step": 737, "timestamp": 1784551673.0848095}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342584.255534222, "phase": "backward_start", "step": 737, "timestamp": 1784551673.585858}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342584.279394334, "phase": "backward_end", "step": 737, "timestamp": 1784551673.609718}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342584.279976282, "phase": "loss_sync_start", "step": 737, "timestamp": 1784551673.6103003}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.19357430934906006, "micro_step": 0, "monotonic_s": 342585.164643538, "phase": "loss_sync_end", "step": 737, "timestamp": 1784551674.4949675}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342585.184620859, "phase": "optimizer_update_start", "step": 737, "timestamp": 1784551674.5149448}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342585.262184798, "phase": "optimizer_update_end", "step": 737, "timestamp": 1784551674.5925086}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.19357430934906006, "monotonic_s": 342585.32978815, "phase": "optimizer_step_end", "step": 737, "timestamp": 1784551674.6601121, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342585.331219353, "phase": "optimizer_step_start", "step": 738, "timestamp": 1784551674.6615434}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342585.33138846, "phase": "data_load_start", "step": 738, "timestamp": 1784551674.6617126}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342585.33700966, "phase": "data_load_end", "step": 738, "timestamp": 1784551674.6673336, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342585.337204146, "phase": "forward_start", "step": 738, "timestamp": 1784551674.6675282}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342585.359773779, "phase": "forward_end", "step": 738, "timestamp": 1784551674.6900976}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342585.853742797, "phase": "backward_start", "step": 738, "timestamp": 1784551675.1840668}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342585.877455874, "phase": "backward_end", "step": 738, "timestamp": 1784551675.2077796}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342585.878128998, "phase": "loss_sync_start", "step": 738, "timestamp": 1784551675.208453}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.149817556142807, "micro_step": 0, "monotonic_s": 342586.76417753, "phase": "loss_sync_end", "step": 738, "timestamp": 1784551676.0945013}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342586.784292707, "phase": "optimizer_update_start", "step": 738, "timestamp": 1784551676.1146166}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342586.85945282, "phase": "optimizer_update_end", "step": 738, "timestamp": 1784551676.189777}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.149817556142807, "monotonic_s": 342586.929418649, "phase": "optimizer_step_end", "step": 738, "timestamp": 1784551676.2597427, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342586.930848198, "phase": "optimizer_step_start", "step": 739, "timestamp": 1784551676.2611723}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342586.931056752, "phase": "data_load_start", "step": 739, "timestamp": 1784551676.261381}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342586.935968187, "phase": "data_load_end", "step": 739, "timestamp": 1784551676.2662923, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342586.936158726, "phase": "forward_start", "step": 739, "timestamp": 1784551676.2664826}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342586.958777182, "phase": "forward_end", "step": 739, "timestamp": 1784551676.2891011}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342587.479435223, "phase": "backward_start", "step": 739, "timestamp": 1784551676.8097591}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342587.502943554, "phase": "backward_end", "step": 739, "timestamp": 1784551676.8332672}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342587.503479292, "phase": "loss_sync_start", "step": 739, "timestamp": 1784551676.8338034}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.0853414386510849, "micro_step": 0, "monotonic_s": 342588.389004951, "phase": "loss_sync_end", "step": 739, "timestamp": 1784551677.719329}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342588.409154014, "phase": "optimizer_update_start", "step": 739, "timestamp": 1784551677.739478}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342588.481760679, "phase": "optimizer_update_end", "step": 739, "timestamp": 1784551677.8120847}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.0853414386510849, "monotonic_s": 342588.554175833, "phase": "optimizer_step_end", "step": 739, "timestamp": 1784551677.8845, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342588.555775392, "phase": "optimizer_step_start", "step": 740, "timestamp": 1784551677.8860993}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342588.555994246, "phase": "data_load_start", "step": 740, "timestamp": 1784551677.8863184}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342588.561960033, "phase": "data_load_end", "step": 740, "timestamp": 1784551677.892284, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342588.562153367, "phase": "forward_start", "step": 740, "timestamp": 1784551677.8924775}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342588.584839196, "phase": "forward_end", "step": 740, "timestamp": 1784551677.915163}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342589.085370766, "phase": "backward_start", "step": 740, "timestamp": 1784551678.4156945}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342589.108929293, "phase": "backward_end", "step": 740, "timestamp": 1784551678.439253}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342589.109487865, "phase": "loss_sync_start", "step": 740, "timestamp": 1784551678.439812}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.06591115146875381, "micro_step": 0, "monotonic_s": 342589.995524705, "phase": "loss_sync_end", "step": 740, "timestamp": 1784551679.3258486}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342590.01578802, "phase": "optimizer_update_start", "step": 740, "timestamp": 1784551679.346112}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342590.085932486, "phase": "optimizer_update_end", "step": 740, "timestamp": 1784551679.4162564}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.06591115146875381, "monotonic_s": 342590.160677623, "phase": "optimizer_step_end", "step": 740, "timestamp": 1784551679.4910016, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342590.162066634, "phase": "optimizer_step_start", "step": 741, "timestamp": 1784551679.4923906}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342590.162266882, "phase": "data_load_start", "step": 741, "timestamp": 1784551679.4925911}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342590.167522173, "phase": "data_load_end", "step": 741, "timestamp": 1784551679.4978461, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342590.167713603, "phase": "forward_start", "step": 741, "timestamp": 1784551679.4980378}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342590.190126904, "phase": "forward_end", "step": 741, "timestamp": 1784551679.5204508}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342590.684563627, "phase": "backward_start", "step": 741, "timestamp": 1784551680.0148876}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342590.708141131, "phase": "backward_end", "step": 741, "timestamp": 1784551680.0384648}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342590.708703681, "phase": "loss_sync_start", "step": 741, "timestamp": 1784551680.0390277}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.16184961795806885, "micro_step": 0, "monotonic_s": 342591.594954155, "phase": "loss_sync_end", "step": 741, "timestamp": 1784551680.9252782}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342591.614976752, "phase": "optimizer_update_start", "step": 741, "timestamp": 1784551680.9453008}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342591.682881229, "phase": "optimizer_update_end", "step": 741, "timestamp": 1784551681.0132053}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.16184961795806885, "monotonic_s": 342591.760120899, "phase": "optimizer_step_end", "step": 741, "timestamp": 1784551681.0904448, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342591.761521402, "phase": "optimizer_step_start", "step": 742, "timestamp": 1784551681.0918453}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342591.761727692, "phase": "data_load_start", "step": 742, "timestamp": 1784551681.0920517}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342591.767598705, "phase": "data_load_end", "step": 742, "timestamp": 1784551681.0979228, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342591.767787561, "phase": "forward_start", "step": 742, "timestamp": 1784551681.0981116}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342591.790269493, "phase": "forward_end", "step": 742, "timestamp": 1784551681.1205933}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342592.284381659, "phase": "backward_start", "step": 742, "timestamp": 1784551681.6147053}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342592.308046973, "phase": "backward_end", "step": 742, "timestamp": 1784551681.6383705}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342592.308629332, "phase": "loss_sync_start", "step": 742, "timestamp": 1784551681.6389532}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.10887276381254196, "micro_step": 0, "monotonic_s": 342593.194917979, "phase": "loss_sync_end", "step": 742, "timestamp": 1784551682.5252419}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342593.214996235, "phase": "optimizer_update_start", "step": 742, "timestamp": 1784551682.5453203}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342593.280201642, "phase": "optimizer_update_end", "step": 742, "timestamp": 1784551682.6105256}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.10887276381254196, "monotonic_s": 342593.360037743, "phase": "optimizer_step_end", "step": 742, "timestamp": 1784551682.6903617, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342593.361483794, "phase": "optimizer_step_start", "step": 743, "timestamp": 1784551682.6918077}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342593.361653533, "phase": "data_load_start", "step": 743, "timestamp": 1784551682.6919777}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342593.368010999, "phase": "data_load_end", "step": 743, "timestamp": 1784551682.698335, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342593.368204774, "phase": "forward_start", "step": 743, "timestamp": 1784551682.698529}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342593.390817419, "phase": "forward_end", "step": 743, "timestamp": 1784551682.7211416}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342593.912397306, "phase": "backward_start", "step": 743, "timestamp": 1784551683.2427213}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342593.936203543, "phase": "backward_end", "step": 743, "timestamp": 1784551683.2665272}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342593.936764359, "phase": "loss_sync_start", "step": 743, "timestamp": 1784551683.2670884}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.05719900131225586, "micro_step": 0, "monotonic_s": 342594.822709221, "phase": "loss_sync_end", "step": 743, "timestamp": 1784551684.153033}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342594.842962537, "phase": "optimizer_update_start", "step": 743, "timestamp": 1784551684.1732864}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342594.925593691, "phase": "optimizer_update_end", "step": 743, "timestamp": 1784551684.2559175}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.05719900131225586, "monotonic_s": 342594.988209803, "phase": "optimizer_step_end", "step": 743, "timestamp": 1784551684.318534, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342594.989674961, "phase": "optimizer_step_start", "step": 744, "timestamp": 1784551684.319999}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342594.989931718, "phase": "data_load_start", "step": 744, "timestamp": 1784551684.3202558}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342594.995875082, "phase": "data_load_end", "step": 744, "timestamp": 1784551684.326199, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342594.996067314, "phase": "forward_start", "step": 744, "timestamp": 1784551684.3263912}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342595.018691462, "phase": "forward_end", "step": 744, "timestamp": 1784551684.3490152}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342595.533028587, "phase": "backward_start", "step": 744, "timestamp": 1784551684.8633525}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342595.556617394, "phase": "backward_end", "step": 744, "timestamp": 1784551684.8869412}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342595.557164795, "phase": "loss_sync_start", "step": 744, "timestamp": 1784551684.887489}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.15544061362743378, "micro_step": 0, "monotonic_s": 342596.444463779, "phase": "loss_sync_end", "step": 744, "timestamp": 1784551685.7747877}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342596.464618423, "phase": "optimizer_update_start", "step": 744, "timestamp": 1784551685.7949424}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342596.544613441, "phase": "optimizer_update_end", "step": 744, "timestamp": 1784551685.8749373}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.15544061362743378, "monotonic_s": 342596.609655181, "phase": "optimizer_step_end", "step": 744, "timestamp": 1784551685.939979, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342596.611069581, "phase": "optimizer_step_start", "step": 745, "timestamp": 1784551685.9413936}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342596.611237416, "phase": "data_load_start", "step": 745, "timestamp": 1784551685.9415617}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342596.61709304, "phase": "data_load_end", "step": 745, "timestamp": 1784551685.947417, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342596.617281325, "phase": "forward_start", "step": 745, "timestamp": 1784551685.9476056}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342596.639708903, "phase": "forward_end", "step": 745, "timestamp": 1784551685.970033}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342597.153823055, "phase": "backward_start", "step": 745, "timestamp": 1784551686.4841468}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342597.177404478, "phase": "backward_end", "step": 745, "timestamp": 1784551686.507728}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342597.17798364, "phase": "loss_sync_start", "step": 745, "timestamp": 1784551686.5083077}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.18324792385101318, "micro_step": 0, "monotonic_s": 342598.064931895, "phase": "loss_sync_end", "step": 745, "timestamp": 1784551687.3952558}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342598.085033506, "phase": "optimizer_update_start", "step": 745, "timestamp": 1784551687.4153574}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342598.162612534, "phase": "optimizer_update_end", "step": 745, "timestamp": 1784551687.4929364}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.18324792385101318, "monotonic_s": 342598.230164667, "phase": "optimizer_step_end", "step": 745, "timestamp": 1784551687.5604887, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342598.231582504, "phase": "optimizer_step_start", "step": 746, "timestamp": 1784551687.5619063}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342598.231779836, "phase": "data_load_start", "step": 746, "timestamp": 1784551687.5621037}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342598.236395237, "phase": "data_load_end", "step": 746, "timestamp": 1784551687.5667193, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342598.236584904, "phase": "forward_start", "step": 746, "timestamp": 1784551687.5669088}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342598.259075164, "phase": "forward_end", "step": 746, "timestamp": 1784551687.589399}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342598.733283661, "phase": "backward_start", "step": 746, "timestamp": 1784551688.0636075}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342598.75722519, "phase": "backward_end", "step": 746, "timestamp": 1784551688.087549}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342598.757805234, "phase": "loss_sync_start", "step": 746, "timestamp": 1784551688.0881293}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.16061462461948395, "micro_step": 0, "monotonic_s": 342599.644803867, "phase": "loss_sync_end", "step": 746, "timestamp": 1784551688.9751277}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342599.66486505, "phase": "optimizer_update_start", "step": 746, "timestamp": 1784551688.995189}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342599.740093204, "phase": "optimizer_update_end", "step": 746, "timestamp": 1784551689.0704172}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.16061462461948395, "monotonic_s": 342599.810156412, "phase": "optimizer_step_end", "step": 746, "timestamp": 1784551689.1404805, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342599.81160609, "phase": "optimizer_step_start", "step": 747, "timestamp": 1784551689.1419303}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342599.811771921, "phase": "data_load_start", "step": 747, "timestamp": 1784551689.142096}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342599.818225994, "phase": "data_load_end", "step": 747, "timestamp": 1784551689.1485498, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342599.818419719, "phase": "forward_start", "step": 747, "timestamp": 1784551689.1487439}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342599.841056471, "phase": "forward_end", "step": 747, "timestamp": 1784551689.1713805}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342600.341515983, "phase": "backward_start", "step": 747, "timestamp": 1784551689.67184}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342600.364991109, "phase": "backward_end", "step": 747, "timestamp": 1784551689.695315}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342600.3655283, "phase": "loss_sync_start", "step": 747, "timestamp": 1784551689.6958523}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.13462191820144653, "micro_step": 0, "monotonic_s": 342601.252636625, "phase": "loss_sync_end", "step": 747, "timestamp": 1784551690.5829606}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342601.272853229, "phase": "optimizer_update_start", "step": 747, "timestamp": 1784551690.6031773}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342601.345635274, "phase": "optimizer_update_end", "step": 747, "timestamp": 1784551690.6759593}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.13462191820144653, "monotonic_s": 342601.418189508, "phase": "optimizer_step_end", "step": 747, "timestamp": 1784551690.7485135, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342601.419715735, "phase": "optimizer_step_start", "step": 748, "timestamp": 1784551690.7500398}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342601.419928417, "phase": "data_load_start", "step": 748, "timestamp": 1784551690.7502525}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342601.425669989, "phase": "data_load_end", "step": 748, "timestamp": 1784551690.7559938, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342601.425864015, "phase": "forward_start", "step": 748, "timestamp": 1784551690.7561882}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342601.448432585, "phase": "forward_end", "step": 748, "timestamp": 1784551690.7787566}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342601.936288962, "phase": "backward_start", "step": 748, "timestamp": 1784551691.2666128}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342601.959903067, "phase": "backward_end", "step": 748, "timestamp": 1784551691.2902267}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342601.960467009, "phase": "loss_sync_start", "step": 748, "timestamp": 1784551691.2907908}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.09838828444480896, "micro_step": 0, "monotonic_s": 342602.847793878, "phase": "loss_sync_end", "step": 748, "timestamp": 1784551692.178118}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342602.868010692, "phase": "optimizer_update_start", "step": 748, "timestamp": 1784551692.1983347}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342602.938245974, "phase": "optimizer_update_end", "step": 748, "timestamp": 1784551692.26857}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.09838828444480896, "monotonic_s": 342603.013066709, "phase": "optimizer_step_end", "step": 748, "timestamp": 1784551692.3433907, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342603.014473354, "phase": "optimizer_step_start", "step": 749, "timestamp": 1784551692.3447974}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342603.014660095, "phase": "data_load_start", "step": 749, "timestamp": 1784551692.344984}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342603.020223874, "phase": "data_load_end", "step": 749, "timestamp": 1784551692.3505478, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342603.020413441, "phase": "forward_start", "step": 749, "timestamp": 1784551692.3507373}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342603.043972209, "phase": "forward_end", "step": 749, "timestamp": 1784551692.374296}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342603.544107122, "phase": "backward_start", "step": 749, "timestamp": 1784551692.874431}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342603.567551578, "phase": "backward_end", "step": 749, "timestamp": 1784551692.8978753}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342603.568134097, "phase": "loss_sync_start", "step": 749, "timestamp": 1784551692.898458}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.14305025339126587, "micro_step": 0, "monotonic_s": 342604.454865743, "phase": "loss_sync_end", "step": 749, "timestamp": 1784551693.7851896}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342604.47487261, "phase": "optimizer_update_start", "step": 749, "timestamp": 1784551693.8051965}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342604.542721719, "phase": "optimizer_update_end", "step": 749, "timestamp": 1784551693.8730457}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.14305025339126587, "monotonic_s": 342604.619861737, "phase": "optimizer_step_end", "step": 749, "timestamp": 1784551693.9501858, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342604.621254404, "phase": "optimizer_step_start", "step": 750, "timestamp": 1784551693.9515784}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342604.621466786, "phase": "data_load_start", "step": 750, "timestamp": 1784551693.9517908}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342604.62722439, "phase": "data_load_end", "step": 750, "timestamp": 1784551693.9575484, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342604.627413436, "phase": "forward_start", "step": 750, "timestamp": 1784551693.9577374}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342604.649928873, "phase": "forward_end", "step": 750, "timestamp": 1784551693.980253}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342605.151282646, "phase": "backward_start", "step": 750, "timestamp": 1784551694.4816067}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342605.175121417, "phase": "backward_end", "step": 750, "timestamp": 1784551694.505445}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342605.175713124, "phase": "loss_sync_start", "step": 750, "timestamp": 1784551694.506037}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.16944381594657898, "micro_step": 0, "monotonic_s": 342606.06264643, "phase": "loss_sync_end", "step": 750, "timestamp": 1784551695.3929703}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342606.082723263, "phase": "optimizer_update_start", "step": 750, "timestamp": 1784551695.4130473}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342606.147944541, "phase": "optimizer_update_end", "step": 750, "timestamp": 1784551695.4782686}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.16944381594657898, "monotonic_s": 342606.227871478, "phase": "optimizer_step_end", "step": 750, "timestamp": 1784551695.5581954, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342606.22932308, "phase": "optimizer_step_start", "step": 751, "timestamp": 1784551695.5596473}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342606.229507587, "phase": "data_load_start", "step": 751, "timestamp": 1784551695.5598319}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342606.235390734, "phase": "data_load_end", "step": 751, "timestamp": 1784551695.5657146, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342606.235582796, "phase": "forward_start", "step": 751, "timestamp": 1784551695.565907}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342606.258227534, "phase": "forward_end", "step": 751, "timestamp": 1784551695.5885515}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342606.766183477, "phase": "backward_start", "step": 751, "timestamp": 1784551696.0965073}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342606.789961119, "phase": "backward_end", "step": 751, "timestamp": 1784551696.120285}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342606.790519982, "phase": "loss_sync_start", "step": 751, "timestamp": 1784551696.1208441}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.12589356303215027, "micro_step": 0, "monotonic_s": 342607.678250803, "phase": "loss_sync_end", "step": 751, "timestamp": 1784551697.0085745}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342607.698394075, "phase": "optimizer_update_start", "step": 751, "timestamp": 1784551697.028718}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342607.781003048, "phase": "optimizer_update_end", "step": 751, "timestamp": 1784551697.111327}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.12589356303215027, "monotonic_s": 342607.843409733, "phase": "optimizer_step_end", "step": 751, "timestamp": 1784551697.1737337, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342607.844852278, "phase": "optimizer_step_start", "step": 752, "timestamp": 1784551697.1751764}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342607.845052896, "phase": "data_load_start", "step": 752, "timestamp": 1784551697.1753771}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342607.851205034, "phase": "data_load_end", "step": 752, "timestamp": 1784551697.181529, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342607.851398228, "phase": "forward_start", "step": 752, "timestamp": 1784551697.1817224}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342607.874041904, "phase": "forward_end", "step": 752, "timestamp": 1784551697.2043657}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342608.367685701, "phase": "backward_start", "step": 752, "timestamp": 1784551697.6980095}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342608.391436933, "phase": "backward_end", "step": 752, "timestamp": 1784551697.7217607}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342608.392009342, "phase": "loss_sync_start", "step": 752, "timestamp": 1784551697.7223334}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.23470617830753326, "micro_step": 0, "monotonic_s": 342609.279615692, "phase": "loss_sync_end", "step": 752, "timestamp": 1784551698.6099398}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342609.299817307, "phase": "optimizer_update_start", "step": 752, "timestamp": 1784551698.6301413}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342609.379818847, "phase": "optimizer_update_end", "step": 752, "timestamp": 1784551698.710143}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.23470617830753326, "monotonic_s": 342609.444731908, "phase": "optimizer_step_end", "step": 752, "timestamp": 1784551698.775056, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342609.446328732, "phase": "optimizer_step_start", "step": 753, "timestamp": 1784551698.7766528}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342609.446509132, "phase": "data_load_start", "step": 753, "timestamp": 1784551698.7768333}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342609.452313937, "phase": "data_load_end", "step": 753, "timestamp": 1784551698.7826378, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342609.452505117, "phase": "forward_start", "step": 753, "timestamp": 1784551698.7828293}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342609.475176927, "phase": "forward_end", "step": 753, "timestamp": 1784551698.805501}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342609.969743652, "phase": "backward_start", "step": 753, "timestamp": 1784551699.3000677}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342609.993465778, "phase": "backward_end", "step": 753, "timestamp": 1784551699.3237896}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342609.994021795, "phase": "loss_sync_start", "step": 753, "timestamp": 1784551699.3243458}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.18079453706741333, "micro_step": 0, "monotonic_s": 342610.880670711, "phase": "loss_sync_end", "step": 753, "timestamp": 1784551700.2109945}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342610.900836546, "phase": "optimizer_update_start", "step": 753, "timestamp": 1784551700.2311606}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342610.978508774, "phase": "optimizer_update_end", "step": 753, "timestamp": 1784551700.308833}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.18079453706741333, "monotonic_s": 342611.04598466, "phase": "optimizer_step_end", "step": 753, "timestamp": 1784551700.3763087, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342611.047397767, "phase": "optimizer_step_start", "step": 754, "timestamp": 1784551700.3777218}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342611.047567105, "phase": "data_load_start", "step": 754, "timestamp": 1784551700.377891}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342611.052732852, "phase": "data_load_end", "step": 754, "timestamp": 1784551700.3830569, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342611.052926718, "phase": "forward_start", "step": 754, "timestamp": 1784551700.383251}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342611.075327784, "phase": "forward_end", "step": 754, "timestamp": 1784551700.4056518}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342611.576635458, "phase": "backward_start", "step": 754, "timestamp": 1784551700.9069593}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342611.600586086, "phase": "backward_end", "step": 754, "timestamp": 1784551700.9309096}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342611.601162613, "phase": "loss_sync_start", "step": 754, "timestamp": 1784551700.9314866}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.161422997713089, "micro_step": 0, "monotonic_s": 342612.48722896, "phase": "loss_sync_end", "step": 754, "timestamp": 1784551701.8175528}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342612.507284882, "phase": "optimizer_update_start", "step": 754, "timestamp": 1784551701.837609}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342612.582199729, "phase": "optimizer_update_end", "step": 754, "timestamp": 1784551701.9125237}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.161422997713089, "monotonic_s": 342612.652269169, "phase": "optimizer_step_end", "step": 754, "timestamp": 1784551701.9825933, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342612.653702235, "phase": "optimizer_step_start", "step": 755, "timestamp": 1784551701.9840264}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342612.65388562, "phase": "data_load_start", "step": 755, "timestamp": 1784551701.9842098}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342612.65951219, "phase": "data_load_end", "step": 755, "timestamp": 1784551701.9898362, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342612.659699483, "phase": "forward_start", "step": 755, "timestamp": 1784551701.9900236}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342612.682251902, "phase": "forward_end", "step": 755, "timestamp": 1784551702.0125756}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342613.169982895, "phase": "backward_start", "step": 755, "timestamp": 1784551702.5003066}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342613.193688387, "phase": "backward_end", "step": 755, "timestamp": 1784551702.524012}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342613.19424215, "phase": "loss_sync_start", "step": 755, "timestamp": 1784551702.5245662}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.12473322451114655, "micro_step": 0, "monotonic_s": 342614.08012954, "phase": "loss_sync_end", "step": 755, "timestamp": 1784551703.4104536}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342614.100365803, "phase": "optimizer_update_start", "step": 755, "timestamp": 1784551703.4306898}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342614.173109955, "phase": "optimizer_update_end", "step": 755, "timestamp": 1784551703.503434}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.12473322451114655, "monotonic_s": 342614.245348577, "phase": "optimizer_step_end", "step": 755, "timestamp": 1784551703.5756726, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342614.246757736, "phase": "optimizer_step_start", "step": 756, "timestamp": 1784551703.577082}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342614.246931693, "phase": "data_load_start", "step": 756, "timestamp": 1784551703.5772557}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342614.252904394, "phase": "data_load_end", "step": 756, "timestamp": 1784551703.5832283, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342614.253099422, "phase": "forward_start", "step": 756, "timestamp": 1784551703.5834234}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342614.275684474, "phase": "forward_end", "step": 756, "timestamp": 1784551703.6060083}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342614.777543727, "phase": "backward_start", "step": 756, "timestamp": 1784551704.1078677}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342614.801145698, "phase": "backward_end", "step": 756, "timestamp": 1784551704.1314695}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342614.801665686, "phase": "loss_sync_start", "step": 756, "timestamp": 1784551704.1319897}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.2305353283882141, "micro_step": 0, "monotonic_s": 342615.689968104, "phase": "loss_sync_end", "step": 756, "timestamp": 1784551705.020292}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342615.710206541, "phase": "optimizer_update_start", "step": 756, "timestamp": 1784551705.0405304}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342615.780444077, "phase": "optimizer_update_end", "step": 756, "timestamp": 1784551705.110768}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.2305353283882141, "monotonic_s": 342615.855278437, "phase": "optimizer_step_end", "step": 756, "timestamp": 1784551705.1856022, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342615.856801658, "phase": "optimizer_step_start", "step": 757, "timestamp": 1784551705.1871257}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342615.85701932, "phase": "data_load_start", "step": 757, "timestamp": 1784551705.1873434}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342615.863260841, "phase": "data_load_end", "step": 757, "timestamp": 1784551705.193585, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342615.863452212, "phase": "forward_start", "step": 757, "timestamp": 1784551705.1937764}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342615.886130184, "phase": "forward_end", "step": 757, "timestamp": 1784551705.216454}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342616.380401417, "phase": "backward_start", "step": 757, "timestamp": 1784551705.7107253}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342616.404009461, "phase": "backward_end", "step": 757, "timestamp": 1784551705.7343333}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342616.404575758, "phase": "loss_sync_start", "step": 757, "timestamp": 1784551705.7348998}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.185440331697464, "micro_step": 0, "monotonic_s": 342617.292032198, "phase": "loss_sync_end", "step": 757, "timestamp": 1784551706.6223562}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342617.31216532, "phase": "optimizer_update_start", "step": 757, "timestamp": 1784551706.6424894}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342617.379923172, "phase": "optimizer_update_end", "step": 757, "timestamp": 1784551706.7102473}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.185440331697464, "monotonic_s": 342617.457015677, "phase": "optimizer_step_end", "step": 757, "timestamp": 1784551706.7873397, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342617.458432913, "phase": "optimizer_step_start", "step": 758, "timestamp": 1784551706.788757}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342617.458603784, "phase": "data_load_start", "step": 758, "timestamp": 1784551706.788928}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342617.464205996, "phase": "data_load_end", "step": 758, "timestamp": 1784551706.7945302, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342617.464396716, "phase": "forward_start", "step": 758, "timestamp": 1784551706.7947206}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342617.48683298, "phase": "forward_end", "step": 758, "timestamp": 1784551706.8171568}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342617.981607699, "phase": "backward_start", "step": 758, "timestamp": 1784551707.3119316}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342618.005070571, "phase": "backward_end", "step": 758, "timestamp": 1784551707.3353944}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342618.005646807, "phase": "loss_sync_start", "step": 758, "timestamp": 1784551707.3359709}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.17944981157779694, "micro_step": 0, "monotonic_s": 342618.892313958, "phase": "loss_sync_end", "step": 758, "timestamp": 1784551708.222638}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342618.912575809, "phase": "optimizer_update_start", "step": 758, "timestamp": 1784551708.2428997}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342618.977892462, "phase": "optimizer_update_end", "step": 758, "timestamp": 1784551708.3082163}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.17944981157779694, "monotonic_s": 342619.05775795, "phase": "optimizer_step_end", "step": 758, "timestamp": 1784551708.388082, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342619.05946675, "phase": "optimizer_step_start", "step": 759, "timestamp": 1784551708.3897908}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342619.059697647, "phase": "data_load_start", "step": 759, "timestamp": 1784551708.3900216}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342619.06473688, "phase": "data_load_end", "step": 759, "timestamp": 1784551708.3950608, "tokens": 8196}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342619.06493309, "phase": "forward_start", "step": 759, "timestamp": 1784551708.3952572}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342619.089007897, "phase": "forward_end", "step": 759, "timestamp": 1784551708.4193318}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342619.573678632, "phase": "backward_start", "step": 759, "timestamp": 1784551708.904002}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342619.612932085, "phase": "backward_end", "step": 759, "timestamp": 1784551708.9432557}
+{"generation": 18, "identity": "node-1-trainer-4", "micro_step": 0, "monotonic_s": 342619.613336448, "phase": "loss_sync_start", "step": 759, "timestamp": 1784551708.9436603}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.16643103957176208, "micro_step": 0, "monotonic_s": 342620.490245315, "phase": "loss_sync_end", "step": 759, "timestamp": 1784551709.8205683}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342620.511022325, "phase": "optimizer_update_start", "step": 759, "timestamp": 1784551709.8413463}
+{"generation": 18, "identity": "node-1-trainer-4", "monotonic_s": 342620.593535911, "phase": "optimizer_update_end", "step": 759, "timestamp": 1784551709.92386}
+{"generation": 18, "identity": "node-1-trainer-4", "loss": 0.16643103957176208, "monotonic_s": 342620.659640942, "phase": "optimizer_step_end", "step": 759, "timestamp": 1784551709.9899647, "tokens": 8196}
