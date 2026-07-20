@@ -200,6 +200,7 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
         self.snapshots: dict[tuple[int, int], dict[str, object]] = {}
         self.admissions: dict[tuple[int, int], GenerationAdmission] = {}
         self.result_roots: dict[tuple[int, int], dict[str, dict[str, object]]] = {}
+        self.owner_results: dict[tuple[int, int], dict[str, dict[str, object]]] = {}
         self.route_readiness: dict[
             tuple[int, int, tuple[str, str]], dict[str, tuple[str, str]]
         ] = {}
@@ -223,6 +224,8 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
                 return self._close(request)
             if op == "route_ready":
                 return self._route_ready(request)
+            if op == "owner_result":
+                return self._owner_result(request)
             if op == "result_root":
                 return self._result_root(request)
             if op == "expire":
@@ -457,6 +460,46 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
                 "global_weight": validated_weight, "result_bytes": validated_bytes,
                 "workers": sorted(values)}
 
+    def _owner_result(self, request: Mapping[str, object]) -> dict[str, object]:
+        """Collect distinct immutable shard-owner roots before redistribution."""
+        generation, attempt = int(request["generation"]), int(request["attempt"])
+        admission = self.admissions[(generation, attempt)]
+        close = admission.close_result
+        if close is None or close.status != "commit_ready":
+            raise RuntimeError("owner result cannot precede the frozen accepted set")
+        worker_id, incarnation = str(request["worker_id"]), str(request["incarnation"])
+        accepted = {(item.worker_id, item.incarnation) for item in close.frozen_identities}
+        if (worker_id, incarnation) not in accepted:
+            raise ValueError("owner result reporter is outside the frozen accepted set")
+        root = str(request["result_root"])
+        layout_digest = str(request["layout_digest"])
+        weight, result_bytes = int(request["global_weight"]), int(request["result_bytes"])
+        if (len(root) != 64 or root == "00" * 32
+                or len(layout_digest) != 64 or layout_digest == "00" * 32
+                or weight != close.accepted_tokens
+                or result_bytes <= 0):
+            raise ValueError("owner result metadata is invalid")
+        values = self.owner_results.setdefault((generation, attempt), {})
+        record = {"incarnation": incarnation, "result_root": root,
+                  "layout_digest": layout_digest,
+                  "global_weight": weight, "result_bytes": result_bytes}
+        prior = values.get(worker_id)
+        if prior is not None and prior != record:
+            raise ValueError("conflicting owner result replay")
+        values[worker_id] = record
+        accepted_workers = {item[0] for item in accepted}
+        if set(values) != accepted_workers:
+            return {"status": "waiting", "reported": len(values),
+                    "required": len(accepted_workers)}
+        return {"status": "ready", "global_weight": close.accepted_tokens,
+                "roots": {worker: str(values[worker]["result_root"])
+                          for worker in sorted(values)},
+                "owners": {worker: {
+                    "result_root": str(values[worker]["result_root"]),
+                    "layout_digest": str(values[worker]["layout_digest"]),
+                    "result_bytes": int(values[worker]["result_bytes"]),
+                } for worker in sorted(values)}}
+
 
 class PoolControlClient:
     def __init__(self, address: tuple[str, int], *, timeout_s: float):
@@ -571,6 +614,26 @@ class PoolControlClient:
                 return last
             time.sleep(.01)
         raise TimeoutError(f"native result-root validation deadline expired: {last}")
+
+    def announce_owner_result(self, *, generation: int, attempt: int,
+                              worker_id: str, incarnation: str,
+                              result_root: str, layout_digest: str,
+                              global_weight: int,
+                              result_bytes: int, deadline: float
+                              ) -> dict[str, object]:
+        """Return the immutable per-owner root map once all frozen owners report."""
+        last: dict[str, object] = {"status": "waiting"}
+        while time.monotonic() < deadline:
+            last = self._rpc(
+                "owner_result", generation=generation, attempt=attempt,
+                worker_id=worker_id, incarnation=incarnation,
+                result_root=result_root, layout_digest=layout_digest,
+                global_weight=global_weight,
+                result_bytes=result_bytes)
+            if last.get("status") == "ready":
+                return last
+            time.sleep(.01)
+        raise TimeoutError(f"native owner-result announcement deadline expired: {last}")
 
 
 class _OwnerHandler(socketserver.StreamRequestHandler):

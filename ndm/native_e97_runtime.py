@@ -170,20 +170,22 @@ def encode_owner_frame_fd(*, source_fd: int, payload_offset: int, payload_bytes:
                           base_digest: bytes, result_root: bytes, weight: int,
                           chunk_index: int, chunk_count: int,
                           deadline_unix_ns: int,
-                          message_seq: int | None = None) -> tuple[int, int]:
+                          message_seq: int | None = None,
+                          source_offset: int | None = None) -> tuple[int, int]:
     """Encode one normative native result-data frame around a memfd slice."""
+    local_offset = payload_offset if source_offset is None else int(source_offset)
     if (source_fd < 0 or payload_bytes <= 0 or payload_bytes > payload_max
-            or payload_offset < 0 or weight <= 0
+            or payload_offset < 0 or local_offset < 0 or weight <= 0
             or generation < 0 or generation >= (1 << 32)
             or chunk_index not in range(chunk_count) or chunk_count <= 0):
         raise ValueError("native owner frame bounds are invalid")
-    if os.fstat(source_fd).st_size < payload_offset + payload_bytes:
+    if os.fstat(source_fd).st_size < local_offset + payload_bytes:
         raise ValueError("native owner payload slice exceeds its memfd")
     layout = bytes(layout_digest); base = bytes(base_digest); root = bytes(result_root)
     if any(len(item) != 32 for item in (layout, base, root)):
         raise ValueError("native owner frame digest width is invalid")
     payload_digest = _hash_fd(
-        source_fd, offset=payload_offset, length=payload_bytes)
+        source_fd, offset=local_offset, length=payload_bytes)
     sequence = (((generation + 1) << 32) | (chunk_index + 1)
                 if message_seq is None else int(message_seq))
     if sequence <= 0:
@@ -212,7 +214,7 @@ def encode_owner_frame_fd(*, source_fd: int, payload_offset: int, payload_bytes:
         os.ftruncate(fd, frame_bytes)
         os.pwrite(fd, header, 0)
         copy_fd_range(
-            source_fd, fd, payload_bytes, source_offset=payload_offset,
+            source_fd, fd, payload_bytes, source_offset=local_offset,
             destination_offset=320)
         seal_memfd(fd)
         return fd, frame_bytes

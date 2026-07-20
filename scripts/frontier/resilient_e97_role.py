@@ -134,6 +134,50 @@ def _native_remote_endpoints(
     return tuple(peers)
 
 
+def _native_owner_ranges(
+        worker_ids: tuple[str, ...], *, run_id: str, fence: int,
+        generation: int, attempt: int, owner_epoch: int,
+        f64_layout_bytes: int, payload_max: int, itemsize: int
+        ) -> dict[str, tuple[tuple[int, int, int], ...]]:
+    """Map canonical f64 shards to balanced owners and typed byte extents.
+
+    Placement follows NDP11: owners are sorted by their stable 128-bit worker
+    keys and the first shard is rotated by the fenced generation digest.  The
+    same shard IDs therefore select identical owners for the f64 contribution
+    plane and the f32 result plane even though their byte extents differ.
+    """
+    workers = tuple(worker_ids)
+    if (not workers or len(set(workers)) != len(workers)
+            or any(not worker for worker in workers)):
+        raise ValueError("native owner placement requires unique stable workers")
+    if (f64_layout_bytes <= 0 or payload_max <= 0 or payload_max % 8
+            or f64_layout_bytes % 8 or itemsize not in {4, 8}
+            or min(fence, generation, attempt, owner_epoch) < 0):
+        raise ValueError("native owner placement extent or identity is invalid")
+    keyed = tuple(sorted(
+        workers, key=lambda worker: hashlib.sha256(worker.encode()).digest()[:16]))
+    run_key = hashlib.sha256(run_id.encode()).digest()[:16]
+    material = b"".join((
+        run_key, int(fence).to_bytes(8, "little"),
+        int(generation).to_bytes(8, "little"),
+        int(attempt).to_bytes(4, "little"),
+        int(owner_epoch).to_bytes(8, "little"),
+    ))
+    rotation = int.from_bytes(hashlib.sha256(material).digest()[:8], "little")
+    ranges: dict[str, list[tuple[int, int, int]]] = {
+        worker: [] for worker in workers
+    }
+    shard_count = (f64_layout_bytes + payload_max - 1) // payload_max
+    for shard in range(shard_count):
+        f64_offset = shard * payload_max
+        f64_extent = min(payload_max, f64_layout_bytes - f64_offset)
+        elements = f64_extent // 8
+        owner = keyed[(rotation + shard) % len(keyed)]
+        ranges[owner].append(
+            (shard, (f64_offset // 8) * itemsize, elements * itemsize))
+    return {worker: tuple(value) for worker, value in ranges.items()}
+
+
 def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser()
     value.add_argument("role", choices=("manager", "trainer"))
@@ -621,14 +665,21 @@ class _NativePeerInbox:
     """
 
     def __init__(self, session: NativeManagerSession, *, peer_ids: tuple[str, ...],
-                 capacity: int, frames_per_peer: int, deadline: float,
+                 capacity: int, frames_per_peer: int | dict[str, int], deadline: float,
                  queue_slots: int = 4):
+        if isinstance(frames_per_peer, int):
+            frame_budgets = {peer: frames_per_peer for peer in peer_ids}
+        else:
+            frame_budgets = {str(peer): int(value)
+                             for peer, value in frames_per_peer.items()}
         if (not peer_ids or len(set(peer_ids)) != len(peer_ids)
-                or capacity <= 320 or frames_per_peer <= 0 or queue_slots <= 0):
+                or set(frame_budgets) != set(peer_ids)
+                or any(value <= 0 for value in frame_budgets.values())
+                or capacity <= 320 or queue_slots <= 0):
             raise ValueError("native peer inbox bounds are invalid")
         self.session = session
         self.capacity = int(capacity)
-        self.frames_per_peer = int(frames_per_peer)
+        self.frame_budgets = frame_budgets
         self.deadline = float(deadline)
         self.queues = {
             peer: queue.Queue(maxsize=queue_slots) for peer in peer_ids
@@ -661,7 +712,7 @@ class _NativePeerInbox:
         return False
 
     def _run(self) -> None:
-        expected = len(self.queues) * self.frames_per_peer
+        expected = sum(self.frame_budgets.values())
         total = 0
         try:
             while (total < expected and not self.stop.is_set()
@@ -678,7 +729,7 @@ class _NativePeerInbox:
                     peer, frame_bytes = received
                     if peer not in self.queues:
                         raise ValueError("native owner frame arrived from an unfenced peer")
-                    if self.received[peer] >= self.frames_per_peer:
+                    if self.received[peer] >= self.frame_budgets[peer]:
                         raise ValueError("native owner peer exceeded its fixed frame budget")
                     keep = self._put(peer, (frame_fd, int(frame_bytes)))
                     if not keep:
@@ -739,25 +790,85 @@ class _NativePeerInbox:
 def _native_peer_exchange(session: NativeManagerSession, local_result, *, args,
                           node: int, peer_id: str, peer_incarnation: str,
                           peer_root: bytes, peer_weight: int,
+                          peer_layout_digest: bytes | None = None,
                           deadline: float, inbox: _NativePeerInbox | None = None,
-                          local_digest_future=None) -> tuple[int, bytes, bytes]:
-    """Symmetric two-node memfd/libfabric exchange with bounded chunk replay."""
+                          local_digest_future=None, local_digest_value: bytes | None = None,
+                          send_ranges: tuple[tuple[int, ...], ...] | None = None,
+                          receive_ranges: tuple[tuple[int, ...], ...] | None = None,
+                          receive_length: int | None = None,
+                          wire_chunk_count: int | None = None,
+                          ) -> tuple[int, bytes, bytes]:
+    """Symmetric memfd/libfabric exchange of exact deterministic shard ranges."""
     payload_max = args.bulk_chunk_bytes
-    chunk_count = (local_result.length + payload_max - 1) // payload_max
+    natural_chunk_count = (local_result.length + payload_max - 1) // payload_max
+    chunk_count = natural_chunk_count if wire_chunk_count is None else int(wire_chunk_count)
+    if chunk_count <= 0:
+        raise ValueError("native peer wire shard count is invalid")
+    if send_ranges is None:
+        send_ranges = tuple(
+            (chunk, chunk * payload_max,
+             min(payload_max, local_result.length - chunk * payload_max))
+            for chunk in range(natural_chunk_count))
+    if receive_ranges is None:
+        receive_ranges = tuple(
+            (chunk, chunk * payload_max,
+             min(payload_max, local_result.length - chunk * payload_max))
+            for chunk in range(natural_chunk_count))
+
+    def normalized(ranges: tuple[tuple[int, ...], ...]
+                   ) -> tuple[tuple[int, int, int, int], ...]:
+        values = []
+        for item in ranges:
+            if len(item) == 3:
+                chunk, wire_offset, extent = item
+                local_offset = wire_offset
+            elif len(item) == 4:
+                chunk, local_offset, wire_offset, extent = item
+            else:
+                raise ValueError("native peer shard range width is invalid")
+            values.append((int(chunk), int(local_offset),
+                           int(wire_offset), int(extent)))
+        return tuple(values)
+
+    send_ranges = normalized(send_ranges)
+    receive_ranges = normalized(receive_ranges)
+    remote_length = int(local_result.length if receive_length is None else receive_length)
+    if (not send_ranges or not receive_ranges or remote_length <= 0
+            or any(chunk not in range(chunk_count) or local_offset < 0
+                   or wire_offset < 0 or extent <= 0 or extent > payload_max
+                   or local_offset + extent > local_result.length
+                   for chunk, local_offset, wire_offset, extent in send_ranges)
+            or any(chunk not in range(chunk_count) or local_offset < 0
+                   or wire_offset < 0 or extent <= 0 or extent > payload_max
+                   or local_offset + extent > remote_length
+                   for chunk, local_offset, wire_offset, extent in receive_ranges)):
+        raise ValueError("native peer shard ranges are invalid")
+    send_by_chunk = {chunk: (local_offset, wire_offset, extent)
+                     for chunk, local_offset, wire_offset, extent in send_ranges}
+    receive_by_chunk = {chunk: (local_offset, wire_offset, extent)
+                        for chunk, local_offset, wire_offset, extent in receive_ranges}
+    if (len(send_by_chunk) != len(send_ranges)
+            or len(receive_by_chunk) != len(receive_ranges)):
+        raise ValueError("native peer shard ranges contain duplicate IDs")
     remote_fd = create_memfd("emender-ndp-remote-result", allow_sealing=True)
-    os.ftruncate(remote_fd, local_result.length)
+    os.ftruncate(remote_fd, remote_length)
+    peer_layout = (local_result.layout_digest if peer_layout_digest is None
+                   else bytes(peer_layout_digest))
+    if len(peer_layout) != 32:
+        os.close(remote_fd)
+        raise ValueError("native peer layout digest metadata is invalid")
 
     def frame_deadline() -> int:
         return min(session.transport.deadline_unix_ns,
                    time.time_ns() + max(1, int(
                        (deadline - time.monotonic()) * 1e9)))
 
-    def send_all(*, sequence_base: int) -> None:
-        for chunk in range(chunk_count):
-            offset = chunk * payload_max
-            extent = min(payload_max, local_result.length - offset)
+    def send_all(*, sequence_base: int,
+                 selected=send_ranges) -> None:
+        for chunk, local_offset, wire_offset, extent in selected:
             frame_fd, frame_bytes = encode_owner_frame_fd(
-                source_fd=local_result.fd, payload_offset=offset,
+                source_fd=local_result.fd, source_offset=local_offset,
+                payload_offset=wire_offset,
                 payload_bytes=extent, payload_max=payload_max,
                 run_id=args.run_id, fence_epoch=_fence_epoch(args),
                 generation=local_result.generation, attempt=local_result.attempt,
@@ -781,19 +892,18 @@ def _native_peer_exchange(session: NativeManagerSession, local_result, *, args,
             finally:
                 os.close(frame_fd)
 
-    def send_credits(*, sequence_base: int) -> None:
-        for chunk in range(chunk_count):
-            offset = chunk * payload_max
-            extent = min(payload_max, local_result.length - offset)
+    def send_credits(*, sequence_base: int,
+                     selected=receive_ranges) -> None:
+        for chunk, _local_offset, wire_offset, extent in selected:
             credit_fd = encode_credit_frame_fd(
-                payload_offset=offset, payload_bytes=extent,
+                payload_offset=wire_offset, payload_bytes=extent,
                 payload_max=payload_max, run_id=args.run_id,
                 fence_epoch=_fence_epoch(args), generation=local_result.generation,
                 attempt=local_result.attempt,
                 owner_epoch=local_result.client.owner_epoch,
                 worker_id=f"node-{node}",
                 incarnation=session.owner_endpoint.incarnation,
-                layout_digest=local_result.layout_digest,
+                layout_digest=peer_layout,
                 base_digest=local_result.base_digest,
                 permitted_root=peer_root, weight=peer_weight,
                 chunk_index=chunk, chunk_count=chunk_count,
@@ -809,9 +919,13 @@ def _native_peer_exchange(session: NativeManagerSession, local_result, *, args,
             finally:
                 os.close(credit_fd)
 
-    def receive_credits() -> None:
+    def receive_credits(selected=send_ranges) -> None:
+        expected_chunks = {
+            chunk: (local_offset, wire_offset, extent)
+            for chunk, local_offset, wire_offset, extent in selected
+        }
         seen: set[int] = set()
-        while len(seen) != chunk_count:
+        while len(seen) != len(expected_chunks):
             if time.monotonic() >= deadline:
                 raise TimeoutError("native owner credit deadline expired")
             if inbox is None:
@@ -849,19 +963,24 @@ def _native_peer_exchange(session: NativeManagerSession, local_result, *, args,
                         "chunk_count": chunk_count,
                     })
                 chunk = int(value["chunk_index"])
-                expected_offset = chunk * payload_max
-                expected_extent = min(payload_max, local_result.length - expected_offset)
-                if (int(value["payload_offset"]) != expected_offset
+                if chunk not in expected_chunks:
+                    raise ValueError("native owner credit named an unassigned shard")
+                _local_offset, expected_wire_offset, expected_extent = expected_chunks[chunk]
+                if (int(value["payload_offset"]) != expected_wire_offset
                         or int(value["credit"]) != expected_extent):
                     raise ValueError("native owner credit extent mismatch")
                 seen.add(chunk)
             finally:
                 os.close(credit_fd)
 
-    def receive_all() -> None:
+    def receive_all(selected=receive_ranges) -> None:
+        expected_chunks = {
+            chunk: (local_offset, wire_offset, extent)
+            for chunk, local_offset, wire_offset, extent in selected
+        }
         seen: set[int] = set()
         capacity = payload_max + 320
-        while len(seen) != chunk_count:
+        while len(seen) != len(expected_chunks):
             if time.monotonic() >= deadline:
                 raise TimeoutError("native owner redistribution deadline expired")
             if inbox is None:
@@ -892,21 +1011,24 @@ def _native_peer_exchange(session: NativeManagerSession, local_result, *, args,
                             peer_id.encode()).digest()[:16],
                         "incarnation": __import__("hashlib").sha256(
                             peer_incarnation.encode()).digest()[:16],
-                        "layout_digest": local_result.layout_digest,
+                        "layout_digest": peer_layout,
                         "base_digest": local_result.base_digest,
                         "result_root": peer_root,
                         "weight": peer_weight,
                         "chunk_count": chunk_count,
                     })
                 chunk = int(value["chunk_index"])
+                if chunk not in expected_chunks:
+                    raise ValueError("native owner frame named an unassigned shard")
                 if chunk in seen:
                     continue  # authenticated idempotent replay
-                expected_offset = chunk * payload_max
-                if int(value["payload_offset"]) != expected_offset:
+                local_offset, expected_wire_offset, expected_extent = expected_chunks[chunk]
+                if (int(value["payload_offset"]) != expected_wire_offset
+                        or int(value["payload_bytes"]) != expected_extent):
                     raise ValueError("native redistribution chunk offset mismatch")
                 _copy_frame_payload(
                     frame_fd, remote_fd, payload_bytes=int(value["payload_bytes"]),
-                    payload_offset=expected_offset)
+                    payload_offset=local_offset)
                 seen.add(chunk)
             finally:
                 os.close(frame_fd)
@@ -919,25 +1041,416 @@ def _native_peer_exchange(session: NativeManagerSession, local_result, *, args,
         with ThreadPoolExecutor(
                 max_workers=1, thread_name_prefix="native-local-result-digest"
                 ) as digest_executor:
-            local_digest = (local_digest_future
-                            if local_digest_future is not None
-                            else digest_executor.submit(local_result.sha256))
-            # Static byte credits are granted before each direction; they are
-            # distinct from CQ completion and bound each exact frozen chunk.
-            # The lower worker's data direction runs first, without a
-            # fixed-world rendezvous.
-            if f"node-{node}" < peer_id:
-                receive_credits(); send_all(sequence_base=1)
-                send_credits(sequence_base=chunk_count + 1); receive_all()
+            if local_digest_value is not None:
+                if len(bytes(local_digest_value)) != 32:
+                    raise ValueError("native local digest metadata is invalid")
+                local_digest = None
             else:
-                send_credits(sequence_base=1); receive_all()
-                receive_credits(); send_all(sequence_base=chunk_count + 1)
+                local_digest = (local_digest_future
+                                if local_digest_future is not None
+                                else digest_executor.submit(local_result.sha256))
+            # Static byte credits are distinct from CQ completion and bound
+            # each exact frozen chunk.  Handshake one chunk at a time on each
+            # peer route: FI_EP_RDM does not promise message ordering, so a
+            # batched CREDIT followed by batched DATA can otherwise expose a
+            # later DATA before an earlier CREDIT.  The per-peer handshake
+            # keeps at most one logical frame outstanding without introducing
+            # a fixed-world rendezvous or reducing concurrency across peers.
+            if f"node-{node}" < peer_id:
+                for item in send_ranges:
+                    receive_credits((item,))
+                    send_all(sequence_base=1, selected=(item,))
+                # The higher worker echoes the last granted credit only after
+                # consuming the last DATA.  Waiting for that authenticated,
+                # idempotent replay closes the first direction before a
+                # reverse CREDIT can overtake its final DATA on FI_EP_RDM.
+                receive_credits((send_ranges[-1],))
+                for item in receive_ranges:
+                    send_credits(sequence_base=chunk_count + 1,
+                                 selected=(item,))
+                    receive_all((item,))
+            else:
+                for item in receive_ranges:
+                    send_credits(sequence_base=1, selected=(item,))
+                    receive_all((item,))
+                send_credits(sequence_base=1,
+                             selected=(receive_ranges[-1],))
+                for item in send_ranges:
+                    receive_credits((item,))
+                    send_all(sequence_base=chunk_count + 1,
+                             selected=(item,))
             seal_memfd(remote_fd)
-            remote_digest = fd_sha256(remote_fd, length=local_result.length)
-            return remote_fd, local_digest.result(), remote_digest
+            remote_digest = fd_sha256(remote_fd, length=remote_length)
+            return remote_fd, (bytes(local_digest_value) if local_digest is None
+                               else local_digest.result()), remote_digest
     except BaseException:
         os.close(remote_fd)
         raise
+
+
+def _packed_range_map(
+        ranges: tuple[tuple[int, int, int], ...]
+        ) -> tuple[tuple[int, int, int, int], ...]:
+    """Map canonical disjoint wire ranges onto one compact local extent."""
+    packed: list[tuple[int, int, int, int]] = []
+    cursor = 0
+    prior_end = 0
+    seen: set[int] = set()
+    for shard, wire_offset, extent in ranges:
+        shard, wire_offset, extent = int(shard), int(wire_offset), int(extent)
+        if (shard < 0 or shard in seen or wire_offset < prior_end
+                or extent <= 0):
+            raise ValueError("native owner ranges are invalid or overlapping")
+        seen.add(shard)
+        packed.append((shard, cursor, wire_offset, extent))
+        cursor += extent
+        prior_end = wire_offset + extent
+    if not packed:
+        raise ValueError("native owner ranges are empty")
+    return tuple(packed)
+
+
+def _packed_owner_fd(source_fd: int, *,
+                     ranges: tuple[tuple[int, int, int], ...]
+                     ) -> tuple[int, tuple[tuple[int, int, int, int], ...], bytes]:
+    """Retain assigned round-robin shards in one compact sealed replay memfd."""
+    if source_fd < 0:
+        raise ValueError("native packed owner source is invalid")
+    packed_ranges = _packed_range_map(ranges)
+    source_length = os.fstat(source_fd).st_size
+    packed_length = sum(extent for _shard, _local, _wire, extent in packed_ranges)
+    target = create_memfd("emender-ndp-packed-owner", allow_sealing=True)
+    try:
+        os.ftruncate(target, packed_length)
+        for _shard, local_offset, wire_offset, extent in packed_ranges:
+            if wire_offset + extent > source_length:
+                raise ValueError("native packed owner range exceeds its source")
+            copy_fd_range(
+                source_fd, target, extent, source_offset=wire_offset,
+                destination_offset=local_offset)
+        seal_memfd(target)
+        return (target, packed_ranges,
+                fd_sha256(target, length=packed_length))
+    except BaseException:
+        os.close(target)
+        raise
+
+
+def _native_sharded_owner_reduce(
+        session: NativeManagerSession, local_operation, local_result, freeze, *,
+        args, node: int, incarnation: str,
+        remote_endpoints: tuple[OwnerEndpoint, ...], workers: list[str],
+        weights: dict[str, int], roots: dict[str, bytes], base_digest: bytes,
+        plan_digest: bytes, pool_client: PoolControlClient, bulk: Path,
+        identity: str, generation: int, exchange_deadline: float
+        ):
+    """Reduce by balanced shard owners and redistribute one exact native view.
+
+    Every sender moves each f64 numerator shard exactly once to its deterministic
+    owner. Owners pack their disjoint round-robin shards into compact native
+    layouts, reduce those layouts, and send each compact f32 owner result to
+    every node using the canonical wire offsets. Two bounded local native
+    conversions install the assembled result as the ordinary read-only service
+    view without carrying dense values through Python or a Python socket.
+    """
+    def remaining_s() -> float:
+        remaining = exchange_deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("native sharded owner phase deadline expired")
+        return max(.001, min(float(args.deadline_s), remaining))
+
+    local_worker = f"node-{node}"
+    peer_by_worker = {item.worker_id: item for item in remote_endpoints}
+    worker_ids = tuple(workers)
+    f64_layout_bytes = int(local_result.length)
+    full_layout_digest = bytes(local_result.layout_digest)
+    total_elements = f64_layout_bytes // 8
+    contribution_ranges = _native_owner_ranges(
+        worker_ids, run_id=args.run_id, fence=_fence_epoch(args),
+        generation=generation, attempt=1, owner_epoch=1,
+        f64_layout_bytes=f64_layout_bytes, payload_max=args.bulk_chunk_bytes,
+        itemsize=8)
+    result_ranges = _native_owner_ranges(
+        worker_ids, run_id=args.run_id, fence=_fence_epoch(args),
+        generation=generation, attempt=1, owner_epoch=1,
+        f64_layout_bytes=f64_layout_bytes, payload_max=args.bulk_chunk_bytes,
+        itemsize=4)
+    shard_count = sum(len(value) for value in contribution_ranges.values())
+    owner_bytes = {
+        worker: sum(extent for _shard, _offset, extent in ranges)
+        for worker, ranges in contribution_ranges.items()
+    }
+    if (set(worker_ids) != set(contribution_ranges)
+            or max(owner_bytes.values()) - min(owner_bytes.values())
+               > args.bulk_chunk_bytes):
+        raise RuntimeError("native shard-owner placement is not balanced")
+
+    local_packed_fd, local_packed_ranges, local_packed_digest = _packed_owner_fd(
+        local_result.fd, ranges=contribution_ranges[local_worker])
+    remote_packed_fds: dict[str, int] = {}
+    remote_packed_digests: dict[str, bytes] = {}
+    contribution_started = time.monotonic()
+    try:
+        frame_budgets = {
+            peer: (len(contribution_ranges[peer])
+                   + len(contribution_ranges[local_worker])
+                   + (1 if local_worker < peer else 0))
+            for peer in peer_by_worker
+        }
+        with _NativePeerInbox(
+                session, peer_ids=tuple(peer_by_worker),
+                capacity=args.bulk_chunk_bytes + 320,
+                frames_per_peer=frame_budgets, deadline=exchange_deadline,
+                queue_slots=4) as inbox:
+            with ThreadPoolExecutor(
+                    max_workers=len(peer_by_worker),
+                    thread_name_prefix="native-shard-contribution") as executor:
+                futures = {
+                    peer: executor.submit(
+                        _native_peer_exchange, session, local_result, args=args,
+                        node=node, peer_id=peer,
+                        peer_incarnation=endpoint.incarnation,
+                        peer_root=roots[peer], peer_weight=weights[peer],
+                        deadline=exchange_deadline, inbox=inbox,
+                        local_digest_value=local_result.result_root,
+                        send_ranges=contribution_ranges[peer],
+                        receive_ranges=local_packed_ranges,
+                        receive_length=owner_bytes[local_worker],
+                        wire_chunk_count=shard_count)
+                    for peer, endpoint in peer_by_worker.items()
+                }
+                failures = []
+                for peer, future in futures.items():
+                    try:
+                        remote_fd, _unused_local_digest, remote_digest = future.result()
+                        remote_packed_fds[peer] = remote_fd
+                        remote_packed_digests[peer] = remote_digest
+                    except BaseException as error:
+                        failures.append(error)
+                if failures:
+                    raise failures[0]
+        _stage_telemetry(
+            bulk, identity, generation, "native_owner_contribution",
+            contribution_started, pool_client.timeout_s,
+            sent_bytes=sum(owner_bytes[peer] for peer in peer_by_worker),
+            received_bytes=owner_bytes[local_worker] * len(peer_by_worker),
+            owner_count=len(worker_ids), shard_count=shard_count,
+            maximum_owner_bytes=max(owner_bytes.values()),
+            minimum_owner_bytes=min(owner_bytes.values()),
+            balanced_owner_placement=True, python_dense_socket_bytes=0,
+            receive_queue_high_water_frames=inbox.high_water_frames)
+
+        # Attempt 1 produced the retained full-layout f64 numerator. Attempt 2
+        # installs only this owner's compact element count, imports one compact
+        # source per frozen worker, and finalizes its assigned f32 result shards
+        # with the exact accepted-token weight.
+        session.abort(deadline_s=5)
+        local_result.close(); local_operation.close(); freeze.close()
+        compact_layout_digest = session.install_generation(
+            total_elements=owner_bytes[local_worker] // 8,
+            generation=generation, attempt=2, owner_epoch=1,
+            source_dtype=DType.F64, base_digest=base_digest,
+            plan_digest=plan_digest, payload_max=args.bulk_chunk_bytes,
+            deadline_s=remaining_s())
+        imported_sources = tuple(
+            ((local_packed_fd if worker == local_worker else remote_packed_fds[worker]),
+             worker,
+             incarnation if worker == local_worker else peer_by_worker[worker].incarnation,
+             sequence, weights[worker],
+             local_packed_digest if worker == local_worker
+             else remote_packed_digests[worker])
+            for sequence, worker in enumerate(workers))
+        with session.import_reduction_sources(
+                imported_sources, source_dtype=DType.F64,
+                deadline_s=remaining_s()):
+            owner_freeze = session.freeze(deadline_s=remaining_s())
+            owner_operation, owner_result = session.finalize_redistribution(
+                deadline_s=remaining_s())
+    finally:
+        os.close(local_packed_fd)
+        for remote_fd in remote_packed_fds.values():
+            os.close(remote_fd)
+
+    if (owner_result.length * 2 != owner_bytes[local_worker]
+            or owner_result.layout_digest != compact_layout_digest):
+        owner_result.close(); owner_operation.close(); owner_freeze.close()
+        session.abort(deadline_s=1)
+        raise RuntimeError("native compact owner result extent/layout is invalid")
+    owner_map = pool_client.announce_owner_result(
+        generation=generation, attempt=1, worker_id=local_worker,
+        incarnation=incarnation, result_root=owner_result.result_root.hex(),
+        layout_digest=owner_result.layout_digest.hex(),
+        global_weight=owner_result.global_weight, result_bytes=owner_result.length,
+        deadline=exchange_deadline)
+    owner_records = dict(owner_map["owners"])
+    if set(owner_records) != set(worker_ids):
+        raise RuntimeError("native compact owner map differs from frozen membership")
+    parsed_owner_records = {}
+    for worker, record in owner_records.items():
+        value = dict(record)
+        root = bytes.fromhex(str(value["result_root"]))
+        layout = bytes.fromhex(str(value["layout_digest"]))
+        result_bytes = int(value["result_bytes"])
+        expected_bytes = sum(extent for _shard, _offset, extent
+                             in result_ranges[worker])
+        if (len(root) != 32 or len(layout) != 32
+                or result_bytes != expected_bytes):
+            raise RuntimeError("native compact owner metadata is invalid")
+        parsed_owner_records[worker] = (root, layout, result_bytes)
+
+    result_packed_ranges = {
+        worker: _packed_range_map(result_ranges[worker])
+        for worker in worker_ids
+    }
+    full_result_bytes = f64_layout_bytes // 2
+    aggregate_fd = create_memfd("emender-ndp-assembled-result", allow_sealing=True)
+    remote_result_fds: dict[str, int] = {}
+    redistribution_started = time.monotonic()
+    try:
+        os.ftruncate(aggregate_fd, full_result_bytes)
+        for _shard, local_offset, wire_offset, extent in result_packed_ranges[local_worker]:
+            copy_fd_range(
+                owner_result.fd, aggregate_fd, extent, source_offset=local_offset,
+                destination_offset=wire_offset)
+        frame_budgets = {
+            peer: (len(result_ranges[local_worker]) + len(result_ranges[peer])
+                   + (1 if local_worker < peer else 0))
+            for peer in peer_by_worker
+        }
+        with _NativePeerInbox(
+                session, peer_ids=tuple(peer_by_worker),
+                capacity=args.bulk_chunk_bytes + 320,
+                frames_per_peer=frame_budgets, deadline=exchange_deadline,
+                queue_slots=4) as inbox:
+            with ThreadPoolExecutor(
+                    max_workers=len(peer_by_worker),
+                    thread_name_prefix="native-shard-redistribution") as executor:
+                futures = {
+                    peer: executor.submit(
+                        _native_peer_exchange, session, owner_result, args=args,
+                        node=node, peer_id=peer,
+                        peer_incarnation=endpoint.incarnation,
+                        peer_root=parsed_owner_records[peer][0],
+                        peer_weight=owner_result.global_weight,
+                        peer_layout_digest=parsed_owner_records[peer][1],
+                        deadline=exchange_deadline, inbox=inbox,
+                        local_digest_value=owner_result.result_root,
+                        send_ranges=result_packed_ranges[local_worker],
+                        receive_ranges=result_packed_ranges[peer],
+                        receive_length=parsed_owner_records[peer][2],
+                        wire_chunk_count=shard_count)
+                    for peer, endpoint in peer_by_worker.items()
+                }
+                failures = []
+                for peer, future in futures.items():
+                    try:
+                        remote_fd, _unused_local_digest, _remote_digest = future.result()
+                        remote_result_fds[peer] = remote_fd
+                    except BaseException as error:
+                        failures.append(error)
+                if failures:
+                    raise failures[0]
+        for peer, remote_fd in remote_result_fds.items():
+            for _shard, local_offset, wire_offset, extent in result_packed_ranges[peer]:
+                copy_fd_range(
+                    remote_fd, aggregate_fd, extent, source_offset=local_offset,
+                    destination_offset=wire_offset)
+        seal_memfd(aggregate_fd)
+        aggregate_digest = fd_sha256(aggregate_fd, length=full_result_bytes)
+        result_owner_bytes = {
+            worker: sum(extent for _shard, _offset, extent in ranges)
+            for worker, ranges in result_ranges.items()
+        }
+        _stage_telemetry(
+            bulk, identity, generation, "native_owner_redistribution",
+            redistribution_started, pool_client.timeout_s,
+            sent_bytes=result_owner_bytes[local_worker] * len(peer_by_worker),
+            received_bytes=sum(result_owner_bytes[peer] for peer in peer_by_worker),
+            owner_count=len(worker_ids), shard_count=shard_count,
+            maximum_owner_bytes=max(result_owner_bytes.values()),
+            minimum_owner_bytes=min(result_owner_bytes.values()),
+            balanced_owner_placement=True, python_dense_socket_bytes=0,
+            receive_queue_high_water_frames=inbox.high_water_frames)
+    except BaseException:
+        os.close(aggregate_fd)
+        raise
+    finally:
+        for remote_fd in remote_result_fds.values():
+            os.close(remote_fd)
+
+    # Install the complete f32 aggregate into the ordinary native result
+    # lifecycle. F32->f64 retains the accepted-token numerator; f64->f32 then
+    # divides once by that same exact weight. Both passes are native and local.
+    session.abort(deadline_s=5)
+    owner_result.close(); owner_operation.close(); owner_freeze.close()
+    assembled_identity = f"assembled:{_fence_epoch(args)}:{generation}"
+    accepted_tokens = sum(weights.values())
+    restored_layout_digest = session.install_generation(
+        total_elements=total_elements, generation=generation,
+        attempt=1, owner_epoch=1,
+        source_dtype=DType.F32, base_digest=base_digest,
+        plan_digest=plan_digest, payload_max=args.bulk_chunk_bytes,
+        deadline_s=remaining_s())
+    if restored_layout_digest != full_layout_digest:
+        os.close(aggregate_fd)
+        session.abort(deadline_s=1)
+        raise RuntimeError("native restored full layout differs from attempt 1")
+    try:
+        with session.import_reduction_sources(
+                ((aggregate_fd, "assembled-global", assembled_identity, 0,
+                  accepted_tokens, aggregate_digest),),
+                source_dtype=DType.F32, deadline_s=remaining_s()):
+            bridge_freeze = session.freeze(deadline_s=remaining_s())
+            bridge_operation, bridge_result = session.finalize_redistribution(
+                deadline_s=remaining_s())
+    finally:
+        os.close(aggregate_fd)
+    bridge_fd = os.dup(bridge_result.fd)
+    bridge_digest = bridge_result.sha256()
+    if (bridge_result.length != f64_layout_bytes
+            or bridge_result.layout_digest != full_layout_digest):
+        os.close(bridge_fd)
+        bridge_result.close(); bridge_operation.close(); bridge_freeze.close()
+        session.abort(deadline_s=1)
+        raise RuntimeError("native assembled bridge result is invalid")
+    session.abort(deadline_s=5)
+    bridge_result.close(); bridge_operation.close(); bridge_freeze.close()
+    # The final install RPC remains inside the owner-exchange deadline, while
+    # the installed native result must remain valid through the distinct
+    # bounded recovery-receipt/commit phase.  Keeping those deadlines separate
+    # prevents a healthy durable publication from reaching COMMIT with an
+    # already-expired service generation after slow full-model checkpoint I/O.
+    final_operation_deadline_s = remaining_s()
+    session.install_reduction_attempt(
+        generation=generation, attempt=2, owner_epoch=1,
+        source_dtype=DType.F64, base_digest=base_digest,
+        plan_digest=plan_digest, deadline_s=final_operation_deadline_s,
+        generation_deadline_s=(
+            final_operation_deadline_s + min(float(args.deadline_s), 180.0)))
+    try:
+        with session.import_reduction_sources(
+                ((bridge_fd, "assembled-global", assembled_identity, 0,
+                  accepted_tokens, bridge_digest),),
+                source_dtype=DType.F64, deadline_s=remaining_s()):
+            final_freeze = session.freeze(deadline_s=remaining_s())
+            final_operation, final_result = session.finalize_redistribution(
+                deadline_s=remaining_s())
+    finally:
+        os.close(bridge_fd)
+    if (final_result.length != full_result_bytes
+            or final_result.layout_digest != full_layout_digest
+            or final_result.attempt != 2):
+        final_result.close(); final_operation.close(); final_freeze.close()
+        session.abort(deadline_s=1)
+        raise RuntimeError("native final assembled result is invalid")
+    _stage_telemetry(
+        bulk, identity, generation, "native_redistribution",
+        redistribution_started, pool_client.timeout_s,
+        contributions=len(imported_sources), input_dtype="float64",
+        result_dtype="float32", result_bytes=final_result.length,
+        owner_count=len(worker_ids), owner_shards=shard_count,
+        python_dense_socket_bytes=0)
+    return final_operation, final_result, final_freeze
 
 
 def _native_manager_session_lifetime_s(args) -> float:
@@ -1000,8 +1513,9 @@ def _native_manager(args) -> int:
     control_server = control_thread = None
     pool_client = None
     if args.node_count > 1:
-        if args.node_count not in {2, 4}:
-            raise ValueError("ordered native E97 scale runtime permits only 2 or 4 nodes")
+        if args.node_count not in {2, 4, 8}:
+            raise ValueError(
+                "ordered native E97 scale runtime permits only 2, 4, or 8 nodes")
         if node == 0:
             control_server = PoolControlServer(
                 ("0.0.0.0", args.coordinator_port), pool_config,
@@ -1104,151 +1618,47 @@ def _native_manager(args) -> int:
                 heartbeat(bulk, identity, generation=generation,
                           step=generation * args.local_steps, loss=None,
                           stage="owner_transport")
-                owner_transport_started = time.monotonic()
-                exchange_deadline = time.monotonic() + pool_config.slo.transport_s
-                remote_fds: dict[str, int] = {}
-                remote_source_sha256: dict[str, bytes] = {}
-                local_source_sha256: bytes | None = None
-                try:
-                    # Every reciprocal readiness call remains pairwise: no
-                    # call depends on an unrelated peer.  Launch the calls
-                    # together so all bounded point-to-point transfers can
-                    # use the four fixed provider slots inside the unchanged
-                    # 90-second owner-transport deadline.
-                    def await_route(peer_endpoint: OwnerEndpoint):
-                        peer_id = peer_endpoint.worker_id
-                        route_ready_started = time.monotonic()
-                        route_ready = pool_client.await_peer_route_ready(
-                            generation=generation, attempt=1,
-                            worker_id=f"node-{node}", incarnation=incarnation,
-                            peer_worker_id=peer_id,
-                            peer_incarnation=peer_endpoint.incarnation,
-                            deadline=min(exchange_deadline, time.monotonic()
-                                         + pool_config.slo.freeze_s))
-                        return peer_endpoint, route_ready, (
-                            time.monotonic() - route_ready_started)
+                # The complete owner-transfer/finalization/redistribution phase
+                # shares the normative 180-second absolute bound. Individual
+                # pair readiness remains capped by the 15-second freeze SLO.
+                owner_phase_deadline = time.monotonic() + min(args.deadline_s, 180.0)
 
-                    with ThreadPoolExecutor(
-                            max_workers=len(remote_endpoints),
-                            thread_name_prefix="native-route-ready") as route_executor:
-                        route_futures = [
-                            route_executor.submit(await_route, peer_endpoint)
-                            for peer_endpoint in remote_endpoints]
-                        routes = [future.result() for future in route_futures]
-                    for peer_endpoint, route_ready, route_ready_elapsed in routes:
-                        peer_id = peer_endpoint.worker_id
-                        _stage_telemetry(
-                            bulk, identity, generation, "native_route_readiness",
-                            time.monotonic() - route_ready_elapsed,
-                            pool_config.slo.freeze_s,
-                            peer_id=peer_id, participants=route_ready["workers"],
-                            pairwise=True, python_dense_socket_bytes=0)
-                    chunk_count = ((local_result.length + args.bulk_chunk_bytes - 1)
-                                   // args.bulk_chunk_bytes)
-                    with ThreadPoolExecutor(
-                            max_workers=1,
-                            thread_name_prefix="native-local-result-digest") as digest_executor:
-                        local_digest_future = digest_executor.submit(local_result.sha256)
-                        with _NativePeerInbox(
-                                session,
-                                peer_ids=tuple(item.worker_id
-                                               for item in remote_endpoints),
-                                capacity=args.bulk_chunk_bytes + 320,
-                                frames_per_peer=2 * chunk_count,
-                                deadline=exchange_deadline,
-                                queue_slots=4) as inbox:
-                            with ThreadPoolExecutor(
-                                    max_workers=len(remote_endpoints),
-                                    thread_name_prefix="native-peer-exchange") as exchange_executor:
-                                futures = {
-                                    peer_endpoint.worker_id: exchange_executor.submit(
-                                        _native_peer_exchange,
-                                        session, local_result, args=args, node=node,
-                                        peer_id=peer_endpoint.worker_id,
-                                        peer_incarnation=peer_endpoint.incarnation,
-                                        peer_root=roots[peer_endpoint.worker_id],
-                                        peer_weight=weights[peer_endpoint.worker_id],
-                                        deadline=exchange_deadline, inbox=inbox,
-                                        local_digest_future=local_digest_future)
-                                    for peer_endpoint in remote_endpoints
-                                }
-                                outcomes = {}
-                                failures = []
-                                for peer_id, future in futures.items():
-                                    try:
-                                        outcomes[peer_id] = future.result()
-                                    except BaseException as error:
-                                        failures.append(error)
-                                if failures:
-                                    for remote_fd, _local_sha, _remote_sha in outcomes.values():
-                                        os.close(remote_fd)
-                                    raise failures[0]
-                    for peer_id, outcome in outcomes.items():
-                        remote_fd, observed_local_sha256, observed_remote_sha256 = outcome
-                        remote_fds[peer_id] = remote_fd
-                        remote_source_sha256[peer_id] = observed_remote_sha256
-                        if (local_source_sha256 is not None
-                                and observed_local_sha256 != local_source_sha256):
-                            raise ValueError(
-                                "immutable local numerator digest changed between peers")
-                        local_source_sha256 = observed_local_sha256
-                except BaseException:
-                    for remote_fd in remote_fds.values():
-                        os.close(remote_fd)
-                    raise
-                if local_source_sha256 is None:
-                    raise RuntimeError("native frozen generation has no remote peer")
-                _stage_telemetry(
-                    bulk, identity, generation, "native_owner_exchange",
-                    owner_transport_started, pool_config.slo.transport_s,
-                    sent_bytes=local_result.length * len(remote_endpoints),
-                    received_bytes=local_result.length * len(remote_endpoints),
-                    peer_count=len(remote_endpoints),
-                    concurrent_peer_limit=len(remote_endpoints),
-                    receive_queue_slots_per_peer=4,
-                    receive_queue_high_water_frames=inbox.high_water_frames,
-                    receive_queue_high_water_bytes=(
-                        inbox.high_water_frames * (args.bulk_chunk_bytes + 320)),
-                    python_dense_socket_bytes=0)
-                local_fd = os.dup(local_result.fd)
-                session.abort(deadline_s=5)
-                local_result.close(); local_operation.close(); freeze.close()
-                session.install_reduction_attempt(
-                    generation=generation, attempt=2, owner_epoch=1,
-                    source_dtype=DType.F64, base_digest=base_digest,
-                    plan_digest=plan_digest,
-                    deadline_s=max(.001, args.deadline_s))
-                heartbeat(bulk, identity, generation=generation,
-                          step=generation * args.local_steps, loss=None,
-                          stage="redistribution")
-                redistribution_started = time.monotonic()
-                imported_sources = tuple(
-                    (local_fd if worker == f"node-{node}" else remote_fds[worker],
-                     worker,
-                     incarnation if worker == f"node-{node}"
-                     else next(item.incarnation for item in remote_endpoints
-                               if item.worker_id == worker),
-                     sequence, weights[worker],
-                     local_source_sha256 if worker == f"node-{node}"
-                     else remote_source_sha256[worker])
-                    for sequence, worker in enumerate(workers))
-                try:
-                    with session.import_reduction_sources(
-                            imported_sources, source_dtype=DType.F64,
-                            deadline_s=args.deadline_s):
-                        freeze = session.freeze(deadline_s=args.deadline_s)
-                        final_operation, final_result = session.finalize_redistribution(
-                            deadline_s=args.deadline_s)
-                finally:
-                    os.close(local_fd)
-                    for remote_fd in remote_fds.values():
-                        os.close(remote_fd)
-                _stage_telemetry(
-                    bulk, identity, generation, "native_redistribution",
-                    redistribution_started, pool_config.slo.apply_s,
-                    contributions=len(imported_sources), input_dtype="float64",
-                    result_dtype="float32", result_bytes=final_result.length,
-                    python_dense_socket_bytes=0)
+                def await_route(peer_endpoint: OwnerEndpoint):
+                    peer_id = peer_endpoint.worker_id
+                    route_ready_started = time.monotonic()
+                    route_ready = pool_client.await_peer_route_ready(
+                        generation=generation, attempt=1,
+                        worker_id=f"node-{node}", incarnation=incarnation,
+                        peer_worker_id=peer_id,
+                        peer_incarnation=peer_endpoint.incarnation,
+                        deadline=min(owner_phase_deadline, time.monotonic()
+                                     + pool_config.slo.freeze_s))
+                    return peer_endpoint, route_ready, (
+                        time.monotonic() - route_ready_started)
+
+                with ThreadPoolExecutor(
+                        max_workers=len(remote_endpoints),
+                        thread_name_prefix="native-route-ready") as route_executor:
+                    route_futures = [
+                        route_executor.submit(await_route, peer_endpoint)
+                        for peer_endpoint in remote_endpoints]
+                    routes = [future.result() for future in route_futures]
+                for peer_endpoint, route_ready, route_ready_elapsed in routes:
+                    _stage_telemetry(
+                        bulk, identity, generation, "native_route_readiness",
+                        time.monotonic() - route_ready_elapsed,
+                        pool_config.slo.freeze_s,
+                        peer_id=peer_endpoint.worker_id,
+                        participants=route_ready["workers"], pairwise=True,
+                        python_dense_socket_bytes=0)
+                final_operation, final_result, freeze = _native_sharded_owner_reduce(
+                    session, local_operation, local_result, freeze,
+                    args=args, node=node, incarnation=incarnation,
+                    remote_endpoints=remote_endpoints, workers=workers,
+                    weights=weights, roots=roots, base_digest=base_digest,
+                    plan_digest=plan_digest, pool_client=pool_client,
+                    bulk=bulk, identity=identity, generation=generation,
+                    exchange_deadline=owner_phase_deadline)
                 validated = pool_client.validate_result_root(
                     generation=generation, attempt=1, worker_id=f"node-{node}",
                     incarnation=incarnation, result_root=final_result.result_root.hex(),

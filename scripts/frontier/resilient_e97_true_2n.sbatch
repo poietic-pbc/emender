@@ -1,7 +1,7 @@
 #!/bin/bash
 # True resilient E97 bounded scale gate: one manager and eight real trainers
 # per node.  The accepted 2-node rung remains the default; this source admits
-# only the next ordered 4-node rung and deliberately rejects 8+ nodes.
+# the ordered 4- and 8-node rungs and deliberately rejects 32+ nodes.
 # Managers and trainers are separate srun steps; --overlap and --no-kill keep a
 # failed step from cancelling healthy siblings. There are no sentinel ranks;
 # every GPU step is a real trainer. The debug QoS bounds this G3 admission
@@ -26,8 +26,8 @@ APPROVED_EMENDER_CONDA_ENV=/lustre/orion/bif148/scratch/erikgarrison/emender/.en
   echo "EMENDER_CONDA_ENV must resolve to $APPROVED_EMENDER_CONDA_ENV" >&2; exit 64;
 }
 RESILIENT_E97_NODE_COUNT=${RESILIENT_E97_NODE_COUNT:-2}
-[[ $RESILIENT_E97_NODE_COUNT == 2 || $RESILIENT_E97_NODE_COUNT == 4 ]] || {
-  echo "ordered native scale gate permits only 2 or 4 nodes" >&2; exit 64;
+[[ $RESILIENT_E97_NODE_COUNT == 2 || $RESILIENT_E97_NODE_COUNT == 4 || $RESILIENT_E97_NODE_COUNT == 8 ]] || {
+  echo "ordered native scale gate permits only 2, 4, or 8 nodes" >&2; exit 64;
 }
 export EMENDER_CONDA_ENV
 source "$REPO/scripts/frontier/frontier_runtime_env.sh"

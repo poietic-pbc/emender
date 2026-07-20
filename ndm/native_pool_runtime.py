@@ -355,7 +355,9 @@ class NativeManagerSession:
                            payload_max: int = 64 << 20,
                            base_digest: bytes | None = None,
                            plan_digest: bytes | None = None,
-                           deadline_s: float = 30.0) -> bytes:
+                           deadline_s: float = 30.0,
+                           generation_deadline_s: float | None = None
+                           ) -> bytes:
         """Install a bounded native local generation after Python opens it."""
         if self._generation_installed:
             raise RuntimeError("native generation is already installed")
@@ -364,7 +366,8 @@ class NativeManagerSession:
         self.local.install_generation(
             generation, attempt=attempt, owner_epoch=owner_epoch,
             base_digest=base_digest, plan_digest=plan_digest,
-            deadline_s=deadline_s).close()
+            deadline_s=deadline_s,
+            generation_deadline_s=generation_deadline_s).close()
         self._generation_installed = True
         self._frozen = self._checkpoint_proposed = False
         return digest
@@ -372,7 +375,9 @@ class NativeManagerSession:
     def install_reduction_attempt(self, *, generation: int, attempt: int,
                                   owner_epoch: int, source_dtype: DType,
                                   base_digest: bytes, plan_digest: bytes,
-                                  deadline_s: float) -> None:
+                                  deadline_s: float,
+                                  generation_deadline_s: float | None = None
+                                  ) -> None:
         """Reuse the installed flat layout for the post-transfer f64 attempt."""
         if self._generation_installed:
             raise RuntimeError("native generation is already installed")
@@ -380,7 +385,8 @@ class NativeManagerSession:
         self.local.install_generation(
             generation, attempt=attempt, owner_epoch=owner_epoch,
             base_digest=base_digest, plan_digest=plan_digest,
-            deadline_s=deadline_s).close()
+            deadline_s=deadline_s,
+            generation_deadline_s=generation_deadline_s).close()
         self._generation_installed = True
         self._frozen = self._checkpoint_proposed = False
 

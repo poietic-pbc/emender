@@ -85,19 +85,21 @@ def test_launcher_discovers_coordinator_and_wires_exact_restart_handoff():
     assert '--resume-handoff "$RESILIENT_E97_RESUME_HANDOFF"' in text
 
 
-def test_scale_launcher_and_supervisor_admit_only_ordered_two_or_four_node_rungs():
+def test_scale_launcher_and_supervisor_admit_only_ordered_two_four_or_eight_node_rungs():
     launcher = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
     supervisor = (
         ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py"
     ).read_text()
 
     assert "RESILIENT_E97_NODE_COUNT=${RESILIENT_E97_NODE_COUNT:-2}" in launcher
-    assert '[[ $RESILIENT_E97_NODE_COUNT == 2 || $RESILIENT_E97_NODE_COUNT == 4 ]]' in launcher
+    assert ('[[ $RESILIENT_E97_NODE_COUNT == 2 || '
+            '$RESILIENT_E97_NODE_COUNT == 4 || '
+            '$RESILIENT_E97_NODE_COUNT == 8 ]]') in launcher
     assert '[[ ${SLURM_JOB_NUM_NODES:?} == "$RESILIENT_E97_NODE_COUNT" ]]' in launcher
     assert "--nodes=$RESILIENT_E97_NODE_COUNT --ntasks=$RESILIENT_E97_NODE_COUNT" in launcher
     assert "--node-count $RESILIENT_E97_NODE_COUNT" in launcher
     assert 'RESILIENT_E97_NODE_COUNT", "2"' in supervisor
-    assert "node_count not in {2, 4}" in supervisor
+    assert "node_count not in {2, 4, 8}" in supervisor
     assert 'f"-N{node_count}", f"-n{node_count}"' in supervisor
     assert "exactly two physical nodes" not in supervisor
 

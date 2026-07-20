@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import queue
 import subprocess
 import sys
 import socket
@@ -141,14 +142,15 @@ def test_native_owner_credits_follow_reciprocal_pair_route_readiness():
                      source.index("def manager(args)")]
     install = manager.index("session.install_routes(endpoints)")
     reciprocal_ready = manager.index("pool_client.await_peer_route_ready(")
-    exchange = manager.index("_native_peer_exchange,")
+    exchange = manager.index("_native_sharded_owner_reduce(")
 
     assert install < reciprocal_ready < exchange
     assert '"native_route_readiness"' in manager
     assert "pairwise=True" in manager
     assert 'thread_name_prefix="native-route-ready"' in manager
-    assert 'thread_name_prefix="native-peer-exchange"' in manager
-    assert "_NativePeerInbox(" in manager
+    assert 'thread_name_prefix="native-shard-contribution"' in source
+    assert 'thread_name_prefix="native-shard-redistribution"' in source
+    assert "_NativePeerInbox(" in source
 
 
 def test_native_peer_inbox_demultiplexes_with_fixed_queue_bound():
@@ -238,7 +240,240 @@ def test_native_four_node_peer_schedule_is_bounded_and_deterministic():
     manager = ROLE.read_text()[ROLE.read_text().index("def _native_manager(args)"):]
     assert "native E97 v1 owner exchange currently requires exactly two nodes" not in manager
     assert "for peer_endpoint in remote_endpoints" in manager
-    assert "remote_fds" in manager
+    assert "_native_sharded_owner_reduce(" in manager
+
+
+def test_native_eight_node_peer_schedule_balances_every_pair_once():
+    from ndm.resilient_pool_runtime import OwnerEndpoint
+    from scripts.frontier import resilient_e97_role as role
+
+    workers = tuple(f"node-{index}" for index in range(8))
+    endpoints = tuple(
+        OwnerEndpoint(worker, f"inc-{worker}", "host", 29571 + index)
+        for index, worker in enumerate(reversed(workers))
+    )
+    schedules = {
+        worker: [peer.worker_id for peer in role._native_remote_endpoints(
+            endpoints, local_worker_id=worker, minimum_contributions=8)]
+        for worker in workers
+    }
+
+    all_pairs = set()
+    for round_index in range(7):
+        pairs = {
+            tuple(sorted((worker, schedule[round_index])))
+            for worker, schedule in schedules.items()
+        }
+        assert len(pairs) == 4
+        assert len({worker for pair in pairs for worker in pair}) == 8
+        all_pairs.update(pairs)
+    assert len(all_pairs) == 28
+
+
+def test_native_eight_node_shard_ranges_are_balanced_and_byte_bounded():
+    from scripts.frontier import resilient_e97_role as role
+
+    workers = tuple(f"node-{index}" for index in range(8))
+    f64_layout_bytes = 173 * (64 << 20)
+    contribution = role._native_owner_ranges(
+        workers, run_id="run", fence=11, generation=12, attempt=1,
+        owner_epoch=1, f64_layout_bytes=f64_layout_bytes,
+        payload_max=64 << 20, itemsize=8)
+    redistribution = role._native_owner_ranges(
+        workers, run_id="run", fence=11, generation=12, attempt=1,
+        owner_epoch=1, f64_layout_bytes=f64_layout_bytes,
+        payload_max=64 << 20, itemsize=4)
+
+    contribution_counts = [len(contribution[worker]) for worker in workers]
+    assert max(contribution_counts) - min(contribution_counts) == 1
+    assert sum(contribution_counts) == 173
+    assert {shard for ranges in contribution.values()
+            for shard, _offset, _extent in ranges} == set(range(173))
+    assert sum(extent for ranges in contribution.values()
+               for _shard, _offset, extent in ranges) == f64_layout_bytes
+    assert sum(extent for ranges in redistribution.values()
+               for _shard, _offset, extent in ranges) == f64_layout_bytes // 2
+    for worker in workers:
+        assert [item[0] for item in contribution[worker]] == [
+            item[0] for item in redistribution[worker]]
+        assert all(right[0] - left[0] == len(workers)
+                   for left, right in zip(contribution[worker],
+                                          contribution[worker][1:]))
+        assert sum(item[2] for item in contribution[worker]) <= (
+            f64_layout_bytes + len(workers) - 1) // len(workers) + (64 << 20)
+
+
+def test_native_packed_owner_fd_retains_only_assigned_round_robin_shards():
+    from ndm.native_dataplane import create_memfd
+    from scripts.frontier import resilient_e97_role as role
+
+    source = create_memfd("owner-pack-source", allow_sealing=True)
+    payload = bytes(range(96))
+    assert os.pwrite(source, payload, 0) == len(payload)
+    ranges = ((0, 0, 32), (2, 64, 32))
+    packed_fd, packed_ranges, digest = role._packed_owner_fd(
+        source, ranges=ranges)
+    try:
+        assert os.fstat(packed_fd).st_size == 64
+        assert os.pread(packed_fd, 64, 0) == payload[:32] + payload[64:]
+        assert packed_ranges == ((0, 0, 0, 32), (2, 32, 64, 32))
+        assert digest == hashlib.sha256(payload[:32] + payload[64:]).digest()
+    finally:
+        os.close(source)
+        os.close(packed_fd)
+
+
+def test_native_peer_inbox_accepts_exact_per_peer_frame_budgets():
+    from scripts.frontier import resilient_e97_role as role
+
+    class FakeSession:
+        def __init__(self):
+            self.frames = [
+                ("node-2", 320), ("node-1", 640), ("node-2", 640),
+                ("node-1", 320), ("node-2", 320),
+            ]
+            self.lock = threading.Lock()
+
+        def receive_owner_fd(self, _fd, *, capacity):
+            assert capacity == 960
+            with self.lock:
+                return self.frames.pop(0) if self.frames else None
+
+    session = FakeSession()
+    observed = {}
+    budgets = {"node-1": 2, "node-2": 3}
+    with role._NativePeerInbox(
+            session, peer_ids=tuple(budgets), capacity=960,
+            frames_per_peer=budgets, deadline=time.monotonic() + 2,
+            queue_slots=2) as inbox:
+        def consume(peer):
+            values = []
+            for _ in range(budgets[peer]):
+                frame_fd, frame_bytes = inbox.receive(
+                    peer, deadline=time.monotonic() + 2)
+                try:
+                    values.append(frame_bytes)
+                finally:
+                    os.close(frame_fd)
+            observed[peer] = values
+
+        consumers = [threading.Thread(target=consume, args=(peer,))
+                     for peer in budgets]
+        for thread in consumers:
+            thread.start()
+        for thread in consumers:
+            thread.join()
+
+    assert session.frames == []
+    assert inbox.queued_frames == 0
+    assert observed == {"node-1": [640, 320], "node-2": [320, 640, 320]}
+
+
+def test_native_peer_exchange_moves_only_reciprocal_sparse_ranges():
+    from ndm.native_dataplane import create_memfd, seal_memfd
+    from scripts.frontier import resilient_e97_role as role
+
+    class Fabric:
+        def __init__(self):
+            self.queues = {worker: queue.Queue() for worker in ("node-0", "node-1")}
+            self.history = []
+            self.lock = threading.Lock()
+
+    class Session:
+        def __init__(self, fabric, worker):
+            self.fabric, self.worker = fabric, worker
+            self.owner_endpoint = SimpleNamespace(incarnation=f"{worker}-boot")
+            self.transport = SimpleNamespace(deadline_unix_ns=time.time_ns() + 5_000_000_000)
+
+        def transfer_frozen_fd(self, peer_id, fd, *, frame_bytes, **_metadata):
+            frame = os.pread(fd, frame_bytes, 0)
+            assert len(frame) == frame_bytes
+            with self.fabric.lock:
+                self.fabric.history.append(
+                    (self.worker, peer_id,
+                     int.from_bytes(frame[12:14], "little")))
+            self.fabric.queues[peer_id].put((self.worker, frame))
+
+        def receive_owner_fd(self, fd, *, capacity):
+            try:
+                worker, frame = self.fabric.queues[self.worker].get_nowait()
+            except queue.Empty:
+                return None
+            assert len(frame) <= capacity
+            assert os.pwrite(fd, frame, 0) == len(frame)
+            return worker, len(frame)
+
+    def result(worker, payload, weight):
+        fd = create_memfd(f"sparse-range-{worker}", allow_sealing=True)
+        assert os.pwrite(fd, payload, 0) == len(payload)
+        seal_memfd(fd)
+        root = hashlib.sha256(payload).digest()
+        return SimpleNamespace(
+            fd=fd, length=len(payload), generation=7, attempt=1,
+            client=SimpleNamespace(owner_epoch=1),
+            layout_digest=bytes.fromhex("11" * 32),
+            base_digest=bytes.fromhex("22" * 32),
+            result_root=root, global_weight=weight,
+            sha256=lambda: root,
+        )
+
+    fabric = Fabric()
+    sessions = [Session(fabric, f"node-{index}") for index in range(2)]
+    results = [result("node-0", bytes(range(96)), 17),
+               result("node-1", bytes(reversed(range(96))), 23)]
+    args = SimpleNamespace(
+        run_id="selective-exchange", coordinator_epoch=9,
+        bulk_chunk_bytes=32,
+    )
+    deadline = time.monotonic() + 3
+    exchanges = (
+        dict(session=sessions[0], local_result=results[0], args=args, node=0,
+             peer_id="node-1", peer_incarnation="node-1-boot",
+             peer_root=results[1].result_root, peer_weight=23,
+             send_ranges=((0, 0, 32), (2, 64, 32)),
+             receive_ranges=((1, 0, 32, 32),),
+             receive_length=32),
+        dict(session=sessions[1], local_result=results[1], args=args, node=1,
+             peer_id="node-0", peer_incarnation="node-0-boot",
+             peer_root=results[0].result_root, peer_weight=17,
+             send_ranges=((1, 32, 32),),
+             receive_ranges=((0, 0, 0, 32), (2, 32, 64, 32)),
+             receive_length=64),
+    )
+    returned = [None, None]
+    failures = []
+
+    def exchange(index):
+        try:
+            returned[index] = role._native_peer_exchange(
+                **exchanges[index], deadline=deadline, wire_chunk_count=3)
+        except BaseException as error:
+            failures.append(error)
+
+    threads = [threading.Thread(target=exchange, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    try:
+        assert failures == []
+        expected_payloads = (
+            os.pread(results[1].fd, 32, 32),
+            os.pread(results[0].fd, 32, 0) + os.pread(results[0].fd, 32, 64),
+        )
+        for index, expected in enumerate(expected_payloads):
+            remote_fd, local_digest, remote_digest = returned[index]
+            assert os.fstat(remote_fd).st_size == len(expected)
+            assert os.pread(remote_fd, len(expected), 0) == expected
+            assert local_digest == results[index].result_root
+            assert remote_digest == hashlib.sha256(expected).digest()
+            os.close(remote_fd)
+        assert [frame_type for _source, _peer, frame_type in fabric.history] == [
+            3, 8, 3, 8, 3, 3, 8,
+        ]
+    finally:
+        for value in results:
+            os.close(value.fd)
 
 
 def test_terminal_native_follower_reuses_fenced_authoritative_checkpoint(tmp_path):
@@ -348,6 +583,17 @@ def test_manager_uses_exchange_commit_bound_for_all_recovery_receipts():
     assert "min(args.deadline_s, 180.0)" in window
     assert "deadline=recovery_deadline" in window
     assert "apply_deadline" not in window
+
+
+def test_final_native_result_lifetime_covers_bounded_recovery_commit_phase():
+    source = ROLE.read_text()
+    owner = source[source.index("def _native_sharded_owner_reduce("):
+                   source.index("def _native_manager_session_lifetime_s(")]
+
+    assert "final_operation_deadline_s = remaining_s()" in owner
+    assert "deadline_s=final_operation_deadline_s" in owner
+    assert "generation_deadline_s=(" in owner
+    assert "final_operation_deadline_s + min(float(args.deadline_s), 180.0)" in owner
 
 
 def test_import_liveness_does_not_refresh_runtime_import_progress_deadline():

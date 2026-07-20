@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import ctypes
 import os
+import time
 
 import numpy as np
 import pytest
@@ -42,6 +43,16 @@ def test_newer_fence_cancels_older_generation_and_preserves_incarnation_boundary
         source.close()
         old.close()
         newer.close()
+
+
+def test_install_rpc_deadline_does_not_truncate_generation_commit_lifetime():
+    """A quick INSTALL RPC may authorize a longer bounded result lifecycle."""
+    with open_client(124) as client:
+        client.install_flat_layout(4, source_dtype=DType.F32, payload_max=64)
+        client.install_generation(
+            6, deadline_s=0.25, generation_deadline_s=2.0).close()
+        time.sleep(0.3)
+        client.control(Command.ABORT, deadline_s=1.0).close()
 
 
 def test_corruption_and_nonfinite_are_rejected_before_accumulator_mutation():

@@ -330,6 +330,112 @@ def test_native_manager_binds_both_abis_before_ready_installs_routes_and_drains(
     replacement.close("normal")
 
 
+def test_native_manager_switches_compact_owner_layout_then_restores_full_attempt(tmp_path):
+    """The 8-node owner path may compact, redistribute, and restore in one service."""
+    import hashlib
+
+    session = NativeManagerSession.start(
+        backend=NATIVE_TEST, run_id="compact-owner", fence_epoch=29,
+        worker_id="node-0", incarnation="node-0-boot", host="127.0.0.1",
+        build_manifest=BUILD_MANIFEST, gate_json=None, source_root=ROOT,
+        production=False, full_layout=False, deadline_s=20,
+        telemetry_path=tmp_path / "native-compact.jsonl", payload_max=4096,
+        resident_limit_bytes=1 << 20,
+    )
+    base_digest = bytes.fromhex("22" * 32)
+    plan_digest = bytes.fromhex("33" * 32)
+
+    def sealed_source(name: str, values: np.ndarray) -> tuple[int, bytes]:
+        payload = values.tobytes()
+        fd = create_memfd(name, allow_sealing=True)
+        assert os.write(fd, payload) == len(payload)
+        seal_memfd(fd)
+        return fd, hashlib.sha256(payload).digest()
+
+    try:
+        full_layout = session.install_generation(
+            total_elements=8, generation=6, attempt=1, source_dtype=DType.F32,
+            payload_max=64, base_digest=base_digest, plan_digest=plan_digest,
+            deadline_s=10)
+        session.abort(deadline_s=10)
+
+        compact_layout = session.install_generation(
+            total_elements=3, generation=6, attempt=2, source_dtype=DType.F64,
+            payload_max=64, base_digest=base_digest, plan_digest=plan_digest,
+            deadline_s=10)
+        assert compact_layout != full_layout
+        compact_sources = (
+            sealed_source("compact-a", np.array([3., 6., 9.], dtype=np.float64)),
+            sealed_source("compact-b", np.array([7., 14., 21.], dtype=np.float64)),
+        )
+        try:
+            sources = tuple(
+                (fd, f"node-{index}", f"node-{index}-boot", index,
+                 (3, 7)[index], digest)
+                for index, (fd, digest) in enumerate(compact_sources))
+            with session.import_reduction_sources(
+                    sources, source_dtype=DType.F64, deadline_s=10):
+                owner_freeze = session.freeze(deadline_s=10)
+                owner_operation, owner_result = session.finalize_redistribution(
+                    deadline_s=10)
+            with owner_result.mapped("float32") as actual:
+                assert np.array_equal(actual, np.array([1., 2., 3.], np.float32))
+            assert owner_result.layout_digest == compact_layout
+            assert owner_result.attempt == 2 and owner_result.global_weight == 10
+        finally:
+            for fd, _digest in compact_sources:
+                os.close(fd)
+        session.abort(deadline_s=10)
+        owner_result.close(); owner_operation.close(); owner_freeze.close()
+
+        assembled = np.arange(8, dtype=np.float32)
+        aggregate_fd, aggregate_digest = sealed_source("assembled", assembled)
+        try:
+            restored_layout = session.install_generation(
+                total_elements=8, generation=6, attempt=1,
+                source_dtype=DType.F32, payload_max=64,
+                base_digest=base_digest, plan_digest=plan_digest,
+                deadline_s=10)
+            assert restored_layout == full_layout
+            with session.import_reduction_sources(
+                    ((aggregate_fd, "assembled", "assembled-boot", 0, 10,
+                      aggregate_digest),),
+                    source_dtype=DType.F32, deadline_s=10):
+                bridge_freeze = session.freeze(deadline_s=10)
+                bridge_operation, bridge_result = session.finalize_redistribution(
+                    deadline_s=10)
+        finally:
+            os.close(aggregate_fd)
+        with bridge_result.mapped("float64") as actual:
+            assert np.array_equal(actual, assembled.astype(np.float64) * 10)
+        bridge_fd = os.dup(bridge_result.fd)
+        bridge_digest = bridge_result.sha256()
+        session.abort(deadline_s=10)
+        bridge_result.close(); bridge_operation.close(); bridge_freeze.close()
+
+        session.install_reduction_attempt(
+            generation=6, attempt=2, owner_epoch=1, source_dtype=DType.F64,
+            base_digest=base_digest, plan_digest=plan_digest, deadline_s=10)
+        try:
+            with session.import_reduction_sources(
+                    ((bridge_fd, "assembled", "assembled-boot", 0, 10,
+                      bridge_digest),),
+                    source_dtype=DType.F64, deadline_s=10):
+                final_freeze = session.freeze(deadline_s=10)
+                final_operation, final_result = session.finalize_redistribution(
+                    deadline_s=10)
+        finally:
+            os.close(bridge_fd)
+        with final_result.mapped("float32") as actual:
+            assert np.array_equal(actual, assembled)
+        assert final_result.layout_digest == full_layout
+        assert final_result.attempt == 2 and final_result.global_weight == 10
+        session.abort(deadline_s=10)
+        final_result.close(); final_operation.close(); final_freeze.close()
+    finally:
+        session.close("normal")
+
+
 def test_transport_python_bridge_exposes_bounded_native_send_receive_abi():
     """Regression: live wiring must not silently omit the dense frame ABI."""
     manifest = json.loads(BUILD_MANIFEST.read_text())

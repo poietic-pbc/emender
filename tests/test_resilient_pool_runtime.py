@@ -156,6 +156,35 @@ def test_ready_token_floor_distributed_owner_loss_and_late_join(tmp_path):
         assert {value["status"] for value in route_ready.values()} == {"ready"}
         assert route_ready[0]["workers"] == ["n0", "n1"]
 
+        # Sharded owners report distinct partial-result roots before direct
+        # redistribution. The controller releases the immutable root map only
+        # after every frozen owner has reported exactly once.
+        owner_roots = {}
+        def announce_owner_root(index):
+            owner_roots[index] = clients[index].announce_owner_result(
+                generation=4, attempt=0, worker_id=f"n{index}",
+                incarnation=f"i{index}", result_root=(f"{index + 1:02x}" * 32),
+                layout_digest=(f"{index + 3:02x}" * 32),
+                global_weight=10, result_bytes=64 + index * 4,
+                deadline=time.monotonic() + 2)
+        owner_threads = [threading.Thread(target=announce_owner_root, args=(0,)),
+                         threading.Thread(target=announce_owner_root, args=(1,))]
+        for thread in owner_threads: thread.start()
+        for thread in owner_threads: thread.join()
+        assert {value["status"] for value in owner_roots.values()} == {"ready"}
+        assert owner_roots[0]["roots"] == {"n0": "01" * 32, "n1": "02" * 32}
+        assert owner_roots[0]["owners"]["n0"] == {
+            "layout_digest": "03" * 32,
+            "result_bytes": 64,
+            "result_root": "01" * 32,
+        }
+        with pytest.raises(RuntimeError, match="conflicting owner result replay"):
+            clients[0].announce_owner_result(
+                generation=4, attempt=0, worker_id="n0", incarnation="i0",
+                result_root="03" * 32, layout_digest="03" * 32,
+                global_weight=10, result_bytes=64,
+                deadline=time.monotonic() + 1)
+
         layout = TensorLayout.from_state(_state(0), max_chunk_bytes=16)
         contributions = {"n0:i0:9": layout.pack(_state(1)),
                          "n1:i1:9": layout.pack(_state(5))}

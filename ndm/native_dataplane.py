@@ -899,7 +899,9 @@ class Client:
     def install_generation(self, generation: int, *, attempt: int = 1,
                            owner_epoch: int = 1, base_digest: bytes | None = None,
                            plan_digest: bytes | None = None,
-                           deadline_s: float = 30.0) -> Operation:
+                           deadline_s: float = 30.0,
+                           generation_deadline_s: float | None = None
+                           ) -> Operation:
         self.generation = int(generation)
         self.attempt = int(attempt)
         self.owner_epoch = int(owner_epoch)
@@ -909,7 +911,9 @@ class Client:
         self.plan_digest = _digest32(plan_digest or hashlib.sha256(
             b"native-local-plan" + self.generation.to_bytes(8, "little")
         ).digest(), field="plan_digest")
-        self.generation_deadline_ns = _deadline(deadline_s)
+        self.generation_deadline_ns = _deadline(
+            deadline_s if generation_deadline_s is None
+            else generation_deadline_s)
         request = self._control_request(Command.INSTALL_GENERATION, deadline_s=deadline_s)
         request.deadline_unix_ns = self.generation_deadline_ns
         handle = ctypes.c_uint64()
