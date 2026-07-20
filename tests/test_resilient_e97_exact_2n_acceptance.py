@@ -2,9 +2,14 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import importlib.util
+
+import pytest
 
 
 ROOT = Path(__file__).parents[1]
+SPEC = importlib.util.spec_from_file_location("exact_2n", ROOT / "scripts/frontier/render_resilient_e97_exact_2n_acceptance.py")
+MODULE = importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(MODULE)
 
 
 def _native(root: Path) -> Path:
@@ -12,7 +17,8 @@ def _native(root: Path) -> Path:
     service = root / "bin/service"; service.write_text("#!/bin/sh\nexit 0\n"); service.chmod(0o755)
     (root / "lib/local.so").write_bytes(b"local"); (root / "lib/transport.so").write_bytes(b"transport")
     manifest = root / "native.json"
-    manifest.write_text(json.dumps({"bundle_sha256": "immutable-bundle", "artifacts": {
+    commit = subprocess.check_output(["git", "-C", ROOT, "rev-parse", "HEAD"], text=True).strip()
+    manifest.write_text(json.dumps({"source_commit": commit, "bundle_sha256": "immutable-bundle", "artifacts": {
         "service_binary": {"path": "bin/service"}, "local_library": {"path": "lib/local.so"},
         "transport_library": {"path": "lib/transport.so"}}}))
     return manifest
@@ -52,4 +58,57 @@ def test_submit_path_is_fail_closed_and_never_contains_4n_submission():
     assert "refusing to overlap another user allocation" in source
     assert 'command = ["sbatch", "--parsable", "-N", "2"' in source
     assert '"-N", "4"' not in source and '"--nodes=4"' not in source
-    assert 'dependency = "afternotok"' in source
+    assert 'return advance(plan, output, state_path, repo)' in source
+    assert "--dependency=" not in source
+
+
+def _serial_plan(tmp_path):
+    commit = subprocess.check_output(["git", "-C", ROOT, "rev-parse", "HEAD"], text=True).strip()
+    return {"source_commit": commit, "authoritative_stage": {"source": {"commit": commit},
+            "build_manifest": "/stage/native.json"}, "phases": [{
+        "name": name, "run_dir": str(tmp_path / name), "launcher": "two.sbatch",
+        "generations": 5 if index == 0 else 1, "initial_generation": index,
+        "injection": {}} for index, name in enumerate(("clean-overlap", "fault-rejoin"))]}
+
+
+def test_one_job_qos_never_receives_concurrent_phase_submission(monkeypatch, tmp_path):
+    calls = []
+    plan = _serial_plan(tmp_path)
+    monkeypatch.setenv("USER", "tester")
+    monkeypatch.setattr(MODULE, "verify_source_identity", lambda *args: None)
+    def output(command, **kwargs):
+        calls.append(command)
+        if command[0] == "squeue": return ""
+        if command[0] == "sbatch": return "5035685\n"
+        raise AssertionError(command)
+    monkeypatch.setattr(MODULE.subprocess, "check_output", output)
+    state = tmp_path / "state.json"; output_path = tmp_path / "acceptance.json"
+    assert MODULE.advance(plan, output_path, state, ROOT) == 75
+    assert len([call for call in calls if call[0] == "sbatch"]) == 1
+    saved = json.loads(state.read_text())
+    assert saved["active"]["phase"] == "clean-overlap" and saved["next_phase"] == 0
+
+
+def test_pending_phase_is_resumable_wait_and_does_not_submit(monkeypatch, tmp_path):
+    plan = _serial_plan(tmp_path); state = tmp_path / "state.json"
+    state.write_text(json.dumps({"schema": "emender-exact-2n-serial-state-v1", "next_phase": 0,
+        "active": {"phase": "clean-overlap", "job_id": "5035685", "run_dir": str(tmp_path / "clean-overlap")},
+        "history": []}))
+    calls = []
+    monkeypatch.setattr(MODULE.subprocess, "check_output", lambda command, **kwargs:
+                        calls.append(command) or ("PENDING\n" if command[0] == "squeue" else ""))
+    assert MODULE.advance(plan, tmp_path / "acceptance.json", state, ROOT) == 75
+    saved = json.loads(state.read_text())
+    assert saved["wait"] == {"kind": "slurm-terminal", "job_id": "5035685",
+                             "observed_state": "PENDING", "resumable": True}
+    assert not any(call[0] == "sbatch" for call in calls)
+
+
+def test_stale_installed_bundle_source_is_rejected(tmp_path):
+    manifest = _native(tmp_path / "native")
+    value = json.loads(manifest.read_text()); value["source_commit"] = "1" * 40
+    manifest.write_text(json.dumps(value))
+    gate = tmp_path / "gate.json"; gate.write_text("{}")
+    commit = subprocess.check_output(["git", "-C", ROOT, "rev-parse", "HEAD"], text=True).strip()
+    with pytest.raises(ValueError, match="does not match the launched source"):
+        MODULE.build_plan(ROOT, commit, manifest, gate, tmp_path / "runs")
