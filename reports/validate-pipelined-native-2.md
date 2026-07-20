@@ -2,7 +2,65 @@
 
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
-Result: **blocked before submission by the fail-closed allocation-overlap guard**
+Result: **exact two-node clean phase submitted; multi-phase chain blocked by the debug-QoS submit limit**
+
+## Fourth concrete attempt: reviewed exact acceptance launcher
+
+After the prerequisite launcher merged, authoritative `main` and
+`origin/main` both resolved to
+`08a26a0f0bc71c7e480010ba1ecb4e024ce37e36`.  The per-user Slurm queue was
+empty at `2026-07-20T13:12:07Z`.  From the clean authoritative checkout, after
+canonical Frontier activation, the new exact submit path was invoked with:
+
+```text
+$EMENDER_PYTHON scripts/frontier/render_resilient_e97_exact_2n_acceptance.py \
+  --repo /lustre/orion/bif148/scratch/erikgarrison/emender \
+  --native-build-manifest /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/native-artifacts.json \
+  --full-layout-gate /lustre/orion/bif148/scratch/erikgarrison/emender/reports/frontier/native-dataplane/5033120/full-layout-gate.json \
+  --run-root /lustre/orion/bif148/scratch/erikgarrison/emender/reports/frontier/pipelined-native-2-20260720T131330Z/phases \
+  --output /lustre/orion/bif148/scratch/erikgarrison/emender/reports/frontier/pipelined-native-2-20260720T131330Z/acceptance.json \
+  --submit
+```
+
+All mandatory immutable E97 seed, data, tokenizer, approved training-config,
+native-CXI, and fenced-run inputs were exported before this command.  Slurm
+accepted the first phase as job `5035685`:
+
+```text
+clean-overlap=5035685
+5035685|resilient-e97-true-2n|RUNNING|2|02:00:00|frontier[03756-03757]
+```
+
+Thus this attempt concretely submitted exactly two nodes.  It submitted no
+4-node-or-larger job.  At `2026-07-20T13:16:06Z`, job `5035685` remained
+RUNNING at 2:29 elapsed and was still in canonical environment/runtime
+startup; its stdout/stderr contained module activation only, so no completed
+K40 generation was yet available to claim.
+
+The renderer immediately attempted to enqueue `fault-rejoin` behind the clean
+job.  Slurm rejected that second submission before assigning a job ID:
+
+```text
+sbatch: error: QOSMaxSubmitJobPerUserLimit
+sbatch: error: Batch job submission failed: Job violates accounting/QOS policy
+```
+
+The renderer consequently exited 64 and did not attempt the remaining three
+phases.  The immutable render and submission transcript are retained under
+`reports/frontier/pipelined-native-2-20260720T131330Z/` in the authoritative
+checkout.  The clean job must be allowed to finish and harvested; subsequent
+phases must then be submitted serially as the QoS slot becomes free.  The
+current all-at-once dependency-chain implementation cannot establish the full
+acceptance sequence on a QoS configured with a one-job-per-user submit limit.
+
+Two additional lineage issues remain fail-closed validation points for the
+live job: the installed native manifest records source `176ae0bc...` rather
+than the submitted source `08a26a0f...`, and the renderer's phase-specific
+`run_dir`/`restart_from` values are recorded in JSON but are not exported as
+`RUN_DIR`/`RESILIENT_E97_RESUME_HANDOFF` to each `sbatch` command.  Runtime
+attestation and restart evidence must not be claimed unless the job artifacts
+prove those bindings.  These observations do not justify cancelling or
+mutating the accepted job.
 
 Retry note (agent-1347): at `2026-07-20T12:50:12Z`, a third concrete attempt
 fetched `origin/main`, confirmed that the authoritative checkout's `HEAD`,
