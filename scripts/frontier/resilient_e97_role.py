@@ -76,6 +76,10 @@ from ndm.native_e97_runtime import (
     state_elements, wait_metadata,
 )
 from ndm.native_pool_runtime import NativeManagerSession
+from ndm.native_pipeline import (
+    CommittedResult, GenerationIdentity, NativeGenerationPipeline,
+    finite_result_verifier,
+)
 from ndm.resilient_e97_reducer import TensorLayout
 from ndm.fenced_admission import AllocationLease, SQLiteFencedControlStore
 from ndm.resilient_e97_runtime import (SplitManagerLoop, apply_delta, atomic_json,
@@ -2179,6 +2183,9 @@ def trainer(args) -> int:
     completed = start_generation
     leader_checkpoint: Path | None = None
     trainer_incarnation = uuid.uuid4().hex
+    pipeline = (NativeGenerationPipeline(
+        run_id=args.run_id, fence=_fence_epoch(args),
+        incarnation=trainer_incarnation) if native else None)
     for generation in range(start_generation, target_generation):
         if stop["requested"]:
             break
@@ -2247,10 +2254,22 @@ def trainer(args) -> int:
                 if native:
                     heartbeat(bulk, identity, generation=generation, step=step,
                               loss=None, stage="streaming_delta")
-                    native_plane.publish_model_delta(
+                    marker = native_plane.publish_model_delta(
                         base_state, model, tokens,
                         chunk_elements=max(1, args.local_spool_chunk_bytes // 4),
                         deadline_s=max(.001, generation_deadline - time.monotonic()))
+                    slot = pipeline.reserve(deadline=generation_deadline)
+                    token = pipeline.handoff(
+                        slot, GenerationIdentity(
+                            args.run_id, _fence_epoch(args), generation,
+                            native_plane.metadata.attempt, trainer_incarnation,
+                            native_plane.metadata.layout_digest,
+                            native_plane.metadata.base_digest),
+                        marker, weight=tokens, digest=marker["source_sha256"])
+                    # submit() acknowledged that the persistent service retained
+                    # the sealed memfd, so the producer ownership token is now
+                    # safe to release while outer work continues independently.
+                    pipeline.release(token)
                     _stage_telemetry(
                         bulk, identity, generation, "native_direct_memfd",
                         time.monotonic(), 180.0, trainer_spool_bytes=0,
@@ -2328,11 +2347,20 @@ def trainer(args) -> int:
             heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
                       stage="streaming_delta")
             if native:
-                native_plane.publish_flat_shards(
+                marker = native_plane.publish_flat_shards(
                     flatten_tensors(
                         delta, chunk_elements=max(1, args.bulk_chunk_bytes // 4)),
                     tokens=tokens,
                     deadline_s=max(.001, generation_deadline - time.monotonic()))
+                slot = pipeline.reserve(deadline=generation_deadline)
+                token = pipeline.handoff(
+                    slot, GenerationIdentity(
+                        args.run_id, _fence_epoch(args), generation,
+                        native_plane.metadata.attempt, trainer_incarnation,
+                        native_plane.metadata.layout_digest,
+                        native_plane.metadata.base_digest),
+                    marker, weight=tokens, digest=marker["source_sha256"])
+                pipeline.release(token)
             else:
                 spool.publish(fence, rank, flatten_tensors(
                     delta, chunk_elements=max(1, args.bulk_chunk_bytes // 8)),
@@ -2357,6 +2385,29 @@ def trainer(args) -> int:
                 deadline=exchange_deadline,
                 chunk_elements=max(1, args.bulk_chunk_bytes // 4))
             manifest, aggregate = native_context.__enter__()
+            committed = CommittedResult(
+                GenerationIdentity(
+                    args.run_id, _fence_epoch(args), generation,
+                    int(manifest["attempt"]), trainer_incarnation,
+                    str(manifest["layout_digest"]), str(manifest["base_digest"])),
+                manifest, str(manifest["result_root"]),
+                str(manifest.get("membership_root", manifest["result_root"])),
+                int(manifest["global_weight"]), time.monotonic_ns())
+            if not pipeline.publish_committed(
+                    committed, verify=finite_result_verifier):
+                native_context.__exit__(None, None, None)
+                raise ValueError("native pipeline rejected committed result")
+            admitted = pipeline.take_at_boundary(
+                trainer_generation=generation, fence=_fence_epoch(args),
+                incarnation=trainer_incarnation,
+                base_digest=str(manifest["base_digest"]))
+            if admitted is None or admitted.payload is not manifest:
+                native_context.__exit__(None, None, None)
+                raise ValueError("native committed result missed safe boundary")
+            _stage_telemetry(
+                bulk, identity, generation, "native_generation_pipeline",
+                generation_started, args.deadline_s,
+                **pipeline.metrics.__dict__)
         else:
             manifest, aggregate = spool.stream_aggregate(
                 fence, deadline=exchange_deadline,
