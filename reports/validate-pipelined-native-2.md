@@ -4,6 +4,25 @@ Date: 2026-07-20
 Task: `validate-pipelined-native-2`  
 Result: **blocked before submission by the fail-closed allocation-overlap guard**
 
+Retry note (agent-1347): at `2026-07-20T12:50:12Z`, a third concrete attempt
+fetched `origin/main`, confirmed that the authoritative checkout's `HEAD`,
+`main`, and `origin/main` still all resolved to
+`176ae0bc11db5bf1cad51008d6891d209867004c`, and activated the canonical
+Frontier environment.  The activation selected the current canonical module
+stack (including `PrgEnv-gnu/8.7.0`, `cray-mpich/9.1.0`, and
+`gcc-native/14.2`).  The exact approved clean two-node command was then invoked
+again with the retained native manifest and `$EMENDER_PYTHON`; it exited 69
+with `refusing to overlap another user allocation` before `sbatch`.
+
+Immediately after that attempt, job `5035539` remained RUNNING on 32 nodes at
+12:01 elapsed of its 30-minute bound.  The authoritative source had not gained
+a reviewed real-K40 acceptance submitter: the clean G2 launcher still fixes
+three synthetic generations, while `resilient_e97_true_2n.sbatch` still admits
+only 20/30-minute gates and therefore cannot safely cover five independently
+bounded 420-second K40 windows plus the required control/checkpoint phases.
+No job was submitted by this retry, and the live acceptance criteria remain
+unclaimed.
+
 Retry note (agent-1346): the retry on the same date re-read both normative
 design authorities, verified that the authoritative checkout still resolved
 `HEAD`, `main`, and `origin/main` to `176ae0bc11db5bf1cad51008d6891d209867004c`,
