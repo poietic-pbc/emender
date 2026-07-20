@@ -79,3 +79,19 @@ plane v1. Applicable matrix requirements are R01-R16 and NDP01-NDP17.
 This report is intentionally an integration/attempt record, not scale
 admission. The downstream four-node rung must remain blocked until a subsequent
 main-branch runner commits the missing five-generation live evidence.
+
+## Retry on 2026-07-20
+
+A subsequent worker resumed the committed branch at `4b9960a0` and repeated
+the exact approved submission attempt with the retained manifest:
+
+```text
+NDP_BUILD_MANIFEST="$PWD/build/native-resilient-dataplane/native-artifacts.json" \
+  bash scripts/frontier/submit_native_dataplane_2n_gate.sh clean
+exit 64: authoritative Frontier gate must be submitted from main
+```
+
+The independent no-overlap precondition also remains false: Slurm job
+`5035347` (`validate-native-pool-32n-third-atomic`) is still running on 32
+nodes. The wrapper was allowed to fail closed; it was not modified or bypassed,
+and no new Slurm job (including no job at four or more nodes) was submitted.
