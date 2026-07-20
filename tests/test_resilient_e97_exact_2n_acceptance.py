@@ -51,6 +51,11 @@ def test_dry_run_renders_exact_real_k40_fenced_acceptance_without_submission(tmp
     identities = {(p["source_commit"], p["native_bundle"]["bundle_sha256"]) for p in plan["phases"]}
     assert len(identities) == 1
     assert all(max(p["stage_deadlines"].values()) <= 420 for p in plan["phases"])
+    assert plan["phases"][0]["performance_gate"] == {
+        "foreground_idle_fraction_strict_max": 0.10,
+        "steady_state_cadence_multiple_max": 1.25,
+        "requires_background_g_overlap_k40_g_plus_1": True,
+    }
 
 
 def test_submit_path_is_fail_closed_and_never_contains_4n_submission():
@@ -61,6 +66,9 @@ def test_submit_path_is_fail_closed_and_never_contains_4n_submission():
     assert '"-N", "4"' not in source and '"--nodes=4"' not in source
     assert 'return advance(plan, output, state_path, repo)' in source
     assert "--dependency=" not in source
+    payload = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
+    assert "validate_pipelined_e97_performance.py" in payload
+    assert "--telemetry-root" in payload and "pipelined-performance.json" in payload
 
 
 def _serial_plan(tmp_path):

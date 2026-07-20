@@ -162,6 +162,12 @@ def build_plan(repo: Path, commit: str, manifest: Path, gate: Path, run_root: Pa
                       "initial_generation": initial, "final_generation": initial + generations,
                       "restart_from": restart_from, "run_dir": str((run_root / name).resolve()),
                       "injection": injection})
+        if name == "clean-overlap":
+            phase["performance_gate"] = {
+                "foreground_idle_fraction_strict_max": 0.10,
+                "steady_state_cadence_multiple_max": 1.25,
+                "requires_background_g_overlap_k40_g_plus_1": True,
+            }
         phases.append(phase)
     return {
         "schema": "emender-real-e97-exact-2n-acceptance-v1",

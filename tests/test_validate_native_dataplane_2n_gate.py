@@ -57,6 +57,21 @@ def test_reference_rejects_partial_f64_pair_layout():
         raise AssertionError("partial alternating f64 reference was accepted")
 
 
+def test_sub_4x_g2_is_telemetry_not_k40_admission_failure():
+    module = _module()
+    telemetry = module.clean_performance_telemetry(
+        [23.164536252, 26.393715247, 25.491979176], exact=True
+    )
+    assert telemetry["legacy_4x_telemetry_target_met"] is False
+    assert telemetry["logical_bytes_per_second"] == pytest.approx(864_078_954.28)
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert "legacy_4x_telemetry_target_met" in source
+    assert '"admission_policy": "correctness_only_then_live_k40_performance"' in source
+    assert "native clean throughput did not reach 4x" not in source
+    assert "timed clean generation contained a rejection" in source
+    assert "preflight did not reject one stale and corrupt frame" in source
+
+
 def test_fault_physical_accounting_requires_one_exact_remote_replay_shard():
     module = _module()
     layout = module.LAYOUT_BYTES
