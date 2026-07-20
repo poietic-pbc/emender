@@ -76,6 +76,7 @@ def _serial_plan(tmp_path):
     return {"source_commit": commit, "authoritative_stage": {"source": {"commit": commit},
             "build_manifest": "/stage/native.json"}, "phases": [{
         "name": name, "run_dir": str(tmp_path / name), "launcher": "two.sbatch",
+        "full_layout_gate": str(tmp_path / "g2.json"), "fence_ordinal": index + 1,
         "generations": 5 if index == 0 else 1, "initial_generation": index,
         "injection": {}} for index, name in enumerate(("clean-overlap", "fault-rejoin"))]}
 
@@ -96,6 +97,15 @@ def test_one_job_qos_never_receives_concurrent_phase_submission(monkeypatch, tmp
     assert len([call for call in calls if call[0] == "sbatch"]) == 1
     saved = json.loads(state.read_text())
     assert saved["active"]["phase"] == "clean-overlap" and saved["next_phase"] == 0
+    sbatch = next(call for call in calls if call[0] == "sbatch")
+    assert sbatch[sbatch.index("--chdir") + 1] == os.fspath(ROOT.resolve())
+    assert sbatch[-1] == os.fspath((ROOT / "two.sbatch").resolve())
+    exported = next(value for value in sbatch if value.startswith("--export=ALL,"))
+    for required in ("REPO=", "NDP_FULL_LAYOUT_GATE_JSON=", "EMENDER_CONDA_ENV=",
+                     "RESILIENT_E97_SEED=", "RESILIENT_E97_DATA=",
+                     "RESILIENT_E97_TIKTOKEN_CACHE_FILE=", "RESILIENT_E97_RUN_ID=",
+                     "RESILIENT_E97_SOURCE_ID=", "RESILIENT_E97_PAYLOAD_ID="):
+        assert required in exported
 
 
 def test_pending_phase_is_resumable_wait_and_does_not_submit(monkeypatch, tmp_path):

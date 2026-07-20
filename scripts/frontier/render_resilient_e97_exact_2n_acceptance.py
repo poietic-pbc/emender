@@ -22,6 +22,12 @@ from typing import Any
 
 
 WALLTIME = "02:00:00"
+APPROVED_ENV = "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312"
+SEED = "/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260709_084606_step_1525000/checkpoint_step_1525000_loss_2.4378.pt"
+DATA = "/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt"
+TIKTOKEN = "/lustre/orion/bif148/proj-shared/emender/tokenizers/tiktoken/p50k_base/ec7223a39ce59f226a68acc30dc1af2788490e15"
+SEED_SHA256 = "1da27d2e09bc6c6f5ffc30e3e4476df1cebd807267431c8524de1a5b0dc5bca9"
+TIKTOKEN_SHA256 = "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069"
 STAGE_DEADLINES = {
     "handoff_s": 180,
     "apply_s": 180,
@@ -247,17 +253,36 @@ def advance(plan: dict[str, Any], output: Path, state_path: Path, repo: Path) ->
     phase = plan["phases"][index]
     run_dir = Path(phase["run_dir"]); run_dir.mkdir(parents=True, exist_ok=True)
     exports = {
+        "REPO": str(repo.resolve()),
         "RESILIENT_E97_ACCEPTANCE_MANIFEST": str(output.resolve()),
         "RESILIENT_E97_ACCEPTANCE_PHASE": phase["name"], "RUN_DIR": str(run_dir),
         "NDP_BUILD_MANIFEST": plan["authoritative_stage"]["build_manifest"],
+        "NDP_FULL_LAYOUT_GATE_JSON": phase["full_layout_gate"],
+        "EMENDER_CONDA_ENV": APPROVED_ENV,
+        "DILOCO_DATAPLANE": "native-cxi", "FI_PROVIDER": "cxi",
+        "RESILIENT_E97_RUN_ID": f"exact-2n-{phase['name']}-{plan['source_commit'][:12]}",
+        "RESILIENT_E97_SOURCE_ID": f"step-1525000-sha256-{SEED_SHA256}",
+        "RESILIENT_E97_PAYLOAD_ID": f"{plan['source_commit'][:12]}-{phase['name']}-e97-k40",
+        "RESILIENT_E97_CODE_ID": plan["source_commit"],
+        "RESILIENT_E97_SEED": SEED,
+        "RESILIENT_E97_TRAIN_ARGS_JSON": str((repo / "configs/frontier/e97_resilient_split_role_flat.json").resolve()),
+        "RESILIENT_E97_DATA": DATA, "RESILIENT_E97_TIKTOKEN_CACHE_FILE": TIKTOKEN,
+        "RESILIENT_E97_TIKTOKEN_SHA256": TIKTOKEN_SHA256,
         "RESILIENT_E97_NODE_COUNT": "2", "RESILIENT_E97_GENERATIONS": str(phase["generations"]),
         "RESILIENT_E97_INITIAL_GENERATION": str(phase["initial_generation"]),
+        "RESILIENT_E97_COORDINATOR_EPOCH": str(phase["fence_ordinal"]),
+        "RESILIENT_E97_GLOBAL_QUORUM": "2", "RESILIENT_E97_GLOBAL_TOKEN_MIN": "3934080",
+        "RESILIENT_E97_STARTUP_SMOKE": "0", "RESILIENT_E97_REQUESTED_WALLTIME": WALLTIME,
+        "RESILIENT_E97_BULK_ROOT": f"/tmp/exact-2n-{plan['source_commit'][:12]}-{phase['name']}",
         "RESILIENT_E97_GENERATION_DEADLINE_S": str(STAGE_DEADLINES["quorum_s"]), **phase["injection"],
     }
     if state["history"]:
         exports["RESILIENT_E97_RESUME_HANDOFF"] = state["history"][-1]["terminal_artifact"]
+    launcher = (repo / phase["launcher"]).resolve()
+    launcher.relative_to(repo.resolve())
     command = ["sbatch", "--parsable", "-N", "2", "-t", WALLTIME, "--qos=debug", "--network=job_vni",
-               "--export=ALL," + ",".join(f"{k}={v}" for k, v in exports.items()), phase["launcher"]]
+               "--chdir", str(repo.resolve()),
+               "--export=ALL," + ",".join(f"{k}={v}" for k, v in exports.items()), str(launcher)]
     job_id = subprocess.check_output(command, text=True).strip().split(";")[0]
     state["active"] = {"phase": phase["name"], "job_id": job_id, "run_dir": str(run_dir),
                        "submitted_unix_seconds": int(time.time())}
