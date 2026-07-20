@@ -1,0 +1,58 @@
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 2543, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 2539, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+                                                        ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 2363, in trainer
+    manifest, aggregate = native_context.__enter__()
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/lib/python3.12/contextlib.py", line 137, in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/native_e97_runtime.py", line 522, in result_shards
+    value = wait_metadata(
+            ^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/native_e97_runtime.py", line 65, in wait_metadata
+    raise TimeoutError(f"native metadata deadline expired for {target}: {last}")
+TimeoutError: native metadata deadline expired for /tmp/e32-f17-clean-095924/npv1f-progress-20260719T223459Z-f56e27a/node-14/control/native-result-00000014.json: [Errno 2] No such file or directory: '/tmp/e32-f17-clean-095924/npv1f-progress-20260719T223459Z-f56e27a/node-14/control/native-result-00000014.json'
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 2543, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 2539, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+                                                        ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/scripts/frontier/resilient_e97_role.py", line 2213, in trainer
+    native_plane = NativeTrainerDataPlane.connect(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/native_e97_runtime.py", line 421, in connect
+    metadata = GenerationMetadata.from_json(value)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-48b280b7a0/ndm/native_e97_runtime.py", line 392, in from_json
+    raise ValueError("native E97 generation identity is invalid")
+ValueError: native E97 generation identity is invalid
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-3ef0610ae7/scripts/frontier/resilient_e97_role.py", line 2543, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-3ef0610ae7/scripts/frontier/resilient_e97_role.py", line 2539, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+                                                        ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-3ef0610ae7/scripts/frontier/resilient_e97_role.py", line 2516, in trainer
+    native_plane.close()
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-3ef0610ae7/ndm/native_e97_runtime.py", line 581, in close
+    self.submission.close(); self.submission = None
+    ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-3ef0610ae7/ndm/native_dataplane.py", line 593, in close
+    self.client.native.check(code, "ndp_op_release_v1")
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-3ef0610ae7/ndm/native_dataplane.py", line 532, in check
+    raise error_type(code, operation, detail)
+ndm.native_dataplane.NativeDataplaneError: ndp_op_release_v1: route failure (-12)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
