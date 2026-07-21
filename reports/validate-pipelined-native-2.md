@@ -2,9 +2,34 @@
 
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
-Result: **supervisor-fix exact-source G2 refresh queued; replacement K40 remains fail-closed pending G2**
+Result: **supervisor-fix replacement K40 job 5043045 queued; monitoring sole exact two-node allocation**
 
 ## Supervisor-fix retry (active)
+
+Exact-source G2 refresh job `5042988` completed successfully (`0:0`) on
+exactly two nodes, `frontier[05335,05337]`, in 3:04.  Its passing
+correctness/integrity gate is retained at
+`g2-artifacts/5042988/full-layout-gate.json` beneath the immutable controller
+root, with SHA-256
+`f9acb5af938df5f8b47798d08dc67442a4d71986bb557a6acd61245e24042a6f`.
+The throughput fields remain telemetry rather than K40 admission evidence.
+
+After G2 was terminal, a fresh scheduler query proved the user queue empty.
+The serial fail-closed launcher rebuilt the exact source, passed native CTest
+10/10, and attested bundle digest
+`59fa632b98999e522be6fee3cda98d095a0fc4c85b0b3a95286b0eb61c19fa6d`.
+The acceptance native manifest SHA-256 is
+`c0efedd312b27a19fd0ab911e2e21934359404a9359f0ba691f630726c4b059c`;
+the immutable acceptance manifest SHA-256 is
+`d1ebb1c2c172cc3e81f06774a94be9303f131071b79db17d070eb8f4342e10b1`.
+
+At 2026-07-21 08:24 EDT the controller submitted exactly one clean-overlap
+replacement, job `5043045`, requesting exactly two nodes, five K40
+generations, and a two-hour bound.  It is the sole user job and is currently
+`PENDING (Priority)` with no scheduler start estimate.  No duplicate, later
+serial phase, or four-node-or-larger job has been submitted.  The task remains
+active through terminal completion; live overlap, cadence, fault/rejection,
+and restart claims remain pending rather than inferred from queue state.
 
 Authoritative `origin/main` resolves to
 `084f36f05cfa66ed8b2c416941824d80b88cbdf9`, containing the reviewed
