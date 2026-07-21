@@ -2,9 +2,9 @@
 
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
-Result: **authorized lifecycle-fix replacement submitted once as job 5039258; terminal validation pending**
+Result: **authorized lifecycle-fix replacement job 5039258 reached generation 1, then failed; two-node gate not accepted**
 
-## Lifecycle-fix replacement (active)
+## Lifecycle-fix replacement (terminal harvest)
 
 Authoritative `main` and `origin/main` resolve to
 `3cfed722beb086d015cff254f473af2a63eaa492`, which contains the reviewed
@@ -35,20 +35,60 @@ The immutable controller root is
 `/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-lifecycle-fix-20260720T202500Z/`.
 Its acceptance manifest requires exactly two nodes, five K40 generations,
 background-g/compute-(g+1) overlap, foreground idle below 10%, and cadence no
-worse than 1.25x raw K40 compute when background work fits.  At this report
-checkpoint the job is `PENDING (Priority)` with an estimated start of
-`2026-07-21T02:38:00-04:00`.  No duplicate K40 job and no 4-node-or-larger job
-has been submitted.  The task remains active for terminal monitoring and live
-artifact harvest.
+worse than 1.25x raw K40 compute when background work fits.
+
+Slurm accounting records that the sole replacement started at
+`2026-07-20T17:59:06` on exactly `frontier[06619-06620]` and terminated
+`FAILED 143:0` at `18:09:09` after `00:10:03`; its Python step failed `1:0`
+after `00:08:49`. No duplicate K40 job and no 4-node-or-larger job was
+submitted.
+
+The replacement materially advanced beyond job 5037971. Generation 0
+completed K40 on all 16 trainers, accepted both nodes and 5,245,440 tokens,
+produced identical 5,506,770,496-byte result root
+`ede07c3e8d55504bcf189551f5f5cc5fba4f6b6e3bb10fccc4016765bf3a27a3`
+on both managers, applied the result at the safe boundary, and atomically
+published the finalized generation-1 checkpoint. The retained handoff is
+7,899,873,331 bytes with SHA-256
+`bf013bed934da7c54c339163bddd204c34457df5e326e851fb01778772242151`;
+`latest.json` points only to that finalized manifest. Generation 1 then began
+real optimizer/forward/backward work. This proves one atomic generation and
+bounded safe handoff/application, but not the required five generations or
+generation-g background overlap with generation-(g+1) compute: the observed
+checkpoint commit preceded the recorded generation-1 training stages.
+
+Generation-0 per-trainer pipeline elapsed times ranged from 288.477 to
+300.584 seconds. All 16 records report one handoff and one applied result,
+handoff and result queue high-water marks of one, zero replacements, zero
+stale/rejected results, and a maximum foreground wait of 14,058 ns (0.0049%
+of the fastest recorded pipeline interval). The two manager contribution
+phases took 34.986/35.017 seconds and redistribution took 22.009/22.068
+seconds, with receive queue high-water one and no Python dense-socket bytes.
+These are useful bounded-queue, background-phase, and foreground-idle
+measurements. They are not a five-generation steady-state cadence result, and
+the generic performance validator refuses the incomplete artifact layout with
+`no real trainer step telemetry`.
+
+The terminal defect is a generation-identity handoff mismatch exposed during
+trainer-7 recovery on both nodes: `GenerationMetadata.from_json()` rejected
+`native-generation-00000001.json` as `native E97 generation identity is
+invalid`. Both trainer-7 roles exhausted their single restart; other trainers
+then encountered native buffer/operation release route failures (`-12`) as
+the allocation step was torn down. Consequently the clean phase stopped in
+generation 1 and the serial controller did not submit fault/rejoin,
+invalid-result, checkpoint-publication-failure, or fresh-restart phases.
 
 Conformance for this replacement is checked against *Resilient DiLoCo Compute
 Pool* v1 R01-R16 and *Native resilient DiLoCo data plane* v1 NDP01-NDP17.
 Exact-source identity, G2 correctness/integrity, two-node admission,
 point-to-point CXI selection, and no-overlap/no-scale guards currently pass.
-Atomic five-generation progress, overlap/cadence timing, bounded latest-only
-queue behavior, fault/rejoin, invalid-result rejection, failed-publication
-retention, and fresh restart remain pending live evidence from the serial
-acceptance phases.
+Exact identity, G2 integrity, two-node admission, one atomic safe-boundary
+commit, checkpoint publication, and bounded latest-only queue behavior have
+live evidence. The replacement does not satisfy R07/R11/R12/R14/R16 and
+NDP10/NDP13/NDP15/NDP16/NDP17 acceptance as a whole: five generations,
+steady-state overlap/cadence, loss/rejoin, invalid-result rejection,
+failed-publication retention, and fresh restart were never reached. No scale
+ladder job is admitted from this result.
 
 ## Terminal harvest of job 5037971
 
