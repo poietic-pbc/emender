@@ -2,7 +2,7 @@
 
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
-Result: **generation-identity-fix replacement validation in progress; exact-source G2 refresh job 5042670 submitted on two nodes**
+Result: **generation-identity-fix replacement validation in progress; exact two-node K40 job 5042682 pending**
 
 ## Generation-identity-fix retry
 
@@ -17,17 +17,31 @@ CTest 10/10; the immutable preflight installation is under the adjacent
 The user Slurm queue was empty immediately before submission. Because this
 source identity differs from the retained job-5039234 G2 artifact, the
 fail-closed launcher submitted exact-source G2 refresh job `5042670` at
-2026-07-21 04:09 EDT for exactly two nodes. It started on
-`frontier[04129,04132]`. No K40 replacement, duplicate allocation, or
-four-node-or-larger job had been submitted at this checkpoint. The task remains
-active until G2 and the subsequently authorized exact two-node replacement are
-terminal and harvested.
+2026-07-21 04:09 EDT for exactly two nodes. It completed `0:0` in 2:54 on
+`frontier[04129,04132]` and published the passing correctness/integrity gate at
+`g2-artifacts/5042670/full-layout-gate.json` (SHA-256
+`c5a95ee303271686bbd2b6051829854e680287bdb3ae1a4f019fcdd7160804cc`).
+
+After G2 left the queue, the serial fail-closed controller rebuilt and
+re-attested the exact source. The acceptance native manifest SHA-256 is
+`bdc72415338b74112087756762aa3819ee6762dd70a271878bd31b5f3b433ac0`,
+and its recorded native bundle digest is
+`59fa632b98999e522be6fee3cda98d095a0fc4c85b0b3a95286b0eb61c19fa6d`.
+The immutable acceptance manifest SHA-256 is
+`10d2167fc9836b9223a6e1dbafbe0b3c807ab20dfaa9ed39c34c368027ad1ee3`.
+The adjacent empty-queue guard then submitted exactly one authorized K40
+replacement, clean-overlap job `5042682`, for exactly two nodes and five K40
+generations. It is `PENDING (Priority)` at this checkpoint. No duplicate or
+four-node-or-larger job was submitted. The task remains active until this job
+and, if admitted by its terminal evidence, the serial fault/rejection/restart
+phases are terminal and harvested.
 
 Conformance is checked against *Resilient DiLoCo Compute Pool* v1 R01-R16 and
 *Native resilient DiLoCo data plane* v1 NDP01-NDP17. At this checkpoint the
-exact pushed source, clean native build, empty-queue guard, fixed two-node
-capacity, and no-scale guard pass. Live committed-generation, overlap/cadence,
-failure/rejection, and checkpoint-recovery claims remain pending.
+exact pushed source, clean native build, refreshed G2 correctness/integrity,
+empty-queue guard, fixed two-node capacity, and no-scale guard pass. Live
+committed-generation, overlap/cadence, failure/rejection, and
+checkpoint-recovery claims remain pending.
 
 ## Lifecycle-fix replacement (terminal harvest)
 
