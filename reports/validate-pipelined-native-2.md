@@ -2,9 +2,33 @@
 
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
-Result: **telemetry-fix exact-source G2 refresh queued; final two-node acceptance pending**
+Result: **telemetry-fix exact-source G2 passed; sole final two-node acceptance replacement pending**
 
 ## Telemetry-harvest-fix retry (active)
+
+Exact-source G2 refresh job `5047138` completed successfully (`0:0`) in 2:55
+on exactly two nodes, `frontier[05911-05912]`.  Its correctness/integrity gate
+passed with SHA-256
+`c41ec3ab8e0b3c54da1d16218a9188e8d7dfb8d6713575a4e089aafdecc3a5a8`;
+the gate records exact source `5c4950f16bd9ce7cb7d96ab9b67e24efb61ed3a6`,
+bundle `59fa632b98999e522be6fee3cda98d095a0fc4c85b0b3a95286b0eb61c19fa6d`,
+two CXI endpoints, exact-reference agreement, checksum/stale rejection, zero
+all-rank barriers, zero dense-socket bytes, 44,322,599,424 useful bytes and
+44,323,138,304 wire bytes in each direction.  The three timed generations
+were 22.984653924, 23.023732634, and 25.124313882 seconds; 956,712,029.89
+logical B/s and the 4.298x retained-Python comparison are telemetry only.
+
+After G2 reached terminal success, a fresh scheduler query proved the user
+queue empty.  The canonical serial controller rebuilt the exact authoritative
+source, passed CTest 10/10, and re-attested the same source and bundle.  The
+first submission attempt correctly refused because G2 Slurm logs made the
+clone untracked-dirty; those logs were moved intact into the immutable G2
+artifact directory and the source was rechecked clean.  At 2026-07-21 18:16
+EDT the controller submitted exactly one final clean-overlap K40 replacement,
+job `5047497`, for exactly two nodes, five generations, K40, and a two-hour
+bound.  It is the sole user job and is `PENDING`; no duplicate, later serial
+phase, or four-node-or-larger job has been submitted.  The task remains active
+through terminal monitoring and serial artifact harvest.
 
 Authoritative `origin/main` resolves to
 `5c4950f16bd9ce7cb7d96ab9b67e24efb61ed3a6`, containing the reviewed
