@@ -18,10 +18,92 @@ from ndm.resilient_e97_runtime import (apply_delta, finalize_checkpoint,
                                        assert_node_local_path, flatten_tensors,
                                        outer_state_migration)
 from ndm.fenced_admission import FenceRejected, SQLiteFencedControlStore
-from ndm.native_e97_runtime import state_digest
+from ndm.native_e97_runtime import GenerationMetadata, SCHEMA, state_digest
+
+
+# Exact node-0 native-generation-00000001.json identity retained from Frontier
+# job 5039258.  The runtime digests are intentionally preserved: this catches
+# producer/consumer drift rather than testing a hand-written minimal payload.
+JOB_5039258_GENERATION_1 = {
+    "attempt": 1,
+    "base_digest": "d9486e29c02b22a453ad70d2205cf801c05222f9454e89dcd79a4326b740e53e",
+    "deadline_unix_ns": 1784585715282347119,
+    "fence_epoch": 1,
+    "generation": 1,
+    "layout_digest": "e3fb15da10a151dbd33d6f66a3a2f8723be69bbaf7b34a6b3652bee0f5a352e2",
+    "owner_epoch": 1,
+    "plan_digest": "4cfa18b8601f69b77a069f6459648823e46db0a9ac113dbbebf425e3334ca663",
+    "run_id": "exact-2n-clean-overlap-3cfed722beb0",
+    "runtime_digests": {
+        "artifacts": {
+            "local_library": "e049cf7a31d38be642c113a1d633401359d9fe14caf4991b1e1cc68aec0a2e4c",
+            "service_binary": "a0b5ea04695886685acf32054f4ca09132853e4e97240350a9fbbeb2e43e0a5b",
+            "synthetic_gate_binary": "b23fb009ecb84d184c0c7549fa5913dc462a1a31941074d745630a83dd6d6fac",
+            "transport_library": "132554f1ecdeedfb8033f468715aa74aecfc8c3d6ef5ce1dad2aed74f641f97a",
+        },
+        "build_bundle_sha256": "59fa632b98999e522be6fee3cda98d095a0fc4c85b0b3a95286b0eb61c19fa6d",
+        "build_manifest_sha256": "af148a0a064a3398088f445a7237d32aa4b3d77994c2a2dcc17a1c125b3bbfa2",
+        "config_sha256": "afc2a65fd8c73499e74e21cb9531c978206c3a9c898e42d18cc58bb93eb9fe9c",
+        "provider": "cxi",
+        "provider_sha256": "9f78e6ad1221d69097239d1f29df35d87d62a2ab7f1051875c561c3f7b4bc6a4",
+        "schema": "emender-native-e97-runtime-digests-v1",
+        "source_commit": "3cfed722beb086d015cff254f473af2a63eaa492",
+    },
+    "schema": SCHEMA,
+    "total_elements": 1376692624,
+}
 
 
 ROLE = Path(__file__).parents[1] / "scripts/frontier/resilient_e97_role.py"
+
+
+def test_job_5039258_generation_1_reconnect_identity_is_valid(monkeypatch):
+    """The emitted next-generation record was valid before cleanup ate its TTL."""
+    import ndm.native_e97_runtime as native_runtime
+
+    monkeypatch.setattr(native_runtime.time, "time_ns", lambda: 1784585346000000000)
+    monkeypatch.setattr(native_runtime, "wait_metadata",
+                        lambda *_args, **_kwargs: JOB_5039258_GENERATION_1)
+    monkeypatch.setattr(native_runtime, "artifact_path",
+                        lambda *_args, **_kwargs: Path("unused-native-library"))
+
+    class ReconnectedClient:
+        attached = None
+
+        @classmethod
+        def open(cls, **_kwargs):
+            return cls()
+
+        def attach_generation(self, **kwargs):
+            self.attached = kwargs
+
+    monkeypatch.setattr(native_runtime, "Client", ReconnectedClient)
+    plane = native_runtime.NativeTrainerDataPlane.connect(
+        build_manifest="unused-manifest", socket_path="unused-socket",
+        run_id=JOB_5039258_GENERATION_1["run_id"], fence_epoch=1,
+        generation=1, rank=7, identity="node-0-trainer-7",
+        incarnation="recovery-incarnation", control_root="unused-control",
+        deadline=time.monotonic() + 10)
+    assert plane.metadata.generation == 1
+    assert plane.client.attached["deadline_unix_ns"] == 1784585715282347119
+    assert plane.metadata.deadline_unix_ns - native_runtime.time.time_ns() > 360_000_000_000
+
+
+@pytest.mark.parametrize("mutation", [
+    {"deadline_unix_ns": 1784585345999999999},  # stale
+    {"owner_epoch": 0},                         # partial identity
+    {"layout_digest": "g" * 64},               # corrupt digest
+    {"total_elements": float("nan")},           # non-finite/coercible input
+    {"fence_epoch": 0},                         # obsolete fence
+])
+def test_generation_identity_rejects_stale_partial_corrupt_nonfinite_and_obsolete(
+        monkeypatch, mutation):
+    import ndm.native_e97_runtime as native_runtime
+
+    monkeypatch.setattr(native_runtime.time, "time_ns", lambda: 1784585346000000000)
+    value = {**JOB_5039258_GENERATION_1, **mutation}
+    with pytest.raises((TypeError, ValueError), match="native E97 generation"):
+        GenerationMetadata.from_json(value)
 
 
 def test_native_state_digest_hashes_exact_bfloat16_storage_bits():

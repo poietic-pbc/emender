@@ -588,8 +588,12 @@ class Operation:
             code = self.client.native.library.ndp_op_release_v1(
                 self.client.handle, self.handle
             )
+            # Release is idempotent cleanup after the process has finished
+            # consuming the mapping.  A disappeared service route cannot
+            # retain this process's closed fd and must not replace the primary
+            # generation outcome with a restart-inducing teardown failure.
             if code not in (ResultCode.OK, ResultCode.EINVAL, ResultCode.EFENCE,
-                            ResultCode.ESHUTDOWN):
+                            ResultCode.EROUTE, ResultCode.ESHUTDOWN):
                 self.client.native.check(code, "ndp_op_release_v1")
 
     def __enter__(self) -> "Operation":
@@ -675,8 +679,11 @@ class Buffer:
             code = self.client.native.library.ndp_buffer_release_v1(
                 self.client.handle, self.handle
             )
+            # The local fd is already closed.  Route loss means the remote
+            # service disappeared and therefore cannot retain this process's
+            # reference; release remains complete and bounded.
             if code not in (ResultCode.OK, ResultCode.EINVAL, ResultCode.EFENCE,
-                            ResultCode.ESHUTDOWN):
+                            ResultCode.EROUTE, ResultCode.ESHUTDOWN):
                 self.client.native.check(code, "ndp_buffer_release_v1")
 
     def __enter__(self) -> "Buffer":
@@ -1038,7 +1045,7 @@ class Client:
         code = self.native.library.ndp_client_close_v1(self.handle)
         self.closed = True
         if code not in (ResultCode.OK, ResultCode.EINVAL, ResultCode.EFENCE,
-                        ResultCode.ESHUTDOWN):
+                        ResultCode.EROUTE, ResultCode.ESHUTDOWN):
             self.native.check(code, "ndp_client_close_v1")
 
     def __enter__(self) -> "Client":

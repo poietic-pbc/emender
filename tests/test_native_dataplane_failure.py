@@ -110,6 +110,27 @@ def test_buffer_slot_exhaustion_is_bounded():
         assert client.metrics.shared_bytes_current == 0
 
 
+def test_result_release_and_client_close_tolerate_lost_cleanup_route(monkeypatch):
+    """A consumed local fd is released even if its service route disappeared."""
+    client = open_client(150)
+    client.install_flat_layout(4, source_dtype=DType.F32, payload_max=64)
+    client.install_generation(1, deadline_s=20).close()
+    buffer = client.allocate(dtype=DType.F32)
+    release = client.native.library.ndp_buffer_release_v1
+    close = client.native.library.ndp_client_close_v1
+    monkeypatch.setattr(client.native.library, "ndp_buffer_release_v1",
+                        lambda *_args: -12)
+    monkeypatch.setattr(client.native.library, "ndp_client_close_v1",
+                        lambda *_args: -12)
+    try:
+        buffer.close()
+        client.close()
+        assert buffer.closed and client.closed
+    finally:
+        monkeypatch.setattr(client.native.library, "ndp_buffer_release_v1", release)
+        monkeypatch.setattr(client.native.library, "ndp_client_close_v1", close)
+
+
 
 def test_shared_byte_exhaustion_is_fixed_at_service_start():
     with open_client(152) as client:

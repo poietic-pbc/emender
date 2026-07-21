@@ -376,6 +376,11 @@ class GenerationMetadata:
     def from_json(cls, value: Mapping[str, object]) -> "GenerationMetadata":
         if value.get("schema") != SCHEMA:
             raise ValueError("native E97 generation schema mismatch")
+        integer_fields = ("fence_epoch", "generation", "attempt", "owner_epoch",
+                          "total_elements", "deadline_unix_ns")
+        if any(isinstance(value.get(field), bool)
+               or not isinstance(value.get(field), int) for field in integer_fields):
+            raise ValueError("native E97 generation identity is invalid")
         result = cls(
             str(value["run_id"]), int(value["fence_epoch"]),
             int(value["generation"]), int(value["attempt"]),
@@ -387,8 +392,11 @@ class GenerationMetadata:
         if (not result.run_id or result.fence_epoch <= 0 or result.generation < 0
                 or result.attempt <= 0 or result.owner_epoch <= 0
                 or result.total_elements <= 0 or result.deadline_unix_ns <= time.time_ns()
-                or any(len(item) != 64 for item in (
-                    result.layout_digest, result.base_digest, result.plan_digest))):
+                or not isinstance(value.get("runtime_digests"), Mapping)
+                or any(len(item) != 64 or any(character not in "0123456789abcdef"
+                                              for character in item)
+                       for item in (result.layout_digest, result.base_digest,
+                                    result.plan_digest))):
             raise ValueError("native E97 generation identity is invalid")
         return result
 
