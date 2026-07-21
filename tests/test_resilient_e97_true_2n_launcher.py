@@ -931,6 +931,58 @@ def test_manager_liveness_does_not_disguise_stalled_generation_progress(tmp_path
     assert supervisor._deadline_reason(child, 126) == "progress_deadline"
 
 
+def test_pipelined_trainer_apply_receipts_refresh_manager_progress(tmp_path, monkeypatch):
+    child = Child("manager", 0, "node000", None, "python manager.py")
+    supervisor = AllocationSupervisor(tmp_path, [child], heartbeat_s=60,
+                                      progress_s=20, max_restarts=1)
+    child.process = type("Process", (), {"poll": lambda self: None})()
+    state = tmp_path / "supervision" / "node-0-manager.json"
+    state.write_text(json.dumps({"heartbeat_time": 125, "progress_time": 100,
+                                 "generation": 2, "stage": "redistribution"}))
+    control = tmp_path / "control"
+    control.mkdir()
+    receipt = control / "native-applied-00000002-03.json"
+    receipt.write_text(json.dumps({"run_id": "run", "generation": 2, "rank": 3}))
+    os.utime(receipt, (124, 124))
+    monkeypatch.setenv("RESILIENT_E97_RUN_ID", "run")
+    monkeypatch.delenv("RESILIENT_E97_BULK_ROOT", raising=False)
+
+    assert supervisor._deadline_reason(child, 126) is None
+    assert supervisor._deadline_reason(child, 145) == "progress_deadline"
+
+
+def test_restart_restores_first_atomic_deadline_from_durable_checkpoint(
+        tmp_path, monkeypatch):
+    child = Child("manager", 0, "node000", None, "python manager.py")
+    supervisor = AllocationSupervisor(tmp_path, [child], heartbeat_s=60,
+                                      progress_s=60, max_restarts=1)
+    child.process = type("Process", (), {"poll": lambda self: None})()
+    state = tmp_path / "supervision" / "node-0-manager.json"
+    state.write_text(json.dumps({"heartbeat_time": 800, "progress_time": 800,
+                                 "generation": 0, "stage": "training_wait"}))
+    handoff = tmp_path / "handoff"
+    handoff.mkdir()
+    manifest = handoff / "generation-00000002-fence-00000001.json"
+    manifest.write_text(json.dumps({"finalized": True, "run_id": "run",
+                                    "generation": 2}, sort_keys=True))
+    (handoff / "latest.json").write_text(json.dumps({
+        "generation": 2, "manifest": str(manifest),
+        "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+    }))
+    monkeypatch.setenv("RESILIENT_E97_RUN_ID", "run")
+    monkeypatch.setenv("RESILIENT_E97_INITIAL_GENERATION", "0")
+    monkeypatch.setenv("RESILIENT_E97_ALLOCATION_ADMITTED_AT", "0")
+    monkeypatch.delenv("RESILIENT_E97_BULK_ROOT", raising=False)
+
+    assert supervisor._deadline_reason(child, 800) is None
+
+    # A corrupt pointer cannot suppress the fail-closed first-commit budget.
+    latest = json.loads((handoff / "latest.json").read_text())
+    latest["manifest_sha256"] = "0" * 64
+    (handoff / "latest.json").write_text(json.dumps(latest))
+    assert supervisor._deadline_reason(child, 800) == "first_atomic_generation_deadline"
+
+
 def test_all_real_roles_publish_import_liveness_without_generation_progress():
     text = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
     assert 'sys.argv[1] not in {"manager", "trainer"}' in text

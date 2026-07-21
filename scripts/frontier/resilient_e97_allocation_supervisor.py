@@ -216,6 +216,51 @@ class AllocationSupervisor:
         (run_dir / "supervision").mkdir(parents=True, exist_ok=True)
         (run_dir / "logs").mkdir(parents=True, exist_ok=True)
 
+    def _durable_generation(self) -> int | None:
+        """Return the checksum-verified generation from authoritative handoff."""
+        latest_path = self.run_dir / "handoff" / "latest.json"
+        try:
+            latest = json.loads(latest_path.read_text())
+            manifest_path = Path(str(latest["manifest"]))
+            raw = manifest_path.read_bytes()
+            if hashlib.sha256(raw).hexdigest() != str(latest["manifest_sha256"]):
+                return None
+            manifest = json.loads(raw)
+            generation = int(latest["generation"])
+            if (not manifest.get("finalized")
+                    or int(manifest.get("generation", -1)) != generation):
+                return None
+            run_id = os.environ.get("RESILIENT_E97_RUN_ID")
+            if run_id and manifest.get("run_id") != run_id:
+                return None
+            return generation
+        except (FileNotFoundError, KeyError, TypeError, ValueError,
+                json.JSONDecodeError, OSError):
+            return None
+
+    def _apply_progress_time(self, child: Child, generation: int) -> float:
+        """Observe immutable per-trainer apply receipts as manager progress.
+
+        Redistribution/apply is intentionally pipelined across independent
+        trainers.  The manager stage record changes only at stage boundaries,
+        while each completed trainer publishes a checksum-validated receipt.
+        Those monotonically accumulating receipts are real forward progress.
+        """
+        if child.role not in {"manager", "node-supervisor"}:
+            return 0.0
+        control = self._state_path(child).parent.parent / "control"
+        newest = 0.0
+        for receipt in control.glob(f"native-applied-{generation:08d}-*.json"):
+            try:
+                payload = json.loads(receipt.read_text())
+                if (int(payload.get("generation", -1)) == generation
+                        and (not os.environ.get("RESILIENT_E97_RUN_ID")
+                             or payload.get("run_id") == os.environ["RESILIENT_E97_RUN_ID"])):
+                    newest = max(newest, receipt.stat().st_mtime)
+            except (FileNotFoundError, TypeError, ValueError, json.JSONDecodeError, OSError):
+                continue
+        return newest
+
     def _event(self, event: str, child: Child, **extra: object) -> None:
         record = {"time": time.time(), "event": event, "identity": child.identity,
                   "role": child.role, "node_rank": child.node_rank,
@@ -384,11 +429,17 @@ class AllocationSupervisor:
             "redistribution": EXCHANGE_COMMIT_HARD_S,
             "checkpoint_commit": EXCHANGE_COMMIT_HARD_S,
         }.get(stage, self.progress_s)
-        if now - float(state.get("progress_time", 0)) > min(self.progress_s, stage_budget):
+        progress_time = max(
+            float(state.get("progress_time", 0)),
+            self._apply_progress_time(child, int(state.get("generation", 0))),
+        )
+        if now - progress_time > min(self.progress_s, stage_budget):
             return "progress_deadline"
         admitted_at = float(os.environ.get("RESILIENT_E97_ALLOCATION_ADMITTED_AT", now))
         initial_generation = int(os.environ.get("RESILIENT_E97_INITIAL_GENERATION", "0"))
-        if (int(state.get("generation", initial_generation)) <= initial_generation
+        durable_generation = self._durable_generation()
+        if ((durable_generation is None or durable_generation <= initial_generation)
+                and int(state.get("generation", initial_generation)) <= initial_generation
                 and now - admitted_at > FIRST_COMMIT_HARD_S):
             return "first_atomic_generation_deadline"
         return None
