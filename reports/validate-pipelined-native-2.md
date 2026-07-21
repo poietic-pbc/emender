@@ -23,7 +23,7 @@ queue empty.  The canonical serial controller rebuilt the exact authoritative
 source, passed CTest 10/10, and re-attested the same source and bundle.  The
 first submission attempt correctly refused because G2 Slurm logs made the
 clone untracked-dirty; those logs were moved intact into the immutable G2
-artifact directory and the source was rechecked clean.  At 2026-07-21 18:16
+artifact directory and the source was rechecked clean.  At 2026-07-21 18:09
 EDT the controller submitted exactly one final clean-overlap K40 replacement,
 job `5047497`, for exactly two nodes, five generations, K40, and a two-hour
 bound.  It is the sole user job and is `PENDING`; no duplicate, later serial
