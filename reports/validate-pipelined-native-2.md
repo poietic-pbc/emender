@@ -2,9 +2,47 @@
 
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
-Result: **supervisor-fix replacement K40 job 5043045 queued; monitoring sole exact two-node allocation**
+Result: **supervisor-fix replacement completed five K40 generations; post-run performance gate failed closed**
 
-## Supervisor-fix retry (active)
+## Supervisor-fix retry (terminal harvest)
+
+Slurm records job `5043045` as terminal `FAILED 1:0` after 31:08 on exactly
+two nodes, `frontier[02714,03991]`.  The allocation nevertheless completed
+the requested clean payload before its post-run gate failed: all 16 trainers
+applied generations 0 through 4, both managers published generation 5, and
+the retained handoff/checkpoint set contains five restartable payloads,
+`generation-00000001` through `generation-00000005`.  Supervisor events show
+every trainer and manager exiting zero and both native services being evicted
+only for `allocation_complete`; the queue remained bounded/latest-only with
+no all-rank wait.
+
+The batch then invoked `validate_pipelined_e97_performance.py` on
+`$RESILIENT_E97_BULK_ROOT/telemetry`.  The supervisor had already harvested
+the node-local bulk roots into
+`retained-evidence/node-{0,1}/telemetry`, so that path contained no records and
+the validator failed closed with `ValueError: no real trainer step telemetry`.
+A read-only replay over the combined retained trainer telemetry advanced past
+that plumbing error but rejected `generation 0 background did not overlap 1
+K40 compute`.  Therefore five atomic K40 generations and durable publication
+are established, but the required steady-state overlap, below-10% idle, and
+at-most-1.25x cadence gates are not claimed.
+
+Because the clean phase did not pass its admission validator, the serial
+controller correctly withheld the authorized loss/rejoin, invalid-result,
+checkpoint-publication-failure, and fresh-restart phases.  No duplicate and
+no four-node-or-larger job was submitted.  Follow-up WG task `fix-exact-2n`
+tracks the retained-evidence validator plumbing regression; it must preserve
+the live overlap/cadence rejection rather than converting telemetry into a
+pass.
+
+Conformance was checked against *Resilient DiLoCo Compute Pool* v1 R01-R16
+and *Native resilient DiLoCo data plane* v1 NDP01-NDP17.  Exact identity,
+two-node admission, five atomic publications, safe application, bounded
+queues, and fail-closed post-validation support R04/R06/R07/R10/R11/R13/R14
+and NDP02/NDP03/NDP10/NDP13/NDP15/NDP17.  The missing live overlap/cadence
+pass and unexecuted resilience/rejection/restart phases leave
+R12/R14/R16 and NDP16/NDP17 acceptance incomplete, so scale-out remains
+blocked.
 
 Exact-source G2 refresh job `5042988` completed successfully (`0:0`) on
 exactly two nodes, `frontier[05335,05337]`, in 3:04.  Its passing
