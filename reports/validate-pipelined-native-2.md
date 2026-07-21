@@ -2,7 +2,32 @@
 
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
-Result: **authorized lifecycle-fix replacement job 5039258 reached generation 1, then failed; two-node gate not accepted**
+Result: **generation-identity-fix replacement validation in progress; exact-source G2 refresh job 5042670 submitted on two nodes**
+
+## Generation-identity-fix retry
+
+Authoritative `origin/main` resolves to
+`dd50c5123f72d91f0618059f6689c2df9ea36233`, containing the reviewed
+generation-identity recovery fix. A clean `main` clone at
+`/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-generation-identity-20260721T081000Z/source`
+exactly matches that pushed commit. Its canonical Frontier native build passed
+CTest 10/10; the immutable preflight installation is under the adjacent
+`native-stage/preflight/install` directory.
+
+The user Slurm queue was empty immediately before submission. Because this
+source identity differs from the retained job-5039234 G2 artifact, the
+fail-closed launcher submitted exact-source G2 refresh job `5042670` at
+2026-07-21 04:09 EDT for exactly two nodes. It started on
+`frontier[04129,04132]`. No K40 replacement, duplicate allocation, or
+four-node-or-larger job had been submitted at this checkpoint. The task remains
+active until G2 and the subsequently authorized exact two-node replacement are
+terminal and harvested.
+
+Conformance is checked against *Resilient DiLoCo Compute Pool* v1 R01-R16 and
+*Native resilient DiLoCo data plane* v1 NDP01-NDP17. At this checkpoint the
+exact pushed source, clean native build, empty-queue guard, fixed two-node
+capacity, and no-scale guard pass. Live committed-generation, overlap/cadence,
+failure/rejection, and checkpoint-recovery claims remain pending.
 
 ## Lifecycle-fix replacement (terminal harvest)
 
