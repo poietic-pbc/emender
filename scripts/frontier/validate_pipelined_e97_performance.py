@@ -20,7 +20,7 @@ BACKGROUND_STAGES = frozenset({
 
 def _records(root: Path) -> list[dict[str, Any]]:
     values: list[dict[str, Any]] = []
-    for path in sorted(root.glob("*.jsonl")):
+    for path in sorted(root.rglob("*.jsonl")):
         for line in path.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 value = json.loads(line)

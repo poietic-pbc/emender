@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -69,3 +70,35 @@ def test_live_k40_requires_exact_step_timestamps():
     records.pop(0)
     with pytest.raises(ValueError, match="exact K40"):
         MODULE.validate(records)
+
+
+def test_post_supervisor_retained_evidence_recursively_harvests_both_nodes(tmp_path):
+    retained = tmp_path / "run" / "retained-evidence"
+    records = _records()
+    node_records = {
+        "node-0": records,
+        "node-1": [
+            {**value, "identity": value["identity"].replace("-0", "-1")}
+            for value in records
+        ],
+    }
+    for node, values in node_records.items():
+        telemetry = retained / node / "telemetry"
+        telemetry.mkdir(parents=True)
+        (telemetry / f"{node}.jsonl").write_text(
+            "".join(json.dumps(value) + "\n" for value in values),
+            encoding="utf-8",
+        )
+
+    harvested = MODULE._records(retained)
+    assert {value["identity"] for value in harvested} == {
+        "trainer-0", "manager-0", "trainer-1", "manager-1",
+    }
+    result = MODULE.validate(harvested)
+    assert result["status"] == "passed"
+    assert result["foreground_control_plane_idle_fraction"] < 0.10
+    assert result["steady_state_cadence_multiple"] <= 1.25
+    assert {(overlap["identity"], overlap["background_generation"])
+            for overlap in result["overlaps"]} == {
+                ("trainer-0", 0), ("trainer-1", 0),
+            }

@@ -1170,6 +1170,16 @@ def test_node_local_exit_retains_only_small_control_evidence(tmp_path):
                for path in retained.rglob("*") if path.is_file())
 
 
+def test_clean_overlap_validates_post_supervisor_retained_node_telemetry():
+    launcher = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
+    supervisor = launcher.index("resilient_e97_allocation_supervisor.py")
+    validator = launcher.index("validate_pipelined_e97_performance.py")
+    retained_root = launcher.index(
+        '--telemetry-root "$RUN_DIR/retained-evidence"', validator)
+    assert supervisor < validator < retained_root
+    assert '--telemetry-root "$RESILIENT_E97_BULK_ROOT/telemetry"' not in launcher
+
+
 def test_real_trainer_streams_model_delta_without_full_cpu_materialization():
     role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
     worker = (ROOT / "ndm/async_diloco_real.py").read_text()

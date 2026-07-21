@@ -204,6 +204,6 @@ printf 'topology managers=%s real_trainers=%s trainers_per_node=8 local_steps=40
 "$TRAIN_PYTHON_BIN" "$REPO/scripts/frontier/resilient_e97_allocation_supervisor.py"
 if [[ ${RESILIENT_E97_ACCEPTANCE_PHASE:-} == clean-overlap ]]; then
   "$TRAIN_PYTHON_BIN" "$REPO/scripts/frontier/validate_pipelined_e97_performance.py" \
-    --telemetry-root "$RESILIENT_E97_BULK_ROOT/telemetry" \
+    --telemetry-root "$RUN_DIR/retained-evidence" \
     --output "$RUN_DIR/pipelined-performance.json"
 fi
