@@ -2,7 +2,33 @@
 
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
-Result: **supervisor-fix replacement completed five K40 generations; post-run performance gate failed closed**
+Result: **telemetry-fix exact-source G2 refresh queued; final two-node acceptance pending**
+
+## Telemetry-harvest-fix retry (active)
+
+Authoritative `origin/main` resolves to
+`5c4950f16bd9ce7cb7d96ab9b67e24efb61ed3a6`, containing the reviewed
+`fix-exact-2n` retained-evidence telemetry correction.  A fresh clean `main`
+clone at
+`/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-telemetry-fix-20260721T213400Z/source`
+matches that pushed identity exactly.  Its canonical Frontier native bundle
+was rebuilt under the adjacent `native-stage/preflight` root and CTest passed
+10/10.
+
+The user Slurm queue was empty immediately before submission.  Because this
+source identity differs from the retained job-5042988 gate, the fail-closed
+path submitted exact-source G2 correctness/integrity refresh job `5047138` at
+2026-07-21 17:35 EDT for exactly two nodes.  It is the sole user allocation;
+no K40 replacement, duplicate, later serial phase, or four-node-or-larger job
+has been submitted.  G2 must reach terminal success before the single final
+K40 acceptance replacement is admissible.
+
+Conformance is checked against *Resilient DiLoCo Compute Pool* v1 R01-R16
+and *Native resilient DiLoCo data plane* v1 NDP01-NDP17.  Exact pushed
+source, a clean native build, fixed two-node capacity, empty-queue admission,
+and fail-closed source/G2 fencing support R10/R13/R14/R16 and
+NDP02/NDP03/NDP13/NDP16/NDP17.  Live overlap, cadence, fault/rejection,
+failed-publication retention, and fresh-restart claims remain pending.
 
 ## Supervisor-fix retry (terminal harvest)
 
