@@ -2,7 +2,35 @@
 
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
-Result: **generation-identity-fix replacement terminal; two atomic K40 generations completed before supervisor false-deadline failure**
+Result: **supervisor-fix exact-source G2 refresh queued; replacement K40 remains fail-closed pending G2**
+
+## Supervisor-fix retry (active)
+
+Authoritative `origin/main` resolves to
+`084f36f05cfa66ed8b2c416941824d80b88cbdf9`, containing the reviewed
+supervisor generation-progress recovery fix. A fresh clean `main` checkout at
+`/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-supervisor-fix-20260721T114200Z/source`
+exactly matches that pushed identity. In the canonical Frontier environment,
+its native bundle built successfully and CTest passed 10/10; the immutable
+preflight bundle is retained under the adjacent
+`native-stage/preflight/install` directory.
+
+The user Slurm queue was empty before submission. Because the source identity
+changed from the job-5042670 gate, the fail-closed path submitted exact-source
+G2 correctness/integrity refresh job `5042988` at 2026-07-21 07:43 EDT for
+exactly two nodes. At this checkpoint it is the sole user allocation and is
+`PENDING (Priority)` with no scheduler start estimate. No K40 replacement,
+duplicate, fault phase, or four-node-or-larger job has been submitted. The task
+remains active through terminal G2 and, only after a passing gate and another
+empty-queue check, the single authorized exact two-node K40 replacement.
+
+Conformance is checked against *Resilient DiLoCo Compute Pool* v1 R01-R16 and
+*Native resilient DiLoCo data plane* v1 NDP01-NDP17. The exact pushed source,
+clean native build, fixed two-node capacity, no-overlap guard, source/bundle
+fencing, and fail-closed K40 admission conform to R10/R13/R14/R16 and
+NDP02/NDP03/NDP13/NDP16/NDP17. Live five-generation, overlap/cadence,
+loss/rejoin, rejection, failed-publication retention, and fresh-restart
+evidence remains pending rather than claimed.
 
 ## Generation-identity-fix retry
 
