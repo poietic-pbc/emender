@@ -26,9 +26,11 @@ clone untracked-dirty; those logs were moved intact into the immutable G2
 artifact directory and the source was rechecked clean.  At 2026-07-21 18:09
 EDT the controller submitted exactly one final clean-overlap K40 replacement,
 job `5047497`, for exactly two nodes, five generations, K40, and a two-hour
-bound.  It is the sole user job and is `PENDING`; no duplicate, later serial
-phase, or four-node-or-larger job has been submitted.  The task remains active
-through terminal monitoring and serial artifact harvest.
+bound.  A resumed `squeue`/`sacct` check at 2026-07-21 18:53 EDT still records
+it as `PENDING (Priority)`, with zero elapsed time, no assigned nodes, and the
+full two-hour limit remaining.  It is the sole user job; no duplicate, later
+serial phase, or four-node-or-larger job has been submitted.  The task remains
+active through terminal monitoring and serial artifact harvest.
 
 Authoritative `origin/main` resolves to
 `5c4950f16bd9ce7cb7d96ab9b67e24efb61ed3a6`, containing the reviewed
