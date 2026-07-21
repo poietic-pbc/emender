@@ -26,7 +26,9 @@ the immutable acceptance manifest SHA-256 is
 At 2026-07-21 08:24 EDT the controller submitted exactly one clean-overlap
 replacement, job `5043045`, requesting exactly two nodes, five K40
 generations, and a two-hour bound.  It is the sole user job and is currently
-`PENDING (Priority)` with no scheduler start estimate.  No duplicate, later
+`PENDING (Priority)`.  At 2026-07-21 08:32 EDT, Slurm's non-binding estimate
+was a 13:04 EDT start on `frontier[05238-05239]`; the job still had no
+allocation.  No duplicate, later
 serial phase, or four-node-or-larger job has been submitted.  The task remains
 active through terminal completion; live overlap, cadence, fault/rejection,
 and restart claims remain pending rather than inferred from queue state.
