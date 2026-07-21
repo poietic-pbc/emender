@@ -2,7 +2,7 @@
 
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
-Result: **generation-identity-fix replacement validation in progress; exact two-node K40 job 5042682 pending**
+Result: **generation-identity-fix replacement terminal; two atomic K40 generations completed before supervisor false-deadline failure**
 
 ## Generation-identity-fix retry
 
@@ -31,17 +31,53 @@ The immutable acceptance manifest SHA-256 is
 `10d2167fc9836b9223a6e1dbafbe0b3c807ab20dfaa9ed39c34c368027ad1ee3`.
 The adjacent empty-queue guard then submitted exactly one authorized K40
 replacement, clean-overlap job `5042682`, for exactly two nodes and five K40
-generations. It is `PENDING (Priority)` at this checkpoint. No duplicate or
-four-node-or-larger job was submitted. The task remains active until this job
-and, if admitted by its terminal evidence, the serial fault/rejection/restart
-phases are terminal and harvested.
+generations. Slurm records that it ran on `frontier[05631,08192]` from
+2026-07-21 04:51:41 through 05:05:59 EDT and terminated `FAILED 1:0` after
+14:18; its Python step failed after 13:32. No duplicate or
+four-node-or-larger job was submitted.
+
+The replacement completed and safely applied generations 0 and 1 on both
+nodes. `handoff/latest.json` points to the finalized generation-2 manifest,
+which records 10,490,880 accepted tokens and manifest SHA-256
+`fc98357c2377a94f785f4776a4eba636e90235780cd91c6fe74c4ffd2fd1bf97`;
+both generation-1 and generation-2 restartable checkpoint payloads remain on
+disk. All 16 trainers report two handoffs and two applied results, queue
+high-water marks of one, no replacements, and zero stale or rejected results.
+For node-0 trainer 0, the generation pipeline intervals were 291.345 and
+337.965 seconds, foreground waits were 9,619 and 22,243 ns, and both stayed
+inside the 420-second bound. Generation-1 manager telemetry separately records
+17.560 seconds local reduction, 35.036 seconds owner contribution, 22.066
+seconds owner redistribution, and 65.028 seconds total redistribution, with
+receive queue high-water one, zero Python dense-socket bytes, zero native
+retries/CQ/route errors, and roughly 82.35 MB/s observed native throughput.
+
+Trainer timestamps prove real generation-1 optimizer work through step 79
+while generation-0 background collection/reduction/redistribution and apply
+completed, and generation-2 safe-boundary redistribution/application began.
+This is direct g-background/g+1-compute overlap evidence and keeps observed
+foreground control-plane idle far below 10%. It is not the requested
+five-generation steady-state sample, so the full cadence gate is not claimed.
+
+The terminal defect is in supervision rather than data-plane integrity. During
+the long, still-progressing generation-2 per-trainer redistribution/apply
+sequence, both managers were killed for `progress_deadline`, their native
+services were rejoined, and the replacement managers restarted at
+`runtime_import`. The supervisor then immediately killed them for
+`first_atomic_generation_deadline`, even though two atomic generations and a
+finalized generation-2 checkpoint already existed, and exhausted their restart
+budgets. Thus the clean phase failed after two of five generations and the
+serial controller correctly did not submit the fault/rejoin, invalid-result,
+checkpoint-publication-failure, or fresh-restart phases.
 
 Conformance is checked against *Resilient DiLoCo Compute Pool* v1 R01-R16 and
-*Native resilient DiLoCo data plane* v1 NDP01-NDP17. At this checkpoint the
-exact pushed source, clean native build, refreshed G2 correctness/integrity,
-empty-queue guard, fixed two-node capacity, and no-scale guard pass. Live
-committed-generation, overlap/cadence, failure/rejection, and
-checkpoint-recovery claims remain pending.
+*Native resilient DiLoCo data plane* v1 NDP01-NDP17. Exact pushed source,
+clean native build, refreshed G2 correctness/integrity, empty-queue guard,
+fixed two-node capacity, no-scale guard, R04/R06 safe application, R07/R11
+bounded latest-only queues, and NDP10/NDP13/NDP15 integrity/ownership behavior
+pass in retained evidence. The premature manager eviction/restart accounting
+violates the required R12/R14/R16 and NDP16/NDP17 resilient progress gate;
+five-generation cadence plus the named fault, rejection, publication-failure,
+and fresh-restart phases remain unproven.
 
 ## Lifecycle-fix replacement (terminal harvest)
 
