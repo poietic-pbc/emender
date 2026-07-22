@@ -77,7 +77,7 @@ from ndm.native_e97_runtime import (
 )
 from ndm.native_pool_runtime import NativeManagerSession
 from ndm.native_pipeline import (
-    CommittedResult, GenerationIdentity,
+    BackgroundWork, CommittedResult, GenerationIdentity,
     LiveNativeGenerationScheduler, NativeGenerationPipeline,
     finite_result_verifier,
 )
@@ -92,6 +92,47 @@ from ndm.resilient_pool_runtime import (
     PoolControlServer, PoolStageSLO, chunk_manifest_digest, contribution_id,
     fetch_owned_shards, live_owner_endpoints, submit_owned_shards,
 )
+
+
+def production_overlap_probe(*, background_release: threading.Event,
+                             background_started: threading.Event,
+                             timeout_s: float = 2.0) -> list[object]:
+    """Exercise the production role's delayed native scheduling edge.
+
+    This deliberately small deterministic hook uses the same concrete classes
+    constructed by :func:`trainer`.  It exists so the exact rendered role can
+    prove that certification of generation ``g`` is background work and is
+    not permission to begin K40(``g+1``), without requiring a Frontier job or
+    substituting a fixture scheduler.
+    """
+    digest = "0" * 64
+    incarnation = "production-overlap-probe"
+    pipeline = NativeGenerationPipeline(
+        run_id="production-overlap-probe", fence=1,
+        incarnation=incarnation)
+    events: list[object] = []
+    scheduler = LiveNativeGenerationScheduler(
+        pipeline, telemetry=events.append, result_delay=1)
+    generation0 = GenerationIdentity(
+        "production-overlap-probe", 1, 0, 1, incarnation, digest, digest)
+
+    def certify(payload, phase):
+        phase("discovery_membership_quorum_start")
+        background_started.set()
+        if not background_release.wait(timeout_s):
+            raise TimeoutError("probe background release timed out")
+        phase("checkpoint_publication")
+        return CommittedResult(
+            generation0, payload, digest, digest, 1, time.monotonic_ns())
+
+    if not scheduler.enqueue(BackgroundWork(generation0, 1.0, certify)):
+        raise RuntimeError("production scheduler rejected generation zero")
+    if not background_started.wait(timeout_s):
+        raise TimeoutError("production background did not start")
+    scheduler.event(GenerationIdentity(
+        "production-overlap-probe", 1, 1, 1, incarnation, digest, digest),
+        "k40_start")
+    return [scheduler, events]
 
 
 def _owner_endpoint_from_snapshot(peer: dict[str, object]) -> OwnerEndpoint:

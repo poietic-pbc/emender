@@ -68,6 +68,30 @@ foreground loop requires a larger state-machine conversion than the marker
 patch alone.  Until that conversion is complete, the live overlap requirement
 R12/R14/R16 and NDP16/NDP17 must remain fail-closed.
 
+### Deterministic production-role regression
+
+The follow-up adds `production_overlap_probe` to the rendered production role
+itself.  It constructs the same `NativeGenerationPipeline` and
+`LiveNativeGenerationScheduler(result_delay=1)` as the trainer, enqueues a
+generation-0 control-plane operation which is deliberately held before quorum
+certificate/checkpoint publication, and records generation-1 `k40_start`
+while that operation remains held.  The exact-renderer regression first proves
+the canonical sbatch selects this role, invokes the hook, and asserts the
+monotonic order
+
+```
+discovery_membership_quorum_start(g=0)
+  < k40_start(g=1)
+  < checkpoint_publication(g=0).
+```
+
+This closes the prior abstraction-only testing hole and would fail before the
+production role imported/enqueued `BackgroundWork`.  It is intentionally a
+deterministic no-Slurm gate.  The live tensor path still contains the
+synchronous waits enumerated above; the probe is therefore evidence for the
+required production scheduling edge and a guard for the forthcoming tensor
+state-machine conversion, not a claim that another Frontier run has passed.
+
 ## Exact retained topology and authority
 
 Both retained runs used the same logical topology: one two-node Slurm
