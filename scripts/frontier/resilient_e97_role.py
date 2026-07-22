@@ -1618,13 +1618,20 @@ def _native_manager(args) -> int:
                             metadata.as_json())
             heartbeat(bulk, identity, generation=generation,
                       step=generation * args.local_steps, loss=None, stage="training_wait")
-            submissions = [wait_metadata(
-                control / f"native-submit-{generation:08d}-{rank:02d}.json",
-                deadline=native_deadline,
-                expected={"run_id": args.run_id, "fence_epoch": _fence_epoch(args),
-                          "generation": generation, "rank": rank,
-                          "layout_digest": expected_layout.hex()})
-                for rank in range(args.local_quorum)]
+            submissions = []
+            for rank in range(args.local_quorum):
+                submissions.append(wait_metadata(
+                    control / f"native-submit-{generation:08d}-{rank:02d}.json",
+                    deadline=native_deadline,
+                    expected={"run_id": args.run_id, "fence_epoch": _fence_epoch(args),
+                              "generation": generation, "rank": rank,
+                              "layout_digest": expected_layout.hex()}))
+                # An accepted rank is monotonic lifecycle progress.  Refresh
+                # the manager deadline at each acceptance instead of expiring
+                # an advancing generation from its initial training_wait time.
+                heartbeat(bulk, identity, generation=generation,
+                          step=generation * args.local_steps + len(submissions),
+                          loss=None, stage="training_wait")
             local_weight = sum(int(item["tokens"]) for item in submissions)
             heartbeat(bulk, identity, generation=generation,
                       step=generation * args.local_steps, loss=None, stage="freeze")
