@@ -2,9 +2,46 @@
 
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
-Result: **telemetry-fix exact-source G2 passed; sole final two-node acceptance replacement pending**
+Result: **telemetry-fix exact-source G2 passed; final two-node clean phase failed the live overlap gate**
 
-## Telemetry-harvest-fix retry (active)
+## Telemetry-harvest-fix retry (terminal harvest)
+
+Slurm records the sole final replacement, job `5047497`, as terminal
+`FAILED 1:0` after 30:58 on exactly two nodes,
+`frontier[07680,07808]`.  The allocation ran from 2026-07-21 19:10:53 EDT
+through 19:41:51 EDT.  Its allocation step completed successfully; the batch
+failed only when the fail-closed performance validator rejected the retained
+two-node trainer telemetry with
+`generation 0 background did not overlap 1 K40 compute`.
+
+The payload nevertheless completed all five requested atomic K40 generations.
+All 16 trainers reached generation 5 `applied`, both managers reached
+generation 5 `published`, and all trainers and managers exited zero.  The
+bounded pipeline telemetry reports `handoff_high_water=1`,
+`result_high_water=1`, no replacements, and no rejected or stale results for
+the clean workload.  Five finalized handoffs and five restartable checkpoints
+remain in the immutable phase directory, from
+`generation-00000001-fence-00000001` through
+`generation-00000005-fence-00000001`.  Native services were evicted only for
+`allocation_complete` after role completion.
+
+This is useful evidence for exact two-node execution, five atomic
+generations, safe application, bounded/latest-only handoff, and durable
+checkpoint publication.  It does not prove the required generation-g
+background/generation-(g+1) compute overlap, below-10% foreground idle, or
+at-most-1.25x cadence.  Since the primary clean admission gate failed, the
+serial controller correctly withheld fault/rejoin, invalid-result,
+checkpoint-publication-failure, and fresh-restart phases.  No duplicate and
+no four-node-or-larger job was submitted; scale-out remains blocked.
+
+Conformance was checked against *Resilient DiLoCo Compute Pool* v1 R01-R16
+and *Native resilient DiLoCo data plane* v1 NDP01-NDP17.  The exact-source G2
+gate and clean run support R04/R06/R07/R10/R11/R13/R14 and
+NDP02/NDP03/NDP10/NDP13/NDP15/NDP17.  The failed live overlap gate and
+unexecuted resilience/rejection/restart phases leave R12/R14/R16 and
+NDP16/NDP17 acceptance incomplete.
+
+## Telemetry-harvest-fix retry (submission and G2 evidence)
 
 Exact-source G2 refresh job `5047138` completed successfully (`0:0`) in 2:55
 on exactly two nodes, `frontier[05911-05912]`.  Its correctness/integrity gate
