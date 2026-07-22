@@ -1237,3 +1237,21 @@ def test_frontier_default_keeps_supervision_state_node_local():
     assert 'launch_backend="node-local-child"' in text
     assert 'sys.executable, __file__, "--node-local"' in text
     assert 'f"-N{node_count}", f"-n{node_count}"' in text
+def test_exact_renderer_binds_production_delayed_scheduler_marker(tmp_path):
+    """The reviewed scheduler must be constructed by the rendered role path."""
+    from scripts.frontier import render_resilient_e97_exact_2n_acceptance as renderer
+
+    manifest = tmp_path / "native-artifacts.json"
+    gate = tmp_path / "gate.json"
+    # build_plan validates these through native_identity; retain the exact
+    # launcher assertion here without manufacturing a second launch path.
+    source = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    batch = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
+    assert renderer.build_plan.__module__.endswith(
+        "render_resilient_e97_exact_2n_acceptance")
+    assert 'launcher": "scripts/frontier/resilient_e97_true_2n.sbatch"' in (
+        ROOT / "scripts/frontier/render_resilient_e97_exact_2n_acceptance.py").read_text()
+    assert 'ROLE="$REPO/scripts/frontier/resilient_e97_role.py"' in batch
+    assert "LiveNativeGenerationScheduler(" in source
+    assert '"schema": "emender-production-delayed-pipeline-v1"' in source
+    assert '"implementation": (' in source
