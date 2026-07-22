@@ -477,10 +477,15 @@ int controller_finalize(int result_pipe) {
   ndp_op_t frozen = 0, result = 0;
   if (control(client, NDP_CONTROL_FREEZE, &frozen) != NDP_OK) return 2;
   if (control(client, NDP_CONTROL_FINALIZE_OWNERS, &result) != NDP_OK) return 3;
-  if (::write(result_pipe, &result, sizeof(result)) != sizeof(result)) return 4;
+  // Reordered duplicate FREEZE after projection must converge on the original
+  // immutable operation rather than fail because this peer advanced first.
+  ndp_op_t repeated_freeze = 0;
+  if (control(client, NDP_CONTROL_FREEZE, &repeated_freeze) != NDP_OK
+      || repeated_freeze != frozen) return 4;
+  if (::write(result_pipe, &result, sizeof(result)) != sizeof(result)) return 5;
   // Deliberately do not release either operation.  Their authoritative state
   // belongs to the service and must survive this controller process exiting.
-  return ndp_client_close_v1(client) == NDP_OK ? 0 : 5;
+  return ndp_client_close_v1(client) == NDP_OK ? 0 : 6;
 }
 
 int controller_read_commit_and_fence(ndp_op_t result_operation, int stale_pipe) {

@@ -189,6 +189,7 @@ def build_plan(repo: Path, commit: str, manifest: Path, gate: Path, run_root: Pa
 
 TERMINAL_STATES = {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "PREEMPTED", "BOOT_FAIL"}
 EXPECTED_FAILURES = {"checkpoint-publication-failure"}
+SACCT_PROPAGATION_WINDOW_S = 120.0
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -219,11 +220,21 @@ def advance(plan: dict[str, Any], output: Path, state_path: Path, repo: Path) ->
     if active:
         result = _scheduler_state(active["job_id"])
         if result["state"] not in TERMINAL_STATES:
+            if result["state"] == "ACCOUNTING_PENDING":
+                pending_since = float(state.get("accounting_pending_since", time.time()))
+                state["accounting_pending_since"] = pending_since
+                if time.time() - pending_since > SACCT_PROPAGATION_WINDOW_S:
+                    raise TimeoutError(
+                        f"job {active['job_id']} remained absent from squeue and sacct "
+                        f"for more than {SACCT_PROPAGATION_WINDOW_S:g}s")
+            else:
+                state.pop("accounting_pending_since", None)
             state["wait"] = {"kind": "slurm-terminal", "job_id": active["job_id"],
                              "observed_state": result["state"], "resumable": True}
             _atomic_json(state_path, state)
             print(f"WAIT phase={active['phase']} job_id={active['job_id']} state={result['state']}")
             return 75
+        state.pop("accounting_pending_since", None)
         phase = active["phase"]
         successful = result["state"] == "COMPLETED"
         if successful == (phase in EXPECTED_FAILURES):

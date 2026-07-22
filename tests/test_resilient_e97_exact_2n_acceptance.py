@@ -123,6 +123,38 @@ def test_pending_phase_is_resumable_wait_and_does_not_submit(monkeypatch, tmp_pa
     assert not any(call[0] == "sbatch" for call in calls)
 
 
+def test_squeue_to_sacct_propagation_gap_is_retried_then_harvested(monkeypatch, tmp_path):
+    plan = _serial_plan(tmp_path); plan["phases"] = plan["phases"][:1]
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"schema": "emender-exact-2n-serial-state-v1", "next_phase": 0,
+        "active": {"phase": "clean-overlap", "job_id": "5053690",
+                   "run_dir": str(tmp_path / "clean-overlap")}, "history": []}))
+    monkeypatch.setattr(MODULE.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(MODULE, "_scheduler_state", lambda _job: {
+        "state": "ACCOUNTING_PENDING", "exit_code": ""})
+    assert MODULE.advance(plan, tmp_path / "acceptance.json", state, ROOT) == 75
+    saved = json.loads(state.read_text())
+    assert saved["accounting_pending_since"] == 1000.0
+
+    monkeypatch.setattr(MODULE, "_scheduler_state", lambda _job: {
+        "state": "COMPLETED", "exit_code": "0:0"})
+    assert MODULE.advance(plan, tmp_path / "acceptance.json", state, ROOT) == 0
+    assert "accounting_pending_since" not in json.loads(state.read_text())
+
+
+def test_sacct_propagation_gap_has_a_bounded_failure_window(monkeypatch, tmp_path):
+    plan = _serial_plan(tmp_path); state = tmp_path / "state.json"
+    state.write_text(json.dumps({"schema": "emender-exact-2n-serial-state-v1", "next_phase": 0,
+        "active": {"phase": "clean-overlap", "job_id": "5053690",
+                   "run_dir": str(tmp_path / "clean-overlap")}, "history": [],
+        "accounting_pending_since": 1000.0}))
+    monkeypatch.setattr(MODULE.time, "time", lambda: 1121.0)
+    monkeypatch.setattr(MODULE, "_scheduler_state", lambda _job: {
+        "state": "ACCOUNTING_PENDING", "exit_code": ""})
+    with pytest.raises(TimeoutError, match="absent from squeue and sacct"):
+        MODULE.advance(plan, tmp_path / "acceptance.json", state, ROOT)
+
+
 def test_stale_installed_bundle_source_is_rejected(tmp_path):
     manifest = _native(tmp_path / "native")
     value = json.loads(manifest.read_text()); value["source_commit"] = "1" * 40
