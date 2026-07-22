@@ -7,7 +7,8 @@ import pytest
 from scripts.frontier.resilient_e97_allocation_supervisor import AllocationSupervisor, Child
 
 from ndm.resilient_e97_topology import (
-    ChildSpec, IndependentProcessSupervisor, true_frontier_topology,
+    ChildSpec, IndependentProcessSupervisor, rank_topology_certificate,
+    true_frontier_topology,
     validate_true_topology,
 )
 
@@ -21,6 +22,20 @@ def test_two_nodes_are_two_cpu_managers_and_sixteen_real_gpu_trainers():
     assert all(item.env["CUDA_VISIBLE_DEVICES"] == "" for item in managers)
     assert {item.env["CUDA_VISIBLE_DEVICES"] for item in trainers} == {str(i) for i in range(8)}
     assert all("--local-steps=40" in item.command for item in trainers)
+
+
+def test_rank_topology_certificate_enumerates_exactly_sixteen_independent_identities():
+    specs = true_frontier_topology(2, ["manager"], ["trainer"])
+    certificate = rank_topology_certificate(specs, lease_id="lease-7", fence=7)
+    ranks = certificate["ranks"]
+    assert len(ranks) == 16
+    assert [(r["node_rank"], r["local_gpu"], r["global_rank"])
+            for r in ranks] == [(node, gpu, node * 8 + gpu)
+                                for node in range(2) for gpu in range(8)]
+    assert len({r["process_id"] for r in ranks}) == 16
+    assert {r["manager_id"] for r in ranks} == {"node-0/manager", "node-1/manager"}
+    assert all(r["membership"] == "eligible" and r["lease_id"] == "lease-7"
+               and r["fence"] == 7 and r["decision"] == "pending" for r in ranks)
 
 
 def test_sentinel_workaround_is_rejected():
@@ -83,6 +98,15 @@ def test_generation_gated_injections_are_distinct_and_one_shot(tmp_path, monkeyp
                                 "progress_time": now}))
     assert supervisor._deadline_reason(child, now) is None
     path.write_text(json.dumps({"generation": 2, "heartbeat_time": now,
-                                "progress_time": now}))
+                                "progress_time": now, "stage": "applied"}))
     assert supervisor._deadline_reason(child, now) == "injected_generation_gate"
     assert supervisor._deadline_reason(child, now) is None
+
+
+def test_exhausted_trainer_is_retired_without_retiring_manager_or_siblings():
+    source = __import__(
+        "inspect").getsource(AllocationSupervisor.run)
+    assert 'if child.role == "trainer"' in source
+    assert 'self._event("rank_retired"' in source
+    assert "completed.add(child.identity)" in source
+    assert 'revocation="lease_incarnation_revoked"' in source

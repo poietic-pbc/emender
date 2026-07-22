@@ -34,6 +34,12 @@ class ChildSpec:
         suffix = "manager" if self.local_rank is None else f"trainer-{self.local_rank}"
         return f"node-{self.node_rank}/{suffix}"
 
+    @property
+    def global_rank(self) -> int | None:
+        if self.role != "trainer" or self.local_rank is None:
+            return None
+        return self.node_rank * TRAINERS_PER_FRONTIER_NODE + self.local_rank
+
 
 def true_frontier_topology(node_count: int, manager_command: Sequence[str],
                            trainer_command: Sequence[str]) -> tuple[ChildSpec, ...]:
@@ -52,10 +58,45 @@ def true_frontier_topology(node_count: int, manager_command: Sequence[str],
             result.append(ChildSpec("trainer", node, local_rank, tuple(trainer_command), {
                 "RESILIENT_E97_ROLE": "trainer", "RESILIENT_E97_NODE_RANK": str(node),
                 "RESILIENT_E97_LOCAL_RANK": str(local_rank),
+                "RESILIENT_E97_GLOBAL_RANK": str(
+                    node * TRAINERS_PER_FRONTIER_NODE + local_rank),
                 "CUDA_VISIBLE_DEVICES": str(local_rank),
             }))
     validate_true_topology(result, node_count=node_count)
     return tuple(result)
+
+
+def rank_topology_certificate(specs: Sequence[ChildSpec], *, lease_id: str,
+                              fence: int, generation: int = 0,
+                              incarnation: int = 0) -> dict[str, object]:
+    """Build the durable rank membership surface used by pool certificates.
+
+    A rank, not a node manager or native service, is the contribution member.
+    Process identities include an incarnation so a restarted process cannot
+    publish under the identity that was revoked when it exited.
+    """
+    if not lease_id or fence <= 0 or generation < 0 or incarnation < 0:
+        raise ValueError("a positive fence and complete rank lease identity are required")
+    trainers = sorted((item for item in specs if item.role == "trainer"),
+                      key=lambda item: int(item.global_rank))
+    ranks = []
+    for item in trainers:
+        assert item.local_rank is not None and item.global_rank is not None
+        stable = f"node-{item.node_rank}/gpu-{item.local_rank}/rank-{item.global_rank}"
+        ranks.append({
+            "node_rank": item.node_rank, "local_gpu": item.local_rank,
+            "global_rank": item.global_rank,
+            "process_id": f"{stable}/incarnation-{incarnation}",
+            "manager_id": f"node-{item.node_rank}/manager",
+            "lease_id": lease_id, "fence": fence, "incarnation": incarnation,
+            "generation": generation, "membership": "eligible",
+            "eligible": True, "contribution": None,
+            "accepted_tokens": 0, "accepted_samples": 0,
+            "quorum": "pending", "revocation": None, "rejection": None,
+            "decision": "pending",
+        })
+    return {"schema_version": 1, "lease_id": lease_id, "fence": fence,
+            "generation": generation, "ranks": ranks}
 
 
 def validate_true_topology(specs: Sequence[ChildSpec], *, node_count: int) -> None:
@@ -118,4 +159,3 @@ class IndependentProcessSupervisor:
                 evicted.append(identity)
                 del self.processes[identity]
         return tuple(evicted)
-
