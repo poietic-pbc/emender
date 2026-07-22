@@ -4,7 +4,46 @@ Date: 2026-07-20
 Task: `validate-pipelined-native-2`  
 Result: **telemetry-fix exact-source G2 passed; final two-node clean phase failed the live overlap gate**
 
-## Final overlap-scheduler retry (K40 replacement pending, 2026-07-22)
+## Final overlap-scheduler retry (terminal harvest, 2026-07-22)
+
+Slurm records the sole final replacement, job `5050642`, as terminal
+`FAILED 1:0` after 31:08 on exactly two nodes,
+`frontier[08317,08701]`.  It ran from 2026-07-22 05:51:04 through 06:22:12
+EDT.  The allocation payload completed successfully; the batch failed only
+when the strict retained-evidence validator rejected the live timing trace
+with `generation 0 background did not overlap 1 K40 compute`.
+
+The payload nevertheless completed all five requested atomic K40 generations.
+The retained pool-control records close generations 0 through 4 with two READY
+node-peer contributions and 5,245,440 accepted tokens each.  Five immutable
+handoffs and five restartable checkpoints were published, from
+`generation-00000001-fence-00000001` through
+`generation-00000005-fence-00000001`; each checkpoint is 7,899,873,331 bytes.
+All 16 trainer lanes have fenced native apply receipts through generation 4,
+and both node snapshots were harvested.  Dense Python socket and trainer-spool
+bytes remain zero.  This establishes exact two-node execution, five atomic
+generations, safe fenced application, bounded native handoff, and durable
+checkpoint publication, but not the required generation-g/background versus
+generation-(g+1)/K40 overlap, sub-10% foreground idle, or at-most-1.25x
+steady cadence.
+
+Because the primary clean admission gate failed, the serial controller
+correctly withheld the loss/rejoin, invalid-result, checkpoint-publication
+failure, and fresh-restart phases.  No duplicate and no job larger than two
+nodes was submitted.  The reviewed overlap scheduler change therefore does
+not pass the live production flow despite its simulated tests; scale-out must
+remain blocked pending a new root-cause fix and another exact-source two-node
+replacement.
+
+Conformance was checked against *Resilient DiLoCo Compute Pool* v1 R01-R16
+and *Native resilient DiLoCo data plane* v1 NDP01-NDP17.  Exact identity, G2,
+two-node admission, READY membership, five atomic publications, fenced apply,
+bounded queues, and fail-closed validation support R04/R06/R07/R10/R11/R13/R14
+and NDP02/NDP03/NDP10/NDP13/NDP15/NDP17.  The failed live overlap gate and
+unexecuted serial resilience/rejection/restart phases leave R12/R14/R16 and
+NDP16/NDP17 acceptance incomplete.
+
+## Final overlap-scheduler retry (submission checkpoint, 2026-07-22)
 
 The prior admission blocker is cleared.  A fresh fetch resolves authoritative
 `origin/main` to `32fd9ab15c6908827d094b21ff638f8ec2a24c2b`; reviewed overlap
