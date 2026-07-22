@@ -2,7 +2,56 @@
 
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
-Result: **final production-entrypoint exact-source G2 refresh running; K40 replacement withheld pending its terminal pass**
+Result: **exact-source G2 passed; final two-node K40 replacement failed in generation 0; later phases withheld**
+
+## Final K40 replacement terminal harvest (2026-07-22)
+
+The sole authorized K40 replacement, Slurm job `5053690`, reached terminal
+`FAILED (1:0)` after 5:52 on exactly two nodes,
+`frontier[05345,05350]`.  Its batch allocation requested two nodes and the
+two-hour debug bound.  No duplicate, later serial phase, or job larger than
+two nodes was submitted.
+
+The immutable execution root is
+`/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-final-20260722T180000Z`.
+The exact source is `53441395245af7fbe767c2e25cc3ad379db07b0e`, the native
+bundle SHA-256 is
+`59fa632b98999e522be6fee3cda98d095a0fc4c85b0b3a95286b0eb61c19fa6d`,
+and the acceptance manifest SHA-256 is
+`1f593510d492fcc79c3e3634575fd499eec2b8e57f2a87b9520be8cbe5c42877`.
+The preceding exact-source G2 job `5053588` passed correctness/integrity on
+two nodes; its measured speedup was 3.866x and remains telemetry under the
+approved policy.  It reported 44,322,599,424 useful bytes and 44,323,138,304
+wire bytes in each direction, with 25.596-second median and 25.719-second
+maximum generation intervals.
+
+The replacement did not complete one atomic generation, so it cannot support
+the five-generation overlap, cadence, rejection, loss/rejoin, or checkpoint
+claims.  All 16 trainers completed their first K40 and published generation-0
+contributions, and both native services retained generation-0 evidence.  The
+managers then diverged during the generation-0 freeze: one expired the
+deterministic freeze deadline, while the other observed native `FREEZE` in an
+invalid lifecycle state; recovery attempts also observed a missing peer route
+`(0, 1)`.  The allocation supervisor consequently terminated the step.  This
+is a fail-closed lifecycle/coordination failure before an accepted atomic
+result, not a strict-overlap performance failure.
+
+The batch stdout/stderr were moved intact from the otherwise-clean source
+clone into `phases/clean-overlap/slurm/`.  A resumable-controller harvest was
+then attempted.  It correctly did not submit another job, but exposed a
+separate terminal-query defect: after Slurm aged the job out of `squeue`, the
+controller treated `squeue -j 5053690` exit 1 as a launcher refusal instead of
+falling back to `sacct`.  The serial state therefore still records the clean
+phase as active even though `sacct` is authoritative and terminal.  Advancing
+the fault/rejection/checkpoint phases would violate the clean-gate dependency,
+so they remain withheld.
+
+Conformance was checked against *Resilient DiLoCo Compute Pool* v1 R01-R16
+and *Native resilient DiLoCo data plane* v1 NDP01-NDP17.  Exact identity and
+two-node admission satisfy the applicable R01/R10/R14/R16 and
+NDP02/NDP03/NDP16/NDP17 checks.  Atomic fail-closed behavior was preserved,
+but the live run does not validate the remaining R04-R12/NDP06-NDP15 runtime
+acceptance claims.
 
 ## Production-entrypoint/rank-containment retry (K40 running, 2026-07-22)
 
