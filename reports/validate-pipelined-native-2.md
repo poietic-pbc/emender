@@ -2,7 +2,42 @@
 
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
-Result: **exact-source G2 passed; final two-node K40 replacement failed in generation 0; later phases withheld**
+Result: **manager-freeze-fix exact-source G2 refresh submitted; K40 replacement withheld pending terminal pass**
+
+## Manager-freeze convergence retry (G2 submitted, 2026-07-22)
+
+The prior sole K40 job `5053690` is terminal `FAILED 1:0` after 5:52 on
+exactly two nodes.  Its retained evidence shows that all 16 trainers completed
+their first K40 and submitted generation-0 contributions, but no atomic
+generation completed: managers encountered a deterministic freeze timeout,
+native `FREEZE` in an invalid lifecycle state, and a missing peer route during
+recovery.  No later serial phase was admitted.
+
+Authoritative `origin/main` has since advanced from that job's source
+`53441395245af7fbe767c2e25cc3ad379db07b0e` to
+`5f180e25fd0a54852892d5ff59a97b3c1d8737ff`, which contains the reviewed
+manager-freeze convergence merge.  A fresh clean `main` clone at
+`/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-freeze-final-20260722T223000Z/source`
+matches the fetched remote identity exactly.  The canonical Frontier
+GNU/ROCm environment rebuilt its native bundle and CTest passed 10/10.  The
+exact build-manifest SHA-256 is
+`3b5d2847420fb8ec10038186347664b4faa52d61d68c70b5537c323fdc4e6a48`.
+
+An adjacent per-user scheduler query was empty.  The canonical fail-closed G2
+launcher then submitted exactly one job, `5055869`, requesting exactly two
+nodes and 20 minutes.  The prior G2 result is retained only as historical
+telemetry because the source identity changed.  No K40 replacement, duplicate,
+later serial phase, or job larger than two nodes was submitted.  The K40 gate
+remains withheld until job `5055869` reaches terminal success and its
+exact-source correctness/integrity artifact is harvested.
+
+Conformance was checked against *Resilient DiLoCo Compute Pool* v1 R01-R16
+and *Native resilient DiLoCo data plane* v1 NDP01-NDP17.  This checkpoint
+specifically preserves exact pushed identity, serialized two-node admission,
+bounded execution, and fail-closed precursor ordering required by
+R10/R13/R14/R16 and NDP02/NDP03/NDP13/NDP16/NDP17.  Live overlap,
+resilience, rejection, and restart claims remain withheld rather than inferred
+from scheduler admission.
 
 ## Final K40 replacement terminal harvest (2026-07-22)
 
