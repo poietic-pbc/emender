@@ -4,7 +4,7 @@ Date: 2026-07-20
 Task: `validate-pipelined-native-2`  
 Result: **telemetry-fix exact-source G2 passed; final two-node clean phase failed the live overlap gate**
 
-## Final overlap-scheduler retry (exact-source G2 pending, 2026-07-22)
+## Final overlap-scheduler retry (K40 replacement pending, 2026-07-22)
 
 The prior admission blocker is cleared.  A fresh fetch resolves authoritative
 `origin/main` to `32fd9ab15c6908827d094b21ff638f8ec2a24c2b`; reviewed overlap
@@ -29,12 +29,29 @@ as `NDP_PYTHON_BIN`.  Its stdout/stderr are preserved beneath
 
 After that job was terminal and the user queue was empty again, the same
 exact-source launcher was corrected with the explicit canonical Python path
-and submitted job `5050571` for exactly two nodes.  At 2026-07-22 05:13 EDT it
-is the sole user job and remains `PENDING (Priority)`, with zero elapsed time
-and no assigned nodes.  No K40 replacement, active duplicate, later serial
-phase, or job larger than two nodes has been submitted.  Terminal G2
-correctness/integrity success and another empty-queue check are required before
-exactly one final K40 replacement can be admitted.
+and submitted job `5050571` for exactly two nodes.  It completed `0:0` in 2:55
+on `frontier[08029-08030]`.  The exact-source production attestation passed;
+the full-layout gate SHA-256 is
+`5c21aeed49872280d255e9164b7f3ee94122b4af2378665248d99d27bb4a6d08`.
+It records two leased CXI `FI_EP_RDM` endpoints, exact-reference agreement,
+checksum/stale rejection, zero route/CQ errors, 44,322,599,424 useful bytes and
+44,323,138,304 wire bytes per direction.  Its timed generations were
+23.513984104, 23.924894782, and 22.966800809 seconds; 936,765,198.38 logical
+B/s and 4.209x the retained Python comparison are telemetry only.
+
+After G2 was terminal and another adjacent scheduler query proved the user
+queue empty, the canonical serial controller rebuilt and re-attested the exact
+bundle, then submitted exactly one final clean-overlap K40 replacement: job
+`5050642`, exactly two nodes, five K40 generations, and a two-hour bound.  At
+2026-07-22 05:21 EDT it is the sole user job and is `PENDING (Priority)`, with
+zero elapsed time and no assigned nodes.  The immutable acceptance manifest
+SHA-256 is
+`97d3a0f5df69c759df570908f8ee4068b629d30e0fd4b8540b66063e6fe19b59`;
+the authoritative-stage attestation SHA-256 is
+`3183fb7ae31e715b74fd5dd5ca3010e0c5af6d27700ee540e6cc1eb03cc25f05`.
+No duplicate, later serial phase, or job larger than two nodes has been
+submitted.  Live overlap, cadence, rejection, resilience, and restart claims
+remain pending terminal evidence rather than inferred from admission.
 
 This checkpoint conforms to *Resilient DiLoCo Compute Pool* v1
 R10/R13/R14/R16 and native data plane NDP02/NDP03/NDP13/NDP16/NDP17:
