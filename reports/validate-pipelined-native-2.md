@@ -4,7 +4,7 @@ Date: 2026-07-20
 Task: `validate-pipelined-native-2`  
 Result: **final production-entrypoint exact-source G2 refresh running; K40 replacement withheld pending its terminal pass**
 
-## Production-entrypoint/rank-containment retry (G2 running, 2026-07-22)
+## Production-entrypoint/rank-containment retry (K40 running, 2026-07-22)
 
 Authoritative `origin/main` now resolves to
 `53441395245af7fbe767c2e25cc3ad379db07b0e`, which contains the reviewed
@@ -23,12 +23,21 @@ the recorded bundle SHA-256 is
 
 An adjacent per-user queue check was empty.  The canonical fail-closed G2
 launcher then submitted exactly one job, `5053588`, requesting exactly two
-nodes and 20 minutes.  The first observed state was `PENDING (Priority)`; it
-subsequently began running on `frontier[04040,04042]`.  No K40 replacement,
-duplicate, later serial phase, or job larger than two nodes has been
-submitted.  The K40 acceptance remains withheld until this exact-source G2
-correctness/integrity job reaches terminal success and its full-layout gate
-is harvested.
+nodes and 20 minutes.  It completed `0:0` in 2:59 on
+`frontier[04040,04042]`.  Exact-source production attestation passed, and the
+retained full-layout gate SHA-256 is
+`eb7d60395f8842f5a78a516e1176f5108281817ad95e5cf29a7ef1cebfc9c2a8`.
+
+After G2 was terminal, its clone-local scheduler logs were moved intact into
+the immutable job artifact directory, another adjacent scheduler query proved
+the user queue empty, and the serial controller rebuilt and re-attested the
+same exact source and bundle.  It submitted exactly one clean K40 replacement,
+job `5053690`, for exactly two nodes, five K40 generations, and the two-hour
+debug bound.  The acceptance manifest SHA-256 is
+`1f593510d492fcc79c3e3634575fd499eec2b8e57f2a87b9520be8cbe5c42877`.
+The job is running on `frontier[05345,05350]`; no duplicate, later serial
+phase, or job larger than two nodes has been submitted.  Live claims remain
+withheld pending terminal harvest and strict telemetry validation.
 
 Conformance was checked against *Resilient DiLoCo Compute Pool* v1 R01-R16
 and *Native resilient DiLoCo data plane* v1 NDP01-NDP17.  This checkpoint
