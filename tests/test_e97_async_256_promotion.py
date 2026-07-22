@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 ROOT=Path(__file__).resolve().parents[1]
-SEED={"uri":"s3://spinozans/emender/e97-diloco/emender_E97_1.3B_20260709_084606/step_1525000/checkpoint_step_1525000_loss_2.4378.pt","path":"/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260709_084606_step_1525000/checkpoint_step_1525000_loss_2.4378.pt","step":1525000,"loss":2.4378,"tokens":"99.9424B","size":7719679924,"sha256":"1da27d2e09bc6c6f5ffc30e3e4476df1cebd807267431c8524de1a5b0dc5bca9"}
+SEED=json.loads((ROOT/"configs/frontier/e97_async_256.yaml").read_text())["seed"]
 def module(path):
     spec=importlib.util.spec_from_file_location("e97_render",path); result=importlib.util.module_from_spec(spec); spec.loader.exec_module(result); return result
 RENDER=module(ROOT/"scripts/frontier/render_e97_async_256.py")
@@ -31,10 +31,11 @@ def test_job_4962400_launcher_is_byte_exact_and_only_scale_queue_time_differ(tmp
         assert launch["resolved"]["steps"]==40000000
         assert launch["resolved"]["local_steps"]==40
         assert launch["resolved"]["steps"]==launch["resolved"]["generations"]*launch["resolved"]["local_steps"]
-        assert "E97_CHECKPOINT="+SEED["path"] in launch["sbatch_argv"][launch["sbatch_argv"].index("--export")+1]
+        assert "E97_SEED_B64=" in launch["sbatch_argv"][launch["sbatch_argv"].index("--export")+1]
         serialized=json.dumps(launch).lower()
         assert "latest.pt" not in serialized
-        assert "latest_emender" not in serialized
+        assert "latest" not in launch["resolved"]["seed"]["uri"].lower()
+        assert launch["resolved"]["seed"]["latest_pointer_uri"].endswith("latest_emender_E97_1.3B.json")
 
 MUTATIONS=[
  ("source_commit","0"*40),("launcher_sha256","0"*64),("resolved.account","other"),("resolved.reservation","x"),
@@ -42,7 +43,7 @@ MUTATIONS=[
  ("resolved.nodes",255),("resolved.ranks_per_node",7),("resolved.launched_ranks",256),("resolved.participant_ranks",256),
  ("resolved.worker_ranks",256),("resolved.global_quorum",171),("resolved.local_steps",41),("resolved.steps",40000),
  ("resolved.timeout_s",1),("resolved.walltime_remaining_s",43200),("resolved.checkpoint_interval",1),
- ("resolved.seed.path","new.pt"),("resolved.seed.sha256","0"*64),("resolved.seed.step",1),("resolved.seed.loss",1.0),("resolved.seed.tokens","1B"),("resolved.seed.size",1),("resolved.data","other"),("resolved.model","E97/1.3b"),("resolved.optimizer","adamw"),
+ ("resolved.seed.uri","s3://bucket/new.pt"),("resolved.seed.sha256","0"*64),("resolved.seed.step",1),("resolved.seed.loss",1.0),("resolved.seed.tokens",1),("resolved.seed.size",1),("resolved.data","other"),("resolved.model","E97/1.3b"),("resolved.optimizer","adamw"),
  ("resolved.learning_rate","1"),("resolved.batch_size",8),("resolved.chunk_size",1),("resolved.transport","tcp"),
  ("resolved.mpich_gpu_support_enabled","1"),("resolved.signal","USR1"),("resolved.requeue",True),
  ("training_stop_budget.steps",40000),("training_stop_budget.walltime_remaining_s",43200),
@@ -57,7 +58,7 @@ def test_every_non_allowlisted_field_fails_closed(tmp_path,field,value):
 
 def test_recent_wrapper_drift_reproduced_and_rejected(tmp_path):
     s,p=bundles(tmp_path); launch=p/"launch-inputs.json"
-    for field,value in (("resolved.global_quorum",171),("resolved.participant_ranks",256),("resolved.seed.path","step1282500/latest.pt"),("resolved.signal","B:USR1@1200")):
+    for field,value in (("resolved.global_quorum",171),("resolved.participant_ranks",256),("resolved.seed.uri","s3://bucket/latest.pt"),("resolved.signal","B:USR1@1200")):
         mutate(launch,field,value)
     # Jobs 4972201/4972494/4974389/4974391/4974444 also introduced export=NONE,
     # spool/helper bootstrap. Any launcher byte drift is independently fatal.
@@ -70,7 +71,7 @@ def test_unknown_profile_key_and_golden_source_drift_fail(tmp_path,monkeypatch):
     with pytest.raises(ValueError,match="only nodes, walltime, and queue"): RENDER.load()
 
 def test_dynamic_seed_reference_is_rejected(tmp_path,monkeypatch):
-    config=json.loads(RENDER.CONFIG.read_text()); config["seed"]["path"]="/tmp/latest.pt"
+    config=json.loads(RENDER.CONFIG.read_text()); config["seed"]["uri"]="s3://bucket/latest.pt"
     bad=tmp_path/"config.json"; bad.write_text(json.dumps(config)); monkeypatch.setattr(RENDER,"CONFIG",bad)
     with pytest.raises(ValueError,match="dynamic or invalid seed"): RENDER.load()
 

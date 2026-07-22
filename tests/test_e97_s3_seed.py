@@ -1,0 +1,104 @@
+import hashlib
+import io
+import json
+from pathlib import Path
+
+import pytest
+
+from scripts.frontier.materialize_e97_s3_seed import materialize, verify_authorities
+
+
+SEED = json.loads((Path(__file__).parents[1] / "configs/frontier/e97_async_256.yaml").read_text())["seed"]
+
+
+class Response(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+
+def opener(objects):
+    def open_url(url, timeout):
+        if url not in objects:
+            raise OSError("inaccessible object")
+        return Response(objects[url])
+    return open_url
+
+
+def authorities(checkpoint=b"checkpoint", **changes):
+    seed = {**SEED, "size": len(checkpoint), "sha256": hashlib.sha256(checkpoint).hexdigest()}
+    manifest = {"checkpoint_s3_uri": seed["uri"], "checkpoint_size_bytes": seed["size"],
+                "checkpoint_sha256": seed["sha256"], "step": seed["step"], "loss": seed["loss"]}
+    latest = dict(manifest)
+    target = changes.pop("target", None)
+    if target:
+        (manifest if target == "manifest" else latest).update(changes)
+    from scripts.frontier.materialize_e97_s3_seed import https_url
+    objects = {https_url(seed["manifest_uri"]): json.dumps(manifest).encode(),
+               https_url(seed["latest_pointer_uri"]): json.dumps(latest).encode(),
+               https_url(seed["uri"]): checkpoint}
+    return seed, objects
+
+
+@pytest.mark.parametrize("target,change", [
+    ("latest", {"checkpoint_s3_uri": "s3://bucket/drift.pt"}),
+    ("manifest", {"checkpoint_size_bytes": 1}),
+    ("manifest", {"checkpoint_sha256": "0" * 64}),
+    ("latest", {"step": 1}),
+    ("latest", {"loss": 1.0}),
+])
+def test_authority_disagreement_fails_closed(target, change):
+    seed, objects = authorities(target=target, **change)
+    with pytest.raises(ValueError, match="disagrees"):
+        verify_authorities(seed, opener(objects))
+
+
+def test_absent_field_and_inaccessible_source_fail_closed():
+    seed, objects = authorities()
+    document_url = next(iter(objects))
+    value = json.loads(objects[document_url]); value.pop("step")
+    objects[document_url] = json.dumps(value).encode()
+    with pytest.raises(ValueError, match="disagrees"):
+        verify_authorities(seed, opener(objects))
+    with pytest.raises(OSError, match="inaccessible"):
+        verify_authorities(seed, opener({}))
+
+
+def test_atomic_job_scoped_materialization_and_runtime_identity(tmp_path, monkeypatch):
+    seed, objects = authorities()
+    monkeypatch.setenv("SLURM_JOB_ID", "1234")
+    destination = tmp_path / "1234" / "checkpoint.pt"
+    runtime = tmp_path / "artifacts" / "seed-materialization.json"
+    assert materialize(seed, destination, runtime, opener(objects)) == destination
+    assert destination.read_bytes() == b"checkpoint"
+    evidence = json.loads(runtime.read_text())
+    assert evidence["staged_size"] == seed["size"]
+    assert evidence["staged_sha256"] == seed["sha256"]
+    assert not list(destination.parent.glob("*.tmp.*"))
+
+
+def test_partial_download_is_removed_and_never_promoted(tmp_path, monkeypatch):
+    seed, objects = authorities(checkpoint=b"complete")
+    from scripts.frontier.materialize_e97_s3_seed import https_url
+    objects[https_url(seed["uri"])] = b"partial"
+    monkeypatch.setenv("SLURM_JOB_ID", "5678")
+    destination = tmp_path / "5678" / "checkpoint.pt"
+    with pytest.raises(ValueError, match="identity mismatch"):
+        materialize(seed, destination, tmp_path / "runtime.json", opener(objects))
+    assert not destination.exists()
+    assert not list(destination.parent.glob("*.tmp.*"))
+
+
+def test_stale_file_non_job_path_and_legacy_path_are_rejected(tmp_path, monkeypatch):
+    seed, objects = authorities()
+    monkeypatch.setenv("SLURM_JOB_ID", "9012")
+    destination = tmp_path / "9012" / "checkpoint.pt"
+    destination.parent.mkdir(); destination.write_bytes(b"stale")
+    with pytest.raises(FileExistsError, match="stale"):
+        materialize(seed, destination, tmp_path / "runtime.json", opener(objects))
+    legacy = tmp_path / "legacy-shared-seed" / "checkpoint.pt"
+    with pytest.raises(ValueError, match="SLURM_JOB_ID"):
+        materialize(seed, legacy, tmp_path / "runtime.json", opener(objects))
+    assert not legacy.parent.exists()

@@ -195,6 +195,17 @@ frontier_load_default_modules
 frontier_activate_emender_conda_env
 frontier_assert_emender_conda_env
 PYTHON_BIN=$(command -v python)
+if [[ -n "${E97_SEED_B64:-}" ]]; then
+  [[ -n "${SLURM_JOB_ID:-}" ]] || { echo "immutable S3 seed staging requires SLURM_JOB_ID" >&2; exit 64; }
+  SEED_STAGE_DIR="${TMPDIR:-/tmp}/emender-e97-seed/${SLURM_JOB_ID}"
+  E97_CHECKPOINT="${SEED_STAGE_DIR}/checkpoint.pt"
+  E97_SEED_JSON=$("$PYTHON_BIN" -c 'import base64,sys; print(base64.urlsafe_b64decode(sys.argv[1]).decode())' "$E97_SEED_B64")
+  "$PYTHON_BIN" scripts/frontier/materialize_e97_s3_seed.py \
+    --seed-json "$E97_SEED_JSON" \
+    --destination "$E97_CHECKPOINT" \
+    --runtime-manifest "${ARTIFACT_DIR}/seed-materialization.json"
+  unset E97_SEED_JSON
+fi
 export REPO TIKTOKEN_CACHE_DIR PYTHON_BIN RANK_START_LOG ASYNC_ENTRYPOINT
 export RUN_DIR ASYNC_QUORUM_TRANSPORT ASYNC_TIMEOUT_S
 export MPICH_GPU_SUPPORT_ENABLED=${MPICH_GPU_SUPPORT_ENABLED:-0}
