@@ -4,6 +4,31 @@ Date: 2026-07-20
 Task: `validate-pipelined-native-2`  
 Result: **telemetry-fix exact-source G2 passed; final two-node clean phase failed the live overlap gate**
 
+## Overlap-scheduler-fix admission checkpoint (2026-07-22)
+
+The retained sole final job `5047497` remains terminal `FAILED 1:0`; a fresh
+`sacct` query confirms that it ran for 30:58 on exactly two nodes from
+2026-07-21 19:10:53 EDT through 19:41:51 EDT.  A fresh per-user `squeue`
+query is empty, so there is no active equivalent job and no scheduler overlap.
+
+The reviewed live-overlap scheduling fix is commit `84a81e40`, but a fresh
+`git fetch origin main` on 2026-07-22 still resolves authoritative
+`origin/main` to `5c4950f16bd9ce7cb7d96ab9b67e24efb61ed3a6`.  Consequently the exact
+authoritative source has not changed since job `5047497`, and rebuilding or
+submitting from it would reproduce the known-bad foreground scheduling rather
+than validate the fix.  The exact-source admission gate therefore remains
+fail-closed: no replacement, duplicate, later serial phase, or job larger than
+two nodes was submitted.
+
+This checkpoint conforms to Compute Pool R10/R13/R14/R16 and native data plane
+NDP02/NDP03/NDP13/NDP16/NDP17 by preserving pushed-source identity,
+single-allocation admission, and fail-closed bundle/runtime attestation.  The
+live criteria in R04/R06/R07/R11/R12/R14/R16 and
+NDP10/NDP13/NDP15/NDP16/NDP17 remain incomplete until `84a81e40` (or its
+reviewed equivalent) is merged and pushed to authoritative main, after which
+exact-source G2 must be refreshed and exactly one two-node replacement may be
+submitted from the new identity.
+
 ## Telemetry-harvest-fix retry (terminal harvest)
 
 Slurm records the sole final replacement, job `5047497`, as terminal
