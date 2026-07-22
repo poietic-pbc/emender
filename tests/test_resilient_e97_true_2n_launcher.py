@@ -1256,3 +1256,33 @@ def test_exact_renderer_binds_production_delayed_scheduler_marker(tmp_path):
     assert "result_delay=1" in source
     assert '"schema": "emender-production-delayed-pipeline-v1"' in source
     assert '"implementation": (' in source
+
+
+def test_exact_rendered_production_role_starts_g1_without_g0_quorum_permission():
+    """Regression: production role, not an abstraction-only fixture, overlaps."""
+    from scripts.frontier import render_resilient_e97_exact_2n_acceptance as renderer
+    from scripts.frontier import resilient_e97_role as role
+
+    batch = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
+    assert renderer.build_plan.__module__.endswith(
+        "render_resilient_e97_exact_2n_acceptance")
+    assert 'ROLE="$REPO/scripts/frontier/resilient_e97_role.py"' in batch
+
+    background_started = threading.Event()
+    background_release = threading.Event()
+    scheduler, events = role.production_overlap_probe(
+        background_release=background_release,
+        background_started=background_started)
+    try:
+        k40 = next(event for event in events if event.phase == "k40_start")
+        quorum = next(event for event in events
+                      if event.phase == "discovery_membership_quorum_start")
+        assert quorum.monotonic_ns < k40.monotonic_ns
+        assert not any(event.phase == "checkpoint_publication" for event in events)
+        background_release.set()
+    finally:
+        background_release.set()
+        scheduler.close()
+    publication = next(event for event in events
+                       if event.phase == "checkpoint_publication")
+    assert k40.monotonic_ns < publication.monotonic_ns
