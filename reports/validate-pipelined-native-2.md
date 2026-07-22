@@ -4,6 +4,37 @@ Date: 2026-07-20
 Task: `validate-pipelined-native-2`  
 Result: **telemetry-fix exact-source G2 passed; final two-node clean phase failed the live overlap gate**
 
+## Final overlap-scheduler retry (exact-source G2 pending, 2026-07-22)
+
+The prior admission blocker is cleared.  A fresh fetch resolves authoritative
+`origin/main` to `32fd9ab15c6908827d094b21ff638f8ec2a24c2b`; reviewed overlap
+scheduler commit `84a81e40` is an ancestor.  A new clean `main` clone at
+`/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-overlap-final-20260722T091500Z/source`
+matches that pushed identity exactly.  Under the canonical Frontier
+environment its clean native build passed CTest 10/10, and the focused exact
+two-node renderer/performance suite passed 11/11.  The recorded native bundle
+SHA-256 is
+`59fa632b98999e522be6fee3cda98d095a0fc4c85b0b3a95286b0eb61c19fa6d`;
+the build-manifest SHA-256 is
+`a88fda81badfed62ce82eacf9df82e3b0067b945ca5dd14c31637742b8f36535`.
+
+Because the exact source changed, the old G2 artifact is telemetry only and
+cannot attest this bundle.  Immediately after an empty per-user queue check,
+the canonical fail-closed G2 launcher submitted job `5050569` for exactly two
+nodes.  At 2026-07-22 05:12 EDT it is the sole user job and remains
+`PENDING (Priority)`, with zero elapsed time, no assigned nodes, and no start
+estimate.  No K40 replacement, duplicate, later serial phase, or job larger
+than two nodes has been submitted.  Terminal G2 correctness/integrity success
+and another empty-queue check are required before exactly one final K40
+replacement can be admitted.
+
+This checkpoint conforms to *Resilient DiLoCo Compute Pool* v1
+R10/R13/R14/R16 and native data plane NDP02/NDP03/NDP13/NDP16/NDP17:
+authoritative identity and bundle provenance are exact, admission is serialized,
+and the production gate remains fail-closed.  Live R04/R06/R07/R11/R12/R14/R16
+and NDP10/NDP13/NDP15/NDP16/NDP17 evidence remains pending rather than inferred
+from scheduler state.
+
 ## Overlap-scheduler-fix admission checkpoint (2026-07-22)
 
 The retained sole final job `5047497` remains terminal `FAILED 1:0`; a fresh
