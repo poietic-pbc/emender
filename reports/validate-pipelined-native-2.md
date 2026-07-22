@@ -21,12 +21,20 @@ the build-manifest SHA-256 is
 Because the exact source changed, the old G2 artifact is telemetry only and
 cannot attest this bundle.  Immediately after an empty per-user queue check,
 the canonical fail-closed G2 launcher submitted job `5050569` for exactly two
-nodes.  At 2026-07-22 05:12 EDT it is the sole user job and remains
-`PENDING (Priority)`, with zero elapsed time, no assigned nodes, and no start
-estimate.  No K40 replacement, duplicate, later serial phase, or job larger
-than two nodes has been submitted.  Terminal G2 correctness/integrity success
-and another empty-queue check are required before exactly one final K40
-replacement can be admitted.
+nodes.  It reached terminal `FAILED 66:0` after eight seconds, before source
+validation or dataplane execution, because the fresh clone has no clone-local
+Python environment and the canonical shared interpreter had not been passed
+as `NDP_PYTHON_BIN`.  Its stdout/stderr are preserved beneath
+`g2-artifacts/5050569/`.
+
+After that job was terminal and the user queue was empty again, the same
+exact-source launcher was corrected with the explicit canonical Python path
+and submitted job `5050571` for exactly two nodes.  At 2026-07-22 05:13 EDT it
+is the sole user job and remains `PENDING (Priority)`, with zero elapsed time
+and no assigned nodes.  No K40 replacement, active duplicate, later serial
+phase, or job larger than two nodes has been submitted.  Terminal G2
+correctness/integrity success and another empty-queue check are required before
+exactly one final K40 replacement can be admitted.
 
 This checkpoint conforms to *Resilient DiLoCo Compute Pool* v1
 R10/R13/R14/R16 and native data plane NDP02/NDP03/NDP13/NDP16/NDP17:
