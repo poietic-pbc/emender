@@ -97,7 +97,7 @@ def promotion(s, **overrides):
         "generations_completed":[0,1,2],"merges_completed":3,
         "accepted_updates_per_generation":16,"aggregate_bytes_per_generation":5506770496,
         "aggregate_bucket_count":80,"max_rss_kib":61159724,"host_oom":False,
-        "cross_node_path_failure":False,"latest_checkpoint_step":1525120,
+        "cross_node_path_failure":False,"latest_checkpoint_step":SEED["step"]+120,
         "latest_checkpoint_generation":2,"latest_checkpoint_reload":"pass",
         "stable_seed_pointer_unchanged":True,"production_submitted":False,
         "larger_smoke_submitted":False,"production_paused":True,
