@@ -33,11 +33,15 @@ class GenerationIdentity:
     incarnation: str
     layout_digest: str
     base_digest: str
+    source_id: str = "local"
+    route_id: str = "native"
+    lease_id: str = "allocation"
 
     def validate(self) -> None:
         if (not self.run_id or not self.incarnation or self.fence <= 0
                 or self.generation < 0 or self.attempt <= 0
-                or len(self.layout_digest) != 64 or len(self.base_digest) != 64):
+                or len(self.layout_digest) != 64 or len(self.base_digest) != 64
+                or not self.source_id or not self.route_id or not self.lease_id):
             raise ValueError("invalid pipelined generation identity")
 
 
@@ -80,6 +84,145 @@ class PipelineMetrics:
     foreground_wait_ns: int = 0
     handoff_high_water: int = 0
     result_high_water: int = 0
+    backpressure_events: int = 0
+    dropped_handoffs: int = 0
+
+
+@dataclass(frozen=True)
+class PipelineEvent:
+    monotonic_ns: int
+    generation: int
+    phase: str
+    identity: GenerationIdentity
+    details: dict[str, object]
+
+
+@dataclass(frozen=True)
+class BackgroundWork(Generic[T]):
+    """Immutable work captured at a K boundary.
+
+    ``run`` owns collection through durable checkpoint publication.  It must
+    return only a completely published result; an exception is non-
+    participation for that round and never poisons the foreground thread.
+    """
+    identity: GenerationIdentity
+    payload: T
+    run: Callable[[T, Callable[[str], None]], CommittedResult[T] | None]
+
+
+class LiveNativeGenerationScheduler(Generic[T]):
+    """One-worker, latest-only native generation scheduler.
+
+    The training thread performs only an immutable snapshot and ``enqueue``.
+    Native collection/reduce/scan/redistribution/checkpoint work executes on
+    the service thread.  At most one queued item and one running item exist.
+    When the queue is occupied a newer generation replaces it; when the
+    configured safety policy requires backpressure, the wait is deadline
+    bounded and reported in both metrics and telemetry.
+    """
+
+    BACKGROUND_PHASES = ("collection", "reduction", "integrity_scan",
+                         "redistribution", "checkpoint_publication")
+
+    def __init__(self, pipeline: "NativeGenerationPipeline[T]", *,
+                 telemetry: Callable[[PipelineEvent], None] | None = None):
+        self.pipeline = pipeline
+        self._telemetry = telemetry or (lambda event: None)
+        self._condition = threading.Condition()
+        self._queued: BackgroundWork[T] | None = None
+        self._running: BackgroundWork[T] | None = None
+        self._closed = False
+        self._thread = threading.Thread(target=self._service_loop,
+                                        name="native-generation-service", daemon=True)
+        self._thread.start()
+
+    def event(self, identity: GenerationIdentity, phase: str, **details: object) -> None:
+        self._telemetry(PipelineEvent(time.monotonic_ns(), identity.generation,
+                                      phase, identity, details))
+
+    def enqueue(self, work: BackgroundWork[T], *, deadline: float | None = None,
+                require_backpressure: bool = False) -> bool:
+        work.identity.validate()
+        if (work.identity.run_id, work.identity.fence, work.identity.incarnation) != (
+                self.pipeline.run_id, self.pipeline.fence, self.pipeline.incarnation):
+            raise ValueError("background work belongs to an obsolete identity")
+        started = time.monotonic_ns()
+        with self._condition:
+            while require_backpressure and self._queued is not None:
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    self.pipeline._increment_metric("backpressure_events")
+                    self.event(work.identity, "backpressure_timeout",
+                               waited_ns=time.monotonic_ns() - started)
+                    return False
+                self._condition.wait(remaining)
+            if self._closed:
+                raise RuntimeError("scheduler is closed")
+            old = self._queued
+            if old is not None:
+                if work.identity.generation <= old.identity.generation:
+                    self.pipeline._increment_metric("dropped_handoffs")
+                    self.event(work.identity, "enqueue_rejected_stale")
+                    return False
+                self.pipeline._increment_metric("handoff_replacements")
+                self.pipeline._increment_metric("dropped_handoffs")
+                self.event(old.identity, "enqueue_replaced",
+                           replacement_generation=work.identity.generation)
+            self._queued = work
+            self.event(work.identity, "enqueue", queue_depth=1)
+            self._condition.notify_all()
+            return True
+
+    def apply_at_safe_boundary(self, identity: GenerationIdentity, *,
+                               apply: Callable[[CommittedResult[T]], None]) -> bool:
+        value = self.pipeline.take_at_boundary(
+            trainer_generation=identity.generation, fence=identity.fence,
+            incarnation=identity.incarnation, base_digest=identity.base_digest)
+        if value is None:
+            return False
+        apply(value)
+        self.event(identity, "safe_boundary_apply",
+                   source_generation=value.identity.generation,
+                   result_digest=value.result_digest)
+        return True
+
+    def close(self, *, drain: bool = True, timeout: float = 30.0) -> None:
+        with self._condition:
+            self._closed = True
+            if not drain:
+                self._queued = None
+            self._condition.notify_all()
+        self._thread.join(timeout)
+        if self._thread.is_alive():
+            raise TimeoutError("native generation service did not stop within bound")
+
+    def _service_loop(self) -> None:
+        while True:
+            with self._condition:
+                while self._queued is None and not self._closed:
+                    self._condition.wait()
+                if self._queued is None and self._closed:
+                    return
+                work, self._queued = self._queued, None
+                self._running = work
+                self._condition.notify_all()
+            assert work is not None
+            try:
+                result = work.run(work.payload,
+                                  lambda phase: self.event(work.identity, phase))
+                if result is not None and self.pipeline.publish_committed(
+                        result, verify=finite_result_verifier):
+                    self.event(work.identity, "accepted_result_ready",
+                               result_digest=result.result_digest)
+                elif result is not None:
+                    self.event(work.identity, "accepted_result_rejected")
+            except Exception as error:  # round failure is non-participation
+                self.event(work.identity, "background_failed",
+                           error=type(error).__name__)
+            finally:
+                with self._condition:
+                    self._running = None
+                    self._condition.notify_all()
 
 
 class NativeGenerationPipeline(Generic[T]):
@@ -231,6 +374,14 @@ class NativeGenerationPipeline(Generic[T]):
         with self._condition:
             self._closed = True
             self._condition.notify_all()
+
+    def _increment_metric(self, name: str) -> None:
+        """Internal atomic counter shared with the scheduler policy layer."""
+        with self._condition:
+            if name not in PipelineMetrics.__dataclass_fields__:
+                raise ValueError(f"unknown pipeline metric {name}")
+            self._metrics = replace(
+                self._metrics, **{name: getattr(self._metrics, name) + 1})
 
     def _require_slot(self, slot: int, expected: SlotState) -> None:
         if slot not in (0, 1) or self._states[slot] is not expected:
