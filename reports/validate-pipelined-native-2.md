@@ -2,7 +2,41 @@
 
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
-Result: **telemetry-fix exact-source G2 passed; final two-node clean phase failed the live overlap gate**
+Result: **final production-entrypoint exact-source G2 refresh running; K40 replacement withheld pending its terminal pass**
+
+## Production-entrypoint/rank-containment retry (G2 running, 2026-07-22)
+
+Authoritative `origin/main` now resolves to
+`53441395245af7fbe767c2e25cc3ad379db07b0e`, which contains the reviewed
+production overlap entrypoint and rank-level trainer-failure containment
+merges.  This is newer than the source of terminal job `5050642`, so its G2
+artifact is historical telemetry and cannot attest the replacement bundle.
+
+A fresh clean `main` clone at
+`/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-final-20260722T180000Z/source`
+matches fetched `origin/main` exactly.  The canonical Frontier GNU/ROCm
+environment rebuilt the native bundle from that source; CTest passed 10/10.
+The build manifest SHA-256 is
+`33693b338d664e380174beac23f59f168f94ea115acd1709e1a43503472490e3`, and
+the recorded bundle SHA-256 is
+`59fa632b98999e522be6fee3cda98d095a0fc4c85b0b3a95286b0eb61c19fa6d`.
+
+An adjacent per-user queue check was empty.  The canonical fail-closed G2
+launcher then submitted exactly one job, `5053588`, requesting exactly two
+nodes and 20 minutes.  The first observed state was `PENDING (Priority)`; it
+subsequently began running on `frontier[04040,04042]`.  No K40 replacement,
+duplicate, later serial phase, or job larger than two nodes has been
+submitted.  The K40 acceptance remains withheld until this exact-source G2
+correctness/integrity job reaches terminal success and its full-layout gate
+is harvested.
+
+Conformance was checked against *Resilient DiLoCo Compute Pool* v1 R01-R16
+and *Native resilient DiLoCo data plane* v1 NDP01-NDP17.  This checkpoint
+specifically preserves exact pushed identity, collective-free two-node
+admission, bounded execution, and fail-closed predecessor ordering required
+by R10/R13/R14/R16 and NDP02/NDP03/NDP13/NDP16/NDP17.  Live overlap,
+resilience, rejection, checkpoint-failure, and restart claims remain pending
+rather than inferred from scheduler admission.
 
 ## Final overlap-scheduler retry (terminal harvest, 2026-07-22)
 
