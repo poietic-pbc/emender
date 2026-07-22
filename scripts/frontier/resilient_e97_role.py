@@ -77,7 +77,8 @@ from ndm.native_e97_runtime import (
 )
 from ndm.native_pool_runtime import NativeManagerSession
 from ndm.native_pipeline import (
-    CommittedResult, GenerationIdentity, NativeGenerationPipeline,
+    CommittedResult, GenerationIdentity,
+    LiveNativeGenerationScheduler, NativeGenerationPipeline,
     finite_result_verifier,
 )
 from ndm.resilient_e97_reducer import TensorLayout
@@ -2186,6 +2187,26 @@ def trainer(args) -> int:
     pipeline = (NativeGenerationPipeline(
         run_id=args.run_id, fence=_fence_epoch(args),
         incarnation=trainer_incarnation) if native else None)
+    scheduler_events = []
+    scheduler = (LiveNativeGenerationScheduler(
+        pipeline, telemetry=scheduler_events.append, result_delay=1)
+        if native else None)
+    if native:
+        # This marker is deliberately emitted by the real trainer entrypoint,
+        # after native attestation and state restoration.  Renderer regressions
+        # assert it so a test cannot accidentally exercise only the policy
+        # abstraction in ndm.native_pipeline.
+        atomic_metadata(control / f"production-pipeline-{identity}.json", {
+            "schema": "emender-production-delayed-pipeline-v1",
+            "implementation": (
+                "ndm.native_pipeline.LiveNativeGenerationScheduler"),
+            "result_delay_generations": 1,
+            "role_source": str(Path(__file__).resolve()),
+            "code_id": args.code_id,
+            "run_id": args.run_id,
+            "fence_epoch": _fence_epoch(args),
+            "identity": identity,
+        })
     for generation in range(start_generation, target_generation):
         # This timestamp belongs to the trainer generation lifecycle, not to
         # any individual data-plane stage.  Initialize it at the sole loop
@@ -2253,6 +2274,13 @@ def trainer(args) -> int:
                 with phase_log.open("a", encoding="utf-8") as stream:
                     stream.write(json.dumps(record, sort_keys=True) + "\n")
                     stream.flush()
+                if scheduler is not None and phase in {"training_start", "training_end"}:
+                    scheduler.event(GenerationIdentity(
+                        args.run_id, _fence_epoch(args), generation,
+                        native_plane.metadata.attempt, trainer_incarnation,
+                        native_plane.metadata.layout_digest,
+                        native_plane.metadata.base_digest),
+                        "k40_start" if phase == "training_start" else "k40_end")
                 heartbeat(
                     bulk, identity, generation=generation,
                     step=int(details.get("step", step)),
@@ -2578,6 +2606,8 @@ def trainer(args) -> int:
                     "accepted_tokens": accepted_token_clock,
                 })
         heartbeat(bulk, identity, generation=generation + 1, step=step, loss=loss, stage="applied")
+    if scheduler is not None:
+        scheduler.close()
     return 0
 
 

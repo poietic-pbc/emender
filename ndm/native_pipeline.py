@@ -125,8 +125,12 @@ class LiveNativeGenerationScheduler(Generic[T]):
                          "redistribution", "checkpoint_publication")
 
     def __init__(self, pipeline: "NativeGenerationPipeline[T]", *,
-                 telemetry: Callable[[PipelineEvent], None] | None = None):
+                 telemetry: Callable[[PipelineEvent], None] | None = None,
+                 result_delay: int = 0):
+        if result_delay not in (0, 1):
+            raise ValueError("native result delay must be zero or one generation")
         self.pipeline = pipeline
+        self.result_delay = result_delay
         self._telemetry = telemetry or (lambda event: None)
         self._condition = threading.Condition()
         self._queued: BackgroundWork[T] | None = None
@@ -176,13 +180,15 @@ class LiveNativeGenerationScheduler(Generic[T]):
     def apply_at_safe_boundary(self, identity: GenerationIdentity, *,
                                apply: Callable[[CommittedResult[T]], None]) -> bool:
         value = self.pipeline.take_at_boundary(
-            trainer_generation=identity.generation, fence=identity.fence,
+            trainer_generation=identity.generation - self.result_delay,
+            boundary_generation=identity.generation, fence=identity.fence,
             incarnation=identity.incarnation, base_digest=identity.base_digest)
         if value is None:
             return False
         apply(value)
         self.event(identity, "safe_boundary_apply",
                    source_generation=value.identity.generation,
+                   result_delay=self.result_delay,
                    result_digest=value.result_digest)
         return True
 
@@ -339,8 +345,13 @@ class NativeGenerationPipeline(Generic[T]):
             return True
 
     def take_at_boundary(self, *, trainer_generation: int, fence: int,
+                         boundary_generation: int | None = None,
                          incarnation: str, base_digest: str) -> CommittedResult[T] | None:
         """Return the newest admissible result without waiting for control work."""
+        if boundary_generation is None:
+            boundary_generation = trainer_generation
+        if boundary_generation < trainer_generation:
+            raise ValueError("safe boundary cannot precede the result generation")
         with self._condition:
             value = self._mailbox
             if value is None:
