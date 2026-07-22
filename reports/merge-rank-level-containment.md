@@ -24,6 +24,13 @@ of the evaluated `implement-rank-level` branch (implementation tip
 `70ea99fd`).  The other merge parent is exactly the fetched old `origin/main`.
 The merge completed without a content conflict.
 
+The first authoritative push advanced `origin/main` from the old main to
+`0e560003a40acb85be82e38b3b3b271d48fade48` (the reconciliation merge plus this
+integration report).  A fetch, both ancestry checks, and
+`git ls-remote origin refs/heads/main` independently returned that exact SHA.
+The final documentation-only addendum that records this observation is a
+descendant of that verified integration point and does not alter runtime code.
+
 ## Failure-domain behavior
 
 The topology and supervisor tests prove that a single trainer/GPU process can
