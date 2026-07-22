@@ -2,7 +2,7 @@
 
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
-Result: **manager-freeze-fix exact-source G2 refresh submitted; K40 replacement withheld pending terminal pass**
+Result: **manager-freeze-fix exact-source G2 passed; sole K40 replacement 5055899 pending terminal pass**
 
 ## Manager-freeze convergence retry (K40 submitted, 2026-07-22)
 
@@ -39,6 +39,13 @@ K40 generations, and the two-hour debug bound.  Its first observed state is
 `PENDING (Priority)`.  No duplicate, later serial phase, or job larger than
 two nodes was submitted.  Live overlap, resilience, rejection, and restart
 claims remain withheld pending terminal evidence.
+
+At the 2026-07-22 19:10 EDT resume checkpoint, both `squeue` and `sacct`
+still recorded `5055899` as the sole equivalent job: `PENDING (Priority)`,
+zero elapsed, two requested nodes, no assigned nodes, and a two-hour limit.
+Slurm's current estimate was 20:40 EDT.  This ordinary priority wait does not
+authorize a duplicate, so monitoring continues against this same job and no
+submission command was issued during the checkpoint.
 
 Conformance was checked against *Resilient DiLoCo Compute Pool* v1 R01-R16
 and *Native resilient DiLoCo data plane* v1 NDP01-NDP17.  This checkpoint
