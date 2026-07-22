@@ -146,12 +146,18 @@ class Child:
     process: subprocess.Popen | None = None
     restarts: int = 0
     started_at: float | None = None
+    incarnation: str = ""
 
     @property
     def identity(self) -> str:
         suffix = (self.role if self.local_rank is None
                   else f"trainer-{self.local_rank}")
         return f"node-{self.node_rank}-{suffix}"
+
+    @property
+    def global_rank(self) -> int | None:
+        return (None if self.role != "trainer" or self.local_rank is None else
+                self.node_rank * TRAINERS_PER_NODE + self.local_rank)
 
 
 def _retain_node_evidence(run_dir: Path, *, bulk_root: Path, run_id: str,
@@ -264,13 +270,16 @@ class AllocationSupervisor:
     def _event(self, event: str, child: Child, **extra: object) -> None:
         record = {"time": time.time(), "event": event, "identity": child.identity,
                   "role": child.role, "node_rank": child.node_rank,
-                  "local_rank": child.local_rank, **extra}
+                  "local_rank": child.local_rank, "global_rank": child.global_rank,
+                  "process_incarnation": child.incarnation, **extra}
         with (self.run_dir / "supervision" / "events.jsonl").open("a") as stream:
             stream.write(json.dumps(record, sort_keys=True) + "\n")
 
     def start(self, child: Child) -> None:
+        child.incarnation = uuid.uuid4().hex
         role_values = {"RESILIENT_E97_ROLE": child.role,
                        "RESILIENT_E97_NODE_RANK": str(child.node_rank),
+                       "RESILIENT_E97_PROCESS_INCARNATION": child.incarnation,
                        "RUN_DIR": str(self.run_dir)}
         role_env = [f"{key}={value}" for key, value in role_values.items()]
         if child.role in {"manager", "native-service"}:
@@ -285,6 +294,7 @@ class AllocationSupervisor:
             role_env += [f"RESILIENT_E97_LOCAL_RANK={child.local_rank}",
                          "ASYNC_LOCAL_STEPS=40"]
             role_values.update({"RESILIENT_E97_LOCAL_RANK": str(child.local_rank),
+                                "RESILIENT_E97_GLOBAL_RANK": str(child.global_rank),
                                 "ASYNC_LOCAL_STEPS": "40",
                                 "ROCR_VISIBLE_DEVICES": str(child.local_rank)})
             # Eight cold E97 trainers sharing the default home-directory
@@ -662,6 +672,15 @@ class AllocationSupervisor:
                 self.stop_child(child, reason)
                 if child.restarts >= self.max_restarts:
                     self._event("restart_exhausted", child, reason=reason)
+                    if child.role == "trainer":
+                        # Rank retirement is contribution membership only.  It
+                        # must not poison its model-free manager, native
+                        # service, seven sibling ranks, or the Slurm node step.
+                        completed.add(child.identity)
+                        self._event("rank_retired", child, reason=reason,
+                                    decision="ineligible",
+                                    revocation="lease_incarnation_revoked")
+                        continue
                     return 1
                 if (child.role == "manager"
                         and not self._restart_native_service_for_manager(

@@ -98,6 +98,15 @@ def test_generation_gated_injections_are_distinct_and_one_shot(tmp_path, monkeyp
                                 "progress_time": now}))
     assert supervisor._deadline_reason(child, now) is None
     path.write_text(json.dumps({"generation": 2, "heartbeat_time": now,
-                                "progress_time": now}))
+                                "progress_time": now, "stage": "applied"}))
     assert supervisor._deadline_reason(child, now) == "injected_generation_gate"
     assert supervisor._deadline_reason(child, now) is None
+
+
+def test_exhausted_trainer_is_retired_without_retiring_manager_or_siblings():
+    source = __import__(
+        "inspect").getsource(AllocationSupervisor.run)
+    assert 'if child.role == "trainer"' in source
+    assert 'self._event("rank_retired"' in source
+    assert "completed.add(child.identity)" in source
+    assert 'revocation="lease_incarnation_revoked"' in source
