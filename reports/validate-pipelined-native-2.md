@@ -4,7 +4,7 @@ Date: 2026-07-20
 Task: `validate-pipelined-native-2`  
 Result: **manager-freeze-fix exact-source G2 refresh submitted; K40 replacement withheld pending terminal pass**
 
-## Manager-freeze convergence retry (G2 submitted, 2026-07-22)
+## Manager-freeze convergence retry (K40 submitted, 2026-07-22)
 
 The prior sole K40 job `5053690` is terminal `FAILED 1:0` after 5:52 on
 exactly two nodes.  Its retained evidence shows that all 16 trainers completed
@@ -25,11 +25,20 @@ exact build-manifest SHA-256 is
 
 An adjacent per-user scheduler query was empty.  The canonical fail-closed G2
 launcher then submitted exactly one job, `5055869`, requesting exactly two
-nodes and 20 minutes.  The prior G2 result is retained only as historical
-telemetry because the source identity changed.  No K40 replacement, duplicate,
-later serial phase, or job larger than two nodes was submitted.  The K40 gate
-remains withheld until job `5055869` reaches terminal success and its
-exact-source correctness/integrity artifact is harvested.
+nodes and 20 minutes.  It completed `0:0` in 2:57 on
+`frontier[06173,06175]`; exact-source correctness/integrity passed, and the
+retained full-layout gate SHA-256 is
+`8b44fcc12a0224b49c836afcb32689004d8e973835e844c3b8b6fbfa925c2c33`.
+The prior G2 result is retained only as historical telemetry because the
+source identity changed.
+
+After G2 was terminal and another scheduler query proved the user queue empty,
+the serial controller rebuilt and re-attested the exact source and submitted
+exactly one clean K40 replacement, job `5055899`, for exactly two nodes, five
+K40 generations, and the two-hour debug bound.  Its first observed state is
+`PENDING (Priority)`.  No duplicate, later serial phase, or job larger than
+two nodes was submitted.  Live overlap, resilience, rejection, and restart
+claims remain withheld pending terminal evidence.
 
 Conformance was checked against *Resilient DiLoCo Compute Pool* v1 R01-R16
 and *Native resilient DiLoCo data plane* v1 NDP01-NDP17.  This checkpoint
