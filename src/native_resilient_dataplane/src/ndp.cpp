@@ -1543,7 +1543,13 @@ int Service::control(ndp_client_t handle, const struct ndp_control_v1* input,
     if (input->generation != generation_ || input->attempt != attempt_)
         return NDP_ESTALE;
     if (input->command == NDP_CONTROL_FREEZE) {
-        if (state_ == NDP_STATE_FROZEN && freeze_operation_) {
+        // FREEZE establishes an immutable boundary.  A peer may retry the
+        // same fenced command after this manager has already projected or
+        // committed the result; returning the original operation is the only
+        // monotonic answer.  Re-running reduction (or reporting ESTATE) here
+        // lets asymmetric control scheduling split otherwise identical peers.
+        if ((state_ == NDP_STATE_FROZEN || state_ == NDP_STATE_RESULT_READY
+             || state_ == NDP_STATE_COMMITTED) && freeze_operation_) {
             *output = freeze_operation_->handle;
             return NDP_OK;
         }

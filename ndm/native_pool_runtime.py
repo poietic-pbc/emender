@@ -502,8 +502,13 @@ class NativeManagerSession:
 
     def freeze(self, *, deadline_s: float = 30.0) -> Operation:
         """Execute Python's immutable accepted-set decision in native memory."""
-        if not self._generation_installed or self._frozen:
+        if not self._generation_installed:
             raise RuntimeError("native contribution set cannot be frozen")
+        # Native FREEZE is identity-fenced and idempotent, including after the
+        # lifecycle has advanced to RESULT_READY/COMMITTED.  Always let the
+        # service return its established operation for a retry; a Python-only
+        # `_frozen` rejection previously turned harmless reordered control
+        # traffic into asymmetric manager failure.
         operation = self.local.control(Command.FREEZE, deadline_s=deadline_s)
         self._frozen = True
         return operation
