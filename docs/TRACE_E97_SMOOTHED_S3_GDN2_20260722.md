@@ -10,6 +10,7 @@ run. Runtime files, processes, training state, and S3 objects were not changed.
 ## Sources inspected
 
 - `docs/GDN2_MLP_DILOCO_HANDOFF_20260711.md`
+- `docs/EMENDER_DILOCO_OPS_HANDOFF_20260722.md`
 - `docs/E97_LOSS_INFO_FIGURE_20260629_0735.md`
 - `docs/E97_LOSS_CURVE_BPB_REFRESH_20260630_0755.md`
 - `scripts/plot_e97_diloco_loss.py`
@@ -27,7 +28,20 @@ Verified plot script:
 scripts/plot_e97_diloco_loss.py
 ```
 
-Verified documented refresh command:
+Verified documented refresh command from the current ops handoff:
+
+```bash
+cd /home/erikg/ndm
+RUN_ROOT=/mnt/nvme1n1/erikg/diloco_8gpu/emender
+PLOT=/tmp/e97_diloco_loss_curve_20260623.png
+OUT=/tmp/e97_diloco_loss_curve_20260623.refresh.txt
+
+python scripts/plot_e97_diloco_loss.py \
+  --run-root "$RUN_ROOT" \
+  --output "$PLOT" | tee "$OUT"
+```
+
+Older documented/local default output command:
 
 ```bash
 python scripts/plot_e97_diloco_loss.py \
@@ -54,8 +68,20 @@ No live plot updater was visible by read-only inspection. Searches of process
 state, user cron, user systemd units/timers, and tmux sessions found no
 `plot_e97_diloco_loss.py`, matplotlib, E97 plot, GDN2 plot, or related running
 service. The local PNG mtime is stale relative to the final E97 checkpoint, so
-the current visible mechanism is manual refresh by running the script, not an
-active service that keeps the artifact current.
+the current visible mechanism is operator refresh by running the script, not an
+active service that keeps the artifact current. This matches
+`docs/EMENDER_DILOCO_OPS_HANDOFF_20260722.md`: it documents a status/refresh
+protocol to run when the human asks for status or plot update, not a required
+daemon.
+
+The documented hosted publish step is also operator-run:
+
+```bash
+scp "$PLOT" erik@hypervolu.me:www/emender/e97_diloco_loss_curve_20260623.png
+```
+
+The documented verification is SHA comparison across local PNG, SSH target, and
+HTTP download plus an HTTP header check for `200` and `image/png`.
 
 ### Plot Inputs
 
@@ -189,6 +215,10 @@ log:
   /mnt/nvme1n1/erikg/diloco_8gpu/gdn2_mlp/run.log
 run directory:
   /mnt/nvme1n1/erikg/diloco_8gpu/gdn2_mlp/runs/gdn2_gdn2-mlp_1.3B_20260722_083444
+local checkpoints visible by read-only listing at 2026-07-22T09:08Z:
+  checkpoint_step_000500_loss_5.8263.pt
+  checkpoint_step_001000_loss_5.3572.pt
+  checkpoint_step_001500_loss_4.9854.pt
 ```
 
 Verified launch source:
@@ -207,17 +237,17 @@ parser compatibility, not evidence of an active plot updater. A manual read-only
 parse of the live GDN2 log at inspection time showed:
 
 ```text
-raw_points: 29
-effective_points: 29
+raw_points: 77
+effective_points: 77
+superseded_points: 0
 avg_window: 5
-latest_step: 725
-latest_loss: 5.4976
-latest_time: 2026-07-22T08:47:42+00:00
-smoothed_loss: 5.517080
+latest_step: 1925
+latest_loss: 4.7270
+latest_time: 2026-07-22T09:09:14+00:00
+smoothed_loss: 4.722640
 tokens_per_step: 65536
-latest_tokens: 47513600
-checkpoint_count: 1
-latest_checkpoint_step: 500
+latest_tokens: 126156800
+checkpoint_steps: 500, 1000, 1500
 ```
 
 Those values are a point-in-time observation and will be stale as the live run
@@ -228,7 +258,15 @@ continues.
 No persistent repository upload script, launcher hook, cron job, systemd unit,
 tmux session, or running upload daemon was found for E97 checkpoint uploads.
 Searches of launch/supervisor/train scripts showed no `aws s3`, `boto3`, or
-S3 upload integration in the training path.
+S3 upload integration in the training path. The current visible source of truth
+is `docs/EMENDER_DILOCO_OPS_HANDOFF_20260722.md`, which documents an
+operator-run upload protocol rather than a daemon or supervisor hook.
+
+Verified documented local checkpoint source for final E97:
+
+```text
+/mnt/nvme1n1/erikg/diloco_8gpu/emender/runs/emender_E97_1.3B_20260709_084606/checkpoint_step_2300930_loss_2.4365.pt
+```
 
 Verified bucket and run prefix:
 
@@ -240,12 +278,45 @@ latest pointer:
   emender/e97-diloco/latest_emender_E97_1.3B.json
 ```
 
+Documented upload selection and trigger:
+
+```text
+select exactly one intended checkpoint by numeric step;
+ignore temporary/incomplete files;
+verify plausible nonzero size and completed local sha256sum;
+upload only when requested/confirmed for sharing;
+do not use aws s3 sync from the whole run directory.
+```
+
+Documented upload command shape:
+
+```bash
+aws s3 cp "$CKPT" "${S3_PREFIX}/$(basename "$CKPT")" --sse AES256
+aws s3 cp "$META_DIR/" "$S3_PREFIX/" --recursive --sse AES256
+aws s3 cp "$META_DIR/latest_emender_E97_1.3B.json" \
+  s3://spinozans/emender/e97-diloco/latest_emender_E97_1.3B.json \
+  --sse AES256
+```
+
+The metadata bundle is generated under `/tmp/${RUN_NAME}_step_${STEP}_s3_meta`
+and includes sidecar SHA files, `args.json`, `run_manifest.json`,
+`supervisor.log` if present, `latest_symlink_target.txt`, a process snapshot,
+`run_log_tail_1000.txt`, `manifest.json`, `metadata_files.sha256`, and the
+top-level latest pointer JSON.
+
+Cadence/trigger is manual/operator milestone upload. Retry/synchronization
+behavior visible in the protocol is AWS CLI `cp`, including its multipart
+behavior for large files, plus explicit post-upload verification. There is no
+documented loop, daemon, retry supervisor, or periodic sync job, and read-only
+process/scheduler checks found none.
+
 Verified current final remote checkpoint metadata:
 
 ```json
 {
   "ContentLength": 7719680116,
   "LastModified": "2026-07-22T08:03:56+00:00",
+  "ServerSideEncryption": "AES256",
   "ETag": "\"f3f88f4a11fad751ee203baa5c10822f-116\""
 }
 ```
@@ -301,9 +372,13 @@ Verified first live GDN2 checkpoint at inspection time:
 
 No upload configuration for GDN2 was found in
 `scripts/launch_gdn2_mlp_8gpu_diloco.sh`, the live command line, process state,
-cron, or user systemd. Bounded read-only S3 prefix checks for
-`emender/gdn2`, `emender/gdn2_mlp`, and `emender/gdn2-mlp` returned no keys.
-A bounded top-level delimiter listing under `emender/` returned only:
+tmux panes, cron, or user systemd. The ops handoff maps to GDN2 only as a
+procedure an operator could intentionally adapt after selecting a stable GDN2
+checkpoint; it does not configure the currently running GDN2 control to upload.
+Bounded read-only S3 prefix checks for `emender/gdn2` returned `null`, and a
+bounded query for GDN2-named keys under `emender/` returned an empty list.
+A bounded top-level delimiter listing under `emender/` returned only the E97
+lineage:
 
 ```text
 emender/e97-diloco/
@@ -341,16 +416,10 @@ python - <<'PY'
 from pathlib import Path
 import scripts.plot_e97_diloco_loss as p
 root = Path('/mnt/nvme1n1/erikg/diloco_8gpu/emender')
-records = []
-resumes = []
-saved = []
-order = 0
-for log in sorted(root.glob('run*.log'), key=lambda x: (x.stat().st_mtime, x.name)):
-    rs, rr, ss = p.parse_log(log, order)
-    records.extend(rs); resumes.extend(rr); saved.extend(ss)
-    order += len(rs) + len(rr) + len(ss) + 1
+logs = sorted(root.glob('run*.log'), key=lambda x: (x.stat().st_mtime, x.name))
+records, resumes, saved = p.parse_logs(logs)
 kept, superseded = p.effective_lineage(records)
-window = min(80, max(5, len(kept) // 40)) if kept else 0
+window = p.smoothing_window(len(kept)) if kept else 0
 smoothed = p.moving_average([r.loss for r in kept], window) if kept else []
 latest = kept[-1]
 print('raw_points', len(records))
@@ -360,7 +429,35 @@ print('resume_steps', sorted({r.step for r in resumes}))
 print('avg_window', window)
 print('latest_step', latest.step)
 print('latest_raw_loss', latest.loss)
-print('latest_time', latest.time)
+print('latest_time', latest.timestamp.isoformat())
+print('smoothed_loss', smoothed[-1])
+print('tokens_per_step', 4 * 2048 * 8)
+print('latest_tokens', latest.step * 4 * 2048 * 8)
+PY
+```
+
+Recompute the same current summary for the live GDN2 log without writing a
+plot:
+
+```bash
+python - <<'PY'
+from pathlib import Path
+import scripts.plot_e97_diloco_loss as p
+root = Path('/mnt/nvme1n1/erikg/diloco_8gpu/gdn2_mlp')
+logs = sorted(root.glob('run*.log'), key=lambda x: (x.stat().st_mtime, x.name))
+records, resumes, saved = p.parse_logs(logs)
+kept, superseded = p.effective_lineage(records)
+window = p.smoothing_window(len(kept)) if kept else 0
+smoothed = p.moving_average([r.loss for r in kept], window) if kept else []
+latest = kept[-1]
+print('raw_points', len(records))
+print('effective_points', len(kept))
+print('superseded_points', len(superseded))
+print('checkpoint_steps', sorted({c.step for c in saved + p.checkpoint_files(root)}))
+print('avg_window', window)
+print('latest_step', latest.step)
+print('latest_raw_loss', latest.loss)
+print('latest_time', latest.timestamp.isoformat())
 print('smoothed_loss', smoothed[-1])
 print('tokens_per_step', 4 * 2048 * 8)
 print('latest_tokens', latest.step * 4 * 2048 * 8)
@@ -405,7 +502,7 @@ Inspect exact metadata for the final E97 checkpoint:
 aws s3api head-object \
   --bucket spinozans \
   --key emender/e97-diloco/emender_E97_1.3B_20260709_084606/step_2300930/checkpoint_step_2300930_loss_2.4365.pt \
-  --query '{ContentLength:ContentLength,LastModified:LastModified,ETag:ETag}' \
+  --query '{ContentLength:ContentLength,LastModified:LastModified,ServerSideEncryption:ServerSideEncryption,ETag:ETag}' \
   --output json
 ```
 
