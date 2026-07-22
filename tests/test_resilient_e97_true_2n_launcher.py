@@ -1253,5 +1253,6 @@ def test_exact_renderer_binds_production_delayed_scheduler_marker(tmp_path):
         ROOT / "scripts/frontier/render_resilient_e97_exact_2n_acceptance.py").read_text()
     assert 'ROLE="$REPO/scripts/frontier/resilient_e97_role.py"' in batch
     assert "LiveNativeGenerationScheduler(" in source
+    assert "result_delay=1" in source
     assert '"schema": "emender-production-delayed-pipeline-v1"' in source
     assert '"implementation": (' in source

@@ -205,3 +205,23 @@ def test_stale_duplicate_nonfinite_and_wrong_route_identity_are_rejected():
     bad = __import__("dataclasses").replace(identity(2), route_id="")
     with pytest.raises(ValueError):
         BackgroundWork(bad, 1.0, lambda *_: None).identity.validate()
+
+
+def test_production_one_generation_delay_applies_g_at_g_plus_1_boundary():
+    pipe = NativeGenerationPipeline(run_id="run", fence=7, incarnation="boot-a")
+    scheduler = LiveNativeGenerationScheduler(pipe, result_delay=1)
+    assert pipe.publish_committed(result(0), verify=finite_result_verifier)
+    applied = []
+    assert scheduler.apply_at_safe_boundary(identity(1), apply=applied.append)
+    assert [item.identity.generation for item in applied] == [0]
+    assert not scheduler.apply_at_safe_boundary(identity(1), apply=applied.append)
+    scheduler.close()
+
+
+def test_delayed_boundary_never_admits_future_or_two_generation_stale_result():
+    pipe = NativeGenerationPipeline(run_id="run", fence=7, incarnation="boot-a")
+    scheduler = LiveNativeGenerationScheduler(pipe, result_delay=1)
+    assert pipe.publish_committed(result(0), verify=finite_result_verifier)
+    assert not scheduler.apply_at_safe_boundary(identity(2), apply=lambda _: None)
+    assert pipe.metrics.stale_results == 1
+    scheduler.close()

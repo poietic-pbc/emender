@@ -2189,7 +2189,8 @@ def trainer(args) -> int:
         incarnation=trainer_incarnation) if native else None)
     scheduler_events = []
     scheduler = (LiveNativeGenerationScheduler(
-        pipeline, telemetry=scheduler_events.append) if native else None)
+        pipeline, telemetry=scheduler_events.append, result_delay=1)
+        if native else None)
     if native:
         # This marker is deliberately emitted by the real trainer entrypoint,
         # after native attestation and state restoration.  Renderer regressions
@@ -2199,6 +2200,7 @@ def trainer(args) -> int:
             "schema": "emender-production-delayed-pipeline-v1",
             "implementation": (
                 "ndm.native_pipeline.LiveNativeGenerationScheduler"),
+            "result_delay_generations": 1,
             "role_source": str(Path(__file__).resolve()),
             "code_id": args.code_id,
             "run_id": args.run_id,
