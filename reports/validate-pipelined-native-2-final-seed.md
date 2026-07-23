@@ -82,6 +82,15 @@ cluster-local estimate materially moved to `2026-07-24T06:58:00`, still more
 than 60 minutes away. No job was altered or submitted; the watch remains on
 the required 30-minute cadence.
 
+At `2026-07-23T17:45:07-04:00`, all four scheduler views continued to agree:
+job 5062348 was `PENDING (Priority)` with zero runtime, exactly two requested
+nodes, `Partition=batch`, and `QOS=debug`. The cluster-local estimated start
+materially moved to `2026-07-24T06:36:00` America/New_York, approximately
+12 hours 51 minutes after the observation and therefore well beyond the
+60-minute threshold. `scontrol -dd` retained the exact rendered script,
+source/bundle/G2 identities, immutable final-seed identity, and five-generation
+clean-overlap environment. No job was altered or submitted.
+
 ## Seed bootstrap proof
 
 The merged batch bootstrap contains no S3 URI, HTTP URL, or network-fetch
@@ -140,7 +149,7 @@ PASS (6/6)
 render_resilient_e97_exact_2n_acceptance.py ... --submit
 SUBMITTED phase=clean-overlap job_id=5062348
 squeue/sacct/scontrol: PENDING, 2 nodes, Partition=batch, QOS=debug
-squeue --start: 2026-07-24T06:58:00 America/New_York
+squeue --start: 2026-07-24T06:36:00 America/New_York
                (more than 60 minutes away)
 ```
 
