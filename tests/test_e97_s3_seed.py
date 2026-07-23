@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.frontier import materialize_e97_s3_seed as seed_materializer
 from scripts.frontier.materialize_e97_s3_seed import materialize, verify_authorities
 
 
@@ -79,10 +80,15 @@ def test_atomic_job_scoped_materialization_and_runtime_identity(tmp_path, monkey
     assert not list(destination.parent.glob("*.tmp.*"))
 
 
-def test_partial_download_is_removed_and_never_promoted(tmp_path, monkeypatch):
+@pytest.mark.parametrize("download", [
+    b"partial",
+    b"corrupt!",
+])
+def test_wrong_size_or_hash_is_removed_and_never_promoted(
+        tmp_path, monkeypatch, download):
     seed, objects = authorities(checkpoint=b"complete")
     from scripts.frontier.materialize_e97_s3_seed import https_url
-    objects[https_url(seed["uri"])] = b"partial"
+    objects[https_url(seed["uri"])] = download
     monkeypatch.setenv("SLURM_JOB_ID", "5678")
     destination = tmp_path / "5678" / "checkpoint.pt"
     with pytest.raises(ValueError, match="identity mismatch"):
@@ -102,3 +108,25 @@ def test_stale_file_non_job_path_and_legacy_path_are_rejected(tmp_path, monkeypa
     with pytest.raises(ValueError, match="SLURM_JOB_ID"):
         materialize(seed, legacy, tmp_path / "runtime.json", opener(objects))
     assert not legacy.parent.exists()
+
+
+def test_shared_filesystem_seed_destination_is_rejected_before_download(
+        tmp_path, monkeypatch):
+    seed, _ = authorities()
+    monkeypatch.setenv("SLURM_JOB_ID", "3456")
+    monkeypatch.setattr(
+        seed_materializer, "_filesystem_type", lambda _path: "lustre")
+    destination = tmp_path / "3456" / "checkpoint.pt"
+    with pytest.raises(ValueError, match="shared filesystem"):
+        materialize(
+            seed, destination, tmp_path / "runtime.json",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("shared destination must fail before S3 access")))
+    assert not destination.exists()
+
+
+def test_seed_config_loader_rejects_noncanonical_shape(tmp_path):
+    bad = tmp_path / "config.json"
+    bad.write_text(json.dumps({"seed": {**SEED, "extra": True}}))
+    with pytest.raises(ValueError, match="unknown or missing seed fields"):
+        seed_materializer.load_seed_config(bad)

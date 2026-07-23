@@ -112,6 +112,7 @@ export NDP_SERVICE_COMMAND="$NDP_SERVICE_BINARY --provider cxi --require-provide
 [[ ${SLURM_JOB_NUM_NODES:?} == "$RESILIENT_E97_NODE_COUNT" ]] || {
   echo "Slurm node count differs from explicit resilient-pool capacity" >&2; exit 64;
 }
+[[ ${SLURM_JOB_PARTITION:?} == batch ]] || { echo "requires batch partition" >&2; exit 64; }
 [[ ${SLURM_JOB_QOS:?} == debug ]] || { echo "requires debug QoS" >&2; exit 64; }
 if [[ ${RESILIENT_E97_STARTUP_SMOKE:-0} == 1 ]]; then
   # Frontier does not consistently export SLURM_TIMELIMIT into batch jobs.
@@ -150,10 +151,55 @@ RUN_DIR=${RUN_DIR:?set immutable run directory}
 : "${RESILIENT_E97_RUN_ID:?set fenced run identity}"
 : "${RESILIENT_E97_SOURCE_ID:?set verified seed/source identity}"
 : "${RESILIENT_E97_PAYLOAD_ID:?set tensor layout identity}"
-: "${RESILIENT_E97_SEED:?set verified generation-9 seed checkpoint}"
+: "${RESILIENT_E97_SEED_CONFIG:?set canonical immutable E97 seed config}"
+: "${RESILIENT_E97_SEED_STEP:?set canonical immutable E97 seed step}"
+: "${RESILIENT_E97_SEED_TOKENS:?set canonical immutable E97 seed token count}"
+: "${RESILIENT_E97_SEED_SIZE:?set canonical immutable E97 seed byte size}"
+: "${RESILIENT_E97_SEED_SHA256:?set canonical immutable E97 seed SHA256}"
 : "${RESILIENT_E97_TRAIN_ARGS_JSON:?set approved E97 training arguments JSON}"
 : "${RESILIENT_E97_DATA:?set approved token dataset}"
 : "${RESILIENT_E97_TIKTOKEN_CACHE_FILE:?set verified p50k tokenizer cache file}"
+APPROVED_SEED_CONFIG="$REPO/configs/frontier/e97_async_256.yaml"
+[[ $(realpath "$RESILIENT_E97_SEED_CONFIG") == $(realpath "$APPROVED_SEED_CONFIG") ]] || {
+  echo "seed configuration must be canonical: $APPROVED_SEED_CONFIG" >&2
+  exit 64
+}
+readarray -t CANONICAL_SEED_IDENTITY < <("$TRAIN_PYTHON_BIN" - "$APPROVED_SEED_CONFIG" <<'PY'
+import json
+import sys
+seed = json.load(open(sys.argv[1], encoding="utf-8"))["seed"]
+for key in ("step", "tokens", "size", "sha256"):
+    print(seed[key])
+PY
+)
+[[ ${CANONICAL_SEED_IDENTITY[0]} == "$RESILIENT_E97_SEED_STEP"
+  && ${CANONICAL_SEED_IDENTITY[1]} == "$RESILIENT_E97_SEED_TOKENS"
+  && ${CANONICAL_SEED_IDENTITY[2]} == "$RESILIENT_E97_SEED_SIZE"
+  && ${CANONICAL_SEED_IDENTITY[3]} == "$RESILIENT_E97_SEED_SHA256" ]] || {
+  echo "rendered seed identity drifted from canonical config" >&2
+  exit 64
+}
+
+# Download independently on every allocated node. The materializer rejects
+# shared filesystems, an existing/stale path, pointer or manifest drift, and
+# any byte-size or SHA mismatch before any model-bearing trainer can start.
+: "${SLURM_JOB_ID:?job-local seed materialization requires SLURM_JOB_ID}"
+RESILIENT_E97_JOB_SEED_DIR=${RESILIENT_E97_JOB_SEED_DIR:-/tmp/emender-e97-seed-$SLURM_JOB_ID}
+[[ $RESILIENT_E97_JOB_SEED_DIR == "/tmp/emender-e97-seed-$SLURM_JOB_ID" ]] || {
+  echo "seed destination must be the immutable job-local /tmp directory" >&2
+  exit 64
+}
+RESILIENT_E97_SEED="$RESILIENT_E97_JOB_SEED_DIR/checkpoint-step-$RESILIENT_E97_SEED_STEP.pt"
+SEED_EVIDENCE_DIR="$RUN_DIR/seed-materialization"
+mkdir -p "$SEED_EVIDENCE_DIR"
+srun --nodes=$RESILIENT_E97_NODE_COUNT --ntasks=$RESILIENT_E97_NODE_COUNT --ntasks-per-node=1 --cpus-per-task=1 --gpus-per-task=0 \
+  bash -c 'set -euo pipefail
+node=${SLURMD_NODENAME:-$(hostname)}
+"$1" "$2" --seed-config "$3" --destination "$4" --runtime-manifest "$5/$node.json"' \
+  bash "$TRAIN_PYTHON_BIN" "$REPO/scripts/frontier/materialize_e97_s3_seed.py" \
+  "$APPROVED_SEED_CONFIG" "$RESILIENT_E97_SEED" "$SEED_EVIDENCE_DIR"
+export RESILIENT_E97_SEED
+
 RESILIENT_E97_TIKTOKEN_SHA256=${RESILIENT_E97_TIKTOKEN_SHA256:-94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069}
 [[ $(sha256sum "$RESILIENT_E97_TIKTOKEN_CACHE_FILE" | awk '{print $1}') == "$RESILIENT_E97_TIKTOKEN_SHA256" ]] || {
   echo "p50k tokenizer cache checksum mismatch" >&2

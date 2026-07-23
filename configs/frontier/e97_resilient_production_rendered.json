@@ -4,7 +4,7 @@
   "model": "E97-1.3B dim=1792 depth=24 heads=216 state=32 slots=4 groups=2",
   "dataset": "/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt",
   "optimizer": "schedulefree AdamW lr=0.001007 wd=0.01 warmup=0",
-  "seed": "step-1525000 sha256:1da27d2e09bc6c6f5ffc30e3e4476df1cebd807267431c8524de1a5b0dc5bca9",
+  "seed": "step-2300930 tokens=150793748480 size=7719680116 sha256:0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2",
   "local_steps": 40, "trainers_per_node": 8, "managers_per_node": 1,
   "manager_model_free": true, "quorum_policy": "local=6/8 global=all-live-nodes",
   "control_transport": "bounded TCP fenced JSON", "bulk_transport": "bounded node-local chunks plus TCP stream",

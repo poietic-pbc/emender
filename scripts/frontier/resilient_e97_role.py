@@ -84,8 +84,8 @@ from ndm.native_pipeline import (
 from ndm.resilient_e97_reducer import TensorLayout
 from ndm.fenced_admission import AllocationLease, SQLiteFencedControlStore
 from ndm.resilient_e97_runtime import (SplitManagerLoop, apply_delta, atomic_json,
-                                       PINNED_STEP_1525000_SHA256, assert_node_local_path,
-                                       finalize_checkpoint, flatten_tensors, heartbeat,
+                                       assert_node_local_path, finalize_checkpoint,
+                                       flatten_tensors, heartbeat,
                                        outer_state_migration)
 from ndm.resilient_pool_runtime import (
     DistributedOwnerServer, OwnerEndpoint, PoolControlClient, PoolControlConfig,
@@ -2113,22 +2113,46 @@ def _load_real(args):
     from ndm.async_diloco_real import default_tiny_e97_train_args
     if not args.seed or not args.train_args_json:
         raise ValueError("real E97 trainer requires --seed and --train-args-json")
+    expected_sha = os.environ.get("RESILIENT_E97_SEED_SHA256", "")
+    expected_step = int(os.environ.get("RESILIENT_E97_SEED_STEP", "-1"))
+    expected_size = int(os.environ.get("RESILIENT_E97_SEED_SIZE", "-1"))
+    if (
+        len(expected_sha) != 64
+        or any(character not in "0123456789abcdef" for character in expected_sha)
+        or expected_step <= 0
+        or expected_size <= 0
+    ):
+        raise ValueError("canonical immutable E97 seed identity is incomplete")
+    seed_path = Path(args.seed).resolve()
+    job_id = os.environ.get("SLURM_JOB_ID", "")
+    expected_parent = Path(f"/tmp/emender-e97-seed-{job_id}").resolve()
+    if not job_id or seed_path.parent != expected_parent:
+        raise ValueError("real E97 seed must be materialized in the current job-local directory")
+    if seed_path.stat().st_size != expected_size:
+        raise ValueError("job-local E97 seed size differs from canonical identity")
+    seed_digest = __import__("hashlib").sha256()
+    with seed_path.open("rb") as stream:
+        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            seed_digest.update(block)
+    seed_sha = seed_digest.hexdigest()
+    if seed_sha != expected_sha:
+        raise ValueError("job-local E97 seed SHA256 differs from canonical identity")
     overrides = json.loads(Path(args.train_args_json).read_text())
     overrides.update({"data": args.data, "optimizer": "schedulefree"})
     train_args = default_tiny_e97_train_args(**overrides)
-    seed_sha = __import__("hashlib").sha256(Path(args.seed).read_bytes()).hexdigest()
-    if seed_sha != PINNED_STEP_1525000_SHA256:
-        raise ValueError("seed SHA256 does not match pinned step-1525000 checkpoint")
-    payload = torch.load(args.seed, map_location="cpu", mmap=True, weights_only=True)
+    payload = torch.load(seed_path, map_location="cpu", mmap=True, weights_only=True)
     if "model_state_dict" not in payload or "optimizer_state_dict" not in payload:
         raise ValueError("verified seed lacks model or ScheduleFree inner optimizer state")
+    if int(payload.get("step", -1)) != expected_step:
+        raise ValueError("verified seed payload step differs from canonical identity")
     state = {name: value.clone() for name, value in payload["model_state_dict"].items()
              if value.is_floating_point()}
     seed_meta = {"step": int(payload.get("step", -1)), "sha256": seed_sha,
                  "outer_update_state": payload.get("outer_update_state")}
     migration = outer_state_migration(
         seed_meta, policy=args.migration_policy,
-        approved_config={"algorithm": "weighted-mean", "eta_outer": args.eta_outer})
+        approved_config={"algorithm": "weighted-mean", "eta_outer": args.eta_outer},
+        approved_seed={"step": expected_step, "sha256": expected_sha})
     return train_args, state, payload["optimizer_state_dict"], int(payload.get("step", 0)), migration
 
 

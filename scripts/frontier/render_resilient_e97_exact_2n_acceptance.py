@@ -22,11 +22,12 @@ from typing import Any
 
 
 WALLTIME = "02:00:00"
+PARTITION = "batch"
+QOS = "debug"
 APPROVED_ENV = "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312"
-SEED = "/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260709_084606_step_1525000/checkpoint_step_1525000_loss_2.4378.pt"
+SEED_CONFIG = Path("configs/frontier/e97_async_256.yaml")
 DATA = "/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt"
 TIKTOKEN = "/lustre/orion/bif148/proj-shared/emender/tokenizers/tiktoken/p50k_base/ec7223a39ce59f226a68acc30dc1af2788490e15"
-SEED_SHA256 = "1da27d2e09bc6c6f5ffc30e3e4476df1cebd807267431c8524de1a5b0dc5bca9"
 TIKTOKEN_SHA256 = "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069"
 STAGE_DEADLINES = {
     "handoff_s": 180,
@@ -36,6 +37,39 @@ STAGE_DEADLINES = {
     "publication_s": 180,
     "progress_s": 420,
 }
+
+
+def canonical_seed(repo: Path) -> dict[str, Any]:
+    """Load the one reviewed seed identity from the canonical launch config."""
+    config_path = (repo / SEED_CONFIG).resolve()
+    config_path.relative_to(repo.resolve())
+    config = json.loads(config_path.read_text())
+    if (
+        not isinstance(config, dict)
+        or config.get("schema_version") != 3
+        or set(config) != {"schema_version", "golden_manifest", "seed", "profiles"}
+    ):
+        raise ValueError("canonical E97 seed configuration shape is invalid")
+    seed = config.get("seed")
+    required = {
+        "uri", "manifest_uri", "latest_pointer_uri", "step", "loss", "tokens",
+        "size", "sha256", "provenance",
+    }
+    if not isinstance(seed, dict) or set(seed) != required:
+        raise ValueError("canonical E97 seed identity shape is invalid")
+    if not all(
+            isinstance(seed[key], str) and seed[key].startswith("s3://")
+            for key in ("uri", "manifest_uri", "latest_pointer_uri")):
+        raise ValueError("canonical E97 seed authorities must be S3 URIs")
+    if (
+        "latest" in seed["uri"].lower()
+        or len(seed["sha256"]) != 64
+        or any(character not in "0123456789abcdef" for character in seed["sha256"])
+        or not all(isinstance(seed[key], int) and seed[key] > 0
+                   for key in ("step", "tokens", "size"))
+    ):
+        raise ValueError("canonical E97 seed identity is not immutable")
+    return seed
 
 
 def sha256(path: Path) -> str:
@@ -138,6 +172,7 @@ def native_identity(manifest: Path) -> dict[str, Any]:
 def build_plan(repo: Path, commit: str, manifest: Path, gate: Path, run_root: Path,
                stage: dict[str, Any] | None = None) -> dict[str, Any]:
     native = native_identity(manifest)
+    seed = canonical_seed(repo)
     recorded_source = json.loads(manifest.read_text()).get("source_commit")
     if recorded_source != commit:
         raise ValueError("native build does not match the launched source commit")
@@ -146,6 +181,7 @@ def build_plan(repo: Path, commit: str, manifest: Path, gate: Path, run_root: Pa
     common = {
         "nodes": 2, "trainers_per_node": 8, "local_steps": 40,
         "dataplane": "native-cxi", "provider": "cxi", "walltime": WALLTIME,
+        "partition": PARTITION, "qos": QOS, "seed": seed,
         "source_commit": commit, "native_bundle": native,
         "authoritative_stage": stage,
         "full_layout_gate": str(gate.resolve()), "full_layout_gate_sha256": sha256(gate),
@@ -178,6 +214,15 @@ def build_plan(repo: Path, commit: str, manifest: Path, gate: Path, run_root: Pa
     return {
         "schema": "emender-real-e97-exact-2n-acceptance-v1",
         "source_commit": commit, "node_count": 2, "k_local_steps": 40,
+        "seed": seed, "seed_config": str(SEED_CONFIG),
+        "queue": {"partition": PARTITION, "qos": QOS},
+        "payload_parity": {
+            "canonical_profiles": str(SEED_CONFIG),
+            "authorized_differences": [
+                "nodes", "qos", "walltime", "failure_injection",
+            ],
+            "seed_and_training_payload_identical": True,
+        },
         "authoritative_stage": stage,
         "walltime_per_phase": WALLTIME, "phases": phases,
         "forbidden_node_counts": [4, 8, 32, 64, 256],
@@ -200,16 +245,52 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
 
 
 def _scheduler_state(job_id: str) -> dict[str, str]:
-    queued = subprocess.check_output(["squeue", "-h", "-j", job_id, "-o", "%T"], text=True).strip()
+    queued = subprocess.check_output(
+        ["squeue", "-h", "-j", job_id, "-o", "%T|%P|%q"],
+        text=True,
+    ).strip()
     if queued:
-        return {"state": queued.splitlines()[0], "exit_code": ""}
+        fields = queued.splitlines()[0].split("|")
+        if len(fields) != 3:
+            raise ValueError("squeue did not return explicit State, Partition, and QOS")
+        return {
+            "state": fields[0],
+            "exit_code": "",
+            "partition": fields[1],
+            "qos": fields[2],
+        }
     line = subprocess.check_output(
-        ["sacct", "-n", "-X", "-j", job_id, "--format=State,ExitCode", "-P"], text=True
+        [
+            "sacct", "-n", "-X", "-j", job_id,
+            "--format=State,ExitCode,Partition,QOS", "-P",
+        ],
+        text=True,
     ).strip().splitlines()
     if not line:
-        return {"state": "ACCOUNTING_PENDING", "exit_code": ""}
+        return {
+            "state": "ACCOUNTING_PENDING",
+            "exit_code": "",
+            "partition": "",
+            "qos": "",
+        }
     fields = line[0].split("|")
-    return {"state": fields[0].split("+")[0], "exit_code": fields[1] if len(fields) > 1 else ""}
+    if len(fields) < 4:
+        raise ValueError("sacct did not return explicit State, Partition, and QOS")
+    return {
+        "state": fields[0].split("+")[0],
+        "exit_code": fields[1],
+        "partition": fields[2],
+        "qos": fields[3],
+    }
+
+
+def _require_exact_debug_queue(result: dict[str, str]) -> None:
+    if result["state"] == "ACCOUNTING_PENDING":
+        return
+    if result.get("partition") != PARTITION or result.get("qos") != QOS:
+        raise ValueError(
+            "exact two-node acceptance requires scheduler evidence with "
+            "Partition=batch and QOS=debug")
 
 
 def advance(plan: dict[str, Any], output: Path, state_path: Path, repo: Path) -> int:
@@ -219,6 +300,7 @@ def advance(plan: dict[str, Any], output: Path, state_path: Path, repo: Path) ->
     active = state.get("active")
     if active:
         result = _scheduler_state(active["job_id"])
+        _require_exact_debug_queue(result)
         if result["state"] not in TERMINAL_STATES:
             if result["state"] == "ACCOUNTING_PENDING":
                 pending_since = float(state.get("accounting_pending_since", time.time()))
@@ -230,7 +312,8 @@ def advance(plan: dict[str, Any], output: Path, state_path: Path, repo: Path) ->
             else:
                 state.pop("accounting_pending_since", None)
             state["wait"] = {"kind": "slurm-terminal", "job_id": active["job_id"],
-                             "observed_state": result["state"], "resumable": True}
+                             "observed_state": result["state"], "resumable": True,
+                             "scheduler_evidence": result}
             _atomic_json(state_path, state)
             print(f"WAIT phase={active['phase']} job_id={active['job_id']} state={result['state']}")
             return 75
@@ -262,6 +345,11 @@ def advance(plan: dict[str, Any], output: Path, state_path: Path, repo: Path) ->
     if queued:
         raise ValueError("refusing to overlap another user allocation")
     phase = plan["phases"][index]
+    seed = canonical_seed(repo)
+    if plan.get("seed") != seed:
+        raise ValueError("rendered seed identity drifted from canonical E97 config")
+    if plan.get("queue") != {"partition": PARTITION, "qos": QOS}:
+        raise ValueError("rendered exact queue is not Partition=batch and QOS=debug")
     run_dir = Path(phase["run_dir"]); run_dir.mkdir(parents=True, exist_ok=True)
     exports = {
         "REPO": str(repo.resolve()),
@@ -272,10 +360,16 @@ def advance(plan: dict[str, Any], output: Path, state_path: Path, repo: Path) ->
         "EMENDER_CONDA_ENV": APPROVED_ENV,
         "DILOCO_DATAPLANE": "native-cxi", "FI_PROVIDER": "cxi",
         "RESILIENT_E97_RUN_ID": f"exact-2n-{phase['name']}-{plan['source_commit'][:12]}",
-        "RESILIENT_E97_SOURCE_ID": f"step-1525000-sha256-{SEED_SHA256}",
+        "RESILIENT_E97_SOURCE_ID": (
+            f"step-{seed['step']}-tokens-{seed['tokens']}-sha256-{seed['sha256']}"
+        ),
         "RESILIENT_E97_PAYLOAD_ID": f"{plan['source_commit'][:12]}-{phase['name']}-e97-k40",
         "RESILIENT_E97_CODE_ID": plan["source_commit"],
-        "RESILIENT_E97_SEED": SEED,
+        "RESILIENT_E97_SEED_CONFIG": str((repo / SEED_CONFIG).resolve()),
+        "RESILIENT_E97_SEED_STEP": str(seed["step"]),
+        "RESILIENT_E97_SEED_TOKENS": str(seed["tokens"]),
+        "RESILIENT_E97_SEED_SIZE": str(seed["size"]),
+        "RESILIENT_E97_SEED_SHA256": seed["sha256"],
         "RESILIENT_E97_TRAIN_ARGS_JSON": str((repo / "configs/frontier/e97_resilient_split_role_flat.json").resolve()),
         "RESILIENT_E97_DATA": DATA, "RESILIENT_E97_TIKTOKEN_CACHE_FILE": TIKTOKEN,
         "RESILIENT_E97_TIKTOKEN_SHA256": TIKTOKEN_SHA256,
@@ -291,12 +385,14 @@ def advance(plan: dict[str, Any], output: Path, state_path: Path, repo: Path) ->
         exports["RESILIENT_E97_RESUME_HANDOFF"] = state["history"][-1]["terminal_artifact"]
     launcher = (repo / phase["launcher"]).resolve()
     launcher.relative_to(repo.resolve())
-    command = ["sbatch", "--parsable", "-N", "2", "-t", WALLTIME, "--qos=debug", "--network=job_vni",
+    command = ["sbatch", "--parsable", "-N", "2", "-t", WALLTIME,
+               "-p", "batch", "--qos=debug", "--network=job_vni",
                "--chdir", str(repo.resolve()),
                "--export=ALL," + ",".join(f"{k}={v}" for k, v in exports.items()), str(launcher)]
     job_id = subprocess.check_output(command, text=True).strip().split(";")[0]
     state["active"] = {"phase": phase["name"], "job_id": job_id, "run_dir": str(run_dir),
-                       "submitted_unix_seconds": int(time.time())}
+                       "submitted_unix_seconds": int(time.time()),
+                       "scheduler_request": {"partition": PARTITION, "qos": QOS}}
     state["wait"] = {"kind": "slurm-terminal", "job_id": job_id, "observed_state": "SUBMITTED", "resumable": True}
     _atomic_json(state_path, state)
     print(f"SUBMITTED phase={phase['name']} job_id={job_id}; rerun to wait/advance")

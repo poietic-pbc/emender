@@ -19,8 +19,6 @@ import torch
 from ndm.resilient_e97_roles import CpuNodeManager, LocalFence, LocalTrainerSpool
 from ndm.fenced_admission import AllocationLease, SQLiteFencedControlStore
 
-PINNED_STEP_1525000_SHA256 = "1da27d2e09bc6c6f5ffc30e3e4476df1cebd807267431c8524de1a5b0dc5bca9"
-
 
 def assert_node_local_path(path: str | Path, shared_root: str | Path) -> Path:
     """Reject project-shared or Lustre-backed live-path configuration."""
@@ -166,22 +164,33 @@ class SplitManagerLoop:
         return {"members": members, "weight": weight, "manifest": str(path)}
 
 
-def outer_state_migration(seed: Mapping[str, object], *, policy: str,
-                          approved_config: Mapping[str, object] | None = None) -> dict[str, object]:
+def outer_state_migration(
+        seed: Mapping[str, object], *, policy: str,
+        approved_config: Mapping[str, object] | None = None,
+        approved_seed: Mapping[str, object] | None = None) -> dict[str, object]:
     """Restore new-harness outer state or explicitly initialize the pinned cold start."""
     outer = seed.get("outer_update_state")
     if outer is not None:
         return {"status": "restored", "state": outer, "policy": "checkpoint"}
     if policy != "initialize-from-approved-config":
         raise ValueError("cold-start seed has no outer state; approved initialization is required")
-    if seed.get("sha256") != PINNED_STEP_1525000_SHA256 or int(seed.get("step", -1)) != 1525000:
-        raise ValueError("outer initialization is restricted to the pinned step-1525000 seed")
+    if approved_seed is None:
+        raise ValueError("cold-start outer initialization requires an approved seed identity")
+    expected = dict(approved_seed)
+    expected_step = int(expected.get("step", -1))
+    expected_sha256 = expected.get("sha256")
+    if (
+        seed.get("sha256") != expected_sha256
+        or int(seed.get("step", -1)) != expected_step
+    ):
+        raise ValueError(
+            "outer initialization is restricted to the approved immutable seed")
     state = dict(approved_config or {})
     if not state:
         raise ValueError("approved outer-update configuration is required")
     return {"status": "initialized_not_restored", "state": state, "policy": policy,
-            "source_step": 1525000, "source_generation": 0,
-            "source_sha256": PINNED_STEP_1525000_SHA256}
+            "source_step": expected_step, "source_generation": 0,
+            "source_sha256": expected_sha256}
 
 
 def finalize_checkpoint(run_dir: str | Path, checkpoint: str | Path, *,

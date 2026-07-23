@@ -55,6 +55,18 @@ activation script is authoritative for the module stack and approved Python
 3.12 environment; task-specific scripts may add settings but must not duplicate
 or replace that setup.
 
+## Frontier scheduler queue verification
+
+Treat Slurm partition and QoS as separate required evidence. Every Frontier
+submission or runner that claims a queue binding MUST request both fields and
+retain scheduler output that names both `Partition` and `QOS` explicitly (for
+example, `squeue -o '%i|%P|%q'` and/or
+`sacct --format=JobIDRaw,Partition,QOS,...`). Never infer QoS from the default
+`squeue` `PARTITION` column. Iterative exact two-node acceptance submissions
+MUST use `Partition=batch` plus `QOS=debug`, verify both fields while the job is
+queued/running and again in terminal accounting evidence, and fail closed on a
+missing or different value.
+
 ## Resilient DiLoCo design authority
 
 Before changing, testing, running, or scaling resilient training behavior, read

@@ -948,14 +948,21 @@ def test_delta_publication_and_apply_are_bounded_across_parameter_boundaries():
         assert torch.equal(applied[name], delta[name] * .5)
 
 
-def test_pinned_cold_start_outer_policy_and_immutable_reloadable_handoff(tmp_path):
-    from ndm.resilient_e97_runtime import PINNED_STEP_1525000_SHA256
-    seed = {"step": 1525000, "sha256": PINNED_STEP_1525000_SHA256}
+def test_canonical_cold_start_outer_policy_and_immutable_reloadable_handoff(tmp_path):
+    canonical = json.loads(
+        (Path(__file__).parents[1] / "configs/frontier/e97_async_256.yaml").read_text()
+    )["seed"]
+    seed = {"step": canonical["step"], "sha256": canonical["sha256"]}
     with pytest.raises(ValueError, match="approved initialization"):
         outer_state_migration(seed, policy="")
+    with pytest.raises(ValueError, match="approved seed identity"):
+        outer_state_migration(
+            seed, policy="initialize-from-approved-config",
+            approved_config={"algorithm": "weighted-mean", "eta_outer": 1.0})
     migration = outer_state_migration(
         seed, policy="initialize-from-approved-config",
-        approved_config={"algorithm": "weighted-mean", "eta_outer": 1.0})
+        approved_config={"algorithm": "weighted-mean", "eta_outer": 1.0},
+        approved_seed=seed)
     assert migration["status"] == "initialized_not_restored"
     checkpoint = tmp_path / "trainer.pt"
     torch.save({"model_state_dict": {"x": torch.ones(1)},
@@ -966,7 +973,7 @@ def test_pinned_cold_start_outer_policy_and_immutable_reloadable_handoff(tmp_pat
     fence = LocalFence("run", 9, 0, 2, "payload")
     manifest = finalize_checkpoint(
         tmp_path, checkpoint, run_id="run", generation=10, step=40,
-        async_chain=["pinned-step-1525000"], membership=range(6), fence=fence,
+        async_chain=["canonical-step-2300930"], membership=range(6), fence=fence,
         source_id="source", code_id="code", outer_update_state=migration["state"],
         migration=migration)
     payload = json.loads(manifest.read_text())
@@ -979,6 +986,28 @@ def test_pinned_cold_start_outer_policy_and_immutable_reloadable_handoff(tmp_pat
                             source_id="source", code_id="code",
                             outer_update_state=migration["state"],
                             migration=migration)
+
+
+def test_final_canonical_seed_can_initialize_approved_outer_policy():
+    canonical = json.loads(
+        (Path(__file__).parents[1] / "configs/frontier/e97_async_256.yaml").read_text()
+    )["seed"]
+    migration = outer_state_migration(
+        {
+            "step": canonical["step"],
+            "sha256": canonical["sha256"],
+            "outer_update_state": None,
+        },
+        policy="initialize-from-approved-config",
+        approved_config={"algorithm": "weighted-mean", "eta_outer": 1.0},
+        approved_seed={
+            "step": canonical["step"],
+            "sha256": canonical["sha256"],
+        },
+    )
+    assert migration["source_step"] == 2300930
+    assert migration["source_sha256"] == (
+        "0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2")
 
 
 def test_fenced_atomic_global_commit_and_newer_allocation_restart(tmp_path):

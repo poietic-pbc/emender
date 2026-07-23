@@ -35,9 +35,38 @@ def _fake_native_manifest(root: Path) -> Path:
     return manifest
 
 
+def _install_fake_canonical_seed(repo: Path) -> tuple[Path, dict]:
+    config = repo / "configs/frontier/e97_async_256.yaml"
+    config.write_bytes((ROOT / "configs/frontier/e97_async_256.yaml").read_bytes())
+    seed = json.loads(config.read_text())["seed"]
+    materializer = repo / "scripts/frontier/materialize_e97_s3_seed.py"
+    materializer.write_text(
+        "import argparse\n"
+        "p=argparse.ArgumentParser()\n"
+        "p.add_argument('--seed-config')\n"
+        "p.add_argument('--destination')\n"
+        "p.add_argument('--runtime-manifest')\n"
+        "p.parse_args()\n"
+    )
+    return config, seed
+
+
+def _canonical_seed_env(config: Path, seed: dict, job_id: str) -> dict[str, str]:
+    return {
+        "SLURM_JOB_ID": job_id,
+        "SLURM_JOB_PARTITION": "batch",
+        "RESILIENT_E97_SEED_CONFIG": str(config),
+        "RESILIENT_E97_SEED_STEP": str(seed["step"]),
+        "RESILIENT_E97_SEED_TOKENS": str(seed["tokens"]),
+        "RESILIENT_E97_SEED_SIZE": str(seed["size"]),
+        "RESILIENT_E97_SEED_SHA256": seed["sha256"],
+    }
+
+
 def test_true_launcher_is_exact_debug_twenty_minute_topology_without_sentinels():
     text = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
     supervisor = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
+    assert "#SBATCH -p batch" in text
     assert "#SBATCH -q debug" in text
     assert "#SBATCH -N 2" in text
     assert "#SBATCH --gpus-per-node=8" in text
@@ -51,6 +80,28 @@ def test_true_launcher_is_exact_debug_twenty_minute_topology_without_sentinels()
     assert '"$((RESILIENT_E97_NODE_COUNT * 8))"' in text
     assert "resilient_e97_rank_lane.py" not in text
     assert "sentinel ranks" in text
+
+
+def test_exact_launcher_materializes_canonical_seed_node_locally_before_model_load():
+    launcher = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
+    role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    materialize = launcher.index("materialize_e97_s3_seed.py")
+    trainer_command = launcher.index("RESILIENT_E97_TRAINER_COMMAND=")
+    supervisor = launcher.index("resilient_e97_allocation_supervisor.py")
+    assert '[[ ${SLURM_JOB_PARTITION:?} == batch ]]' in launcher
+    assert '[[ ${SLURM_JOB_QOS:?} == debug ]]' in launcher
+    assert 'APPROVED_SEED_CONFIG="$REPO/configs/frontier/e97_async_256.yaml"' in launcher
+    assert 'RESILIENT_E97_SEED_CONFIG:?' in launcher
+    assert "/tmp/emender-e97-seed-$SLURM_JOB_ID" in launcher
+    assert "--seed-config" in launcher and "--runtime-manifest" in launcher
+    assert "--nodes=$RESILIENT_E97_NODE_COUNT --ntasks=$RESILIENT_E97_NODE_COUNT" in launcher
+    assert materialize < trainer_command < supervisor
+    assert ": \"${RESILIENT_E97_SEED:?set verified generation-9 seed checkpoint}\"" not in launcher
+    assert "PINNED_STEP_1525000_SHA256" not in role
+    load_real = role[role.index("def _load_real(args)"):]
+    assert load_real.index("RESILIENT_E97_SEED_SHA256") < load_real.index("torch.load(")
+    assert load_real.index("RESILIENT_E97_SEED_STEP") < load_real.index("torch.load(")
+    assert "pinned step-1525000" not in load_real
 
 
 def test_legacy_runner_cannot_misreport_sentinels_as_real_trainers():
@@ -110,6 +161,7 @@ def test_launcher_omits_empty_resume_argument(tmp_path):
     (repo / "configs/frontier").mkdir(parents=True)
     approved_args = repo / "configs/frontier/e97_resilient_split_role_flat.json"
     approved_args.write_text((ROOT / "configs/frontier/e97_resilient_split_role_flat.json").read_text())
+    seed_config, seed = _install_fake_canonical_seed(repo)
     supervisor = repo / "scripts/frontier/resilient_e97_allocation_supervisor.py"
     supervisor.write_text(
         "import os\nprint(os.environ['RESILIENT_E97_TRAINER_COMMAND'])\n"
@@ -138,6 +190,7 @@ def test_launcher_omits_empty_resume_argument(tmp_path):
         "PATH": f"{bindir}:{APPROVED_ENV / 'bin'}:{os.environ['PATH']}",
         "EMENDER_CONDA_ENV": str(APPROVED_ENV),
         "SLURM_JOB_NUM_NODES": "2",
+        "SLURM_JOB_PARTITION": "batch",
         "SLURM_JOB_QOS": "debug",
         "SLURM_TIMELIMIT": "00:20:00",
         "SLURM_JOB_NODELIST": "node[0-1]",
@@ -146,13 +199,13 @@ def test_launcher_omits_empty_resume_argument(tmp_path):
         "RESILIENT_E97_RUN_ID": "run",
         "RESILIENT_E97_SOURCE_ID": "source",
         "RESILIENT_E97_PAYLOAD_ID": "payload",
-        "RESILIENT_E97_SEED": "/seed.pt",
         "RESILIENT_E97_TRAIN_ARGS_JSON": str(approved_args),
         "RESILIENT_E97_DATA": "/data",
         "RESILIENT_E97_TIKTOKEN_CACHE_FILE": str(tokenizer_cache),
         "RESILIENT_E97_TIKTOKEN_SHA256": hashlib.sha256(tokenizer_cache.read_bytes()).hexdigest(),
         "NDP_BUILD_MANIFEST": str(native_manifest),
         "NDP_FULL_LAYOUT_GATE_JSON": str(tmp_path / "full-layout-gate.json"),
+        **_canonical_seed_env(seed_config, seed, "pytest-empty-resume"),
     }
     result = subprocess.run(
         ["bash", str(ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch")],
@@ -254,6 +307,7 @@ def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tm
     (repo / "configs/frontier").mkdir(parents=True)
     approved_args = repo / "configs/frontier/e97_resilient_split_role_flat.json"
     approved_args.write_text((ROOT / "configs/frontier/e97_resilient_split_role_flat.json").read_text())
+    seed_config, seed = _install_fake_canonical_seed(repo)
     (repo / "scripts/frontier/resilient_e97_allocation_supervisor.py").write_text("pass\n")
     (repo / "scripts/frontier/attest_native_dataplane.py").write_text(
         "import json,sys\nprint(json.dumps({'status':'attested'}))\n"
@@ -279,6 +333,7 @@ def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tm
         "PATH": f"{bindir}:{APPROVED_ENV / 'bin'}:{os.environ['PATH']}",
         "EMENDER_CONDA_ENV": str(APPROVED_ENV),
         "SLURM_JOB_NUM_NODES": "2",
+        "SLURM_JOB_PARTITION": "batch",
         "SLURM_JOB_QOS": "debug",
         "SLURM_JOB_NODELIST": "node[0-1]",
         "RESILIENT_E97_STARTUP_SMOKE": "1",
@@ -290,13 +345,13 @@ def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tm
         "RESILIENT_E97_RUN_ID": "run",
         "RESILIENT_E97_SOURCE_ID": "source",
         "RESILIENT_E97_PAYLOAD_ID": "payload",
-        "RESILIENT_E97_SEED": "/seed.pt",
         "RESILIENT_E97_TRAIN_ARGS_JSON": str(approved_args),
         "RESILIENT_E97_DATA": "/data",
         "RESILIENT_E97_TIKTOKEN_CACHE_FILE": str(tokenizer_cache),
         "RESILIENT_E97_TIKTOKEN_SHA256": hashlib.sha256(tokenizer_cache.read_bytes()).hexdigest(),
         "NDP_BUILD_MANIFEST": str(native_manifest),
         "NDP_FULL_LAYOUT_GATE_JSON": str(tmp_path / "full-layout-gate.json"),
+        **_canonical_seed_env(seed_config, seed, "pytest-startup-smoke"),
     }
     subprocess.run(["bash", str(ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch")],
                    env=env, text=True, capture_output=True, check=True)
