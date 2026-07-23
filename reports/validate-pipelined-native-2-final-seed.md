@@ -117,6 +117,15 @@ five-generation request, final-seed identity, native/G2 manifests, and
 two-hour walltime. Slurm currently estimates a 13:10 EDT start. No duplicate,
 later serial phase, or job larger than two nodes was submitted.
 
+The 2026-07-23 11:40 EDT resume check again found 5060027 as the sole user
+queue job. `squeue` reported `PENDING`, reason `Priority`, exactly two nodes,
+`Partition=batch`, and `QOS=debug`; `sacct` and `scontrol -dd` independently
+agree and show zero elapsed runtime. The retained command still binds the
+clean-overlap phase to five generations, the exact final-seed identity, source
+`f6003e32...`, and the attested native/G2 manifests. Slurm now estimates a
+13:06 EDT start. No duplicate, later serial phase, or job larger than two
+nodes was submitted.
+
 ## Validation checkpoint
 
 - R01-R16 and NDP01-NDP17: reviewed against the version-1 authority; runtime
