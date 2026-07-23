@@ -2,7 +2,7 @@
 
 Date: 2026-07-23
 Task: `validate-pipelined-native-2-final-seed`
-Status: exact-source G2 passed; clean K40 submission preflight pending
+Status: exact-source G2 passed; clean five-generation K40 job 5060027 pending
 
 ## Authority and immutable identity
 
@@ -55,6 +55,17 @@ is:
 SHA256 546766dc559a9b4fc8231155bce215bc1ed2d48fd69c4ed7824a0894f65ff5cc
 ```
 
+The real acceptance preflight repeated the clean build from a fresh `main`
+checkout at the same exact commit:
+
+```text
+/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-final-seed-20260723T134500Z/source-clean
+origin/main = HEAD = f6003e32e14b89e0fde1f6b7f47b6402285d7b39
+authoritative native bundle = 9884a02d84bd9560a15314c26e386868350b865e688cc4c701c802f4f686227a
+native manifest SHA256 = 546766dc559a9b4fc8231155bce215bc1ed2d48fd69c4ed7824a0894f65ff5cc
+acceptance manifest SHA256 = dde613b097cc9ee8549cf3ac757e897565fa8028b335bebadec5f42a15bc93e1
+```
+
 The user queue was empty immediately before submission. Historical job
 5059548 was terminal `FAILED 1:0`, exactly two nodes, `Partition=batch`,
 `QOS=debug`, and therefore was not an active equivalent. Because its G2
@@ -71,14 +82,24 @@ The terminal accounting query explicitly returned `Partition=batch` and
 `QOS=debug`. The retained full-layout gate is
 `g2-artifacts/5059795/full-layout-gate.json` under the execution root.
 
-After G2 completed, the live user queue was empty and the serial acceptance
-launcher was invoked from the exact source. It did not reach `sbatch`: the
-mandatory `git status --porcelain --untracked-files=all` exact-source check
-remained in a Lustre metadata wait for more than eleven minutes. The check was
-terminated without bypassing it. Consequently no real K40 job, duplicate,
-later serial phase, or job larger than two nodes was submitted at this
-checkpoint. The next attempt must repeat the clean-tree and adjacent empty
-queue checks before the one permitted clean five-generation submission.
+After G2 completed, the first serial acceptance attempt did not reach
+`sbatch`: unrelated untracked files in the first exact clone made the mandatory
+all-untracked source check remain in a Lustre metadata wait. A new local clone
+was checked out on `main` at the same immutable `origin/main`, and its complete
+`git status --porcelain --untracked-files=all` returned clean. The unmodified
+launcher then repeated the exact-source inventory, native build (CTest 10/10),
+production G2 attestation, and adjacent empty-user-queue check.
+
+Exactly one real clean replacement was submitted:
+
+```text
+5060027|resilient-e97-true-2n|PENDING|2|batch|debug|0:00|2:00:00
+```
+
+The retained serial controller records phase `clean-overlap`, five K40
+generations, job 5060027, and the requested `Partition=batch`/`QOS=debug`.
+No fault/rejection/checkpoint/restart phase, duplicate, or job larger than two
+nodes has been submitted. This task is parked while job 5060027 is pending.
 
 ## Validation checkpoint
 
@@ -88,8 +109,8 @@ queue checks before the one permitted clean five-generation submission.
 - Exact-source G2: passed, job 5059795, `COMPLETED 0:0`, 2 nodes,
   `Partition=batch`, `QOS=debug`, with retained full-layout gate.
 - Scheduler binding: exact two nodes, `Partition=batch`, `QOS=debug`; no
-  duplicate and no scale-out. The real K40 submission remains unmade because
-  its exact-source preflight did not complete.
+  duplicate and no scale-out. Exactly one clean five-generation replacement,
+  job 5060027, is pending.
 - Five K40 generations, overlap/SLO metrics, fault/rejoin, rejection,
-  checkpoint failure, and fresh restart: not yet applicable while G2 is
-  pending.
+  checkpoint failure, and fresh restart: not yet claimed while the clean job
+  is pending; later serial phases remain unsubmitted.
