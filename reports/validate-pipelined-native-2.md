@@ -38,15 +38,52 @@ five K40 generations, a two-hour bound, `Partition=batch`, and `QOS=debug`.
 The scheduler-exported immutable seed identity is step `2300930`, tokens
 `150793748480`, size `7719680116`, and SHA256
 `0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2`.
-At this checkpoint job `5059548` is the sole active equivalent job and remains
-`PENDING (Priority)`; no duplicate, later serial phase, or job larger than two
-nodes was submitted.
+Job `5059548` subsequently ran on exactly two nodes and terminated `FAILED
+1:0` after 33 seconds. Terminal accounting explicitly records
+`Partition=batch`, `QOS=debug`, `NNodes=2`, and
+`frontier[01918,09456]`. The user queue was empty after termination. No
+duplicate, later serial phase, or job larger than two nodes was submitted.
+
+The batch passed canonical Python/ROCm identity and exact native source,
+bundle, and G2 attestation, then failed before model load on both nodes while
+materializing the immutable step-2300930 seed:
+
+```text
+ValueError: destination must be scoped by the current SLURM_JOB_ID
+```
+
+The final-seed launcher rendered the destination with a submit-side job-id
+expansion rather than preserving a live batch-side `${SLURM_JOB_ID}` binding.
+Consequently the materializer's fail-closed node-local destination check
+rejected both tasks. No K40 step, contribution, generation, handoff, apply, or
+checkpoint occurred. The clean phase therefore cannot admit the serial
+loss/rejoin, invalid-result, failed-publication, or fresh-restart phases. A
+reviewed launcher fix with a regression proving batch-time job-id scoping is
+required before a newly authorized replacement; this attempt does not
+authorize an unreviewed duplicate.
+
+The exact scheduler record is:
+
+```text
+5059548|FAILED|1:0|batch|debug|2|00:00:33|
+2026-07-23T08:48:29|2026-07-23T08:49:02|frontier[01918,09456]
+```
+
+The terminal logs are retained at:
+
+```text
+/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-final-seed-20260723T123000Z/source/logs/frontier/trainpy_async_quorum/resilient-e97-true-2n-5059548.out
+/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-final-seed-20260723T123000Z/source/logs/frontier/trainpy_async_quorum/resilient-e97-true-2n-5059548.err
+```
 
 Conformance was checked against the complete Compute Pool v1 checklist and gap
-matrix. This checkpoint exercises R01, R05, R08-R10, R13-R14, R16 and
-NDP02-NDP03, NDP06, NDP09, NDP11, NDP13-NDP14, NDP16-NDP17. Live runtime
-claims under R04, R06-R07, R11-R12 and NDP10, NDP15-NDP17 await terminal K40
-and serial-phase artifacts.
+matrix. Exact source, G2 integrity, fail-closed seed admission, and scheduler
+binding exercise R01, R10, R13-R14, R16 and NDP02-NDP03, NDP13-NDP14,
+NDP16-NDP17. Runtime acceptance under R04, R06-R07, R11-R12, R14 and NDP10,
+NDP15-NDP17 remains unproven because the job failed before training. Thus zero
+of five required atomic K40 generations completed; overlap, separated timing,
+foreground idle, cadence, bounded latest-only recovery, invalid-result
+rejection, prior-checkpoint retention, and fresh restart are all unexercised.
 
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
