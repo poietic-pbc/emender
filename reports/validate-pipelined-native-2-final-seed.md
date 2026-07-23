@@ -91,6 +91,18 @@ materially moved to `2026-07-24T06:36:00` America/New_York, approximately
 source/bundle/G2 identities, immutable final-seed identity, and five-generation
 clean-overlap environment. No job was altered or submitted.
 
+At the `2026-07-23T18:19:15-04:00` resumed-custody observation, `squeue`,
+`squeue --start`, `scontrol -dd`, and `sacct` still agreed that job 5062348
+was the sole exact clean-overlap submission: `PENDING (Priority)`, zero
+runtime, exactly two nodes, `Partition=batch`, and `QOS=debug`. The
+cluster-local estimate remained `2026-07-24T06:36:00` America/New_York,
+approximately 12 hours 17 minutes away. `scontrol` retained source
+`2e485fa70588f6b5b764416e8efac3dcfa6aaee4`, the exact native manifest and
+G2 paths, the immutable step-2300930 seed identity, and five requested K40
+generations. This custody transition did not alter the job or submit an
+equivalent replacement; because the estimate remains more than 60 minutes
+away, monitoring stays on the requested 30-minute cadence.
+
 ## Seed bootstrap proof
 
 The merged batch bootstrap contains no S3 URI, HTTP URL, or network-fetch
