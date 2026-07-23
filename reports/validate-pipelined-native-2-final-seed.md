@@ -115,6 +115,19 @@ manifests, immutable final seed, and five generations. No job was altered or
 submitted; monitoring therefore remains parked on the requested 30-minute
 cadence.
 
+At `2026-07-23T19:29:38-04:00`, `squeue`, `squeue --start`,
+`scontrol -dd`, and `sacct` continued to agree that job 5062348 was
+`PENDING (Priority)` with zero runtime, exactly two nodes,
+`Partition=batch`, and `QOS=debug`. The scheduler-local estimated start
+materially moved earlier from `2026-07-24T05:22:00` to
+`2026-07-24T04:54:00` America/New_York, approximately 9 hours 24 minutes
+after the observation and still more than 60 minutes away. `scontrol`
+retained the exact rendered script, source
+`2e485fa70588f6b5b764416e8efac3dcfa6aaee4`, native-bundle and G2 paths,
+immutable final-seed identity, five-generation request, and
+`NumNodes=2-2`. No job was altered or submitted; the next observation
+therefore remains on the requested 30-minute cadence.
+
 ## Seed bootstrap proof
 
 The merged batch bootstrap contains no S3 URI, HTTP URL, or network-fetch
@@ -173,7 +186,7 @@ PASS (6/6)
 render_resilient_e97_exact_2n_acceptance.py ... --submit
 SUBMITTED phase=clean-overlap job_id=5062348
 squeue/sacct/scontrol: PENDING, 2 nodes, Partition=batch, QOS=debug
-squeue --start: 2026-07-24T05:22:00 America/New_York
+squeue --start: 2026-07-24T04:54:00 America/New_York
                (more than 60 minutes away)
 ```
 
