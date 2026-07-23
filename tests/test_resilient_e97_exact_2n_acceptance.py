@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import subprocess
 import importlib.util
+import sys
 
 import pytest
 
@@ -34,6 +35,7 @@ def test_dry_run_renders_exact_real_k40_fenced_acceptance_without_submission(tmp
     manifest = _native(tmp_path / "native"); gate = tmp_path / "g2.json"; gate.write_text("{}")
     output = tmp_path / "acceptance.json"
     result = subprocess.run([
+        sys.executable,
         os.fspath(ROOT / "scripts/frontier/render_resilient_e97_exact_2n_acceptance.py"),
         "--repo", os.fspath(ROOT), "--native-build-manifest", os.fspath(manifest),
         "--full-layout-gate", os.fspath(gate), "--run-root", os.fspath(tmp_path / "runs"),
@@ -102,6 +104,12 @@ def test_one_job_qos_never_receives_concurrent_phase_submission(monkeypatch, tmp
     plan = _serial_plan(tmp_path)
     monkeypatch.setenv("USER", "tester")
     monkeypatch.setattr(MODULE, "verify_source_identity", lambda *args: None)
+    def fake_prefetch(seed, cache_root, attestation):
+        cache = tmp_path / f"sha256-{seed['sha256']}.pt"
+        cache.write_bytes(b"fixture")
+        attestation.write_text("{}")
+        return cache, attestation
+    monkeypatch.setattr(MODULE, "prefetch", fake_prefetch)
     def output(command, **kwargs):
         calls.append(command)
         if command[0] == "squeue": return ""
@@ -127,11 +135,29 @@ def test_one_job_qos_never_receives_concurrent_phase_submission(monkeypatch, tmp
                      "RESILIENT_E97_SEED_TOKENS=150793748480",
                      "RESILIENT_E97_SEED_SIZE=7719680116",
                      "RESILIENT_E97_SEED_SHA256=0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2",
+                     "RESILIENT_E97_SEED_CACHE=",
+                     "RESILIENT_E97_SEED_ATTESTATION=",
+                     "RESILIENT_E97_SEED_ATTESTATION_SHA256=",
                      "RESILIENT_E97_DATA=",
                      "RESILIENT_E97_TIKTOKEN_CACHE_FILE=", "RESILIENT_E97_RUN_ID=",
                      "RESILIENT_E97_SOURCE_ID=", "RESILIENT_E97_PAYLOAD_ID="):
         assert required in exported
     assert "RESILIENT_E97_SEED=/lustre" not in exported
+
+
+def test_batch_bootstrap_is_sbcast_only_and_offline_before_model_load():
+    payload = (
+        ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
+    bootstrap = payload[payload.index("SBCAST=$(command -v sbcast)"):
+                        payload.index("export RESILIENT_E97_SEED")]
+    assert '"$SBCAST" -f "$RESILIENT_E97_SEED_CACHE" "$RESILIENT_E97_SEED"' in bootstrap
+    assert "--verify-local" in bootstrap
+    assert "--expected-job-id" in bootstrap
+    assert "materialize_e97_s3_seed.py" in bootstrap
+    assert "--prefetch" not in bootstrap
+    assert "s3://" not in bootstrap and "https://" not in bootstrap
+    assert payload.index("--verify-local") < payload.index(
+        "resilient_e97_allocation_supervisor.py")
 
 
 def test_submit_shell_preserves_job_id_until_batch_runtime(monkeypatch, tmp_path):

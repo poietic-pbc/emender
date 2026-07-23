@@ -20,6 +20,8 @@ import tempfile
 import time
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.frontier.materialize_e97_s3_seed import prefetch
 
 WALLTIME = "02:00:00"
 PARTITION = "batch"
@@ -29,6 +31,8 @@ SEED_CONFIG = Path("configs/frontier/e97_async_256.yaml")
 DATA = "/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt"
 TIKTOKEN = "/lustre/orion/bif148/proj-shared/emender/tokenizers/tiktoken/p50k_base/ec7223a39ce59f226a68acc30dc1af2788490e15"
 TIKTOKEN_SHA256 = "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069"
+SEED_CACHE_ROOT = Path(
+    "/lustre/orion/bif148/proj-shared/emender/bootstrap/e97-seeds")
 STAGE_DEADLINES = {
     "handoff_s": 180,
     "apply_s": 180,
@@ -368,6 +372,14 @@ def advance(plan: dict[str, Any], output: Path, state_path: Path, repo: Path) ->
     if plan.get("queue") != {"partition": PARTITION, "qos": QOS}:
         raise ValueError("rendered exact queue is not Partition=batch and QOS=debug")
     run_dir = Path(phase["run_dir"]); run_dir.mkdir(parents=True, exist_ok=True)
+    # Submit/login-side only: resolve both S3 authorities and acquire the
+    # checkpoint before sbatch. The allocation receives only verified,
+    # digest-pinned files and never receives an S3 credential or URI to fetch.
+    cache_root = Path(os.environ.get(
+        "RESILIENT_E97_SUBMIT_SEED_CACHE_ROOT", str(SEED_CACHE_ROOT)))
+    seed_cache, seed_attestation = prefetch(
+        seed, cache_root, run_dir / "seed-bootstrap-attestation.json")
+    seed_attestation_sha256 = sha256(seed_attestation)
     exports = {
         "REPO": str(repo.resolve()),
         "RESILIENT_E97_ACCEPTANCE_MANIFEST": str(output.resolve()),
@@ -387,6 +399,9 @@ def advance(plan: dict[str, Any], output: Path, state_path: Path, repo: Path) ->
         "RESILIENT_E97_SEED_TOKENS": str(seed["tokens"]),
         "RESILIENT_E97_SEED_SIZE": str(seed["size"]),
         "RESILIENT_E97_SEED_SHA256": seed["sha256"],
+        "RESILIENT_E97_SEED_CACHE": str(seed_cache),
+        "RESILIENT_E97_SEED_ATTESTATION": str(seed_attestation),
+        "RESILIENT_E97_SEED_ATTESTATION_SHA256": seed_attestation_sha256,
         "RESILIENT_E97_TRAIN_ARGS_JSON": str((repo / "configs/frontier/e97_resilient_split_role_flat.json").resolve()),
         "RESILIENT_E97_DATA": DATA, "RESILIENT_E97_TIKTOKEN_CACHE_FILE": TIKTOKEN,
         "RESILIENT_E97_TIKTOKEN_SHA256": TIKTOKEN_SHA256,

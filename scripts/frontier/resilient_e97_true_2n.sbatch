@@ -180,10 +180,23 @@ PY
   exit 64
 }
 
-# Download independently on every allocated node. The materializer rejects
-# shared filesystems, an existing/stale path, pointer or manifest drift, and
-# any byte-size or SHA mismatch before any model-bearing trainer can start.
+# The submitter has already resolved both S3 authorities, verified all 7.7 GB,
+# and atomically published this content-addressed cold artifact.  Compute
+# nodes perform no S3/HTTP request: Slurm broadcasts the pinned files to the
+# exact live-job-scoped node-local destination, then every node independently
+# verifies both artifacts before any model-bearing process can start.
 : "${SLURM_JOB_ID:?job-local seed materialization requires SLURM_JOB_ID}"
+: "${RESILIENT_E97_SEED_CACHE:?submitter must export verified cold seed cache}"
+: "${RESILIENT_E97_SEED_ATTESTATION:?submitter must export pinned authority attestation}"
+: "${RESILIENT_E97_SEED_ATTESTATION_SHA256:?submitter must export authority attestation digest}"
+[[ $(basename "$RESILIENT_E97_SEED_CACHE") == "sha256-$RESILIENT_E97_SEED_SHA256.pt" ]] || {
+  echo "cold seed cache is not content addressed by the immutable digest" >&2
+  exit 64
+}
+[[ $(sha256sum "$RESILIENT_E97_SEED_ATTESTATION" | awk '{print $1}') == "$RESILIENT_E97_SEED_ATTESTATION_SHA256" ]] || {
+  echo "submit-side seed authority attestation digest mismatch" >&2
+  exit 64
+}
 RESILIENT_E97_JOB_SEED_TEMPLATE=${RESILIENT_E97_JOB_SEED_TEMPLATE:-'/tmp/emender-e97-seed-${SLURM_JOB_ID}'}
 [[ $RESILIENT_E97_JOB_SEED_TEMPLATE == '/tmp/emender-e97-seed-${SLURM_JOB_ID}' ]] || {
   echo "seed destination template must retain the deferred batch SLURM_JOB_ID" >&2
@@ -195,14 +208,36 @@ RESILIENT_E97_JOB_SEED_DIR=${RESILIENT_E97_JOB_SEED_TEMPLATE/'${SLURM_JOB_ID}'/"
   exit 64
 }
 RESILIENT_E97_SEED="$RESILIENT_E97_JOB_SEED_DIR/checkpoint-step-$RESILIENT_E97_SEED_STEP.pt"
+RESILIENT_E97_NODE_ATTESTATION="$RESILIENT_E97_JOB_SEED_DIR/seed-bootstrap-attestation.json"
 SEED_EVIDENCE_DIR="$RUN_DIR/seed-materialization"
 mkdir -p "$SEED_EVIDENCE_DIR"
+SBCAST=$(command -v sbcast) || {
+  echo "compiled Slurm sbcast is required for seed bootstrap" >&2
+  exit 64
+}
+[[ -x $SBCAST ]] || { echo "sbcast is not executable: $SBCAST" >&2; exit 64; }
+cleanup_seed_bootstrap() {
+  srun --nodes="$RESILIENT_E97_NODE_COUNT" --ntasks="$RESILIENT_E97_NODE_COUNT" \
+    --ntasks-per-node=1 --cpus-per-task=1 --gpus-per-task=0 \
+    rm -rf -- "$RESILIENT_E97_JOB_SEED_DIR" >/dev/null 2>&1 || true
+}
+trap cleanup_seed_bootstrap ERR INT TERM
+srun --nodes=$RESILIENT_E97_NODE_COUNT --ntasks=$RESILIENT_E97_NODE_COUNT --ntasks-per-node=1 --cpus-per-task=1 --gpus-per-task=0 \
+  bash -c 'set -euo pipefail; test ! -e "$1"; mkdir -m 700 "$1"' \
+  bash "$RESILIENT_E97_JOB_SEED_DIR"
+"$SBCAST" -f "$RESILIENT_E97_SEED_CACHE" "$RESILIENT_E97_SEED"
+"$SBCAST" -f "$RESILIENT_E97_SEED_ATTESTATION" "$RESILIENT_E97_NODE_ATTESTATION"
 srun --nodes=$RESILIENT_E97_NODE_COUNT --ntasks=$RESILIENT_E97_NODE_COUNT --ntasks-per-node=1 --cpus-per-task=1 --gpus-per-task=0 \
   bash -c 'set -euo pipefail
 node=${SLURMD_NODENAME:-$(hostname)}
-"$1" "$2" --seed-config "$3" --destination "$4" --runtime-manifest "$5/$node.json"' \
+"$1" "$2" --verify-local --seed-config "$3" --destination "$4" \
+  --attestation "$5" --expected-job-id "$6" --runtime-manifest "$7/$node.json" \
+  --expected-attestation-sha256 "$8"' \
   bash "$TRAIN_PYTHON_BIN" "$REPO/scripts/frontier/materialize_e97_s3_seed.py" \
-  "$APPROVED_SEED_CONFIG" "$RESILIENT_E97_SEED" "$SEED_EVIDENCE_DIR"
+  "$APPROVED_SEED_CONFIG" "$RESILIENT_E97_SEED" \
+  "$RESILIENT_E97_NODE_ATTESTATION" "$SLURM_JOB_ID" "$SEED_EVIDENCE_DIR" \
+  "$RESILIENT_E97_SEED_ATTESTATION_SHA256"
+trap - ERR INT TERM
 export RESILIENT_E97_SEED
 
 RESILIENT_E97_TIKTOKEN_SHA256=${RESILIENT_E97_TIKTOKEN_SHA256:-94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069}
