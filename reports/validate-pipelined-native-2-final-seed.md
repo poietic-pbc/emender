@@ -2,7 +2,7 @@
 
 Date: 2026-07-23
 Task: `validate-pipelined-native-2-final-seed`
-Status: monitoring exact-source G2 prerequisite
+Status: exact-source G2 passed; clean K40 submission preflight pending
 
 ## Authority and immutable identity
 
@@ -64,21 +64,32 @@ fresh G2.
 Exactly one exact-source G2 prerequisite was submitted:
 
 ```text
-5059795|native-ndp-g2-clean|PENDING|2|batch|debug|0:00|20:00
+5059795|native-ndp-g2-clean|COMPLETED|0:0|2|batch|debug|00:02:58
 ```
 
-No real K40 job, duplicate, later serial phase, or job larger than two nodes
-has been submitted at this checkpoint. The same task will resume monitoring
-job 5059795; a real five-generation clean phase may be submitted only after
-this G2 completes successfully and another adjacent empty-queue check passes.
+The terminal accounting query explicitly returned `Partition=batch` and
+`QOS=debug`. The retained full-layout gate is
+`g2-artifacts/5059795/full-layout-gate.json` under the execution root.
+
+After G2 completed, the live user queue was empty and the serial acceptance
+launcher was invoked from the exact source. It did not reach `sbatch`: the
+mandatory `git status --porcelain --untracked-files=all` exact-source check
+remained in a Lustre metadata wait for more than eleven minutes. The check was
+terminated without bypassing it. Consequently no real K40 job, duplicate,
+later serial phase, or job larger than two nodes was submitted at this
+checkpoint. The next attempt must repeat the clean-tree and adjacent empty
+queue checks before the one permitted clean five-generation submission.
 
 ## Validation checkpoint
 
 - R01-R16 and NDP01-NDP17: reviewed against the version-1 authority; runtime
   claims remain pending.
 - Exact source, bundle, final seed, and deferred/live job-ID scoping: recorded.
+- Exact-source G2: passed, job 5059795, `COMPLETED 0:0`, 2 nodes,
+  `Partition=batch`, `QOS=debug`, with retained full-layout gate.
 - Scheduler binding: exact two nodes, `Partition=batch`, `QOS=debug`; no
-  duplicate and no scale-out.
+  duplicate and no scale-out. The real K40 submission remains unmade because
+  its exact-source preflight did not complete.
 - Five K40 generations, overlap/SLO metrics, fault/rejoin, rejection,
   checkpoint failure, and fresh restart: not yet applicable while G2 is
   pending.
