@@ -2,7 +2,56 @@
 
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
-Result: **manager-freeze-fix exact-source G2 passed; sole K40 replacement 5055899 pending terminal pass**
+Result: **manager-freeze-fix exact-source G2 passed; sole K40 replacement 5055899 completed five atomic generations but failed strict live overlap**
+
+## Manager-freeze convergence retry terminal harvest (2026-07-22)
+
+The sole authorized clean K40 replacement, Slurm job `5055899`, is terminal
+`FAILED 1:0` after 31:10 on exactly two nodes,
+`frontier[04710,04712]`.  The allocation payload step completed `0:0`; the
+batch failure is the fail-closed performance validator rejecting the retained
+trace with `generation 0 background did not overlap 1 K40 compute`.  No
+equivalent job remains active, and no duplicate, later serial phase, or job
+larger than two nodes was submitted.
+
+The immutable execution root is
+`/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-freeze-final-20260722T223000Z`.
+It records exact pushed source
+`5f180e25fd0a54852892d5ff59a97b3c1d8737ff`, native bundle SHA-256
+`9884a02d84bd9560a15314c26e386868350b865e688cc4c701c802f4f686227a`,
+acceptance-manifest SHA-256
+`4f89c7214d622e49c7fa72d51ec783aeb8a379ab886774e3519de3f0e57817a3`,
+and the passing refreshed G2 job `5055869` full-layout gate SHA-256
+`8b44fcc12a0224b49c836afcb32689004d8e973835e844c3b8b6fbfa925c2c33`.
+
+The payload completed all five requested atomic K40 generations.  All 16
+trainer lanes recorded exactly 40 optimizer-step start/end timestamps per
+generation, and fenced native apply receipts advance through generation 4.
+Five immutable handoffs and five restartable 7,899,873,331-byte checkpoints
+were published through `generation-00000005-fence-00000001`.  Queue telemetry
+remained latest-only with handoff and result high-water marks of one, no
+replacement/drop/backpressure events, and zero dense Python socket or trainer
+spool bytes.
+
+Strict timing analysis over both retained node snapshots reports median raw
+K40 compute of 63.369 seconds, median steady-state start cadence of 357.956
+seconds (5.649x raw K40), foreground control-plane idle fraction 0.817631,
+and maximum named background stage duration of 22.230 seconds.  Background
+work therefore fits within one raw K40 window, yet none of the 64 trainer
+generation-pair observations overlaps the following K40 window.  This fails
+both the required overlap proof and the `<10%` idle / `<=1.25x` cadence gates;
+the clean phase cannot admit the loss/rejoin, invalid-result,
+checkpoint-publication-failure, or fresh-restart phases.
+
+Conformance was checked against *Resilient DiLoCo Compute Pool* v1 R01-R16
+and *Native resilient DiLoCo data plane* v1 NDP01-NDP17.  Exact identity,
+refreshed G2 integrity, two-node admission, bounded latest-only handoff, five
+atomic commits, fenced safe-boundary apply, and restartable checkpoint
+publication provide live evidence for R01/R04/R06-R10/R14 and
+NDP02-NDP03/NDP06/NDP10/NDP13/NDP15-NDP17.  The absence of live overlap and
+the deliberately withheld serial fault/rejection/restart phases leave
+R11/R12/R14/R16 and NDP11/NDP13/NDP16/NDP17 acceptance incomplete.  The
+two-node rung remains fail-closed and the dependent scale ladder must not run.
 
 ## Manager-freeze convergence retry (K40 submitted, 2026-07-22)
 
