@@ -13,7 +13,7 @@ from enum import Enum
 import math
 import threading
 import time
-from typing import Callable, Generic, TypeVar
+from typing import Callable, Generic, Iterable, TypeVar
 
 T = TypeVar("T")
 
@@ -95,6 +95,80 @@ class PipelineEvent:
     phase: str
     identity: GenerationIdentity
     details: dict[str, object]
+
+
+@dataclass(frozen=True)
+class ExclusiveSpan:
+    """One non-overlapping interval in a generation wall-clock budget."""
+
+    generation: int
+    trainer: str
+    phase: str
+    begin_ns: int
+    end_ns: int
+    foreground: bool
+
+    def validate(self) -> None:
+        if (self.generation < 0 or not self.trainer or not self.phase
+                or self.begin_ns < 0 or self.end_ns <= self.begin_ns):
+            raise ValueError("invalid exclusive generation span")
+
+
+def close_generation_budget(spans: Iterable[ExclusiveSpan], *, cadence_ns: int,
+                            tolerance_fraction: float = .02,
+                            tolerance_ns: int = 1_000_000_000) -> dict[str, object]:
+    """Close an exclusive wall-clock budget, including concurrent work once.
+
+    Input spans may overlap across foreground/background lanes, but spans on
+    the same lane must be exclusive.  The union is reconciled against cadence;
+    an unlabeled gap is returned as an explicit span instead of being hidden
+    in an ``other`` bucket.  Production reports use this for each trainer.
+    """
+    values = sorted(tuple(spans), key=lambda value: (value.begin_ns, value.end_ns))
+    if cadence_ns <= 0 or not values:
+        raise ValueError("budget requires positive cadence and at least one span")
+    for value in values:
+        value.validate()
+    generation, trainer = values[0].generation, values[0].trainer
+    if any((value.generation, value.trainer) != (generation, trainer)
+           for value in values):
+        raise ValueError("one budget may contain only one trainer generation")
+    lanes: dict[bool, list[ExclusiveSpan]] = {True: [], False: []}
+    for value in values:
+        lane = lanes[value.foreground]
+        if lane and value.begin_ns < lane[-1].end_ns:
+            raise ValueError("same-lane generation spans overlap")
+        lane.append(value)
+    origin = min(value.begin_ns for value in values)
+    finish = origin + cadence_ns
+    intervals = sorted((max(origin, value.begin_ns), min(finish, value.end_ns))
+                       for value in values if value.begin_ns < finish
+                       and value.end_ns > origin)
+    # ``covered_ns`` is the actual union, not the sum of the lanes.
+    merged_ns = 0
+    cursor = origin
+    gaps: list[int] = []
+    for begin, end in intervals:
+        if begin > cursor:
+            gaps.append(begin - cursor)
+            cursor = begin
+        if end > cursor:
+            merged_ns += end - cursor
+            cursor = end
+    if cursor < finish:
+        gaps.append(finish - cursor)
+    gap_ns = cadence_ns - merged_ns
+    tolerance = max(tolerance_ns, int(cadence_ns * tolerance_fraction))
+    phases: dict[str, int] = {}
+    for value in values:
+        phases[value.phase] = phases.get(value.phase, 0) + value.end_ns - value.begin_ns
+    return {
+        "generation": generation, "trainer": trainer, "cadence_ns": cadence_ns,
+        "covered_union_ns": merged_ns, "overlap_ns": sum(phases.values()) - merged_ns,
+        "unaccounted_ns": gap_ns, "within_tolerance": abs(gap_ns) <= tolerance,
+        "phases_ns": phases,
+        "first_uninstrumented_ns": gaps[0] if gaps else 0,
+    }
 
 
 @dataclass(frozen=True)
