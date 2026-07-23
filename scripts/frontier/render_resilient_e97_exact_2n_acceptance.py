@@ -1,12 +1,13 @@
-#!/usr/bin/env python3
+#!/bin/sh
+""":"
+exec "${EMENDER_PYTHON:?source scripts/frontier/activate_emender_frontier.sh first}" "$0" "$@"
+":"""
 """Render the authoritative real-E97 two-node pipelined acceptance sequence.
 
 Rendering is deliberately the default.  Submission requires ``--submit`` and
 passes through the same fail-closed source/allocation checks, which makes this
 file safe to use in CI without accidentally creating a Frontier allocation.
 """
-
-from __future__ import annotations
 
 import argparse
 import hashlib
