@@ -39,6 +39,13 @@ No duplicate, later serial phase, or job larger than two nodes was submitted.
 The same job must be monitored through terminal state before any serial phase
 can advance.
 
+At the 2026-07-23 06:46 EDT resume checkpoint, `squeue` and `sacct` still
+record job `5059293` as `PENDING (Priority)`, with zero elapsed time, exactly
+two requested nodes, and no assigned nodes. It remains the sole equivalent
+allocation. No submission command was run: an ordinary priority wait does not
+authorize a duplicate, a later serial phase, or a job larger than two nodes.
+Terminal monitoring therefore continues against job `5059293`.
+
 Conformance was checked against *Resilient DiLoCo Compute Pool* v1 R01-R16
 and *Native resilient DiLoCo data plane* v1 NDP01-NDP17. This checkpoint
 establishes the exact pushed source/bundle identity, canonical build,
