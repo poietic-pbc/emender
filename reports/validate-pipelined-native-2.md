@@ -2,7 +2,36 @@
 
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
-Result: **manager-freeze-fix exact-source G2 passed; sole K40 replacement 5055899 completed five atomic generations but failed strict live overlap**
+Result: **generation-gap-fix exact-source G2 refresh 5059285 submitted on exactly two nodes; terminal monitoring active**
+
+## Production generation-gap retry (G2 submitted, 2026-07-23)
+
+The prior sole K40 job `5055899` is terminal `FAILED 1:0` on exactly two
+nodes, and a fresh scheduler query showed no active user allocation.
+Authoritative `origin/main` is now
+`4e35a83ab3d9bed6d950daff72034da1a45fe011`, containing the reviewed
+production generation-gap fix.  A clean authoritative clone at
+`/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-generation-gap-20260723T093000Z/source`
+was fetched directly from the remote and verified byte-for-byte at that
+commit.
+
+The canonical Frontier environment rebuilt the exact native bundle.  Its
+build-manifest SHA-256 is
+`17aba1bcf9b21a71ba727eccd7a61fcb47b23e0d481a6e9491187286f7d5c087`;
+the build script's canonical native CTest run passed 10/10.  After a second
+adjacent empty-queue check, the fail-closed G2 launcher submitted exactly one
+job, `5059285`, requesting exactly two nodes.  No K40 job, duplicate, later
+serial phase, or job larger than two nodes was submitted.  The G2 job must be
+monitored through terminal state and its exact-source correctness/integrity
+gate harvested before the single K40 replacement is eligible.
+
+Conformance was checked against *Resilient DiLoCo Compute Pool* v1 R01-R16
+and *Native resilient DiLoCo data plane* v1 NDP01-NDP17.  This checkpoint
+establishes the exact pushed source/bundle identity, canonical build, empty
+queue, serialized two-node admission, and fail-closed precursor ordering
+required by R10/R13/R14/R16 and NDP02/NDP03/NDP13/NDP16/NDP17.  Runtime
+overlap, timing, resilience, rejection, and restart claims remain withheld
+pending live terminal evidence.
 
 ## Manager-freeze convergence retry terminal harvest (2026-07-22)
 
