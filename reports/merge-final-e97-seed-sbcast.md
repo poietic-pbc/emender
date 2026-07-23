@@ -4,7 +4,7 @@ This review integrates the submit-side E97 seed bootstrap from staged commit
 `03e75b1501008cac0632ed62b548ee5fdd4e8c5b` with authoritative
 `origin/main` at `f6003e32e14b89e0fde1f6b7f47b6402285d7b39`. The conflict-free
 ancestry-preserving integration commit is
-`f913289ec41359b5ac15fb8be13b5212c6aef5cf`. No Slurm job was submitted and
+`f913289e0751cfb2aeb94d6036827500a26f06ef`. No Slurm job was submitted and
 the production checkpoint was not downloaded during this review.
 
 ## Reviewed safety properties
