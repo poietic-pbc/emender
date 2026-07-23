@@ -2,7 +2,7 @@
 
 Date: 2026-07-23  
 Task: `validate-pipelined-native-2-final-seed`  
-Status: sbcast retry in progress; exact-source G2 refresh job 5062165 pending
+Status: clean five-generation job 5062348 pending; scheduler wait checkpoint
 
 ## Retained terminal attempt
 
@@ -34,16 +34,33 @@ and manifest SHA-256
 `4292f332ecdef76f5dff57788408418f5714e61ad2202f7d2e8b70aa4f572552`.
 
 After an immediately adjacent empty-user-queue check, exactly one prerequisite
-G2 refresh was submitted:
+G2 refresh was submitted. It is now terminal:
 
 ```text
-5062165|PENDING|batch|debug|2|0:00|(Priority)|native-ndp-g2-clean
+5062165|COMPLETED|0:0|00:02:52|batch|debug|2|frontier[08634,08641]
 ```
 
-`sacct` independently records job 5062165 as `PENDING`, zero elapsed, exactly
-two nodes, `Partition=batch`, and `QOS=debug`. No replacement K40 job, later
-serial phase, duplicate, or allocation larger than two nodes has been
-submitted. This task is parked until the exact-source G2 job is terminal.
+The retained full-layout artifact passes its `SHA256SUMS` verification and
+records source `2e485fa7`, bundle
+`9884a02d84bd9560a15314c26e386868350b865e688cc4c701c802f4f686227a`,
+manifest `4292f332ecdef76f5dff57788408418f5714e61ad2202f7d2e8b70aa4f572552`,
+provider `cxi`, two READY endpoints, zero MPI/all-rank collectives, and the
+exact `batch/debug` scheduler binding.
+
+With the user queue empty, the serial fail-closed controller rebuilt the same
+bundle (10/10 CTests), re-attested it against G2, fully revalidated the
+submit-side checkpoint cache, and submitted exactly one clean phase:
+
+```text
+5062348|resilient-e97-true-2n|PENDING|batch|debug|2|0:00|(Priority)
+```
+
+`sacct`, `squeue`, and `scontrol` agree on two requested nodes,
+`Partition=batch`, `QOS=debug`, zero runtime, and five K40 generations.
+Controller state names `clean-overlap` as its only active phase and has empty
+history. No duplicate, fault/rejection/checkpoint/restart phase, or allocation
+larger than two nodes has been submitted. This task is parked until 5062348 is
+terminal.
 
 ## Seed bootstrap proof
 
@@ -62,6 +79,20 @@ checks the live job ID, node-local filesystem/path, checkpoint size/SHA,
 attestation digest and authority bytes, and records `network_fetches: 0`
 before `RESILIENT_E97_SEED` is exported or the allocation supervisor can load
 a model.
+
+For job 5062348, the submit cache is a regular, single-link file of exactly
+`7719680116` bytes. Its digest-addressed basename and the pinned attestation
+bind SHA-256
+`0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2`,
+step 2300930, 150793748480 tokens, and byte-identical live authority
+documents. The attestation SHA-256 is
+`274465e2676b99cc0154388454643f49207c04874aed80a41f474c07c99d96cb`.
+The exact rendered batch script SHA-256 is
+`8992a017b26ddfc090ff69170171a593a8047935e0edd84be531e16db007c730`;
+a source audit finds zero S3/HTTP URL or network-client reference. It retains
+the literal deferred template, expands it using the live `SLURM_JOB_ID`,
+sbcasts both pinned files, and requires every node-local size/hash/authority
+verifier to succeed before exporting the model seed.
 
 ## Conformance and validation
 
@@ -83,7 +114,12 @@ empty immediately before submission
 NDP_BUILD_MANIFEST=... NDP_ARTIFACT_ROOT=... \
   bash scripts/frontier/submit_native_dataplane_2n_gate.sh clean
 5062165
-squeue/sacct: PENDING, 2 nodes, Partition=batch, QOS=debug
+sacct: COMPLETED 0:0, 2 nodes, Partition=batch, QOS=debug
+sha256sum -c g2-artifacts/5062165/SHA256SUMS
+PASS (6/6)
+render_resilient_e97_exact_2n_acceptance.py ... --submit
+SUBMITTED phase=clean-overlap job_id=5062348
+squeue/sacct/scontrol: PENDING, 2 nodes, Partition=batch, QOS=debug
 ```
 
 Five K40 generations, overlap and idle/cadence metrics, useful/wire bytes,
