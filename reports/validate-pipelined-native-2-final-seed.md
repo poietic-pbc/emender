@@ -62,6 +62,15 @@ history. No duplicate, fault/rejection/checkpoint/restart phase, or allocation
 larger than two nodes has been submitted. This task is parked until 5062348 is
 terminal.
 
+At the 2026-07-23 20:38 UTC watch cycle, `squeue --start` estimated
+`2026-07-24T00:56:00`, more than four hours away. `squeue`, `scontrol`, and
+`sacct` still agreed that the job was `PENDING (Priority)`, requested exactly
+two nodes, used `Partition=batch` and `QOS=debug`, and had consumed zero
+runtime. `scontrol` retained the exact rendered script, five-generation
+environment, final-seed identity, and clean-overlap controller paths. Per the
+long-pending watch policy, no equivalent job was submitted and the next
+observation is parked for 30 minutes.
+
 ## Seed bootstrap proof
 
 The merged batch bootstrap contains no S3 URI, HTTP URL, or network-fetch
@@ -120,6 +129,7 @@ PASS (6/6)
 render_resilient_e97_exact_2n_acceptance.py ... --submit
 SUBMITTED phase=clean-overlap job_id=5062348
 squeue/sacct/scontrol: PENDING, 2 nodes, Partition=batch, QOS=debug
+squeue --start: 2026-07-24T00:56:00 (more than 60 minutes away)
 ```
 
 Five K40 generations, overlap and idle/cadence metrics, useful/wire bytes,
