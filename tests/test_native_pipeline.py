@@ -4,6 +4,7 @@ import time
 import pytest
 
 from ndm.native_pipeline import (BackgroundWork, CommittedResult,
+                                 ExclusiveSpan, close_generation_budget,
                                  GenerationIdentity, LiveNativeGenerationScheduler,
                                  NativeGenerationPipeline, finite_result_verifier)
 
@@ -225,3 +226,44 @@ def test_delayed_boundary_never_admits_future_or_two_generation_stale_result():
     assert not scheduler.apply_at_safe_boundary(identity(2), apply=lambda _: None)
     assert pipe.metrics.stale_results == 1
     scheduler.close()
+
+
+def test_job_5055899_exclusive_budget_exposes_entire_foreground_gap():
+    """R14/NDP16: never hide the 5055899 cadence loss in an ``other`` bucket."""
+    second = 1_000_000_000
+    # Retained summary: raw K40=63.369s, maximum measured background=22.230s,
+    # cadence=357.956s.  These exclusive lanes leave the observed synchronous
+    # interval explicit, rather than misclassifying it as background overlap.
+    spans = [
+        ExclusiveSpan(1, "node-0-trainer-0", "k40", 0,
+                      int(63.369 * second), True),
+        ExclusiveSpan(1, "node-0-trainer-0", "immutable_handoff",
+                      int(63.369 * second), int(64.186 * second), True),
+        ExclusiveSpan(1, "node-0-trainer-0", "measured_background",
+                      int(64.186 * second), int(86.416 * second), False),
+        ExclusiveSpan(1, "node-0-trainer-0",
+                      "foreground_exchange_result_apply_checkpoint_wait",
+                      int(64.186 * second), int(357.956 * second), True),
+    ]
+    budget = close_generation_budget(
+        spans, cadence_ns=int(357.956 * second))
+    assert budget["within_tolerance"]
+    assert budget["unaccounted_ns"] == 0
+    assert budget["overlap_ns"] == int(22.230 * second)
+    assert budget["phases_ns"][
+        "foreground_exchange_result_apply_checkpoint_wait"] == int(293.770 * second)
+
+
+def test_exclusive_budget_rejects_same_lane_double_count_and_labels_gap():
+    with pytest.raises(ValueError, match="same-lane"):
+        close_generation_budget([
+            ExclusiveSpan(0, "trainer", "copy", 0, 10, True),
+            ExclusiveSpan(0, "trainer", "serialize", 9, 20, True),
+        ], cadence_ns=20, tolerance_ns=0)
+    budget = close_generation_budget([
+        ExclusiveSpan(0, "trainer", "k40", 0, 60, True),
+        ExclusiveSpan(0, "trainer", "exchange", 80, 90, False),
+    ], cadence_ns=100, tolerance_fraction=0, tolerance_ns=1)
+    assert budget["unaccounted_ns"] == 30
+    assert budget["first_uninstrumented_ns"] == 20
+    assert not budget["within_tolerance"]
