@@ -101,6 +101,14 @@ generations, job 5060027, and the requested `Partition=batch`/`QOS=debug`.
 No fault/rejection/checkpoint/restart phase, duplicate, or job larger than two
 nodes has been submitted. This task is parked while job 5060027 is pending.
 
+The 2026-07-23 10:55 EDT resume check again found 5060027 as the sole job in
+the user queue. `squeue -o '%i|%T|%D|%P|%q|%R|%j'` reported
+`5060027|PENDING|2|batch|debug|(Priority)|resilient-e97-true-2n`, and the
+independent `sacct` record agreed on `PENDING`, two nodes, `Partition=batch`,
+and `QOS=debug`. It had not started or consumed runtime. The retained
+controller state still names this job as the five-generation `clean-overlap`
+phase, so no equivalent or later-phase submission was made.
+
 ## Validation checkpoint
 
 - R01-R16 and NDP01-NDP17: reviewed against the version-1 authority; runtime
