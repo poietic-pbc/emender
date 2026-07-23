@@ -105,7 +105,7 @@ def _filesystem_type(path: Path) -> str:
 def _validate_destination(destination: Path) -> Path:
     destination = destination.resolve()
     job_id = os.environ.get("SLURM_JOB_ID")
-    if not job_id or job_id not in destination.parts:
+    if not job_id or destination.parent.name != f"emender-e97-seed-{job_id}":
         raise ValueError("destination must be scoped by the current SLURM_JOB_ID")
     filesystem_type = _filesystem_type(destination)
     if filesystem_type in SHARED_FILESYSTEM_TYPES:

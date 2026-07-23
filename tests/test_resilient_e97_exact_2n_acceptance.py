@@ -10,6 +10,10 @@ import pytest
 ROOT = Path(__file__).parents[1]
 SPEC = importlib.util.spec_from_file_location("exact_2n", ROOT / "scripts/frontier/render_resilient_e97_exact_2n_acceptance.py")
 MODULE = importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(MODULE)
+SEED_SPEC = importlib.util.spec_from_file_location(
+    "seed_materializer", ROOT / "scripts/frontier/materialize_e97_s3_seed.py")
+SEED_MODULE = importlib.util.module_from_spec(SEED_SPEC)
+SEED_SPEC.loader.exec_module(SEED_MODULE)
 CANONICAL_SEED = json.loads(
     (ROOT / "configs/frontier/e97_async_256.yaml").read_text())["seed"]
 
@@ -86,7 +90,8 @@ def _serial_plan(tmp_path):
     return {"source_commit": commit, "authoritative_stage": {"source": {"commit": commit},
             "build_manifest": "/stage/native.json"}, "seed": CANONICAL_SEED,
             "queue": {"partition": "batch", "qos": "debug"}, "phases": [{
-        "name": name, "run_dir": str(tmp_path / name), "launcher": "two.sbatch",
+        "name": name, "run_dir": str(tmp_path / name),
+        "launcher": "scripts/frontier/resilient_e97_true_2n.sbatch",
         "full_layout_gate": str(tmp_path / "g2.json"), "fence_ordinal": index + 1,
         "generations": 5 if index == 0 else 1, "initial_generation": index,
         "injection": {}} for index, name in enumerate(("clean-overlap", "fault-rejoin"))]}
@@ -114,7 +119,8 @@ def test_one_job_qos_never_receives_concurrent_phase_submission(monkeypatch, tmp
     assert sbatch[sbatch.index("-p") + 1] == "batch"
     assert "--qos=debug" in sbatch
     assert sbatch[sbatch.index("--chdir") + 1] == os.fspath(ROOT.resolve())
-    assert sbatch[-1] == os.fspath((ROOT / "two.sbatch").resolve())
+    assert sbatch[-1] == os.fspath(
+        (tmp_path / "clean-overlap/rendered.sbatch").resolve())
     exported = next(value for value in sbatch if value.startswith("--export=ALL,"))
     for required in ("REPO=", "NDP_FULL_LAYOUT_GATE_JSON=", "EMENDER_CONDA_ENV=",
                      "RESILIENT_E97_SEED_CONFIG=", "RESILIENT_E97_SEED_STEP=2300930",
@@ -126,6 +132,35 @@ def test_one_job_qos_never_receives_concurrent_phase_submission(monkeypatch, tmp
                      "RESILIENT_E97_SOURCE_ID=", "RESILIENT_E97_PAYLOAD_ID="):
         assert required in exported
     assert "RESILIENT_E97_SEED=/lustre" not in exported
+
+
+def test_submit_shell_preserves_job_id_until_batch_runtime(monkeypatch, tmp_path):
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    rendered = MODULE.render_batch_script(
+        ROOT, "scripts/frontier/resilient_e97_true_2n.sbatch",
+        tmp_path / "rendered.sbatch")
+    payload = rendered.read_text()
+    deferred = "'/tmp/emender-e97-seed-${SLURM_JOB_ID}'"
+    assert deferred in payload
+    assert "/tmp/emender-e97-seed-/checkpoint-step-" not in payload
+
+    result = subprocess.run(
+        ["bash", "-c", r"""
+set -euo pipefail
+SLURM_JOB_ID=5059548
+RESILIENT_E97_JOB_SEED_TEMPLATE='/tmp/emender-e97-seed-${SLURM_JOB_ID}'
+RESILIENT_E97_JOB_SEED_DIR=${RESILIENT_E97_JOB_SEED_TEMPLATE/'${SLURM_JOB_ID}'/"$SLURM_JOB_ID"}
+printf '%s\n' "$RESILIENT_E97_JOB_SEED_DIR/checkpoint-step-2300930.pt"
+"""],
+        text=True, capture_output=True, check=True, env={
+            key: value for key, value in os.environ.items()
+            if key != "SLURM_JOB_ID"
+        })
+    assert result.stdout.strip() == (
+        "/tmp/emender-e97-seed-5059548/checkpoint-step-2300930.pt")
+    monkeypatch.setenv("SLURM_JOB_ID", "5059548")
+    destination = Path(result.stdout.strip())
+    assert SEED_MODULE._validate_destination(destination) == destination
 
 
 def test_scheduler_queries_and_retains_partition_and_qos_explicitly(monkeypatch):
