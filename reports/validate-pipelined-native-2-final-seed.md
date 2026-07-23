@@ -109,6 +109,14 @@ and `QOS=debug`. It had not started or consumed runtime. The retained
 controller state still names this job as the five-generation `clean-overlap`
 phase, so no equivalent or later-phase submission was made.
 
+The 2026-07-23 11:15 EDT resume check still found 5060027 as the sole user
+queue job: `PENDING`, reason `Priority`, exactly two nodes,
+`Partition=batch`, and `QOS=debug`. Independent `sacct` and `scontrol -dd`
+records agree, show zero runtime, and retain the exact clean-overlap command,
+five-generation request, final-seed identity, native/G2 manifests, and
+two-hour walltime. Slurm currently estimates a 13:10 EDT start. No duplicate,
+later serial phase, or job larger than two nodes was submitted.
+
 ## Validation checkpoint
 
 - R01-R16 and NDP01-NDP17: reviewed against the version-1 authority; runtime
