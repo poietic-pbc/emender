@@ -1,5 +1,53 @@
 # Pipelined native DiLoCo two-node gate attempt
 
+## Final-seed/debug-QoS replacement checkpoint (2026-07-23)
+
+The evaluated final-seed/debug-QoS integration is authoritative at
+`7ab92adabcd63ae4c5d0cf2d2c408b0fe182a944`; `git fetch`, the local
+`origin/main` ref, and `git ls-remote origin refs/heads/main` agreed exactly.
+The previous generation-gap replacement, job `5059293`, was cancelled before
+allocation after its obsolete seed binding was discovered. Terminal accounting
+records zero elapsed time on exactly two requested nodes, with
+`Partition=batch` and `QOS=debug`.
+
+A fresh clean clone and native stage were created at:
+
+```text
+/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-final-seed-20260723T123000Z
+```
+
+The canonical Frontier environment selected the approved Python 3.12 and
+ROCm/Cray stack. The exact-source native build, install, artifact recording,
+and CTest completed successfully (**10/10 passed**). After an adjacent empty
+user-queue check, exact-source G2 job `5059531` ran on exactly two nodes and
+completed `0:0` in 2:52. Both live and terminal scheduler evidence explicitly
+record `Partition=batch` and `QOS=debug`. The full-layout correctness and
+integrity gate is retained at:
+
+```text
+/lustre/orion/bif148/scratch/erikgarrison/emender-exact2n-final-seed-20260723T123000Z/g2-artifacts/5059531/full-layout-gate.json
+sha256 df042cce1743ff8c4a0f5623aa9e8ba7d61a41ab6c6c6497b2873a2c12ed9004
+```
+
+The gate attests source `7ab92ada...` and native bundle
+`9884a02d84bd9560a15314c26e386868350b865e688cc4c701c802f4f686227a`.
+After G2 reached terminal state and the queue was empty again, the canonical
+serial acceptance controller rebuilt and re-attested the exact native bundle
+and submitted only clean-overlap job `5059548`. It requests exactly two nodes,
+five K40 generations, a two-hour bound, `Partition=batch`, and `QOS=debug`.
+The scheduler-exported immutable seed identity is step `2300930`, tokens
+`150793748480`, size `7719680116`, and SHA256
+`0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2`.
+At this checkpoint job `5059548` is the sole active equivalent job and remains
+`PENDING (Priority)`; no duplicate, later serial phase, or job larger than two
+nodes was submitted.
+
+Conformance was checked against the complete Compute Pool v1 checklist and gap
+matrix. This checkpoint exercises R01, R05, R08-R10, R13-R14, R16 and
+NDP02-NDP03, NDP06, NDP09, NDP11, NDP13-NDP14, NDP16-NDP17. Live runtime
+claims under R04, R06-R07, R11-R12 and NDP10, NDP15-NDP17 await terminal K40
+and serial-phase artifacts.
+
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
 Result: **exact two-node clean phase submitted; multi-phase chain blocked by the debug-QoS submit limit**
