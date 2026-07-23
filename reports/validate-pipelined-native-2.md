@@ -2,9 +2,9 @@
 
 Date: 2026-07-20  
 Task: `validate-pipelined-native-2`  
-Result: **generation-gap-fix exact-source G2 refresh 5059285 submitted on exactly two nodes; terminal monitoring active**
+Result: **generation-gap-fix exact 2n K40 replacement 5059293 submitted; terminal monitoring active**
 
-## Production generation-gap retry (G2 submitted, 2026-07-23)
+## Production generation-gap retry (K40 submitted, 2026-07-23)
 
 The prior sole K40 job `5055899` is terminal `FAILED 1:0` on exactly two
 nodes, and a fresh scheduler query showed no active user allocation.
@@ -15,23 +15,37 @@ production generation-gap fix.  A clean authoritative clone at
 was fetched directly from the remote and verified byte-for-byte at that
 commit.
 
-The canonical Frontier environment rebuilt the exact native bundle.  Its
+The canonical Frontier environment rebuilt the exact native bundle. Its
 build-manifest SHA-256 is
 `17aba1bcf9b21a71ba727eccd7a61fcb47b23e0d481a6e9491187286f7d5c087`;
 the build script's canonical native CTest run passed 10/10.  After a second
 adjacent empty-queue check, the fail-closed G2 launcher submitted exactly one
-job, `5059285`, requesting exactly two nodes.  No K40 job, duplicate, later
-serial phase, or job larger than two nodes was submitted.  The G2 job must be
-monitored through terminal state and its exact-source correctness/integrity
-gate harvested before the single K40 replacement is eligible.
+job, `5059285`, requesting exactly two nodes. It completed `0:0` in 2:57 on
+`frontier[07935-07936]`. Exact-source correctness/integrity passed, with
+44,322,599,424 useful bytes and 44,323,138,304 wire bytes in each direction.
+Its three measured generation intervals were 22.014, 22.971, and 22.959
+seconds (22.959-second median); the 4.310x historical-Python comparison is
+telemetry, not the primary gate. The immutable full-layout gate SHA-256 is
+`759e1f161ae74162b780ea65d0b07d05c48f771db318145b11cc007bdfbf4a84`.
+
+After G2 reached terminal state, the per-user scheduler query was empty. The
+canonical serial controller rebuilt the exact source again, passed native
+CTest 10/10, re-attested the same source/bundle/G2 identity, and submitted
+exactly one clean K40 replacement: job `5059293`, requesting exactly two
+nodes, five K40 generations, and the two-hour debug bound. Its first observed
+state is `PENDING (Priority)`. The immutable acceptance manifest SHA-256 is
+`7ed14f9ab6318d39bfe8ddbe48f2642e74324e37771f526ae014f8fd1eee74c4`.
+No duplicate, later serial phase, or job larger than two nodes was submitted.
+The same job must be monitored through terminal state before any serial phase
+can advance.
 
 Conformance was checked against *Resilient DiLoCo Compute Pool* v1 R01-R16
-and *Native resilient DiLoCo data plane* v1 NDP01-NDP17.  This checkpoint
-establishes the exact pushed source/bundle identity, canonical build, empty
-queue, serialized two-node admission, and fail-closed precursor ordering
-required by R10/R13/R14/R16 and NDP02/NDP03/NDP13/NDP16/NDP17.  Runtime
-overlap, timing, resilience, rejection, and restart claims remain withheld
-pending live terminal evidence.
+and *Native resilient DiLoCo data plane* v1 NDP01-NDP17. This checkpoint
+establishes the exact pushed source/bundle identity, canonical build,
+correctness/integrity gate, empty-queue checks, serialized two-node admission,
+and fail-closed precursor ordering required by R10/R13/R14/R16 and
+NDP02/NDP03/NDP13/NDP16/NDP17. Runtime overlap, timing, resilience, rejection,
+and restart claims remain withheld pending live terminal evidence.
 
 ## Manager-freeze convergence retry terminal harvest (2026-07-22)
 
