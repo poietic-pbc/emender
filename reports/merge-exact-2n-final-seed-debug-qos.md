@@ -1,6 +1,6 @@
 # Exact two-node final-seed/debug-QoS authoritative integration
 
-Date: 2026-07-23  
+Date: 2026-07-23
 Task: `merge-exact-2n-final-seed-debug-qos`
 
 ## Outcome
