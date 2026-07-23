@@ -62,14 +62,25 @@ history. No duplicate, fault/rejection/checkpoint/restart phase, or allocation
 larger than two nodes has been submitted. This task is parked until 5062348 is
 terminal.
 
-At the 2026-07-23 20:38 UTC watch cycle, `squeue --start` estimated
-`2026-07-24T00:56:00`, more than four hours away. `squeue`, `scontrol`, and
+At the 2026-07-23 16:38 EDT watch cycle, `squeue --start` estimated
+`2026-07-24T00:56:00`, approximately 8 hours 18 minutes away. Frontier
+displays this timestamp in cluster-local America/New_York time; it was not
+interpreted as UTC. `squeue`, `scontrol`, and
 `sacct` still agreed that the job was `PENDING (Priority)`, requested exactly
 two nodes, used `Partition=batch` and `QOS=debug`, and had consumed zero
 runtime. `scontrol` retained the exact rendered script, five-generation
 environment, final-seed identity, and clean-overlap controller paths. Per the
 long-pending watch policy, no equivalent job was submitted and the next
 observation is parked for 30 minutes.
+
+At the next resumed watch cycle, the job remained `PENDING (Priority)` with
+zero runtime. `squeue`, `squeue --start`, `scontrol -dd`, and `sacct` again
+agreed on the immutable scheduler identity: job 5062348, exactly two nodes,
+`Partition=batch`, `QOS=debug`, the exact rendered clean-overlap script, the
+final step-2300930 seed, and five requested K40 generations. The scheduler's
+cluster-local estimate materially moved to `2026-07-24T06:58:00`, still more
+than 60 minutes away. No job was altered or submitted; the watch remains on
+the required 30-minute cadence.
 
 ## Seed bootstrap proof
 
@@ -129,7 +140,8 @@ PASS (6/6)
 render_resilient_e97_exact_2n_acceptance.py ... --submit
 SUBMITTED phase=clean-overlap job_id=5062348
 squeue/sacct/scontrol: PENDING, 2 nodes, Partition=batch, QOS=debug
-squeue --start: 2026-07-24T00:56:00 (more than 60 minutes away)
+squeue --start: 2026-07-24T06:58:00 America/New_York
+               (more than 60 minutes away)
 ```
 
 Five K40 generations, overlap and idle/cadence metrics, useful/wire bytes,
