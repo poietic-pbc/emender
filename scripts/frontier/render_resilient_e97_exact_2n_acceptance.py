@@ -244,6 +244,23 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+def render_batch_script(repo: Path, launcher: str, destination: Path) -> Path:
+    """Render the exact submitted script without expanding batch variables."""
+    source = (repo / launcher).resolve()
+    source.relative_to(repo.resolve())
+    payload = source.read_text()
+    deferred = "'/tmp/emender-e97-seed-${SLURM_JOB_ID}'"
+    if deferred not in payload:
+        raise ValueError(
+            "exact launcher must preserve the literal SLURM_JOB_ID seed template")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(payload)
+    destination.chmod(source.stat().st_mode)
+    if deferred not in destination.read_text():
+        raise ValueError("submit-time rendering expanded the batch SLURM_JOB_ID")
+    return destination.resolve()
+
+
 def _scheduler_state(job_id: str) -> dict[str, str]:
     queued = subprocess.check_output(
         ["squeue", "-h", "-j", job_id, "-o", "%T|%P|%q"],
@@ -383,8 +400,8 @@ def advance(plan: dict[str, Any], output: Path, state_path: Path, repo: Path) ->
     }
     if state["history"]:
         exports["RESILIENT_E97_RESUME_HANDOFF"] = state["history"][-1]["terminal_artifact"]
-    launcher = (repo / phase["launcher"]).resolve()
-    launcher.relative_to(repo.resolve())
+    launcher = render_batch_script(
+        repo, phase["launcher"], run_dir / "rendered.sbatch")
     command = ["sbatch", "--parsable", "-N", "2", "-t", WALLTIME,
                "-p", "batch", "--qos=debug", "--network=job_vni",
                "--chdir", str(repo.resolve()),

@@ -184,7 +184,12 @@ PY
 # shared filesystems, an existing/stale path, pointer or manifest drift, and
 # any byte-size or SHA mismatch before any model-bearing trainer can start.
 : "${SLURM_JOB_ID:?job-local seed materialization requires SLURM_JOB_ID}"
-RESILIENT_E97_JOB_SEED_DIR=${RESILIENT_E97_JOB_SEED_DIR:-/tmp/emender-e97-seed-$SLURM_JOB_ID}
+RESILIENT_E97_JOB_SEED_TEMPLATE=${RESILIENT_E97_JOB_SEED_TEMPLATE:-'/tmp/emender-e97-seed-${SLURM_JOB_ID}'}
+[[ $RESILIENT_E97_JOB_SEED_TEMPLATE == '/tmp/emender-e97-seed-${SLURM_JOB_ID}' ]] || {
+  echo "seed destination template must retain the deferred batch SLURM_JOB_ID" >&2
+  exit 64
+}
+RESILIENT_E97_JOB_SEED_DIR=${RESILIENT_E97_JOB_SEED_TEMPLATE/'${SLURM_JOB_ID}'/"$SLURM_JOB_ID"}
 [[ $RESILIENT_E97_JOB_SEED_DIR == "/tmp/emender-e97-seed-$SLURM_JOB_ID" ]] || {
   echo "seed destination must be the immutable job-local /tmp directory" >&2
   exit 64
