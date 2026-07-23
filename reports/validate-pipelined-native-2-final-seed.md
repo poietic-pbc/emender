@@ -2,7 +2,8 @@
 
 Date: 2026-07-23
 Task: `validate-pipelined-native-2-final-seed`
-Status: exact-source G2 passed; clean five-generation K40 job 5060027 pending
+Status: exact-source G2 passed; clean five-generation K40 job 5060027 failed
+closed during seed-authority download
 
 ## Authority and immutable identity
 
@@ -93,13 +94,13 @@ production G2 attestation, and adjacent empty-user-queue check.
 Exactly one real clean replacement was submitted:
 
 ```text
-5060027|resilient-e97-true-2n|PENDING|2|batch|debug|0:00|2:00:00
+5060027|resilient-e97-true-2n|FAILED|1:0|2|batch|debug|00:08:38
 ```
 
 The retained serial controller records phase `clean-overlap`, five K40
 generations, job 5060027, and the requested `Partition=batch`/`QOS=debug`.
 No fault/rejection/checkpoint/restart phase, duplicate, or job larger than two
-nodes has been submitted. This task is parked while job 5060027 is pending.
+nodes has been submitted.
 
 The 2026-07-23 10:55 EDT resume check again found 5060027 as the sole job in
 the user queue. `squeue -o '%i|%T|%D|%P|%q|%R|%j'` reported
@@ -135,16 +136,57 @@ the immutable size and SHA256 above, exact source `f6003e32...`, and the
 attested native/G2 manifests. Slurm now estimates a 14:08 EDT start. No
 duplicate, later serial phase, or job larger than two nodes was submitted.
 
+## Terminal clean-run result
+
+The 2026-07-23 12:51:36 EDT terminal check found an empty user queue.
+Independent terminal accounting and controller evidence agree:
+
+```text
+JobIDRaw|JobName|State|ExitCode|Elapsed|Start|End|Partition|QOS|AllocNodes
+5060027|resilient-e97-true-2n|FAILED|1:0|00:08:38|2026-07-23T12:42:58|2026-07-23T12:51:36|batch|debug|2
+```
+
+`scontrol show job -dd 5060027` additionally records `NumNodes=2`,
+`QOS=debug`, `Partition=batch`, `Reason=NonZeroExitCode`, and nodes
+`frontier[08176,08180]`. The batch script reached both allocated nodes, emitted
+the Python/ROCm runtime identity, and attested the exact production native
+bundle and G2 gate before attempting seed materialization:
+
+```json
+{"backend":"native-cxi","bundle_sha256":"9884a02d84bd9560a15314c26e386868350b865e688cc4c701c802f4f686227a","full_layout":true,"production":true,"source_commit":"f6003e32e14b89e0fde1f6b7f47b6402285d7b39","status":"attested"}
+```
+
+The rendered script proved the intended live job scope at batch time:
+`SLURM_JOB_ID=5060027` expanded the deferred template to the node-local
+destination `/tmp/emender-e97-seed-5060027/checkpoint-step-2300930.pt`.
+Both node-local materializers then failed closed before model load because
+the compute nodes could not reach the S3 authority document. Each
+`urllib.request.urlopen(..., timeout=60)` ended in
+`urllib.error.URLError: <urlopen error timed out>` inside
+`verify_authorities`; the `srun` seed-materialization step exited 1. No seed
+runtime manifest, trainer process, generation, contribution, reduction,
+redistribution, or checkpoint was produced.
+
+This is an environmental network failure in the batch-time authority fetch,
+not evidence for the K40 pipeline. The acceptance therefore makes no claims
+for generation overlap, cadence, idle fraction, useful/wire bytes,
+late/missing contribution recovery, peer loss/rejoin, rejection behavior, or
+checkpoint/restart behavior. In accordance with the exactly-one replacement
+constraint, no second clean job was submitted, and the serial fault/rejection/
+checkpoint/restart phases were not launched.
+
 ## Validation checkpoint
 
 - R01-R16 and NDP01-NDP17: reviewed against the version-1 authority; runtime
-  claims remain pending.
+  claims that require training remain unproven because the clean gate failed
+  closed before model load.
 - Exact source, bundle, final seed, and deferred/live job-ID scoping: recorded.
 - Exact-source G2: passed, job 5059795, `COMPLETED 0:0`, 2 nodes,
   `Partition=batch`, `QOS=debug`, with retained full-layout gate.
 - Scheduler binding: exact two nodes, `Partition=batch`, `QOS=debug`; no
   duplicate and no scale-out. Exactly one clean five-generation replacement,
-  job 5060027, is pending.
+  job 5060027, reached terminal `FAILED 1:0`.
 - Five K40 generations, overlap/SLO metrics, fault/rejoin, rejection,
-  checkpoint failure, and fresh restart: not yet claimed while the clean job
-  is pending; later serial phases remain unsubmitted.
+  checkpoint failure, and fresh restart: not satisfied and not claimed; the
+  clean job failed during fail-closed seed-authority download, and later
+  serial phases remain unsubmitted.
