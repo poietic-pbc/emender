@@ -279,6 +279,76 @@ def test_ready_token_floor_distributed_owner_loss_and_late_join(tmp_path):
                 pass
 
 
+def test_async_v2_owner_results_use_frozen_aggregation_weight_separate_from_tokens(
+        tmp_path):
+    slo = PoolStageSLO(1, 3, 1, 1, 1, 1, 1, 1)
+    control = PoolControlServer(
+        ("127.0.0.1", _port()),
+        PoolControlConfig("async-v2", 11, q_min=2, t_min=10,
+                          ready_fraction=None, base_digest="base",
+                          policy_digest="async-v2-policy",
+                          layout_digest="layout", code_digest="code", slo=slo),
+        evidence_root=tmp_path / "evidence")
+    threading.Thread(target=control.serve_forever, daemon=True).start()
+    clients = [
+        PoolControlClient(control.server_address, timeout_s=1).bind("async-v2", 11)
+        for _ in range(2)
+    ]
+    try:
+        for index, client in enumerate(clients):
+            client.ready(
+                OwnerEndpoint(f"n{index}", f"i{index}", "127.0.0.1",
+                              30000 + index),
+                generation=4, run_id="async-v2")
+        clients[0].open_generation(4, attempt=2, deadline=time.monotonic() + 1)
+        assert clients[0].contribute(
+            4, 2, "n0", "i0", 0, 3, "payload-0",
+            aggregation_weight=18)["status"] == "accepted"
+        assert clients[1].contribute(
+            4, 2, "n1", "i1", 0, 7, "payload-1",
+            aggregation_weight=7)["status"] == "accepted"
+        close = clients[0]._rpc("close", generation=4, attempt=2)
+        assert close["status"] == "commit_ready"
+        assert close["accepted_tokens"] == 10
+        assert close["accepted_weights"] == {"n0": 18, "n1": 7}
+
+        owner_key = (4, 2)
+        for invalid_weight in (0, 10, 24, 26):
+            with pytest.raises(RuntimeError, match="owner result metadata is invalid"):
+                clients[0].announce_owner_result(
+                    generation=4, attempt=2, worker_id="n0", incarnation="i0",
+                    result_root="01" * 32, layout_digest="03" * 32,
+                    global_weight=invalid_weight, result_bytes=64,
+                    deadline=time.monotonic() + 1)
+            assert owner_key not in control.owner_results
+
+        waiting = clients[0]._rpc(
+            "owner_result", generation=4, attempt=2, worker_id="n0",
+            incarnation="i0", result_root="01" * 32,
+            layout_digest="03" * 32, global_weight=25, result_bytes=64)
+        assert waiting == {"status": "waiting", "reported": 1, "required": 2}
+        prior = dict(control.owner_results[owner_key])
+        with pytest.raises(RuntimeError, match="conflicting owner result replay"):
+            clients[0].announce_owner_result(
+                generation=4, attempt=2, worker_id="n0", incarnation="i0",
+                result_root="04" * 32, layout_digest="03" * 32,
+                global_weight=25, result_bytes=64,
+                deadline=time.monotonic() + 1)
+        assert control.owner_results[owner_key] == prior
+
+        ready = clients[1].announce_owner_result(
+            generation=4, attempt=2, worker_id="n1", incarnation="i1",
+            result_root="02" * 32, layout_digest="04" * 32,
+            global_weight=25, result_bytes=68,
+            deadline=time.monotonic() + 1)
+        assert ready["status"] == "ready"
+        assert ready["global_weight"] == 25
+        assert close["accepted_tokens"] == 10
+    finally:
+        control.shutdown()
+        control.server_close()
+
+
 def test_four_owner_round_robin_route_readiness_is_reciprocal(tmp_path):
     from scripts.frontier import resilient_e97_role as role
 

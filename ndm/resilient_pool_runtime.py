@@ -473,12 +473,18 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
         accepted = {(item.worker_id, item.incarnation) for item in close.frozen_identities}
         if (worker_id, incarnation) not in accepted:
             raise ValueError("owner result reporter is outside the frozen accepted set")
+        frozen = set(close.frozen_identities)
+        aggregation_weight = sum(
+            item.aggregation_weight for item in admission._accepted.values()
+            if item.identity in frozen)
+        if aggregation_weight <= 0:
+            raise ValueError("frozen aggregation weight is invalid")
         root = str(request["result_root"])
         layout_digest = str(request["layout_digest"])
         weight, result_bytes = int(request["global_weight"]), int(request["result_bytes"])
         if (len(root) != 64 or root == "00" * 32
                 or len(layout_digest) != 64 or layout_digest == "00" * 32
-                or weight != close.accepted_tokens
+                or weight != aggregation_weight
                 or result_bytes <= 0):
             raise ValueError("owner result metadata is invalid")
         values = self.owner_results.setdefault((generation, attempt), {})
@@ -493,7 +499,7 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
         if set(values) != accepted_workers:
             return {"status": "waiting", "reported": len(values),
                     "required": len(accepted_workers)}
-        return {"status": "ready", "global_weight": close.accepted_tokens,
+        return {"status": "ready", "global_weight": aggregation_weight,
                 "roots": {worker: str(values[worker]["result_root"])
                           for worker in sorted(values)},
                 "owners": {worker: {
