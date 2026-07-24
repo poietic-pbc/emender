@@ -2,7 +2,7 @@
 
 Date: 2026-07-23  
 Task: `validate-pipelined-native-2-final-seed`  
-Status: clean five-generation job 5062348 running; generation 1 checkpoint
+Status: clean five-generation job 5062348 running; four generations atomic
 
 ## Retained terminal attempt
 
@@ -173,6 +173,17 @@ respectively. Thus generations 0, 1, and 2 have completed the atomic
 background pipeline while later K40 compute continued. Generation 3 was
 active at this observation. The job was neither altered nor duplicated; the
 watch cadence remains five minutes while it is running.
+
+At `2026-07-23T20:29:09-04:00`, all scheduler views continued to bind the
+sole job to exactly two nodes, `Partition=batch`, `QOS=debug`, and zero
+restarts. Generation 3 reached two-node `commit_ready` with 5,245,440
+accepted tokens at 20:24:22 EDT. Its 7,899,873,267-byte generation-4
+checkpoint and atomic handoff manifest were published at 20:26:28 and
+20:26:37, while all 16 trainers were already computing generation 4. Four
+generations (0 through 3) are therefore atomically complete with repeated
+checkpoint/publication overlap into the next K40 window. Generation 4 remains
+active, so the clean gate is not yet terminal and no serial follow-on phase
+has been launched.
 
 ## Seed bootstrap proof
 
