@@ -128,6 +128,23 @@ immutable final-seed identity, five-generation request, and
 `NumNodes=2-2`. No job was altered or submitted; the next observation
 therefore remains on the requested 30-minute cadence.
 
+At `2026-07-23T20:03:45-04:00`, job 5062348 had materially transitioned to
+`RUNNING` (start `2026-07-23T19:57:33-04:00`). `squeue`, `scontrol`, and
+`sacct` agreed on exactly two nodes, `Partition=batch`, `QOS=debug`, and no
+restart. It remained the sole user-queue job; no alteration or duplicate was
+submitted. The batch bootstrap steps completed before the two-node Python
+step began. Both node verification records bind the live job ID `5062348`,
+the live-job-scoped path
+`/tmp/emender-e97-seed-5062348/checkpoint-step-2300930.pt`, exact size
+`7719680116`, exact SHA-256
+`0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2`,
+the pinned authority-attestation digest, and `network_fetches: 0`. Only after
+those records passed did the runtime attest the native bundle and start two
+managers plus 16 real trainers. At this checkpoint both managers reported
+`native_service_ready`, all trainers reached `runtime_import`, and node 0
+trainers had advanced to `model_build_start`; the job was still active, so
+generation and performance results remain unclaimed.
+
 ## Seed bootstrap proof
 
 The merged batch bootstrap contains no S3 URI, HTTP URL, or network-fetch
@@ -185,9 +202,10 @@ sha256sum -c g2-artifacts/5062165/SHA256SUMS
 PASS (6/6)
 render_resilient_e97_exact_2n_acceptance.py ... --submit
 SUBMITTED phase=clean-overlap job_id=5062348
-squeue/sacct/scontrol: PENDING, 2 nodes, Partition=batch, QOS=debug
-squeue --start: 2026-07-24T04:54:00 America/New_York
-               (more than 60 minutes away)
+squeue/sacct/scontrol: RUNNING, 2 nodes, Partition=batch, QOS=debug
+start: 2026-07-23T19:57:33 America/New_York
+seed-materialization/frontier04968.json: exact hash/size/job ID, network_fetches=0
+seed-materialization/frontier07542.json: exact hash/size/job ID, network_fetches=0
 ```
 
 Five K40 generations, overlap and idle/cadence metrics, useful/wire bytes,
