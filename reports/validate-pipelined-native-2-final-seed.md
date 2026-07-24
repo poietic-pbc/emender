@@ -162,6 +162,18 @@ one completed atomic K40 generation plus direct evidence of generation-g
 checkpoint publication overlapping generation-(g+1) compute. Five-generation
 and steady-state performance claims remain gated on terminal evidence.
 
+At `2026-07-23T20:20:44-04:00`, the allocation remained the sole exact
+`RUNNING` job, with `squeue`, `scontrol -dd`, and `sacct` agreeing on exactly
+two nodes, `Partition=batch`, `QOS=debug`, no restart, and the unchanged
+five-generation clean phase. Generations 1 and 2 each subsequently reached
+two-node `commit_ready` with 5,245,440 accepted tokens. Their finalized
+generation-2 and generation-3 checkpoints are each 7,899,873,267 bytes, and
+their atomic handoff manifests were published at 20:14:41 and 20:20:40 EDT,
+respectively. Thus generations 0, 1, and 2 have completed the atomic
+background pipeline while later K40 compute continued. Generation 3 was
+active at this observation. The job was neither altered nor duplicated; the
+watch cadence remains five minutes while it is running.
+
 ## Seed bootstrap proof
 
 The merged batch bootstrap contains no S3 URI, HTTP URL, or network-fetch
