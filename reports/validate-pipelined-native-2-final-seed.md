@@ -5,6 +5,24 @@ Task: `validate-pipelined-native-2-final-seed`
 Status: clean five-generation job 5062348 terminal; five generations atomic,
 but the fail-closed overlap/performance gate rejected the run
 
+## Retry audit
+
+The retry at `2026-07-23T20:42-04:00` re-read both normative design documents
+in full and independently queried terminal Slurm accounting. `squeue` no
+longer knew the terminal job, while `sacct` retained:
+
+```text
+5062348|FAILED|1:0|batch|debug|2026-07-23T19:57:33|2026-07-23T20:33:11|00:35:38|frontier[04968,07542]
+5062348.3|COMPLETED|0:0|||2026-07-23T20:02:50|2026-07-23T20:33:09|00:30:19|frontier[04968,07542]
+```
+
+This confirms the prior harvest rather than opening a new submission
+opportunity: job 5062348 remains the one exact two-node `batch`/`debug` clean
+attempt, its training step completed, and its fail-closed wrapper rejected the
+non-overlapped schedule. No duplicate, replacement, larger allocation, or
+serial follow-on phase was submitted during the retry. Repair and a fresh
+exact-source acceptance belong to downstream task `fix-native-e97`.
+
 ## Retained terminal attempt
 
 Job 5060027 is terminal `FAILED 1:0` after 00:08:38 on exactly two nodes with
