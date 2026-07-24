@@ -1,7 +1,20 @@
 # Resilient DiLoCo Compute Pool
 
-**Status:** Architecture decision and design authority (version 1, 2026-07-17).
-**Authority:** Changes to resilient training behavior MUST conform to this document. The normative compiled transport, local handoff, wire protocol, and Python/native ABI specialization is [Native resilient DiLoCo data plane v1](NATIVE_RESILIENT_DILOCO_DATAPLANE.md). Detailed implementation evidence and gaps live in [the companion matrix](RESILIENT_DILOCO_GAP_MATRIX.md). An implementation must satisfy both authorities; the native specialization cannot weaken the lease, membership, generation, weighting, fencing, atomicity, or recovery rules here. Existing experiments may finish; these documents do not authorize cancelling or mutating jobs.
+**Status:** Architecture decision and design authority. Version 1
+(2026-07-17) remains the strict fresh-only compatibility policy; reviewed
+bounded-lag behavior is defined only by
+[ADR-002: bounded-lag asynchronous DiLoCo v2](ASYNC_DECOUPLED_DILOCO_V2.md)
+(2026-07-24).
+**Authority:** Changes to resilient training behavior MUST conform to this
+document and, when bounded-lag mode is selected, ADR-002. The normative compiled
+transport, local handoff, wire protocol, and Python/native ABI specialization
+is [Native resilient DiLoCo data plane v1](NATIVE_RESILIENT_DILOCO_DATAPLANE.md).
+Detailed implementation evidence and gaps live in
+[the companion matrix](RESILIENT_DILOCO_GAP_MATRIX.md). An implementation must
+satisfy all applicable authorities; the native specialization cannot weaken
+the lease, membership, weighting, fencing, atomicity, or recovery rules here.
+Existing experiments may finish; these documents do not authorize cancelling
+or mutating jobs.
 
 The practical Frontier MVP is one Slurm allocation of any supported size. It acquires an exclusive, expiring, fenced lease for a logical run. Peers inside that allocation become contributors only after synchronizing and advertising READY; they may appear late, disappear, and return without defining a fixed world size or imposing an all-rank barrier. The same protocol applies to a future very large, potentially system-scale, single allocation.
 
@@ -11,7 +24,7 @@ Normative words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** have their RFC 2
 
 The goal is a versioned compute pool that makes bounded progress through committed DiLoCo generations despite ordinary process or node churn. Correctness means exact token/sample-weighted aggregation over an explicitly frozen accepted set, fenced atomic publication, bounded waiting, deterministic recovery, and evidence tied to committed generations.
 
-The MVP includes an exclusive allocation lease, leased READY membership, fresh-generation contributions, quorum/deadline closure, sharded point-to-point aggregation, redistribution, periodic immutable checkpoints, and fresh-allocation continuation. It does **not** promise dynamic Slurm node addition, simultaneous allocations, survival of unlimited failures, exact resurrection of unfinished local work, or continuation after all compute disappears without a durable checkpoint. It does not require stale-update application; the MVP bound is `tau = 0`. It MUST NOT use a failure-sensitive all-rank collective/barrier, Lustre for update/aggregate/heartbeat/membership/redistribution payloads, or a central full-model broker.
+The MVP includes an exclusive allocation lease, leased READY membership, fresh-generation contributions, quorum/deadline closure, sharded point-to-point aggregation, redistribution, periodic immutable checkpoints, and fresh-allocation continuation. It does **not** promise dynamic Slurm node addition, simultaneous allocations, survival of unlimited failures, exact resurrection of unfinished local work, or continuation after all compute disappears without a durable checkpoint. Version 1 remains strict `tau = 0`. The separately versioned v2 performance policy uses the finite bound and exact math in ADR-002; it is not enabled by changing a v1 configuration field. Neither mode may use a failure-sensitive all-rank collective/barrier, Lustre for update/aggregate/heartbeat/membership/redistribution payloads, or a central full-model broker.
 
 Minimum progress is policy, not launch size: at least `Q_min` complete node-peer contributions and `T_min > 0` accepted tokens are required for a commit. A deployment MAY also require an active-membership fraction, but MUST cap the resulting threshold by the active READY snapshot, not launched ranks. If the floor is unavailable at the generation deadline, the generation does not commit; the owner retries only within a bounded run deadline, then checkpoints any previously committed state, releases the lease, and exits so a later allocation can resume.
 
@@ -73,7 +86,15 @@ S_(g+1) = OuterApply(S_g, delta, committed_outer_state)
 
 The full manifest binds the frozen identities, weights, rejection counts, shard checksums, base/result digests, optimizer state, token clock, policy, code, and fence. Commit is atomic: immutable state and manifest become durable before a compare-and-swap-like `latest` pointer advances under the current allocation fence. There is one authoritative result or none. Only after commit may redistribution announce `g+1`; peers checksum it, apply/catch up, and advertise READY for the next generation.
 
-MVP stale policy is strict: accept only `base_generation == open_generation` and the current attempt/epoch. Late work is rejected, then the peer catches up. A future experiment MAY allow `0 < lag <= tau`, but only behind a distinct policy/version with explicit weighting, reference math, and convergence gates; it is not compatible by implication.
+Version 1 stale policy is strict: accept only
+`base_generation == open_generation` and the current attempt/epoch. Late work
+is rejected, then the peer catches up. ADR-002 is the only reviewed exception:
+its distinct experimental v2 policy admits `0 <= global lag <= 6` with a
+promotion target of two, separately bounds speculative local-window lag,
+uses exact token-times-linear-lag weights, applies a stateless half-step outer
+update, and has bounded coalescing, safe-boundary correction/rebase, restart,
+performance, and convergence gates. Those semantics are not compatible with
+v1 by implication or telemetry relabeling.
 
 ## Admission lease, state, and recovery
 
@@ -119,6 +140,47 @@ Scale admission is sequential: deterministic simulation/unit/reference math; the
 - Show bounded non-Lustre hot-path transport, backpressure/release, and no central full-model broker.
 - Exercise the applicable failure/deadline and recovery path; state the minimum progress floor.
 - Report exact validation commands and committed-generation/checkpoint artifacts; scale tasks must pass every prior rung.
+- A bounded-lag task must additionally cite ADR-002 and V2A01–V2A18, report
+  base/commit/apply/window lag honestly, and distinguish the training-lane SLO
+  from checkpoint correctness latency. A v1 task must state `tau = 0` and
+  cannot claim required generation-g work overlaps a generation-(g+1) window
+  that starts from committed `S_(g+1)`.
+
+## Bounded-lag asynchronous v2 policy
+
+ADR-002 resolves the previously open stale-update decision with one concrete
+initial policy. Local K40 windows continue from a worker-local state while
+prior contributions move through the bounded background system. Contributions
+carry fenced worker/incarnation/sequence/window identity, base version and
+digest, exact tokens, policy/layout/code digests, payload digest, and measured
+global and local-window lag. Each worker exposes at most one sealed immutable
+descriptor and cumulatively coalesces adjacent K40 windows into one bounded
+next interval while the native service owns it. The holder admits at most one
+contribution per worker for each global transition, requires the exact
+two-node `Q_min/T_min` floors, and rejects global lag greater than the
+experimental hard bound six. Promotion requires the lower global-lag and
+speculative-window targets of two.
+
+The v2 aggregate uses exact integer
+`tokens * (7 - commit_lag)` weights and the outer equation
+`S_(g+1) = S_g + 0.5 * weighted_mean(delta)`. A verified capacity-one latest
+mailbox is applied only at a K-window boundary by translating both
+ScheduleFree `x` and `z` with
+`(new_global - old_global) - accepted_local_delta_sum`; audited inner moments
+remain local and restartable. One sealed descriptor, one mutable cumulative
+interval, finite native credits/replay, a capacity-one visible mailbox,
+explicit pause/drop/catch-up rules, and a 420-second correctness deadline bound
+memory and time. Local `OWNED` transfers descriptor responsibility to the
+persistent service; the trainer does not wait for send or receipt completion.
+
+The v2 policy preserves the v1 lease/fence, READY membership, model-free
+compiled point-to-point transport, no-all-rank-wait, no-Lustre-dense-hot-path,
+no-central-full-model-broker, and atomic committed-state requirements. It
+requires a versioned native protocol/ABI extension; the v1 generation field and
+one-open-generation buffer contract cannot simply be renamed. Qualification
+is two-node only until numerical, failure/restart, real-decoupling performance,
+and convergence/reproducibility gates all pass and a later review authorizes
+the next rung.
 
 ## Native data-plane binding
 
@@ -153,4 +215,11 @@ Frontier/Slurm supplies a fixed allocation envelope; one model-free allocation h
 
 **ADR-001:** The MVP chooses exactly one allocation write/commit lease for operational simplicity and safe continuation across queued jobs. Simultaneous independent allocations do not join one live run. A future federation may allow them to join through the same pool protocol, but requires a highly available lease/control service, cross-allocation discovery/authentication, shard-owner placement, and partition semantics. It MUST preserve all fences, membership, generation, weighting, and commit invariants; it is an extension, not the organizing design.
 
-Unresolved decisions are intentionally explicit: the approved durable lease/CAS mechanism on Frontier; production `Q_min`, `T_min`, optional fraction and retry deadlines per model size; outer optimizer and checkpoint cadence; production shard placement/reassignment; whether trainer inner state is ever checkpointed; and the evidence required before any `tau > 0` experiment. Until resolved by a reviewed ADR/config, implementations fail closed or use test-only values.
+Unresolved decisions are intentionally explicit: the approved durable
+lease/CAS mechanism on Frontier; v1 production `Q_min`, `T_min`, optional
+fraction and retry deadlines per model size; v1 outer optimizer and checkpoint
+cadence; production shard placement/reassignment; and whether trainer inner
+state is ever checkpointed. ADR-002 resolves bounded-lag math only for its
+initial two-node v2 profile; broader promotion remains gated by its acceptance
+criteria. Until resolved by a reviewed ADR/config, implementations fail closed
+or use test-only values.

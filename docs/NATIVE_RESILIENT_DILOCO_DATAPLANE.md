@@ -7,7 +7,10 @@
 native ABI, and tensor-reduction requirements of
 [Resilient DiLoCo Compute Pool](RESILIENT_DILOCO_COMPUTE_POOL.md), version 1.
 That document remains authoritative for leases, membership, generation closure,
-commit semantics, and training correctness. The
+commit semantics, and training correctness.
+[ADR-002](ASYNC_DECOUPLED_DILOCO_V2.md) is the normative semantic extension
+when bounded-lag v2 is selected; it preserves NDP01–NDP17 but requires a
+versioned protocol/ABI extension rather than relabeling this v1 wire format. The
 [companion gap matrix](RESILIENT_DILOCO_GAP_MATRIX.md) traces both authorities.
 An implementation conforms only if it satisfies both. A contradiction fails
 closed and requires a reviewed design change; it is not resolved by choosing
@@ -68,6 +71,8 @@ closure, outer-optimizer policy, checkpoint naming/retention, Slurm allocation
 changes, simultaneous-allocation federation, stale updates, GPU-direct fabric,
 or confidentiality in v1. The v1 payload is host-resident float64. GPU-direct
 is a future ABI capability and cannot be enabled by configuration alone.
+ADR-002 resolves stale-update policy above this layer but does not make the v1
+ABI capable of carrying it.
 
 The existing `scripts/frontier/compiled_mpich_dense_helper.cpp` is the
 fixed-world performance/numerical reference and an explicitly selected
@@ -75,6 +80,40 @@ fixed-world fallback. Its `MPI_Allreduce`, `MPI_Allgather`, node barriers,
 leader communicator, and launched `world_size` are deliberately nonconforming
 to NDP02. It MUST NOT be used as the membership or failure domain of the
 elastic backend.
+
+### Bounded-lag v2 extension boundary
+
+All NDP01–NDP17 decisions remain mandatory for
+`async-decoupled-v2.0-exp`.
+The native service remains persistent, model-free, point-to-point, credit
+bounded, checksummed, deterministic, and fenced. It still has no authority to
+select lag, membership, accepted sets, weights, outer math, checkpoint cadence,
+or commit state.
+
+The current 76-byte v1 contribution identity, single retained open generation,
+single exact-token `weight` field, and v1 metadata kinds are insufficient for
+ADR-002. A conforming v2 implementation MUST introduce a reviewed
+protocol/ABI version that carries:
+
+- contribution sequence, cumulative local K-window range, interval endpoint,
+  and coalescing facts separately from the global transition;
+- base global version/digest, commit lag, applied-anchor-before-apply lag,
+  result-version-at-apply lag, and speculative/apply local-window lag as
+  distinct clocks;
+- policy and code digests in addition to layout and payload digests;
+- exact tokens separately from integer staleness-adjusted aggregation weight;
+- bounded one-sealed/one-mutable descriptor ownership and byte admission;
+- accepted-local-delta correction identity for safe-boundary rebase; and
+- versioned latest-only result mailbox publication/replacement/release facts.
+
+It MUST preserve the NDP05 deterministic binary64 arithmetic after substituting
+ADR-002's exact integer aggregation weight. It MUST retain exact tokens
+separately for quorum, accepted-token clocks, and manifests. It MUST NOT encode
+lagged work as a v1 `generation` with `tau = 0`, expand v1 structs under the
+same ABI version, retain unbounded generations, make a trainer wait for fabric
+send/receipt after bounded local `OWNED`, add a dense Python/Lustre path, or
+introduce a collective. Until that protocol and all V2A01–V2A18 gates pass, the
+native v1 implementation remains fresh-only compatibility behavior.
 
 ## Plane boundary and process topology
 
@@ -1079,6 +1118,12 @@ cite applicable matrix IDs R01–R16 plus native IDs NDP01–NDP17. At minimum:
 - two-node/scale runners: R01–R16 and NDP01–NDP17; and
 - compiled reference qualification: R05, R10, R15, R16 and NDP02, NDP03,
   NDP05, NDP16, NDP17, explicitly recording its non-elastic fallback status.
+
+A bounded-lag task MUST additionally cite ADR-002 and V2A01–V2A18. Its native
+artifact must prove the versioned identity/weight/descriptor/coalescing/
+correction/mailbox extensions above while retaining every applicable
+NDP01–NDP17 invariant. Passing the v1 G2/G3 gate is a prerequisite and
+reference, not evidence that v2 lagged transport has passed.
 
 The acceptance record must contain exact commands, immutable artifacts, code
 and binary digests, provider facts, committed generation/checkpoint evidence,
