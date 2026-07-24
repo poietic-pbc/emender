@@ -51,15 +51,18 @@ def test_dry_run_renders_exact_real_k40_fenced_acceptance_without_submission(tmp
     assert [p["name"] for p in plan["phases"]] == [
         "clean-overlap", "fault-rejoin", "invalid-result-rejection",
         "checkpoint-publication-failure", "fresh-restart"]
-    assert plan["phases"][0]["generations"] == 5
+    assert plan["phases"][0]["generations"] == 12
     assert all(p["nodes"] == 2 and p["local_steps"] == 40 for p in plan["phases"])
     assert all(p["seed"] == CANONICAL_SEED for p in plan["phases"])
     assert all(p["partition"] == "batch" and p["qos"] == "debug"
                for p in plan["phases"])
     assert [p["fence_ordinal"] for p in plan["phases"]] == [1, 2, 3, 4, 5]
-    assert plan["phases"][1]["injection"] == {"RESILIENT_E97_INJECT_NATIVE_SERVICE": "1:-1:6"}
-    assert plan["phases"][2]["injection"] == {"RESILIENT_E97_INJECT_INVALID_RESULT": "1:9"}
-    assert plan["phases"][3]["injection"] == {"RESILIENT_E97_INJECT_PUBLICATION_FAILURE": "10"}
+    assert plan["phases"][1]["injection"] == {
+        "RESILIENT_E97_INJECT_NATIVE_SERVICE": "1:-1:13"}
+    assert plan["phases"][2]["injection"] == {
+        "RESILIENT_E97_INJECT_INVALID_RESULT": "1:16"}
+    assert plan["phases"][3]["injection"] == {
+        "RESILIENT_E97_INJECT_PUBLICATION_FAILURE": "17"}
     assert plan["phases"][4]["restart_from"] == "checkpoint-publication-failure"
     identities = {(p["source_commit"], p["native_bundle"]["bundle_sha256"]) for p in plan["phases"]}
     assert len(identities) == 1
@@ -67,8 +70,17 @@ def test_dry_run_renders_exact_real_k40_fenced_acceptance_without_submission(tmp
     assert plan["phases"][0]["performance_gate"] == {
         "foreground_idle_fraction_strict_max": 0.10,
         "steady_state_cadence_multiple_max": 1.25,
-        "requires_background_g_overlap_k40_g_plus_1": True,
+        "warmup_windows_per_trainer": 2,
+        "measured_windows_per_trainer": 10,
+        "requires_versioned_background_overlap": True,
+        "commit_lag_p99_max": 2,
+        "anchor_lag_p99_max": 2,
+        "speculative_window_lag_p99_max": 2,
+        "freeze_to_latest_seconds_max": 420,
     }
+    assert plan["policy_id"] == "async-decoupled-v2.0-exp"
+    assert plan["conformance"]["async_v2_requirements"] == [
+        f"V2A{i:02d}" for i in range(1, 19)]
 
 
 def test_submit_path_is_fail_closed_and_never_contains_4n_submission():

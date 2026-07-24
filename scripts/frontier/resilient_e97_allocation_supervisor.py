@@ -751,8 +751,9 @@ def _allocation_main() -> int:
         ["scontrol", "show", "hostnames", os.environ["SLURM_JOB_NODELIST"]], text=True
     ).splitlines()
     node_count = int(os.environ.get("RESILIENT_E97_NODE_COUNT", "2"))
-    if node_count not in {2, 4, 8}:
-        raise SystemExit("ordered native scale gate permits only 2, 4, or 8 physical nodes")
+    if node_count != 2:
+        raise SystemExit(
+            "async-decoupled-v2 qualification requires exactly two physical nodes")
     if len(nodes) != node_count:
         raise SystemExit("Slurm allocation differs from explicit resilient-pool capacity")
     manager = os.environ["RESILIENT_E97_MANAGER_COMMAND"]

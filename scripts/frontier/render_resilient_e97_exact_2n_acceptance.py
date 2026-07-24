@@ -185,6 +185,17 @@ def build_plan(repo: Path, commit: str, manifest: Path, gate: Path, run_root: Pa
         raise ValueError("retained exact-code G2 full-layout gate is missing")
     common = {
         "nodes": 2, "trainers_per_node": 8, "local_steps": 40,
+        "policy_id": "async-decoupled-v2.0-exp",
+        "policy": {
+            "tau_hard": 6, "tau_target": 2,
+            "sigma_hard": 8, "sigma_target": 2,
+            "eta": 0.5, "q_min": 2, "t_min": 3_934_080,
+            "group_deadline_s": 420,
+            "sealed_descriptor_capacity": 1,
+            "mutable_interval_capacity": 1,
+            "result_mailbox_capacity": 1,
+            "result_staging_capacity": 1,
+        },
         "dataplane": "native-cxi", "provider": "cxi", "walltime": WALLTIME,
         "partition": PARTITION, "qos": QOS, "seed": seed,
         "source_commit": commit, "native_bundle": native,
@@ -196,11 +207,11 @@ def build_plan(repo: Path, commit: str, manifest: Path, gate: Path, run_root: Pa
     # Every phase has a distinct allocation/fence.  Restart phases consume only
     # the preceding authoritative handoff; source and bundle remain immutable.
     specs = [
-        ("clean-overlap", 5, 0, None, {}),
-        ("fault-rejoin", 3, 5, "clean-overlap", {"RESILIENT_E97_INJECT_NATIVE_SERVICE": "1:-1:6"}),
-        ("invalid-result-rejection", 2, 8, "fault-rejoin", {"RESILIENT_E97_INJECT_INVALID_RESULT": "1:9"}),
-        ("checkpoint-publication-failure", 1, 10, "invalid-result-rejection", {"RESILIENT_E97_INJECT_PUBLICATION_FAILURE": "10"}),
-        ("fresh-restart", 2, 10, "checkpoint-publication-failure", {"RESILIENT_E97_FRESH_RESTART": "1"}),
+        ("clean-overlap", 12, 0, None, {}),
+        ("fault-rejoin", 3, 12, "clean-overlap", {"RESILIENT_E97_INJECT_NATIVE_SERVICE": "1:-1:13"}),
+        ("invalid-result-rejection", 2, 15, "fault-rejoin", {"RESILIENT_E97_INJECT_INVALID_RESULT": "1:16"}),
+        ("checkpoint-publication-failure", 1, 17, "invalid-result-rejection", {"RESILIENT_E97_INJECT_PUBLICATION_FAILURE": "17"}),
+        ("fresh-restart", 2, 17, "checkpoint-publication-failure", {"RESILIENT_E97_FRESH_RESTART": "1"}),
     ]
     phases = []
     for fence, (name, generations, initial, restart_from, injection) in enumerate(specs, 1):
@@ -213,12 +224,19 @@ def build_plan(repo: Path, commit: str, manifest: Path, gate: Path, run_root: Pa
             phase["performance_gate"] = {
                 "foreground_idle_fraction_strict_max": 0.10,
                 "steady_state_cadence_multiple_max": 1.25,
-                "requires_background_g_overlap_k40_g_plus_1": True,
+                "warmup_windows_per_trainer": 2,
+                "measured_windows_per_trainer": 10,
+                "requires_versioned_background_overlap": True,
+                "commit_lag_p99_max": 2,
+                "anchor_lag_p99_max": 2,
+                "speculative_window_lag_p99_max": 2,
+                "freeze_to_latest_seconds_max": 420,
             }
         phases.append(phase)
     return {
-        "schema": "emender-real-e97-exact-2n-acceptance-v1",
+        "schema": "emender-real-e97-exact-2n-acceptance-v2",
         "source_commit": commit, "node_count": 2, "k_local_steps": 40,
+        "policy_id": "async-decoupled-v2.0-exp",
         "seed": seed, "seed_config": str(SEED_CONFIG),
         "queue": {"partition": PARTITION, "qos": QOS},
         "payload_parity": {
@@ -233,7 +251,9 @@ def build_plan(repo: Path, commit: str, manifest: Path, gate: Path, run_root: Pa
         "forbidden_node_counts": [4, 8, 32, 64, 256],
         "conformance": {"authority": "RESILIENT_DILOCO_COMPUTE_POOL.md version 1",
                         "requirements": [f"R{i:02d}" for i in range(1, 17)],
-                        "native_requirements": [f"NDP{i:02d}" for i in range(1, 18)]},
+                        "native_requirements": [f"NDP{i:02d}" for i in range(1, 18)],
+                        "async_v2_authority": "ASYNC_DECOUPLED_DILOCO_V2.md ADR-002",
+                        "async_v2_requirements": [f"V2A{i:02d}" for i in range(1, 19)]},
     }
 
 
@@ -410,6 +430,9 @@ def advance(plan: dict[str, Any], output: Path, state_path: Path, repo: Path) ->
         "RESILIENT_E97_INITIAL_GENERATION": str(phase["initial_generation"]),
         "RESILIENT_E97_COORDINATOR_EPOCH": str(phase["fence_ordinal"]),
         "RESILIENT_E97_GLOBAL_QUORUM": "2", "RESILIENT_E97_GLOBAL_TOKEN_MIN": "3934080",
+        "RESILIENT_E97_DILOCO_POLICY": "async-decoupled-v2.0-exp",
+        "RESILIENT_E97_TAU_HARD": "6", "RESILIENT_E97_TAU_TARGET": "2",
+        "RESILIENT_E97_SIGMA_HARD": "8", "RESILIENT_E97_SIGMA_TARGET": "2",
         "RESILIENT_E97_STARTUP_SMOKE": "0", "RESILIENT_E97_REQUESTED_WALLTIME": WALLTIME,
         "RESILIENT_E97_BULK_ROOT": f"/tmp/exact-2n-{plan['source_commit'][:12]}-{phase['name']}",
         "RESILIENT_E97_GENERATION_DEADLINE_S": str(STAGE_DEADLINES["quorum_s"]), **phase["injection"],

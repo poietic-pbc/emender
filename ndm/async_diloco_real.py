@@ -1002,6 +1002,389 @@ def _chain_checkpoint_label(args: Namespace) -> str:
     return f"emender_{level}_{params}_{date}"
 
 
+@dataclass(frozen=True)
+class PersistentWindowReport:
+    generation: int
+    tokens: int
+    losses: tuple[float, ...]
+    elapsed_s: float
+
+
+@dataclass(frozen=True)
+class CoalescedWindowReport:
+    """One bounded mutable interval produced beside native completion."""
+
+    local_window_start: int
+    local_window_end: int
+    exact_tokens: int
+    losses: tuple[float, ...]
+    elapsed_s: float
+    reached_hard_bound: bool
+    translation_elapsed_s: float = 0.0
+
+    @property
+    def window_count(self) -> int:
+        return self.local_window_end - self.local_window_start
+
+
+class PersistentRealWorkerSession:
+    """One resident model/inner-optimizer/data lane across exact K windows.
+
+    Production bounded-lag v2 bootstraps this object once per incarnation.
+    `run_window` exposes the only mutation boundary; the caller may then seal
+    a cumulative interval or translate x/z before invoking the next window.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_state: Mapping[str, torch.Tensor],
+        train_args: Namespace,
+        spec: RealAsyncWorkerSpec,
+        synthetic_token_stream: bool,
+        synthetic_vocab_size: int,
+        optimizer_state_dict: Mapping[str, Any] | None = None,
+        consume_optimizer_state: bool = False,
+        bootstrap_phase_callback: Callable[
+            [str, Mapping[str, Any]], None
+        ] | None = None,
+    ):
+        self.args = _copy_train_args(train_args)
+        self.spec = spec
+        self.base_keys = tuple(sorted(base_state))
+        self.hidden_state: Any = None
+        self.closed = False
+        self.windows_completed = 0
+        self.bootstrap_counts = {
+            "model_build": 0,
+            "optimizer_build": 0,
+            "data_iterator_build": 0,
+        }
+        torch.manual_seed(
+            int(getattr(self.args, "seed", 42)) + int(spec.seed_offset))
+        self.device = torch.device(spec.device)
+
+        def phase(name: str) -> None:
+            if bootstrap_phase_callback is not None:
+                bootstrap_phase_callback(name, {"step": 0})
+
+        phase("model_build_start")
+        self.model = train.build_training_model(self.args).to(self.device)
+        self.bootstrap_counts["model_build"] += 1
+        phase("model_device_ready")
+        self.model.load_state_dict(base_state, strict=False)
+        phase("model_state_loaded")
+        if bool(getattr(self.args, "bf16", False)):
+            self.model = self.model.bfloat16()
+        phase("model_dtype_ready")
+        self.optimizer = train.build_training_optimizer(
+            self.model, self.args)
+        self.bootstrap_counts["optimizer_build"] += 1
+        phase("optimizer_built")
+        if optimizer_state_dict:
+            self.optimizer.load_state_dict(optimizer_state_dict)
+            if consume_optimizer_state:
+                _release_consumed_optimizer_state(optimizer_state_dict)
+            for param_group in self.optimizer.param_groups:
+                param_group["lr"] = self.args.lr
+        phase("optimizer_state_loaded")
+        self.batch_iter = _build_batch_iter(
+            self.args,
+            rank=spec.seed_offset,
+            device=self.device,
+            synthetic=synthetic_token_stream,
+            synthetic_vocab_size=synthetic_vocab_size,
+        )
+        self.bootstrap_counts["data_iterator_build"] += 1
+        phase("data_iterator_ready")
+        name_by_parameter = {
+            id(parameter): name
+            for name, parameter in self.model.named_parameters()
+        }
+        self.optimizer_parameter_names = tuple(
+            name_by_parameter[id(parameter)]
+            for group in self.optimizer.param_groups
+            for parameter in group["params"]
+        )
+
+    def run_window(
+        self,
+        generation: int,
+        *,
+        progress_callback: Callable[
+            [int, Mapping[str, Any]], None
+        ] | None = None,
+        phase_callback: Callable[
+            [str, Mapping[str, Any]], None
+        ] | None = None,
+    ) -> PersistentWindowReport:
+        if self.closed:
+            raise RuntimeError("persistent real-worker session is closed")
+        started = time.monotonic()
+        losses: list[float] = []
+        tokens = 0
+        local_steps = max(1, int(self.spec.local_steps))
+        for local_step in range(local_steps):
+            metrics = train.train_one_optimizer_step(
+                self.model,
+                self.optimizer,
+                self.args,
+                batch_iter=self.batch_iter,
+                device=self.device,
+                step=int(generation) * local_steps + local_step,
+                hidden_state=self.hidden_state,
+                phase_callback=phase_callback,
+            )
+            self.hidden_state = metrics.get("hidden_state")
+            losses.append(float(metrics["loss"]))
+            tokens += int(metrics["tokens_processed"])
+            if progress_callback is not None:
+                progress_callback(local_step + 1, metrics)
+        self.windows_completed += 1
+        return PersistentWindowReport(
+            generation=int(generation),
+            tokens=tokens,
+            losses=tuple(losses),
+            elapsed_s=max(0.0, time.monotonic() - started),
+        )
+
+    def snapshot(self) -> dict[str, torch.Tensor]:
+        if self.closed:
+            raise RuntimeError("persistent real-worker session is closed")
+        values = self.model.state_dict()
+        if set(self.base_keys) - set(values):
+            raise ValueError("persistent model layout lost base tensors")
+        return {
+            name: values[name].detach().to(device="cpu").clone()
+            for name in self.base_keys
+        }
+
+    def translate(self, corrections: Mapping[str, torch.Tensor]) -> None:
+        """Translate resident model x and audited ScheduleFree z at a boundary."""
+        if self.closed or tuple(sorted(corrections)) != self.base_keys:
+            raise ValueError("persistent correction layout differs from model")
+        model_state = self.model.state_dict()
+        for name in self.base_keys:
+            correction = corrections[name]
+            target = model_state[name]
+            if (correction.shape != target.shape
+                    or not torch.isfinite(correction).all()):
+                raise ValueError("persistent correction is malformed/nonfinite")
+        with torch.no_grad():
+            for name in self.base_keys:
+                model_state[name].add_(
+                    corrections[name].to(model_state[name]))
+
+        parameters = [
+            parameter
+            for group in self.optimizer.param_groups
+            for parameter in group["params"]
+        ]
+        if len(parameters) != len(self.optimizer_parameter_names):
+            raise ValueError("persistent optimizer parameter order changed")
+        for name, parameter in zip(
+                self.optimizer_parameter_names, parameters):
+            record = self.optimizer.state.get(parameter)
+            if not isinstance(record, dict):
+                raise ValueError("ScheduleFree per-parameter state is missing")
+            z = record.get("z")
+            if not isinstance(z, torch.Tensor) or z.shape != parameter.shape:
+                raise ValueError("ScheduleFree z point is missing or malformed")
+            for key, value in record.items():
+                if isinstance(value, torch.Tensor) and value.shape == z.shape:
+                    if key not in {"z", "exp_avg_sq"}:
+                        raise ValueError(
+                            f"unknown parameter-valued optimizer buffer: {key}")
+            z.add_(corrections[name].to(z))
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class PersistentAsyncTrainingLane:
+    """Run adjacent K windows while a prior native descriptor is owned.
+
+    The model, optimizer, iterator, and hidden state remain in the supplied
+    :class:`PersistentRealWorkerSession`.  This helper owns only a short-lived
+    control thread for one mutable cumulative interval.  Native completion can
+    wait for transport/reduction/publication on the caller thread while this
+    lane keeps the GPU model moving.  ``finish_at_boundary`` is the sole join:
+    it stops before another forward pass, optionally translates ScheduleFree
+    x/z, and returns one bounded interval rather than a FIFO of per-K deltas.
+    """
+
+    def __init__(
+        self,
+        session: PersistentRealWorkerSession,
+        *,
+        sigma_hard: int,
+        progress_callback_factory: Callable[
+            [int], Callable[[int, Mapping[str, Any]], None] | None
+        ] | None = None,
+        phase_callback_factory: Callable[
+            [int], Callable[[str, Mapping[str, Any]], None] | None
+        ] | None = None,
+        window_start_callback: Callable[[int], None] | None = None,
+    ):
+        if isinstance(sigma_hard, bool) or not 1 <= int(sigma_hard) <= 8:
+            raise ValueError("persistent async lane requires finite sigma in [1,8]")
+        self.session = session
+        self.sigma_hard = int(sigma_hard)
+        self.progress_callback_factory = progress_callback_factory
+        self.phase_callback_factory = phase_callback_factory
+        self.window_start_callback = window_start_callback
+        self._condition = threading.Condition()
+        self._thread: threading.Thread | None = None
+        self._running = False
+        self._stop_requested = False
+        self._started = threading.Event()
+        self._error: BaseException | None = None
+        self._window_start = 0
+        self._window_end = 0
+        self._tokens = 0
+        self._losses: list[float] = []
+        self._started_s = 0.0
+        self._start_state: dict[str, torch.Tensor] | None = None
+
+    def start(
+        self,
+        *,
+        local_window_start: int,
+        start_state: Mapping[str, torch.Tensor],
+        admission_deadline: float,
+    ) -> None:
+        if (self._thread is not None or local_window_start < 0
+                or not start_state):
+            raise RuntimeError("persistent async lane cannot be started")
+        if time.monotonic() >= admission_deadline:
+            raise TimeoutError("persistent async lane admission deadline expired")
+        self._window_start = int(local_window_start)
+        self._window_end = int(local_window_start)
+        self._start_state = {
+            name: value
+            for name, value in start_state.items()
+        }
+        self._started_s = time.monotonic()
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"async-v2-k-window-{local_window_start}",
+            daemon=False,
+        )
+        self._thread.start()
+        remaining = admission_deadline - time.monotonic()
+        if remaining <= 0 or not self._started.wait(remaining):
+            self.abort()
+            raise TimeoutError("persistent async lane did not start before deadline")
+
+    def _run(self) -> None:
+        try:
+            while True:
+                with self._condition:
+                    if (self._stop_requested
+                            or self._window_end - self._window_start
+                            >= self.sigma_hard):
+                        self._condition.notify_all()
+                        return
+                    local_window = self._window_end
+                    self._running = True
+                    self._started.set()
+                if self.window_start_callback is not None:
+                    self.window_start_callback(local_window)
+                progress = (
+                    None if self.progress_callback_factory is None
+                    else self.progress_callback_factory(local_window)
+                )
+                phase = (
+                    None if self.phase_callback_factory is None
+                    else self.phase_callback_factory(local_window)
+                )
+                report = self.session.run_window(
+                    local_window,
+                    progress_callback=progress,
+                    phase_callback=phase,
+                )
+                with self._condition:
+                    if report.generation != local_window:
+                        raise ValueError(
+                            "persistent async lane window identity changed")
+                    self._tokens += int(report.tokens)
+                    self._losses.extend(float(value) for value in report.losses)
+                    self._window_end = local_window + 1
+                    self._running = False
+                    self._condition.notify_all()
+        except BaseException as error:
+            with self._condition:
+                self._error = error
+                self._running = False
+                self._stop_requested = True
+                self._started.set()
+                self._condition.notify_all()
+
+    def finish_at_boundary(
+        self,
+        *,
+        deadline: float,
+        corrections: Mapping[str, torch.Tensor] | None = None,
+    ) -> CoalescedWindowReport:
+        """Stop after the active K and optionally translate resident x/z."""
+        thread = self._thread
+        if thread is None:
+            raise RuntimeError("persistent async lane was not started")
+        with self._condition:
+            self._stop_requested = True
+            self._condition.notify_all()
+            while self._running and self._error is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        "persistent async lane did not reach a safe K boundary")
+                self._condition.wait(remaining)
+        thread.join(max(0.0, deadline - time.monotonic()))
+        if thread.is_alive():
+            raise TimeoutError("persistent async lane did not stop at boundary")
+        if self._error is not None:
+            raise self._error
+        if self._window_end <= self._window_start or self._tokens <= 0:
+            raise ValueError("persistent async lane produced an empty interval")
+        translation_elapsed_s = 0.0
+        if corrections is not None:
+            if self._start_state is None:
+                raise RuntimeError("persistent async lane lost its interval start")
+            translation_started = time.monotonic()
+            self.session.translate(corrections)
+            for name, correction in corrections.items():
+                start = self._start_state.get(name)
+                if start is None or start.shape != correction.shape:
+                    raise ValueError(
+                        "persistent async interval correction layout changed")
+                start.add_(correction.to(start))
+            translation_elapsed_s = max(
+                0.0, time.monotonic() - translation_started)
+        return CoalescedWindowReport(
+            local_window_start=self._window_start,
+            local_window_end=self._window_end,
+            exact_tokens=self._tokens,
+            losses=tuple(self._losses),
+            elapsed_s=max(0.0, time.monotonic() - self._started_s),
+            reached_hard_bound=(
+                self._window_end - self._window_start >= self.sigma_hard),
+            translation_elapsed_s=translation_elapsed_s,
+        )
+
+    @property
+    def start_state(self) -> Mapping[str, torch.Tensor]:
+        if self._start_state is None:
+            raise RuntimeError("persistent async lane has no interval start")
+        return self._start_state
+
+    def abort(self) -> None:
+        with self._condition:
+            self._stop_requested = True
+            self._condition.notify_all()
+        if self._thread is not None:
+            self._thread.join(1.0)
+
+
 def _run_real_worker(
     *,
     run_id: str,
@@ -1014,7 +1397,12 @@ def _run_real_worker(
     optimizer_state_dict: Mapping[str, Any] | None = None,
     consume_optimizer_state: bool = False,
     progress_callback: Callable[[int, Mapping[str, Any]], None] | None = None,
+    boundary_callback: Callable[
+        [Mapping[str, torch.Tensor], torch.nn.Module, Any, int], None
+    ] | None = None,
     delta_consumer: Callable[[Mapping[str, torch.Tensor], torch.nn.Module, int], None] | None = None,
+    model_state_consumer: Callable[[torch.nn.Module], None] | None = None,
+    optimizer_parameter_name_consumer: Callable[[tuple[str, ...]], None] | None = None,
     phase_callback: Callable[[str, Mapping[str, Any]], None] | None = None,
 ) -> RealAsyncWorkerReport:
     del run_id
@@ -1042,7 +1430,7 @@ def _run_real_worker(
         bootstrap_phase("model_dtype_ready")
         optimizer = train.build_training_optimizer(model, args)
         bootstrap_phase("optimizer_built")
-        if optimizer_state_dict is not None:
+        if optimizer_state_dict:
             optimizer.load_state_dict(optimizer_state_dict)
             if consume_optimizer_state:
                 _release_consumed_optimizer_state(optimizer_state_dict)
@@ -1076,6 +1464,12 @@ def _run_real_worker(
             tokens += int(metrics["tokens_processed"])
             if progress_callback is not None:
                 progress_callback(step + 1, metrics)
+        # The bounded-lag production path uses this exact post-K/pre-seal
+        # boundary to admit a verified prior result.  It is deliberately
+        # inside the model-owning lane: a result can translate live x/z here,
+        # but can never mutate a partially executed optimizer window.
+        if boundary_callback is not None:
+            boundary_callback(base_state, model, optimizer, tokens)
         if delta_consumer is None:
             worker_delta = _floating_delta_from_model(base_state, model)
         else:
@@ -1084,6 +1478,19 @@ def _run_real_worker(
             # second full CPU model-sized delta merely to serialize it.
             delta_consumer(base_state, model, tokens)
             worker_delta = {}
+        if model_state_consumer is not None:
+            model_state_consumer(model)
+        if optimizer_parameter_name_consumer is not None:
+            name_by_parameter = {
+                id(parameter): name
+                for name, parameter in model.named_parameters()
+            }
+            ordered_names = tuple(
+                name_by_parameter[id(parameter)]
+                for group in optimizer.param_groups
+                for parameter in group["params"]
+            )
+            optimizer_parameter_name_consumer(ordered_names)
         base_generation = generation if spec.stale_generation is None else int(spec.stale_generation)
         update = AsyncDiLoCoUpdate(
             worker_id=spec.worker_id,
@@ -2295,6 +2702,10 @@ __all__ = [
     "RealAsyncNodeResult",
     "RealAsyncWorkerReport",
     "RealAsyncWorkerSpec",
+    "CoalescedWindowReport",
+    "PersistentAsyncTrainingLane",
+    "PersistentRealWorkerSession",
+    "PersistentWindowReport",
     "default_tiny_e97_train_args",
     "run_real_async_diloco",
     "run_real_async_diloco_file_rank",

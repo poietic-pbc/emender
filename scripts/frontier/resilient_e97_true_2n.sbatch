@@ -1,7 +1,6 @@
 #!/bin/bash
-# True resilient E97 bounded scale gate: one manager and eight real trainers
-# per node.  The accepted 2-node rung remains the default; this source admits
-# the ordered 4- and 8-node rungs and deliberately rejects 32+ nodes.
+# True resilient E97 bounded-lag v2 gate: one manager and eight real trainers
+# per node.  ADR-002 authorizes exactly the 2-node batch/debug rung only.
 # Managers and trainers are separate srun steps; --overlap and --no-kill keep a
 # failed step from cancelling healthy siblings. There are no sentinel ranks;
 # every GPU step is a real trainer. The debug QoS bounds this G3 admission
@@ -26,8 +25,8 @@ APPROVED_EMENDER_CONDA_ENV=/lustre/orion/bif148/scratch/erikgarrison/emender/.en
   echo "EMENDER_CONDA_ENV must resolve to $APPROVED_EMENDER_CONDA_ENV" >&2; exit 64;
 }
 RESILIENT_E97_NODE_COUNT=${RESILIENT_E97_NODE_COUNT:-2}
-[[ $RESILIENT_E97_NODE_COUNT == 2 || $RESILIENT_E97_NODE_COUNT == 4 || $RESILIENT_E97_NODE_COUNT == 8 ]] || {
-  echo "ordered native scale gate permits only 2, 4, or 8 nodes" >&2; exit 64;
+[[ $RESILIENT_E97_NODE_COUNT == 2 ]] || {
+  echo "async-decoupled-v2 qualification permits exactly two nodes" >&2; exit 64;
 }
 export EMENDER_CONDA_ENV
 source "$REPO/scripts/frontier/frontier_runtime_env.sh"
@@ -238,6 +237,11 @@ node=${SLURMD_NODENAME:-$(hostname)}
   "$RESILIENT_E97_NODE_ATTESTATION" "$SLURM_JOB_ID" "$SEED_EVIDENCE_DIR" \
   "$RESILIENT_E97_SEED_ATTESTATION_SHA256"
 trap - ERR INT TERM
+# The verified node-local seed must remain resident for every trainer in this
+# allocation, but it is not authoritative after the supervisor exits.  Remove
+# it on every subsequent success/failure path so a retry with the same
+# externally supplied job-id cannot observe or overwrite stale bootstrap state.
+trap cleanup_seed_bootstrap EXIT
 export RESILIENT_E97_SEED
 
 RESILIENT_E97_TIKTOKEN_SHA256=${RESILIENT_E97_TIKTOKEN_SHA256:-94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069}
@@ -276,7 +280,17 @@ srun --nodes=$RESILIENT_E97_NODE_COUNT --ntasks=$RESILIENT_E97_NODE_COUNT --ntas
 export TIKTOKEN_CACHE_DIR=$RESILIENT_E97_NODE_TIKTOKEN_CACHE
 ROLE="$REPO/scripts/frontier/resilient_e97_role.py"
 RESILIENT_E97_BULK_ROOT=${RESILIENT_E97_BULK_ROOT:-/tmp/resilient-e97}
-COMMON="--run-dir $RUN_DIR --run-id $RESILIENT_E97_RUN_ID --generations ${RESILIENT_E97_GENERATIONS:-1} --initial-generation $RESILIENT_E97_INITIAL_GENERATION --local-steps 40 --node-count $RESILIENT_E97_NODE_COUNT --global-quorum $RESILIENT_E97_GLOBAL_QUORUM --global-token-min $RESILIENT_E97_GLOBAL_TOKEN_MIN --coordinator-host $RESILIENT_E97_COORDINATOR_HOST --coordinator-port ${RESILIENT_E97_COORDINATOR_PORT:-29571} --deadline-s ${RESILIENT_E97_GENERATION_DEADLINE_S:-600} --source-id $RESILIENT_E97_SOURCE_ID --payload-id $RESILIENT_E97_PAYLOAD_ID --code-id ${RESILIENT_E97_CODE_ID:-unknown} --coordinator-epoch ${RESILIENT_E97_COORDINATOR_EPOCH:-1} --bulk-root $RESILIENT_E97_BULK_ROOT --max-spool-bytes ${RESILIENT_E97_MAX_SPOOL_BYTES:-68719476736} --bulk-chunk-bytes ${RESILIENT_E97_BULK_CHUNK_BYTES:-67108864} --local-spool-chunk-bytes ${RESILIENT_E97_LOCAL_SPOOL_CHUNK_BYTES:-67108864} --dataplane-backend $DILOCO_DATAPLANE --native-build-manifest $NDP_BUILD_MANIFEST --native-gate-json $NDP_FULL_LAYOUT_GATE_JSON"
+RESILIENT_E97_DILOCO_POLICY=${RESILIENT_E97_DILOCO_POLICY:-async-decoupled-v2.0-exp}
+RESILIENT_E97_TAU_HARD=${RESILIENT_E97_TAU_HARD:-6}
+RESILIENT_E97_TAU_TARGET=${RESILIENT_E97_TAU_TARGET:-2}
+RESILIENT_E97_SIGMA_HARD=${RESILIENT_E97_SIGMA_HARD:-8}
+RESILIENT_E97_SIGMA_TARGET=${RESILIENT_E97_SIGMA_TARGET:-2}
+[[ $RESILIENT_E97_DILOCO_POLICY == async-decoupled-v2.0-exp \
+   && $RESILIENT_E97_TAU_HARD == 6 && $RESILIENT_E97_TAU_TARGET == 2 \
+   && $RESILIENT_E97_SIGMA_HARD == 8 && $RESILIENT_E97_SIGMA_TARGET == 2 ]] || {
+  echo "rendered async-v2 policy differs from reviewed ADR-002" >&2; exit 64;
+}
+COMMON="--run-dir $RUN_DIR --run-id $RESILIENT_E97_RUN_ID --generations ${RESILIENT_E97_GENERATIONS:-1} --initial-generation $RESILIENT_E97_INITIAL_GENERATION --local-steps 40 --node-count $RESILIENT_E97_NODE_COUNT --global-quorum $RESILIENT_E97_GLOBAL_QUORUM --global-token-min $RESILIENT_E97_GLOBAL_TOKEN_MIN --coordinator-host $RESILIENT_E97_COORDINATOR_HOST --coordinator-port ${RESILIENT_E97_COORDINATOR_PORT:-29571} --deadline-s ${RESILIENT_E97_GENERATION_DEADLINE_S:-600} --source-id $RESILIENT_E97_SOURCE_ID --payload-id $RESILIENT_E97_PAYLOAD_ID --code-id ${RESILIENT_E97_CODE_ID:-unknown} --coordinator-epoch ${RESILIENT_E97_COORDINATOR_EPOCH:-1} --bulk-root $RESILIENT_E97_BULK_ROOT --max-spool-bytes ${RESILIENT_E97_MAX_SPOOL_BYTES:-68719476736} --bulk-chunk-bytes ${RESILIENT_E97_BULK_CHUNK_BYTES:-67108864} --local-spool-chunk-bytes ${RESILIENT_E97_LOCAL_SPOOL_CHUNK_BYTES:-67108864} --dataplane-backend $DILOCO_DATAPLANE --native-build-manifest $NDP_BUILD_MANIFEST --native-gate-json $NDP_FULL_LAYOUT_GATE_JSON --diloco-policy $RESILIENT_E97_DILOCO_POLICY --tau-hard $RESILIENT_E97_TAU_HARD --tau-target $RESILIENT_E97_TAU_TARGET --sigma-hard $RESILIENT_E97_SIGMA_HARD --sigma-target $RESILIENT_E97_SIGMA_TARGET --eta-outer 0.5"
 export RESILIENT_E97_MANAGER_COMMAND="$TRAIN_PYTHON_BIN $ROLE manager $COMMON --local-quorum 8"
 RESUME_ARGS=()
 [[ -z $RESILIENT_E97_RESUME_HANDOFF ]] || RESUME_ARGS=(--resume-handoff "$RESILIENT_E97_RESUME_HANDOFF")

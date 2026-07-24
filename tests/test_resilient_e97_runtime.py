@@ -652,6 +652,36 @@ def test_native_apply_lane_excludes_durable_recovery_checkpoint_io():
     assert timer_reset > wait, "the APPLY SLO must measure apply, not lane waiting"
 
 
+def test_production_async_lane_keeps_result_and_checkpoint_off_next_k_path():
+    """The rendered trainer must run real K work beside native completion."""
+    trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args) -> int:"):]
+    owned = trainer.index("native_plane.publish_model_delta(")
+    lane_start = trainer.index("async_training_lane.start(", owned)
+    result_wait = trainer.index("native_plane.result_shards(", lane_start)
+    candidate_apply = trainer.index("state = apply_delta(", result_wait)
+    checkpoint = trainer.index("torch.save(", candidate_apply)
+    verified_latest = trainer.index("latest = wait_metadata(", checkpoint)
+    safe_boundary = trainer.index(
+        "async_training_lane.finish_at_boundary(", verified_latest)
+    verified_apply = trainer.index(
+        '"native_trainer_apply"', safe_boundary)
+
+    assert (owned < lane_start < result_wait < candidate_apply < checkpoint
+            < verified_latest < safe_boundary < verified_apply)
+    completion_path = trainer[result_wait:safe_boundary]
+    assert "persistent_worker.run_window(" not in completion_path
+    assert "persistent_worker.translate(" not in completion_path
+
+    real_source = Path("ndm/async_diloco_real.py").read_text()
+    lane = real_source[
+        real_source.index("class PersistentAsyncTrainingLane"):
+        real_source.index("def _run_real_worker(")
+    ]
+    assert "self.session.run_window(" in lane
+    assert ">= self.sigma_hard" in lane
+    assert "self.session.translate(corrections)" in lane
+
+
 def test_native_trainer_generation_timer_covers_every_result_lifecycle_path():
     """Regression for job 5037971's post-commit_ready NameError.
 
@@ -664,11 +694,12 @@ def test_native_trainer_generation_timer_covers_every_result_lifecycle_path():
     started = trainer.index("generation_started = time.monotonic()", loop)
     stop = trainer.index('if stop["requested"]:', loop)
     publish = trainer.index("native_plane.publish_flat_shards(", loop)
-    rejected = trainer.index("if not pipeline.publish_committed(", publish)
-    safe_boundary = trainer.index("pipeline.take_at_boundary(", rejected)
-    telemetry = trainer.index('"native_generation_pipeline"', safe_boundary)
+    result = trainer.index("native_plane.result_shards(", publish)
+    candidate = trainer.index("state = apply_delta(", result)
+    verified = trainer.index("latest = wait_metadata(", candidate)
+    telemetry = trainer.index('"native_trainer_apply"', verified)
 
-    assert loop < started < stop < publish < rejected < safe_boundary < telemetry
+    assert loop < started < stop < publish < result < candidate < verified < telemetry
     assert trainer[started:telemetry].count("generation_started =") == 1
 
 
@@ -757,7 +788,11 @@ def _control_processes(run, bulk, *, run_id, generations, initial=0, resume="", 
             [sys.executable, str(ROLE), "trainer", *common],
             env={**os.environ, "RESILIENT_E97_NODE_RANK": "0",
                  "RESILIENT_E97_LOCAL_RANK": str(rank)}))
-    assert [item.wait(timeout=40) for item in processes] == [0] * len(processes)
+    # Seven cold Python/Torch processes can spend well over 40 seconds merely
+    # importing on a contended Frontier login node.  The role's own 15-second
+    # protocol deadline starts after import, so keep this subprocess harness
+    # timeout distinct from (and comfortably outside) the protocol bound.
+    assert [item.wait(timeout=90) for item in processes] == [0] * len(processes)
 
 
 def test_eight_independent_trainers_advance_three_exact_generations(tmp_path):
@@ -789,7 +824,9 @@ def test_eight_independent_trainers_advance_three_exact_generations(tmp_path):
             "node-0-generation-*.json")):
         members = json.loads(manifest_path.read_text())["members"]
         reference += sum((rank + 1) ** 2 for rank in members) / sum(rank + 1 for rank in members)
-    assert checkpoint["model_state_dict"]["weight"].item() == pytest.approx(reference)
+    # async-decoupled-v2.0-exp applies the reviewed stateless half-step.
+    assert checkpoint["model_state_dict"]["weight"].item() == pytest.approx(
+        reference * 0.5)
     handoff = json.loads((tmp_path / "handoff/generation-00000003.json").read_text())
     assert handoff["membership"] == ["node-0"]
     assert handoff["checkpoint_sha256"] == hashlib.sha256(
