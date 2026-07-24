@@ -83,10 +83,11 @@ from ndm.async_diloco_v2 import (
 )
 from ndm.resilient_e97_reducer import TensorLayout
 from ndm.fenced_admission import AllocationLease, SQLiteFencedControlStore
-from ndm.resilient_e97_runtime import (SplitManagerLoop, apply_delta, atomic_json,
-                                       assert_node_local_path, finalize_checkpoint,
-                                       flatten_tensors, heartbeat,
-                                       outer_state_migration)
+from ndm.resilient_e97_runtime import (
+    SplitManagerLoop, apply_delta, apply_delta_with_correction_ledger,
+    atomic_json, assert_node_local_path, finalize_checkpoint, flatten_tensors,
+    heartbeat, outer_state_migration,
+)
 from ndm.resilient_pool_runtime import (
     DistributedOwnerServer, OwnerEndpoint, PoolControlClient, PoolControlConfig,
     PoolControlServer, PoolStageSLO, chunk_manifest_digest, contribution_id,
@@ -544,6 +545,60 @@ def _authoritative_trainer_resume_handoff(
             or authoritative.get("manifest_sha256") != manifest_sha256):
         raise ValueError("trainer resume latest pointer is not authoritative")
     return manifest
+
+
+def _reload_verified_async_v2_latest(
+        run: Path, args,
+        fenced: tuple[SQLiteFencedControlStore, AllocationLease] | None,
+        *, generation: int, deadline: float,
+        ) -> tuple[dict[str, object], dict[str, object], str]:
+    """Reload and fence-check the only result eligible for a K-boundary apply.
+
+    A native result handle is a candidate, not global authority.  Eligibility
+    requires the immutable handoff to reload under the expected run/fence and,
+    when an allocation lease is active, exact agreement with the durable
+    ``latest/authoritative`` CAS record.  This check deliberately lives in the
+    real trainer entrypoint instead of a probe or post-run validator.
+    """
+    latest = wait_metadata(
+        run / "handoff/latest.json", deadline=deadline,
+        expected={"generation": int(generation),
+                  "fence": _fence_epoch(args)})
+    published_manifest = Path(str(latest.get("manifest", ""))).resolve()
+    try:
+        published_manifest.relative_to((run / "handoff").resolve())
+    except ValueError as error:
+        raise ValueError(
+            "async v2 authoritative latest escapes handoff root") from error
+    manifest_bytes = published_manifest.read_bytes()
+    manifest_digest = hashlib.sha256(manifest_bytes).hexdigest()
+    if manifest_digest != latest.get("manifest_sha256"):
+        raise ValueError(
+            "async v2 authoritative latest manifest digest mismatch")
+    published = json.loads(manifest_bytes)
+    if (not isinstance(published, dict)
+            or not published.get("finalized")
+            or published.get("run_id") != args.run_id
+            or int(published.get("generation", -1)) != int(generation)
+            or int(dict(published.get("fence", {})).get(
+                "coordinator_epoch", -1)) != _fence_epoch(args)):
+        raise ValueError(
+            "async v2 authoritative latest was not reload verified")
+    if fenced is not None:
+        store, lease = fenced
+        store.assert_current(lease)
+        authoritative = store.read_publication(
+            args.run_id, "latest", "authoritative")
+        if (not isinstance(authoritative, dict)
+                or int(authoritative.get("generation", -1))
+                != int(generation)
+                or int(authoritative.get("fence", -1))
+                != _fence_epoch(args)
+                or authoritative.get("manifest_sha256") != manifest_digest):
+            raise ValueError(
+                "async v2 latest does not match fenced authoritative CAS")
+        store.assert_current(lease)
+    return latest, published, manifest_digest
 
 
 def _native_ready_delay(*, node: int, generation: int) -> float:
@@ -1708,6 +1763,8 @@ def _native_manager(args) -> int:
                         or not 0 <= lag <= args._async_v2_policy.tau_hard
                         or int(submission.get("local_window_end", -1))
                         <= int(submission.get("local_window_start", -1))
+                        or len(str(submission.get(
+                            "descriptor_digest", ""))) != 64
                         or int(submission.get("aggregation_weight", 0))
                         != int(submission.get("tokens", 0))
                            * (args._async_v2_policy.tau_hard + 1 - lag)):
@@ -1841,6 +1898,19 @@ def _native_manager(args) -> int:
                 local_aggregation_weight if pool_client is None
                 else sum(int(value) for value in
                          dict(close["accepted_weights"]).values()))
+            accepted_local_contributions = [{
+                "rank": int(item["rank"]),
+                "trainer": str(item["trainer"]),
+                "incarnation": str(item["incarnation"]),
+                "contribution_sequence": int(
+                    item["contribution_sequence"]),
+                "local_window_start": int(item["local_window_start"]),
+                "local_window_end": int(item["local_window_end"]),
+                "window_count": int(item["window_count"]),
+                "base_global_version": int(item["base_global_version"]),
+                "payload_digest": str(item["payload_digest"]),
+                "descriptor_digest": str(item["descriptor_digest"]),
+            } for item in submissions]
             result_marker = {
                 "schema": "emender-native-e97-result-v2", "run_id": args.run_id,
                 "fence_epoch": _fence_epoch(args), "generation": generation,
@@ -1864,6 +1934,8 @@ def _native_manager(args) -> int:
                 "commit_lag": commit_lag,
                 "result_bytes": final_result.length,
                 "members": [int(item["rank"]) for item in submissions],
+                "accepted_local_contributions":
+                    accepted_local_contributions,
                 "accepted_peers": ([f"node-{node}"] if snapshot is None else
                                    sorted(str(item["worker_id"])
                                           for item in close["frozen_identities"])),
@@ -2442,6 +2514,7 @@ def trainer(args) -> int:
         # atomic commit receive a distinct <=180s bound. No 900s silent wait.
         generation_deadline = time.monotonic() + min(args.deadline_s, 420.0)
         native_plane = None
+        owned_marker: dict[str, object] | None = None
         if native:
             elements = state_elements(state)
             layout = layout_identity(elements, payload_max=args.bulk_chunk_bytes)
@@ -2666,6 +2739,7 @@ def trainer(args) -> int:
                         "local_trainer_set_digest": hashlib.sha256(
                             f"node-{node}:rank-{rank}".encode()).hexdigest(),
                     })
+                owned_marker = marker
                 v2_owned_seconds_max = max(
                     v2_owned_seconds_max,
                     float(marker["owned_ack_seconds"]))
@@ -2845,17 +2919,64 @@ def trainer(args) -> int:
         if not native:
             spool.release_trainer(fence, rank)
         pending_corrections = None
-        state = apply_delta(state, aggregate, eta_outer=args.eta_outer, in_place=True)
+        accepted_own_interval = False
+        if native and not args.control:
+            if owned_marker is None:
+                raise RuntimeError(
+                    "native async v2 result has no owned descriptor identity")
+            accepted_records = manifest.get(
+                "accepted_local_contributions")
+            if not isinstance(accepted_records, list):
+                raise ValueError(
+                    "native async v2 result lacks accepted correction ledger")
+            rank_records = [
+                item for item in accepted_records
+                if isinstance(item, dict)
+                and int(item.get("rank", -1)) == rank
+            ]
+            if rank_records:
+                if len(rank_records) != 1:
+                    raise ValueError(
+                        "native async v2 correction identity is duplicated")
+                accepted = rank_records[0]
+                expected_correction_identity = {
+                    "descriptor_digest": str(
+                        owned_marker.get("descriptor_digest", "")),
+                    "payload_digest": str(
+                        owned_marker.get("payload_digest", "")),
+                    "contribution_sequence": int(
+                        owned_marker.get("contribution_sequence", -1)),
+                    "local_window_start": int(
+                        owned_marker.get("local_window_start", -1)),
+                    "local_window_end": int(
+                        owned_marker.get("local_window_end", -1)),
+                    "base_global_version": int(
+                        owned_marker.get("base_global_version", -1)),
+                }
+                if any(
+                        accepted.get(name) != value
+                        for name, value in
+                        expected_correction_identity.items()):
+                    raise ValueError(
+                        "native async v2 accepted correction identity conflicts "
+                        "with the owned descriptor")
+                accepted_own_interval = True
+            state, pending_corrections = (
+                apply_delta_with_correction_ledger(
+                    state, aggregate, eta_outer=args.eta_outer,
+                    interval_start=interval_start,
+                    interval_endpoint=retained_endpoint,
+                    accepted_own_interval=accepted_own_interval,
+                    in_place=True,
+                ))
+        else:
+            state = apply_delta(
+                state, aggregate, eta_outer=args.eta_outer, in_place=True)
         if native:
             # Materialize the candidate global result and release the bounded
             # native read view.  It is not yet eligible for the worker:
             # ScheduleFree x/z translation occurs only after immutable
             # checkpoint reload verification and fenced latest CAS below.
-            if not args.control:
-                pending_corrections = {
-                    name: state[name].sub(retained_endpoint[name])
-                    for name in sorted(state)
-                }
             native_context.__exit__(None, None, None)
             _stage_telemetry(
                 bulk, identity, generation, "native_result_materialize",
@@ -2870,6 +2991,10 @@ def trainer(args) -> int:
                 anchor_lag_before_apply=1 if prefetched_interval is not None else 0,
                 result_version_lag_at_apply=0,
                 safe_k_boundary=True,
+                accepted_own_interval=accepted_own_interval,
+                accepted_descriptor_digest=(
+                    str(owned_marker["descriptor_digest"])
+                    if accepted_own_interval else None),
                 exact_tokens=int(manifest["exact_tokens"]),
                 aggregation_weight=int(manifest["aggregation_weight"]),
                 contribution_digest=str(manifest["result_root"]))
@@ -3008,25 +3133,13 @@ def trainer(args) -> int:
             # advanced authoritative latest.  The independent model lane may
             # execute old-anchor windows meanwhile; it pauses only now, at the
             # next exact K boundary, for the audited x/z translation.
-            latest = wait_metadata(
-                run / "handoff/latest.json",
-                deadline=time.monotonic() + min(args.deadline_s, 180.0),
-                expected={"generation": completed,
-                          "fence": _fence_epoch(args)})
-            published_manifest = Path(str(latest["manifest"])).resolve()
-            published_manifest.relative_to((run / "handoff").resolve())
-            manifest_bytes = published_manifest.read_bytes()
-            manifest_digest = hashlib.sha256(manifest_bytes).hexdigest()
-            if manifest_digest != latest.get("manifest_sha256"):
-                raise ValueError(
-                    "async v2 authoritative latest manifest digest mismatch")
-            published = json.loads(manifest_bytes)
-            if (not published.get("finalized")
-                    or int(published.get("generation", -1)) != completed
-                    or int(dict(published.get("fence", {})).get(
-                        "coordinator_epoch", -1)) != _fence_epoch(args)):
-                raise ValueError(
-                    "async v2 authoritative latest was not reload verified")
+            _latest, published, manifest_digest = (
+                _reload_verified_async_v2_latest(
+                    run, args, fenced, generation=completed,
+                    deadline=(
+                        time.monotonic()
+                        + min(args.deadline_s, 180.0)),
+                ))
             safe_apply_started = time.monotonic()
             mutable_report = None
             if not args.control:
@@ -3139,7 +3252,8 @@ def trainer(args) -> int:
                 "reload_verified": True,
                 "latest_cas_verified": True,
                 "accepted_contribution_digest": str(
-                    manifest["result_root"]),
+                    owned_marker["descriptor_digest"])
+                    if accepted_own_interval else None,
             }
             with (bulk / "telemetry" /
                   f"{identity}-pool.jsonl").open(

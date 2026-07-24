@@ -639,6 +639,27 @@ class NativeTrainerDataPlane:
             "dense_files_written": 0, "trainer_spool_bytes": 0,
             **identity,
         }
+        if identity:
+            descriptor_identity = {
+                "run_id": marker["run_id"],
+                "fence_epoch": marker["fence_epoch"],
+                "trainer": marker["trainer"],
+                "incarnation": marker["incarnation"],
+                "contribution_sequence": marker["contribution_sequence"],
+                "local_window_start": marker["local_window_start"],
+                "local_window_end": marker["local_window_end"],
+                "window_count": marker["window_count"],
+                "base_global_version": marker["base_global_version"],
+                "base_global_digest": marker["base_global_digest"],
+                "policy_digest": marker["policy_digest"],
+                "code_digest": marker["code_digest"],
+                "exact_tokens": marker["tokens"],
+                "base_lag_at_seal": marker["base_lag_at_seal"],
+                "payload_digest": marker["payload_digest"],
+            }
+            marker["descriptor_digest"] = hashlib.sha256(json.dumps(
+                descriptor_identity, sort_keys=True,
+                separators=(",", ":")).encode()).hexdigest()
         atomic_metadata(
             self.control_root /
             f"native-submit-{self.metadata.generation:08d}-{self.rank:02d}.json",
@@ -680,6 +701,34 @@ class NativeTrainerDataPlane:
                 != int(value.get("exact_tokens", 0))
                    * (7 - int(value.get("commit_lag", -1)))):
             raise ValueError("native async-v2 result identity/weight is invalid")
+        if self.metadata.policy_id:
+            accepted = value.get("accepted_local_contributions")
+            if not isinstance(accepted, list) or not accepted:
+                raise ValueError(
+                    "native async-v2 result lacks accepted correction identities")
+            ranks: set[int] = set()
+            for record in accepted:
+                if not isinstance(record, Mapping):
+                    raise ValueError(
+                        "native async-v2 accepted correction identity is invalid")
+                accepted_rank = int(record.get("rank", -1))
+                window_start = int(record.get("local_window_start", -1))
+                window_end = int(record.get("local_window_end", -1))
+                if (accepted_rank < 0 or accepted_rank in ranks
+                        or window_start < 0 or window_end <= window_start
+                        or int(record.get("window_count", -1))
+                           != window_end - window_start
+                        or int(record.get("base_global_version", -1)) < 0
+                        or any(
+                            len(str(record.get(name, ""))) != 64
+                            or any(
+                                character not in "0123456789abcdef"
+                                for character in str(record.get(name, "")))
+                            for name in (
+                                "payload_digest", "descriptor_digest"))):
+                    raise ValueError(
+                        "native async-v2 accepted correction identity is invalid")
+                ranks.add(accepted_rank)
         # The two-node owner plane replaces local attempt 1 with the exact
         # global attempt 2.  Refresh the persistent trainer connection from
         # the controller-published fenced marker before requesting its view;

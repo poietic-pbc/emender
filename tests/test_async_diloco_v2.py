@@ -562,6 +562,7 @@ def test_native_metadata_abi_carries_exact_tokens_separate_from_lag_weight(tmp_p
     assert marker["payload_digest"] == THREE
     assert marker["schema"] == "emender-native-e97-submission-v2"
     assert len(marker["interval_endpoint_digest"]) == 64
+    assert len(marker["descriptor_digest"]) == 64
 
     plane.buffer = Buffer()
     with pytest.raises(ValueError, match="token/lag/window"):
