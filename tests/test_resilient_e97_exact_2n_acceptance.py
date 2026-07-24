@@ -139,6 +139,10 @@ def test_one_job_qos_never_receives_concurrent_phase_submission(monkeypatch, tmp
     assert sbatch[sbatch.index("-p") + 1] == "batch"
     assert "--qos=debug" in sbatch
     assert sbatch[sbatch.index("--chdir") + 1] == os.fspath(ROOT.resolve())
+    assert sbatch[sbatch.index("--output") + 1] == os.fspath(
+        (tmp_path / "clean-overlap/slurm-%j.out").resolve())
+    assert sbatch[sbatch.index("--error") + 1] == os.fspath(
+        (tmp_path / "clean-overlap/slurm-%j.err").resolve())
     assert sbatch[-1] == os.fspath(
         (tmp_path / "clean-overlap/rendered.sbatch").resolve())
     exported = next(value for value in sbatch if value.startswith("--export=ALL,"))
@@ -204,13 +208,14 @@ printf '%s\n' "$RESILIENT_E97_JOB_SEED_DIR/checkpoint-step-2300930.pt"
 def test_scheduler_queries_and_retains_partition_and_qos_explicitly(monkeypatch):
     calls = []
 
-    def output(command, **kwargs):
+    def run(command, **kwargs):
         calls.append(command)
         if command[0] == "squeue":
-            return "PENDING|batch|debug\n"
+            return subprocess.CompletedProcess(
+                command, 0, stdout="PENDING|batch|debug\n", stderr="")
         raise AssertionError(command)
 
-    monkeypatch.setattr(MODULE.subprocess, "check_output", output)
+    monkeypatch.setattr(MODULE.subprocess, "run", run)
     result = MODULE._scheduler_state("5059293")
     assert result == {
         "state": "PENDING", "exit_code": "", "partition": "batch", "qos": "debug"}
@@ -221,15 +226,16 @@ def test_scheduler_queries_and_retains_partition_and_qos_explicitly(monkeypatch)
 def test_terminal_scheduler_evidence_queries_sacct_qos_explicitly(monkeypatch):
     calls = []
 
-    def output(command, **kwargs):
+    def run(command, **kwargs):
         calls.append(command)
         if command[0] == "squeue":
-            return ""
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
         if command[0] == "sacct":
-            return "COMPLETED|0:0|batch|debug\n"
+            return subprocess.CompletedProcess(
+                command, 0, stdout="COMPLETED|0:0|batch|debug\n", stderr="")
         raise AssertionError(command)
 
-    monkeypatch.setattr(MODULE.subprocess, "check_output", output)
+    monkeypatch.setattr(MODULE.subprocess, "run", run)
     assert MODULE._scheduler_state("5059293") == {
         "state": "COMPLETED",
         "exit_code": "0:0",
@@ -239,6 +245,41 @@ def test_terminal_scheduler_evidence_queries_sacct_qos_explicitly(monkeypatch):
     assert calls[-1] == [
         "sacct", "-n", "-X", "-j", "5059293",
         "--format=State,ExitCode,Partition,QOS", "-P",
+    ]
+
+
+def test_nonzero_squeue_invalid_job_falls_back_to_terminal_sacct_evidence(
+        monkeypatch):
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        if command[0] == "squeue":
+            return subprocess.CompletedProcess(
+                command, 1, stdout="",
+                stderr="slurm_load_jobs error: Invalid job id specified\n")
+        if command[0] == "sacct":
+            return subprocess.CompletedProcess(
+                command, 0, stdout="FAILED|1:0|batch|debug\n", stderr="")
+        raise AssertionError(command)
+
+    monkeypatch.setattr(MODULE.subprocess, "run", run)
+    monkeypatch.setattr(
+        MODULE.subprocess, "check_output",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy check_output path bypasses nonzero fallback")))
+    assert MODULE._scheduler_state("5065388") == {
+        "state": "FAILED",
+        "exit_code": "1:0",
+        "partition": "batch",
+        "qos": "debug",
+    }
+    assert calls == [
+        ["squeue", "-h", "-j", "5065388", "-o", "%T|%P|%q"],
+        [
+            "sacct", "-n", "-X", "-j", "5065388",
+            "--format=State,ExitCode,Partition,QOS", "-P",
+        ],
     ]
 
 
@@ -274,9 +315,12 @@ def test_pending_phase_is_resumable_wait_and_does_not_submit(monkeypatch, tmp_pa
         "active": {"phase": "clean-overlap", "job_id": "5035685", "run_dir": str(tmp_path / "clean-overlap")},
         "history": []}))
     calls = []
-    monkeypatch.setattr(MODULE.subprocess, "check_output", lambda command, **kwargs:
-                        calls.append(command) or (
-                            "PENDING|batch|debug\n" if command[0] == "squeue" else ""))
+    monkeypatch.setattr(MODULE.subprocess, "run", lambda command, **kwargs:
+                        calls.append(command) or subprocess.CompletedProcess(
+                            command, 0,
+                            stdout=("PENDING|batch|debug\n"
+                                    if command[0] == "squeue" else ""),
+                            stderr=""))
     assert MODULE.advance(plan, tmp_path / "acceptance.json", state, ROOT) == 75
     saved = json.loads(state.read_text())
     assert saved["wait"] == {"kind": "slurm-terminal", "job_id": "5035685",
@@ -285,6 +329,62 @@ def test_pending_phase_is_resumable_wait_and_does_not_submit(monkeypatch, tmp_pa
                                  "state": "PENDING", "exit_code": "",
                                  "partition": "batch", "qos": "debug"}}
     assert not any(call[0] == "sbatch" for call in calls)
+
+
+@pytest.mark.parametrize("scheduler_state", ["PENDING", "RUNNING"])
+def test_active_nonterminal_phase_never_submits_duplicate(
+        monkeypatch, tmp_path, scheduler_state):
+    plan = _serial_plan(tmp_path)
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({
+        "schema": "emender-exact-2n-serial-state-v1",
+        "next_phase": 0,
+        "active": {
+            "phase": "clean-overlap",
+            "job_id": "5065388",
+            "run_dir": str(tmp_path / "clean-overlap"),
+        },
+        "history": [],
+    }))
+    calls = []
+    monkeypatch.setattr(MODULE.subprocess, "run", lambda command, **kwargs:
+                        calls.append(command) or subprocess.CompletedProcess(
+                            command, 0,
+                            stdout=f"{scheduler_state}|batch|debug\n", stderr=""))
+    assert MODULE.advance(
+        plan, tmp_path / "acceptance.json", state, ROOT) == 75
+    assert not any(call[0] == "sbatch" for call in calls)
+
+
+def test_unexpected_clean_phase_failure_never_submits_next_phase(
+        monkeypatch, tmp_path):
+    plan = _serial_plan(tmp_path)
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({
+        "schema": "emender-exact-2n-serial-state-v1",
+        "next_phase": 0,
+        "active": {
+            "phase": "clean-overlap",
+            "job_id": "5065388",
+            "run_dir": str(tmp_path / "clean-overlap"),
+        },
+        "history": [],
+    }))
+    calls = []
+    monkeypatch.setattr(MODULE.subprocess, "run", lambda command, **kwargs:
+                        calls.append(command) or subprocess.CompletedProcess(
+                            command, 0,
+                            stdout=("" if command[0] == "squeue"
+                                    else "FAILED|1:0|batch|debug\n"),
+                            stderr=""))
+    with pytest.raises(
+            ValueError,
+            match="clean-overlap had unexpected terminal state FAILED"):
+        MODULE.advance(plan, tmp_path / "acceptance.json", state, ROOT)
+    assert not any(call[0] == "sbatch" for call in calls)
+    saved = json.loads(state.read_text())
+    assert saved["active"]["job_id"] == "5065388"
+    assert saved["next_phase"] == 0
 
 
 def test_squeue_to_sacct_propagation_gap_is_retried_then_harvested(monkeypatch, tmp_path):

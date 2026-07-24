@@ -287,11 +287,18 @@ def render_batch_script(repo: Path, launcher: str, destination: Path) -> Path:
 
 
 def _scheduler_state(job_id: str) -> dict[str, str]:
-    queued = subprocess.check_output(
+    queued_result = subprocess.run(
         ["squeue", "-h", "-j", job_id, "-o", "%T|%P|%q"],
         text=True,
-    ).strip()
+        capture_output=True,
+        check=False,
+    )
+    queued = queued_result.stdout.strip()
     if queued:
+        if queued_result.returncode != 0:
+            raise subprocess.CalledProcessError(
+                queued_result.returncode, queued_result.args,
+                output=queued_result.stdout, stderr=queued_result.stderr)
         fields = queued.splitlines()[0].split("|")
         if len(fields) != 3:
             raise ValueError("squeue did not return explicit State, Partition, and QOS")
@@ -301,13 +308,16 @@ def _scheduler_state(job_id: str) -> dict[str, str]:
             "partition": fields[1],
             "qos": fields[2],
         }
-    line = subprocess.check_output(
+    accounting = subprocess.run(
         [
             "sacct", "-n", "-X", "-j", job_id,
             "--format=State,ExitCode,Partition,QOS", "-P",
         ],
         text=True,
-    ).strip().splitlines()
+        capture_output=True,
+        check=True,
+    )
+    line = accounting.stdout.strip().splitlines()
     if not line:
         return {
             "state": "ACCOUNTING_PENDING",
@@ -444,6 +454,8 @@ def advance(plan: dict[str, Any], output: Path, state_path: Path, repo: Path) ->
     command = ["sbatch", "--parsable", "-N", "2", "-t", WALLTIME,
                "-p", "batch", "--qos=debug", "--network=job_vni",
                "--chdir", str(repo.resolve()),
+               "--output", str((run_dir / "slurm-%j.out").resolve()),
+               "--error", str((run_dir / "slurm-%j.err").resolve()),
                "--export=ALL," + ",".join(f"{k}={v}" for k, v in exports.items()), str(launcher)]
     job_id = subprocess.check_output(command, text=True).strip().split(";")[0]
     state["active"] = {"phase": phase["name"], "job_id": job_id, "run_dir": str(run_dir),
