@@ -4,7 +4,7 @@ Date: 2026-07-24
 
 Task: `re-run-async`
 
-Status: **IN PROGRESS — no scale-out is authorized.**
+Status: **FAILED CLEAN ADMISSION — no scale-out is authorized.**
 
 ## Authority
 
@@ -72,8 +72,16 @@ SHA-256     0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2
 attestation 27e234891df02b64b9db77fc784c341e5a3ae6e87418b8f1af167776d1d710bb
 ```
 
-Each allocation must receive this verified file via `sbcast`, re-hash it on
-each node while offline, and report `network_fetches=0`.
+The clean allocation received the submit-verified file via `sbcast` and
+re-hashed it independently on both nodes while offline:
+
+| host | step | bytes | SHA-256 | network fetches |
+|---|---:|---:|---|---:|
+| `frontier07422` | 2300930 | 7,719,680,116 | `0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2` | 0 |
+| `frontier07424` | 2300930 | 7,719,680,116 | `0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2` | 0 |
+
+Both records bind submit attestation
+`27e234891df02b64b9db77fc784c341e5a3ae6e87418b8f1af167776d1d710bb`.
 
 ## Serialized acceptance
 
@@ -88,10 +96,50 @@ native manifest      ce09c15cef51ed1bed730f8db6b5cfdc0b7e3ec502be4fad55724a8b63d
 rendered sbatch      2a5a19144be83b7e207a80b1528a3b3d34d91c76c2208355cc504f5d59c1681e
 ```
 
-Clean-overlap job `5066162` requests exactly two nodes, `batch`, and `debug`.
-It is currently pending for scheduler priority. The state has
-`next_phase=0`, `active.phase=clean-overlap`, `history=[]`; therefore no later
-phase has been submitted.
+Clean-overlap job `5066162` requested and received exactly two nodes,
+`Partition=batch`, and `QOS=debug`. It ran from
+`2026-07-24T09:55:53` through `2026-07-24T10:07:24`, then terminated
+`FAILED`, `ExitCode=1:0`, after `00:11:31`.
+
+Generation 0 reached a dynamically leased two-member READY snapshot and froze
+both node contributions with `accepted_tokens=5,245,440`, above `Q_min=2` and
+`T_min=3,934,080`. The native CXI path remained point-to-point and bounded:
+telemetry reported exact `cxi`, `FI_EP_RDM`, no retries, no replay, no route
+errors, and a 67,109,184-byte in-flight/retained high-water before release.
+No launched-rank wait, all-rank collective, Python/Lustre dense payload path,
+or central full-model broker was used.
+
+The clean admission nevertheless failed before any committed generation or
+qualifying K40-window sequence. Both managers rejected the first native result
+root with:
+
+```text
+RuntimeError: native result-root token accounting mismatch
+```
+
+The missing result metadata then caused trainer deadlines, and later manager
+restart attempts failed closed at `FREEZE` with `invalid lifecycle state`.
+Because generation 0 did not publish, there are no five sequential qualifying
+windows, cadence/idle/lag verdict, or immutable checkpoint continuation to
+claim.
+
+The controller was rerun to harvest terminal state and refused with:
+
+```text
+acceptance launcher refused: phase clean-overlap had unexpected terminal state FAILED
+```
+
+Its serial state remains `next_phase=0`, `active.phase=clean-overlap`,
+`history=[]`. Thus it did not submit `fault-rejoin`,
+`invalid-result-rejection`, `checkpoint-publication-failure`, or
+`fresh-restart`.
+
+Exact scheduler history:
+
+| job | purpose | state / exit | elapsed | nodes | partition | QoS | start | end |
+|---:|---|---|---|---:|---|---|---|---|
+| 5066119 | current-source G2 | `COMPLETED 0:0` | 00:03:02 | 2 | batch | debug | 2026-07-24 09:37:30 | 2026-07-24 09:40:32 |
+| 5066162 | clean overlap | `FAILED 1:0` | 00:11:31 | 2 | batch | debug | 2026-07-24 09:55:53 | 2026-07-24 10:07:24 |
 
 ## Commands
 
@@ -128,9 +176,10 @@ The real serialized controller uses:
 
 ## Verdict
 
-The terminal verdict is pending the clean gate. Until all criteria pass,
-including honest base/commit/apply lag, at least five sequential local K40
-windows, bounded queues/memory, cadence at most `1.25x` raw K, foreground idle
-below 10%, local `OWNED` at most one second, leased/dynamic READY membership,
-all rejection/recovery/publication/restart cases, and immutable artifacts,
-**scale-out is explicitly denied**.
+The terminal verdict is **FAIL**. Current-source G2, exact scheduling, seed
+materialization, leased READY membership, and bounded native transport passed,
+but clean overlap failed at the first result-root token-accounting check. The
+run therefore did not establish honest base/commit/apply lag over five
+sequential K40 windows, cadence at most `1.25x` raw K, foreground idle below
+10%, local `OWNED` at most one second, or the later rejection, recovery,
+publication, and restart cases. **Scale-out is explicitly denied.**
