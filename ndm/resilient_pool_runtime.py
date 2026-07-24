@@ -456,7 +456,11 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
         if len(identities) != 1:
             raise ValueError("native result-root validation mismatch")
         validated_root, validated_weight, validated_bytes = identities.pop()
-        if validated_weight != admission.close_result.accepted_tokens:
+        frozen = set(admission.close_result.frozen_identities)
+        aggregation_weight = sum(
+            item.aggregation_weight for item in admission._accepted.values()
+            if item.identity in frozen)
+        if aggregation_weight <= 0 or validated_weight != aggregation_weight:
             raise ValueError("native result-root token accounting mismatch")
         return {"status": "validated", "result_root": validated_root,
                 "global_weight": validated_weight, "result_bytes": validated_bytes,
