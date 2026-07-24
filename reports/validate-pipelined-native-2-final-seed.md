@@ -2,7 +2,7 @@
 
 Date: 2026-07-23  
 Task: `validate-pipelined-native-2-final-seed`  
-Status: clean five-generation job 5062348 pending; scheduler wait checkpoint
+Status: clean five-generation job 5062348 running; generation 1 checkpoint
 
 ## Retained terminal attempt
 
@@ -144,6 +144,23 @@ managers plus 16 real trainers. At this checkpoint both managers reported
 `native_service_ready`, all trainers reached `runtime_import`, and node 0
 trainers had advanced to `model_build_start`; the job was still active, so
 generation and performance results remain unclaimed.
+
+At `2026-07-23T20:12:42-04:00`, the sole allocation remained `RUNNING` on
+exactly `frontier[04968,07542]`, `Partition=batch`, and `QOS=debug`, with no
+restart or duplicate. Generation 0 reached a two-node frozen quorum with
+5,245,440 accepted tokens and was atomically published as generation 1. The
+finalized handoff binds source, payload, code, native-runtime, fence, outer
+state, and checkpoint digests. Its checkpoint is 7,899,873,267 bytes with
+SHA-256
+`8e854e623544846c67b7ab6c9ad64fd8a9168b5df4739cefc4f99b466ad1fded`;
+`latest.json` points to the finalized generation-1 manifest. While that
+generation-0 background publication completed, all 16 trainers advanced into
+generation-1 K40 compute. Generation 1 subsequently reached `commit_ready`
+with both node contributions and 5,245,440 accepted tokens at 20:12:27 EDT;
+its checkpoint publication was still in progress at this observation. This is
+one completed atomic K40 generation plus direct evidence of generation-g
+checkpoint publication overlapping generation-(g+1) compute. Five-generation
+and steady-state performance claims remain gated on terminal evidence.
 
 ## Seed bootstrap proof
 
