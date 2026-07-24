@@ -2,7 +2,8 @@
 
 Date: 2026-07-23  
 Task: `validate-pipelined-native-2-final-seed`  
-Status: clean five-generation job 5062348 running; four generations atomic
+Status: clean five-generation job 5062348 terminal; five generations atomic,
+but the fail-closed overlap/performance gate rejected the run
 
 ## Retained terminal attempt
 
@@ -185,6 +186,55 @@ checkpoint/publication overlap into the next K40 window. Generation 4 remains
 active, so the clean gate is not yet terminal and no serial follow-on phase
 has been launched.
 
+At `2026-07-23T20:37:31-04:00`, terminal accounting showed:
+
+```text
+5062348|resilient-e97-true-2n|FAILED|1:0|batch|debug|2
+5062348.3|python|COMPLETED|0:0|2|00:30:19
+```
+
+The allocation ran from `2026-07-23T19:57:33-04:00` through
+`2026-07-23T20:33:11-04:00` on exactly
+`frontier[04968,07542]`. The real two-node training/supervision step
+completed, and all five requested K40 generations (0 through 4) reached
+two-node quorum, applied an accepted native result, and atomically published
+the next checkpoint. `handoff/latest.json` points to the finalized
+generation-5 manifest. The final checkpoint is 7,899,873,267 bytes with
+SHA-256
+`e26f6c15b3528524991efc2c213ac88e410eb189c212f4ac121dda10066ffaa7`;
+accepted state advanced to step 2301130 and 26,227,200 accepted tokens.
+
+The batch wrapper then correctly failed closed in
+`validate_pipelined_e97_performance.py`:
+
+```text
+ValueError: generation 0 background did not overlap 1 K40 compute
+```
+
+Independent harvesting of the retained paired wall/monotonic telemetry
+confirms this is a real acceptance failure, not merely a scheduler or training
+exit-code artifact. Every one of the 16 trainers emitted exactly 40 start and
+40 end timestamps for each of five generations. Across all 80 inter-generation
+windows, median raw K40 compute was 63.679326 seconds, median cadence was
+358.265159 seconds (5.626083x raw K40), median foreground handoff/apply idle
+was 294.940987 seconds, and aggregate foreground control-plane idle fraction
+was 0.817668. Native local reduction was approximately 17.49--17.98 seconds,
+owner redistribution 22.04--22.66 seconds, and trainer apply generally
+11.08--14.68 seconds in generations 0--3 (rank-zero applies were
+3.44--4.32 seconds). These stages reported `within_slo=true`, but they ran
+serially between K40 windows rather than overlapping generation-(g+1)
+compute. The required idle below 10% and cadence no worse than 1.25x raw K40
+therefore both fail by large margins.
+
+Useful payload evidence is 5,506,770,496 result bytes per generation. The
+retained result records do not expose an aggregate wire-byte field, so a
+wire-byte claim is unavailable and remains an instrumentation gap. Because the
+clean overlap/performance gate did not pass, the controller did not launch the
+fault/rejection/checkpoint/restart phases. In particular, this run provides no
+acceptance evidence for peer loss/rejoin, invalid-result rejection, failed
+checkpoint publication retention, or fresh restart. No duplicate, replacement,
+or allocation larger than two nodes was submitted.
+
 ## Seed bootstrap proof
 
 The merged batch bootstrap contains no S3 URI, HTTP URL, or network-fetch
@@ -220,11 +270,17 @@ verifier to succeed before exporting the model seed.
 ## Conformance and validation
 
 Conformance was checked against *Resilient DiLoCo Compute Pool*, version 1,
-and the companion gap matrix: R01-R16 and NDP01-NDP17. The exact-source,
-two-node, explicit queue, bounded-wait, native-bundle, immutable-seed,
-node-local handoff, and ordered-rung constraints are satisfied for this
-pending prerequisite. Runtime-only requirements remain unclaimed until G2
-passes and the clean five-generation K40 phase completes.
+and the companion gap matrix: R01-R16 and NDP01-NDP17. Exact-source identity,
+two-node explicit queue binding, bounded waits, native bundle/G2 attestation,
+immutable seed, live-job-scoped node-local handoff, two-node quorum, fencing,
+five atomic generations, and ordered-rung gating conform. The clean phase
+demonstrates non-conformance with the pipelining/performance portions of R10,
+R11, R12, R13, R15 and NDP10/NDP11: background work did not overlap the next
+K40 window, foreground idle was 81.77%, and cadence was 5.63x raw K40.
+Downstream runtime-only requirements R03/R04/R05/R06/R07/R08/R14 and
+NDP12/NDP14 remain unverified because the required serial phases were
+correctly withheld after this clean-gate failure. This report does not infer
+conformance for any unexecuted phase.
 
 Commands and observations:
 
@@ -242,13 +298,18 @@ sha256sum -c g2-artifacts/5062165/SHA256SUMS
 PASS (6/6)
 render_resilient_e97_exact_2n_acceptance.py ... --submit
 SUBMITTED phase=clean-overlap job_id=5062348
-squeue/sacct/scontrol: RUNNING, 2 nodes, Partition=batch, QOS=debug
+squeue/sacct/scontrol: terminal FAILED 1:0, 2 nodes, Partition=batch, QOS=debug
 start: 2026-07-23T19:57:33 America/New_York
+end: 2026-07-23T20:33:11 America/New_York
 seed-materialization/frontier04968.json: exact hash/size/job ID, network_fetches=0
 seed-materialization/frontier07542.json: exact hash/size/job ID, network_fetches=0
+five handoff manifests and generation-1 through generation-5 checkpoints
+performance validator: rejected generation-0 background/no generation-1 overlap
 ```
 
-Five K40 generations, overlap and idle/cadence metrics, useful/wire bytes,
-loss/rejoin recovery, invalid-result rejection, failed checkpoint publication,
-and fresh restart are not yet claimed. The serial phases remain gated behind
-the clean five-generation result.
+Five K40 generations and their atomic checkpoints are validated. Overlap,
+foreground-idle, and cadence requirements failed. Useful result bytes are
+reported; aggregate wire bytes were not emitted. Loss/rejoin recovery,
+invalid-result rejection, failed checkpoint publication, and fresh restart
+remain unclaimed because the serial phases remain gated behind a passing clean
+five-generation result.
