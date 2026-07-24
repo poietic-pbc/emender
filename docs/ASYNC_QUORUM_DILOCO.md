@@ -2,6 +2,18 @@
 
 Date: 2026-07-05
 
+> **Historical v1 scaffolding, not current bounded-lag authority.** This note
+> defines the stale-reject quorum baseline implemented by the original local
+> simulation and core tests. Strict `tau = 0` remains a compatibility mode
+> under [Resilient DiLoCo Compute Pool](RESILIENT_DILOCO_COMPUTE_POOL.md).
+> The only reviewed policy for continuous decoupled local windows and stale
+> contribution admission is
+> [ADR-002: bounded-lag asynchronous DiLoCo v2](ASYNC_DECOUPLED_DILOCO_V2.md).
+> Where this note calls bounded staleness a future experiment or suggests a
+> transport that conflicts with the native authority, ADR-002 and
+> [Native resilient DiLoCo data plane v1](NATIVE_RESILIENT_DILOCO_DATAPLANE.md)
+> take precedence.
+
 ## Goal
 
 Train E97 at Frontier scale without requiring a static all-rank collective at
