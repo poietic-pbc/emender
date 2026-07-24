@@ -582,6 +582,69 @@ def test_persistent_worker_bootstraps_once_across_multiple_exact_windows(monkeyp
     session.close()
 
 
+def test_persistent_real_worker_materializes_lazy_schedulefree_z(monkeypatch):
+    """Sparse first-window state still permits full-model x/z translation."""
+    import ndm.async_diloco_real as real
+
+    class TwoParamModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.active = torch.nn.Parameter(torch.tensor([1.0]))
+            self.sparse = torch.nn.Parameter(torch.tensor([2.0]))
+
+    class LazyScheduleFreeFixture:
+        def __init__(self, parameters):
+            active, sparse = tuple(parameters)
+            self.param_groups = [{
+                "params": [active, sparse], "lr": 0.1, "train_mode": True,
+            }]
+            self.state = {
+                active: {
+                    "z": torch.tensor([10.0]),
+                    "exp_avg_sq": torch.tensor([4.0]),
+                },
+                sparse: {},
+            }
+
+    monkeypatch.setattr(
+        real.train, "build_training_model", lambda _args: TwoParamModel())
+    monkeypatch.setattr(
+        real.train, "build_training_optimizer",
+        lambda model, _args: LazyScheduleFreeFixture(model.parameters()))
+    monkeypatch.setattr(
+        real, "_build_batch_iter", lambda *_args, **_kwargs: object())
+
+    session = PersistentRealWorkerSession(
+        base_state={
+            "active": torch.tensor([1.0]),
+            "sparse": torch.tensor([2.0]),
+        },
+        train_args=real.Namespace(
+            seed=7, bf16=False, lr=0.1, optimizer="schedulefree"),
+        spec=RealAsyncWorkerSpec("trainer", "node-0", "cpu", 1, 0),
+        synthetic_token_stream=False,
+        synthetic_vocab_size=8,
+    )
+    active, sparse = tuple(session.model.parameters())
+
+    # Preserve existing live state and initialize only the point that the
+    # sparse first window has not touched.
+    torch.testing.assert_close(
+        session.optimizer.state[active]["z"], torch.tensor([10.0]))
+    torch.testing.assert_close(
+        session.optimizer.state[sparse]["z"], torch.tensor([2.0]))
+    session.translate({
+        "active": torch.tensor([3.0]),
+        "sparse": torch.tensor([5.0]),
+    })
+    torch.testing.assert_close(active, torch.tensor([4.0]))
+    torch.testing.assert_close(sparse, torch.tensor([7.0]))
+    torch.testing.assert_close(
+        session.optimizer.state[active]["z"], torch.tensor([13.0]))
+    torch.testing.assert_close(
+        session.optimizer.state[sparse]["z"], torch.tensor([7.0]))
+
+
 def test_persistent_lane_progresses_and_coalesces_while_result_is_delayed(
         monkeypatch):
     import ndm.async_diloco_real as real

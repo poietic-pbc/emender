@@ -986,13 +986,17 @@ def _write_verified_chain_checkpoint(
 def _align_schedulefree_optimizer_state_to_model(
     model: torch.nn.Module,
     optimizer: Any,
+    *,
+    preserve_existing: bool = False,
 ) -> None:
     for group in optimizer.param_groups:
         for param in group["params"]:
             state = optimizer.state.setdefault(param, {})
-            state["z"] = param.detach().clone()
+            if not preserve_existing or "z" not in state:
+                state["z"] = param.detach().clone()
             state.setdefault("exp_avg_sq", torch.zeros_like(param, memory_format=torch.preserve_format))
-        group["train_mode"] = False
+        if not preserve_existing:
+            group["train_mode"] = False
 
 
 def _chain_checkpoint_label(args: Namespace) -> str:
@@ -1087,6 +1091,12 @@ class PersistentRealWorkerSession:
                 _release_consumed_optimizer_state(optimizer_state_dict)
             for param_group in self.optimizer.param_groups:
                 param_group["lr"] = self.args.lr
+        if str(getattr(self.args, "optimizer", "")) == "schedulefree":
+            # ScheduleFree creates per-parameter state lazily. A sparse first
+            # E97 window can reach global translation before every resident
+            # parameter has acquired the required z point.
+            _align_schedulefree_optimizer_state_to_model(
+                self.model, self.optimizer, preserve_existing=True)
         phase("optimizer_state_loaded")
         self.batch_iter = _build_batch_iter(
             self.args,

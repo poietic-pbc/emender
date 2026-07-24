@@ -4,7 +4,8 @@ Date: 2026-07-24
 
 Task: `re-run-fixed`
 
-Status: **CLEAN JOB QUEUED — terminal validation pending scheduler start**
+Status: **CLEAN JOB FAILED AFTER GENERATION 0 — changed-payload correction
+under validation**
 
 ## Authority and scope
 
@@ -126,3 +127,59 @@ On terminal continuation, retain:
 
 If clean fails, stop immediately. Under no outcome does this task authorize a
 4+ node submission or scale promotion.
+
+## Terminal harvest and changed-payload correction
+
+Job `5066495` ran on `frontier[09215-09216]` and terminated after 27 minutes
+37 seconds:
+
+```text
+5066495|resilient-e97-true-2n|FAILED|1:0|00:27:37|2026-07-24T12:17:04|2026-07-24T12:44:41|batch|debug|frontier[09215-09216]
+```
+
+This is terminal accounting evidence for exactly two nodes (`NNodes=2` in the
+retained job request), `Partition=batch`, and `QOS=debug`. The run reached and
+committed generation zero. Its pool-control record preserved
+`accepted_tokens=5245440`, while both node result roots independently
+preserved:
+
+```json
+{
+  "exact_tokens": 5245440,
+  "weight": 5245440,
+  "aggregation_weight": 36718080,
+  "global_weight": 36718080,
+  "result_root": "7636bfeba03dc38b23a829e850bad29a6e63e31b561002410fae757ab11406e1"
+}
+```
+
+Thus the `fix-async-v2-2` accounting correction passed its live production
+case: exact accepted tokens are not substituted for the frozen numerical
+aggregation weight.
+
+The first independent post-commit failure was at the next real trainer
+boundary:
+
+```text
+ValueError: ScheduleFree z point is missing or malformed
+```
+
+ScheduleFree initializes per-parameter state lazily. The full-model async-v2
+translation therefore encountered a parameter not touched by the first sparse
+window and lacking a resident `z` point. Later manager submission timeouts and
+generation-one reconnect identity errors were cascades after trainers failed.
+
+The smallest correction initializes only missing ScheduleFree `z` and
+`exp_avg_sq` entries from the resident model when a persistent real session is
+bootstrapped. It preserves restored/live state and train mode. The focused
+regression `test_persistent_real_worker_materializes_lazy_schedulefree_z`
+reproduces a mixed initialized/lazy optimizer and verifies the complete x/z
+translation. Activated validation passed that regression and the current
+native build passed all 10 CTests.
+
+No unchanged resubmission was made. Any subsequent admission must be a
+source-pinned changed payload, must refresh G2 for that source, and remains
+restricted to the clean phase on exactly two `batch`/`debug` nodes. Pending
+state is checked at most 30 minutes apart; running state is checked every 2–5
+minutes with generation/deadline progress inspection and immediate terminal
+harvest.
