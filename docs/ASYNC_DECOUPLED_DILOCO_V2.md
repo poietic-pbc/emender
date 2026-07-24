@@ -74,6 +74,9 @@ published generation 5, but its 80 trainer inter-window observations measured:
 | median foreground idle | 294.940987 s |
 | cadence / raw K40 | 5.626083x |
 | aggregate foreground idle fraction | 0.817668 |
+| native local reduction | approximately 17.49–17.98 s |
+| owner redistribution | 22.04–22.66 s |
+| trainer apply, generations 0–3 | generally 11.08–14.68 s |
 | generation-g background overlapping generation-(g+1) K40 | none |
 
 The validator correctly rejected `generation 0 background did not overlap 1
@@ -88,12 +91,21 @@ weights. At one dense descriptor emitted per K and one commit per 5.626083 K,
 arrival rate exceeds service rate and any FIFO grows without bound. Increasing
 `tau` only postpones that failure. V2 instead bounds the descriptor arrival
 rate by coalescing adjacent local windows and admits at most one immutable
-descriptor plus one mutable next interval per worker. Six is an experimental
-global-version safety ceiling for delayed/rejoining contributions. Two is the
-lower promotion target. Eight is a separate hard bound on speculative local
-windows; two is its promotion target. The convergence and performance gates,
-not the 5062348 serial time, decide whether any of these values may be
-promoted.
+descriptor plus one mutable next interval per worker. The retained artifact
+does not isolate a quorum service time, and in particular contains no evidence
+that quorum takes six K-windows. Its unitemized remainder includes serialized
+control, handoff, checkpoint, integrity, and publication work.
+
+The implementation must first decouple and independently time the known
+approximately 18-second local reduction, 22-second owner redistribution,
+11–15-second trainer apply, and checkpoint/publication/control stages. Only
+then may the two-node gates interpret the measured base, commit, applied-anchor,
+result, and local-window lag. Six is a predeclared, falsifiable experimental
+global-version ceiling for delayed/rejoining contributions, not a latency
+model. Two is the lower promotion target. Eight is a separate hard bound on
+speculative local windows; two is its promotion target. The convergence and
+performance gates, not the 5062348 serial total or any stage estimate, decide
+whether these values may be promoted.
 
 ## Versions, windows, and lag
 
@@ -635,6 +647,9 @@ interval. For every healthy interval:
 - local K-windows continue while at least one accurately versioned prior
   contribution is being handed off, transported, reduced, committed,
   redistributed, or published;
+- local reduction, owner redistribution, trainer apply, checkpoint/publication,
+  and remaining control/handoff/integrity work have independent intervals and
+  do not disappear into an inferred “quorum time”;
 - median steady-state K-boundary cadence is no greater than `1.25` times
   median raw K40 compute;
 - aggregate foreground idle divided by boundary cadence is strictly below

@@ -27,6 +27,14 @@ transfers descriptor
 responsibility to the persistent service; trainers do not wait for fabric send
 or receipt completion.
 
+The retained stage evidence is recorded without inferring a quorum service
+time: local native reduction was approximately 17.49–17.98 s, owner
+redistribution 22.04–22.66 s, and trainer apply generally 11.08–14.68 s.
+ADR-002 requires those stages and the unitemized
+control/handoff/checkpoint/integrity/publication remainder to be decoupled and
+measured before interpreting lag. The experimental hard bound six is not
+derived from the 5.626083x serial total.
+
 The authoritative policy, compute-pool promotion, native extension boundary,
 V2A01–V2A18 traceability, legacy-note status, and this validation record are
 the only artifacts changed.
@@ -139,11 +147,12 @@ git cat-file -e \
   20c9d1bec436b6aa6a2eba4e434d2202e9c45762:reports/validate-pipelined-native-2-final-seed.md
 git show \
   20c9d1bec436b6aa6a2eba4e434d2202e9c45762:reports/validate-pipelined-native-2-final-seed.md |
-  rg '63\.679326|358\.265159|294\.940987|5\.626083|0\.817668|did not overlap'
+  rg '63\.679326|358\.265159|294\.940987|5\.626083|0\.817668|17\.49|17\.98|22\.04|22\.66|11\.08|14\.68|did not overlap'
 ```
 
 Result: the retained object exists and contains every cited measurement and the
-fail-closed overlap error.
+fail-closed overlap error. It does not contain an isolated six-window quorum
+measurement.
 
 Final format and project-source consistency commands:
 
