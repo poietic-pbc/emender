@@ -245,7 +245,7 @@ def plot_overlay(aligned: list[dict], output: Path, smoothing_window: int, cutof
         fontsize=8,
         color="#111827",
     )
-    ax.set_title("GDN2-MLP vs E97 DiLoCo Training Loss at Matched Tokens")
+    ax.set_title(f"GDN2-MLP vs E97 DiLoCo Training Loss through {cutoff_tokens / 1e9:.6f}B Matched Tokens")
     ax.set_xlabel("Aggregate training tokens (billions)")
     ax.set_ylabel("Rank-0/main logged training loss")
     ax.grid(True, color="#e5e7eb", linewidth=0.8)
@@ -271,14 +271,13 @@ def main() -> None:
     ap.add_argument("--e97-args", type=Path, required=True)
     ap.add_argument("--cutoff-step", type=int, default=DEFAULT_CUTOFF_STEP)
     ap.add_argument("--smoothing-window", type=int, default=DEFAULT_SMOOTHING_WINDOW)
+    ap.add_argument("--snapshot-utc", default="2026-07-23T07:58:22Z")
     ap.add_argument("--output-png", type=Path, required=True)
     ap.add_argument("--output-json", type=Path, required=True)
     args = ap.parse_args()
 
     cutoff_step = args.cutoff_step
     cutoff_tokens = cutoff_step * TOKENS_PER_STEP
-    if cutoff_tokens != DEFAULT_CUTOFF_TOKENS:
-        raise SystemExit(f"unexpected cutoff tokens {cutoff_tokens}; expected {DEFAULT_CUTOFF_TOKENS}")
 
     gdn2_config = tokens_per_step_from_args(args.gdn2_args)
     e97_config = tokens_per_step_from_args(args.e97_args)
@@ -313,6 +312,13 @@ def main() -> None:
         e97_dropped.append(dropped)
         e97_malformed.extend(malformed)
     e97_points, e97_superseded = dedupe(e97_points_raw, cutoff_step)
+
+    expected_window = min(80, max(5, len(gdn2_points) // 40))
+    if args.smoothing_window != expected_window:
+        raise SystemExit(
+            f"smoothing-window {args.smoothing_window} does not match GDN2 "
+            f"effective-count rule min(80,max(5,n//40))={expected_window} for n={len(gdn2_points)}"
+        )
 
     e97_by_step = {p.step: p for p in e97_points}
     gdn2_by_step = {p.step: p for p in gdn2_points}
@@ -379,7 +385,7 @@ def main() -> None:
     plot_stat = args.output_png.stat()
 
     summary = {
-        "snapshot_utc": "2026-07-23T07:58:22Z",
+        "snapshot_utc": args.snapshot_utc,
         "cutoff": {"step": cutoff_step, "tokens": cutoff_tokens, "tokens_billions": cutoff_tokens / 1e9},
         "token_semantics": {
             "validated_same_tokens_per_step": True,
@@ -412,7 +418,11 @@ def main() -> None:
         "smoothing": {
             "method": "trailing moving average over aligned effective records",
             "window_aligned_records": args.smoothing_window,
-            "window_reason": "GDN2 cutoff has 3124 effective records, so min(80, max(5, n//40)) = 78; applied identically to E97 aligned records",
+            "window_reason": (
+                f"GDN2 cutoff has {len(gdn2_points)} effective records, so "
+                f"min(80, max(5, n//40)) = {expected_window}; applied identically "
+                "to E97 aligned records"
+            ),
         },
         "cutoff_raw": raw_cutoff,
         "cutoff_smoothed": smoothed_cutoff,
