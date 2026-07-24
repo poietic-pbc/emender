@@ -62,6 +62,7 @@ def _role_import_heartbeat() -> tuple[threading.Event, threading.Thread] | None:
 
 _IMPORT_HEARTBEAT = _role_import_heartbeat()
 
+import numpy as np
 import torch
 
 from ndm.resilient_e97_roles import LocalFence, LocalTrainerSpool
@@ -76,10 +77,9 @@ from ndm.native_e97_runtime import (
     state_elements, wait_metadata,
 )
 from ndm.native_pool_runtime import NativeManagerSession
-from ndm.native_pipeline import (
-    BackgroundWork, CommittedResult, GenerationIdentity,
-    LiveNativeGenerationScheduler, NativeGenerationPipeline,
-    finite_result_verifier,
+from ndm.async_diloco_v2 import (
+    ASYNC_DECOUPLED_V2, AsyncV2DescriptorService, AsyncV2WorkerLane,
+    OuterState, ResultEnvelope, ScheduleFreeLocalState,
 )
 from ndm.resilient_e97_reducer import TensorLayout
 from ndm.fenced_admission import AllocationLease, SQLiteFencedControlStore
@@ -94,45 +94,59 @@ from ndm.resilient_pool_runtime import (
 )
 
 
+ASYNC_V2_E97_NATIVE_RESIDENT_BYTES = 64_001_671_648
+
+
 def production_overlap_probe(*, background_release: threading.Event,
                              background_started: threading.Event,
                              timeout_s: float = 2.0) -> list[object]:
-    """Exercise the production role's delayed native scheduling edge.
-
-    This deliberately small deterministic hook uses the same concrete classes
-    constructed by :func:`trainer`.  It exists so the exact rendered role can
-    prove that certification of generation ``g`` is background work and is
-    not permission to begin K40(``g+1``), without requiring a Frontier job or
-    substituting a fixture scheduler.
-    """
+    """Exercise the rendered role's actual v2 ownership/continuation edge."""
     digest = "0" * 64
-    incarnation = "production-overlap-probe"
-    pipeline = NativeGenerationPipeline(
+    lane = AsyncV2WorkerLane(
         run_id="production-overlap-probe", fence=1,
-        incarnation=incarnation)
+        worker_id="node-0", incarnation="production-overlap-probe",
+        local=ScheduleFreeLocalState(
+            x=np.asarray([0.0]), parameter_points={"z": np.asarray([0.0])}),
+        anchor_version=0, anchor_state=np.asarray([0.0]),
+        anchor_digest=digest, layout_digest="1" * 64, code_digest="2" * 64,
+        policy=ASYNC_DECOUPLED_V2)
+    lane.finish_window(
+        np.asarray([1.0]), exact_tokens=1, begin_ns=1, end_ns=2)
+    contribution = lane.seal()
     events: list[object] = []
-    scheduler = LiveNativeGenerationScheduler(
-        pipeline, telemetry=events.append, result_delay=1)
-    generation0 = GenerationIdentity(
-        "production-overlap-probe", 1, 0, 1, incarnation, digest, digest)
+    service = AsyncV2DescriptorService(lane=lane, telemetry=events.append)
 
-    def certify(payload, phase):
+    def certify(_contribution, phase):
         phase("discovery_membership_quorum_start")
         background_started.set()
         if not background_release.wait(timeout_s):
             raise TimeoutError("probe background release timed out")
         phase("checkpoint_publication")
-        return CommittedResult(
-            generation0, payload, digest, digest, 1, time.monotonic_ns())
+        return ResultEnvelope.create(
+            run_id="production-overlap-probe", allocation_fence=1,
+            version=1, base_version=0, base_digest=digest,
+            state=np.asarray([0.5]), outer=OuterState(step=1, accepted_tokens=1),
+            policy_digest=ASYNC_DECOUPLED_V2.digest,
+            layout_digest="1" * 64, code_digest="2" * 64,
+            manifest_digest="3" * 64,
+            selected_contribution_digests=(contribution.digest,),
+            reload_verified=True, latest_cas_verified=True)
 
-    if not scheduler.enqueue(BackgroundWork(generation0, 1.0, certify)):
-        raise RuntimeError("production scheduler rejected generation zero")
+    if service.handoff(
+            contribution, certify, deadline=time.monotonic() + timeout_s) != "OWNED":
+        raise RuntimeError("production v2 service rejected local ownership")
     if not background_started.wait(timeout_s):
         raise TimeoutError("production background did not start")
-    scheduler.event(GenerationIdentity(
-        "production-overlap-probe", 1, 1, 1, incarnation, digest, digest),
-        "k40_start")
-    return [scheduler, events]
+    # This is a real lane transition, not a synthetic event: q=1 -> q=2
+    # completes while q=[0,1) remains owned by the delayed service, and its
+    # applied global anchor honestly remains S_0.
+    lane.finish_window(
+        np.asarray([2.0]), exact_tokens=1, begin_ns=3, end_ns=4)
+    service.event(
+        contribution, "k40_start",
+        applied_anchor_version=lane.applied_anchor_version,
+        local_model_basis="worker_local")
+    return [service, events]
 
 
 def _owner_endpoint_from_snapshot(peer: dict[str, object]) -> OwnerEndpoint:
@@ -244,7 +258,15 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--seed", default=""); value.add_argument("--train-args-json", default="")
     value.add_argument("--data", default=""); value.add_argument("--device", default="cuda:0")
     value.add_argument("--control", action="store_true")
-    value.add_argument("--eta-outer", type=float, default=1.0)
+    value.add_argument("--eta-outer", type=float, default=0.5)
+    value.add_argument(
+        "--diloco-policy",
+        default=os.environ.get("RESILIENT_E97_DILOCO_POLICY",
+                               ASYNC_DECOUPLED_V2.policy_id))
+    value.add_argument("--tau-hard", type=int, default=ASYNC_DECOUPLED_V2.tau_hard)
+    value.add_argument("--tau-target", type=int, default=ASYNC_DECOUPLED_V2.tau_target)
+    value.add_argument("--sigma-hard", type=int, default=ASYNC_DECOUPLED_V2.sigma_hard)
+    value.add_argument("--sigma-target", type=int, default=ASYNC_DECOUPLED_V2.sigma_target)
     value.add_argument("--migration-policy", default="")
     value.add_argument("--bulk-root", default=os.environ.get("RESILIENT_E97_BULK_ROOT", "/tmp/resilient-e97"))
     # Eight f32 trainer contributions plus the bounded f64 numerator/result
@@ -258,6 +280,51 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--native-build-manifest", default=os.environ.get("NDP_BUILD_MANIFEST", ""))
     value.add_argument("--native-gate-json", default=os.environ.get("NDP_FULL_LAYOUT_GATE_JSON", ""))
     return value
+
+
+def _async_v2_policy(args):
+    """Fail closed before model load on false tau=0 or policy drift."""
+    if bool(args.control):
+        # The scalar/control fixture may shrink Q/T/deadlines, but it still
+        # exercises and labels the exact v2 lag/coalescing/outer policy.  No
+        # control fixture is production-promotion eligible.
+        if (str(args.diloco_policy) != ASYNC_DECOUPLED_V2.policy_id
+                or int(args.local_steps) != ASYNC_DECOUPLED_V2.k_local_steps
+                or int(args.tau_hard) != ASYNC_DECOUPLED_V2.tau_hard
+                or int(args.tau_target) != ASYNC_DECOUPLED_V2.tau_target
+                or int(args.sigma_hard) != ASYNC_DECOUPLED_V2.sigma_hard
+                or int(args.sigma_target) != ASYNC_DECOUPLED_V2.sigma_target
+                or float(args.eta_outer) != ASYNC_DECOUPLED_V2.eta):
+            raise ValueError("control fixture mislabeled or changed async-v2 policy")
+        return ASYNC_DECOUPLED_V2
+    actual = {
+        "policy_id": str(args.diloco_policy),
+        "k_local_steps": int(args.local_steps),
+        "tau_hard": int(args.tau_hard),
+        "tau_target": int(args.tau_target),
+        "sigma_hard": int(args.sigma_hard),
+        "sigma_target": int(args.sigma_target),
+        "q_min": int(args.global_quorum),
+        "t_min": int(args.global_token_min),
+        "group_deadline_s": min(float(args.deadline_s), 420.0),
+        "generation_attempt_retries": 0,
+        "eta": float(args.eta_outer),
+        "outer_mode": "delta_sgd",
+        "sealed_descriptor_capacity": 1,
+        "mutable_interval_capacity": 1,
+        "result_mailbox_capacity": 1,
+        "result_staging_capacity": 1,
+        "owner_reassignments": 2,
+    }
+    reviewed = ASYNC_DECOUPLED_V2.manifest()
+    reviewed.pop("policy_digest")
+    if actual != reviewed:
+        if actual["tau_hard"] == 0 or actual["policy_id"] != ASYNC_DECOUPLED_V2.policy_id:
+            raise ValueError("false tau=0 or non-v2 production policy labeling")
+        raise ValueError("rendered async-v2 policy differs from reviewed constants")
+    if args.ready_fraction is not None:
+        raise ValueError("async-v2 initial profile disables active-membership fraction")
+    return ASYNC_DECOUPLED_V2
 
 
 def _dataplane_policy(args) -> tuple[str, bool, bool]:
@@ -681,10 +748,7 @@ def _pool_hosts(args) -> tuple[str, ...]:
 
 
 def _pool_config(args) -> PoolControlConfig:
-    policy = __import__("hashlib").sha256(json.dumps({
-        "q_min": args.global_quorum, "t_min": args.global_token_min,
-        "ready_fraction": args.ready_fraction,
-    }, sort_keys=True).encode()).hexdigest()
+    policy = _async_v2_policy(args).digest
     backend, production, full_layout = _dataplane_policy(args)
     attestation = getattr(args, "_dataplane_attestation", {})
     return PoolControlConfig(
@@ -1188,7 +1252,8 @@ def _native_sharded_owner_reduce(
         remote_endpoints: tuple[OwnerEndpoint, ...], workers: list[str],
         weights: dict[str, int], roots: dict[str, bytes], base_digest: bytes,
         plan_digest: bytes, pool_client: PoolControlClient, bulk: Path,
-        identity: str, generation: int, exchange_deadline: float
+        identity: str, generation: int, exchange_deadline: float,
+        semantic_identity: dict[str, object],
         ):
     """Reduce by balanced shard owners and redistribute one exact native view.
 
@@ -1284,7 +1349,8 @@ def _native_sharded_owner_reduce(
             maximum_owner_bytes=max(owner_bytes.values()),
             minimum_owner_bytes=min(owner_bytes.values()),
             balanced_owner_placement=True, python_dense_socket_bytes=0,
-            receive_queue_high_water_frames=inbox.high_water_frames)
+            receive_queue_high_water_frames=inbox.high_water_frames,
+            **semantic_identity)
 
         # Attempt 1 produced the retained full-layout f64 numerator. Attempt 2
         # installs only this owner's compact element count, imports one compact
@@ -1416,7 +1482,8 @@ def _native_sharded_owner_reduce(
             maximum_owner_bytes=max(result_owner_bytes.values()),
             minimum_owner_bytes=min(result_owner_bytes.values()),
             balanced_owner_placement=True, python_dense_socket_bytes=0,
-            receive_queue_high_water_frames=inbox.high_water_frames)
+            receive_queue_high_water_frames=inbox.high_water_frames,
+            **semantic_identity)
     except BaseException:
         os.close(aggregate_fd)
         raise
@@ -1559,9 +1626,9 @@ def _native_manager(args) -> int:
     control_server = control_thread = None
     pool_client = None
     if args.node_count > 1:
-        if args.node_count not in {2, 4, 8}:
+        if args.node_count != 2:
             raise ValueError(
-                "ordered native E97 scale runtime permits only 2, 4, or 8 nodes")
+                "async-decoupled-v2 qualification permits exactly two nodes")
         if node == 0:
             control_server = PoolControlServer(
                 ("0.0.0.0", args.coordinator_port), pool_config,
@@ -1602,7 +1669,8 @@ def _native_manager(args) -> int:
                 raise ValueError("trainer layout differs from native flat-layout ABI")
             base_digest = bytes.fromhex(str(request["base_digest"]))
             plan_digest = __import__("hashlib").sha256(json.dumps(
-                {"generation": generation, "runtime_digests": digests},
+                {"generation": generation, "runtime_digests": digests,
+                 "policy_digest": args._async_v2_policy.digest},
                 sort_keys=True, separators=(",", ":")).encode()).digest()
             session.install_generation(
                 total_elements=elements, generation=generation, attempt=1,
@@ -1613,19 +1681,39 @@ def _native_manager(args) -> int:
             metadata = GenerationMetadata(
                 args.run_id, _fence_epoch(args), generation, 1, 1, elements,
                 expected_layout.hex(), base_digest.hex(), plan_digest.hex(),
-                session.local.generation_deadline_ns, digests)
+                session.local.generation_deadline_ns, digests,
+                policy_id=args._async_v2_policy.policy_id,
+                policy_digest=args._async_v2_policy.digest,
+                code_digest=hashlib.sha256(args.code_id.encode()).hexdigest(),
+                base_global_version=generation,
+                local_window_start=generation,
+                local_window_end=generation + 1)
             atomic_metadata(control / f"native-generation-{generation:08d}.json",
                             metadata.as_json())
             heartbeat(bulk, identity, generation=generation,
                       step=generation * args.local_steps, loss=None, stage="training_wait")
             submissions = []
             for rank in range(args.local_quorum):
-                submissions.append(wait_metadata(
+                submission = wait_metadata(
                     control / f"native-submit-{generation:08d}-{rank:02d}.json",
                     deadline=native_deadline,
                     expected={"run_id": args.run_id, "fence_epoch": _fence_epoch(args),
                               "generation": generation, "rank": rank,
-                              "layout_digest": expected_layout.hex()}))
+                              "layout_digest": expected_layout.hex(),
+                              "policy_id": args._async_v2_policy.policy_id,
+                              "policy_digest": args._async_v2_policy.digest})
+                base_version = int(submission.get("base_global_version", -1))
+                lag = generation - base_version
+                if (lag != int(submission.get("base_lag_at_seal", -1))
+                        or not 0 <= lag <= args._async_v2_policy.tau_hard
+                        or int(submission.get("local_window_end", -1))
+                        <= int(submission.get("local_window_start", -1))
+                        or int(submission.get("aggregation_weight", 0))
+                        != int(submission.get("tokens", 0))
+                           * (args._async_v2_policy.tau_hard + 1 - lag)):
+                    raise ValueError(
+                        "native submission has unverifiable v2 base/lag/weight")
+                submissions.append(submission)
                 # An accepted rank is monotonic lifecycle progress.  Refresh
                 # the manager deadline at each acceptance instead of expiring
                 # an advancing generation from its initial training_wait time.
@@ -1633,6 +1721,29 @@ def _native_manager(args) -> int:
                           step=generation * args.local_steps + len(submissions),
                           loss=None, stage="training_wait")
             local_weight = sum(int(item["tokens"]) for item in submissions)
+            local_aggregation_weight = sum(
+                int(item["aggregation_weight"]) for item in submissions)
+            contribution_base_versions = {
+                int(item["base_global_version"]) for item in submissions
+            }
+            if len(contribution_base_versions) != 1:
+                raise ValueError(
+                    "node-local v2 trainer lanes disagree on original base")
+            contribution_base_version = contribution_base_versions.pop()
+            commit_lag = generation - contribution_base_version
+            contribution_digest = hashlib.sha256(json.dumps(
+                sorted(str(item["source_sha256"]) for item in submissions),
+                separators=(",", ":")).encode()).hexdigest()
+            local_semantic_identity = {
+                "policy_id": args._async_v2_policy.policy_id,
+                "allocation_fence": _fence_epoch(args),
+                "base_global_version": contribution_base_version,
+                "commit_global_version": generation,
+                "commit_lag": commit_lag,
+                "exact_tokens": local_weight,
+                "aggregation_weight": local_aggregation_weight,
+                "contribution_digest": contribution_digest,
+            }
             heartbeat(bulk, identity, generation=generation,
                       step=generation * args.local_steps, loss=None, stage="freeze")
             local_reduce_started = time.monotonic()
@@ -1644,13 +1755,15 @@ def _native_manager(args) -> int:
                 bulk, identity, generation, "native_local_reduction",
                 local_reduce_started, pool_config.slo.sync_s,
                 contributions=len(submissions), input_dtype="float32",
-                result_dtype="float64", result_bytes=local_result.length)
+                result_dtype="float64", result_bytes=local_result.length,
+                **local_semantic_identity)
             final_operation, final_result = local_operation, local_result
             if pool_client is not None:
                 close = pool_client.contribute_and_freeze(
                     generation=generation, attempt=1, worker_id=f"node-{node}",
                     incarnation=incarnation, contribution_seq=generation,
                     accepted_tokens=local_weight,
+                    aggregation_weight=local_aggregation_weight,
                     payload_digest=local_result.result_root.hex(),
                     deadline=time.monotonic() + pool_config.slo.freeze_s)
                 if close.get("status") != "commit_ready":
@@ -1711,7 +1824,8 @@ def _native_manager(args) -> int:
                     weights=weights, roots=roots, base_digest=base_digest,
                     plan_digest=plan_digest, pool_client=pool_client,
                     bulk=bulk, identity=identity, generation=generation,
-                    exchange_deadline=owner_phase_deadline)
+                    exchange_deadline=owner_phase_deadline,
+                    semantic_identity=local_semantic_identity)
                 validated = pool_client.validate_result_root(
                     generation=generation, attempt=1, worker_id=f"node-{node}",
                     incarnation=incarnation, result_root=final_result.result_root.hex(),
@@ -1720,8 +1834,15 @@ def _native_manager(args) -> int:
                     deadline=time.monotonic() + pool_config.slo.apply_s)
                 if validated["status"] != "validated":
                     raise RuntimeError("native result root did not validate")
+            accepted_tokens = (
+                local_weight if pool_client is None
+                else int(close["accepted_tokens"]))
+            accepted_aggregation_weight = (
+                local_aggregation_weight if pool_client is None
+                else sum(int(value) for value in
+                         dict(close["accepted_weights"]).values()))
             result_marker = {
-                "schema": "emender-native-e97-result-v1", "run_id": args.run_id,
+                "schema": "emender-native-e97-result-v2", "run_id": args.run_id,
                 "fence_epoch": _fence_epoch(args), "generation": generation,
                 "attempt": final_result.attempt,
                 "owner_epoch": session.local.owner_epoch,
@@ -1733,7 +1854,14 @@ def _native_manager(args) -> int:
                 "plan_digest": session.local.plan_digest.hex(),
                 "result_root": final_result.result_root.hex(),
                 "global_weight": final_result.global_weight,
-                "weight": final_result.global_weight,
+                "weight": accepted_tokens,
+                "exact_tokens": accepted_tokens,
+                "aggregation_weight": accepted_aggregation_weight,
+                "policy_id": args._async_v2_policy.policy_id,
+                "policy_digest": args._async_v2_policy.digest,
+                "base_global_version": contribution_base_version,
+                "commit_global_version": generation,
+                "commit_lag": commit_lag,
                 "result_bytes": final_result.length,
                 "members": [int(item["rank"]) for item in submissions],
                 "accepted_peers": ([f"node-{node}"] if snapshot is None else
@@ -2255,28 +2383,40 @@ def trainer(args) -> int:
     signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__("requested", True))
     completed = start_generation
     leader_checkpoint: Path | None = None
+    # Exactly one mutable cumulative interval may run beside the immutable
+    # native descriptor.  It is retained until the prior result is
+    # reload-verified and applied at a real K boundary; this is never a FIFO
+    # of per-window dense objects.
+    prefetched_interval: dict[str, object] | None = None
+    v2_owned_seconds_max = 0.0
+    v2_mutable_high_water = 0
+    v2_pause_count = 0
+    persistent_worker = None
+    async_training_lane = None
+    next_local_window = start_generation
     trainer_incarnation = uuid.uuid4().hex
-    pipeline = (NativeGenerationPipeline(
-        run_id=args.run_id, fence=_fence_epoch(args),
-        incarnation=trainer_incarnation) if native else None)
-    scheduler_events = []
-    scheduler = (LiveNativeGenerationScheduler(
-        pipeline, telemetry=scheduler_events.append, result_delay=1)
-        if native else None)
+    v2_policy = args._async_v2_policy
     if native:
-        # This marker is deliberately emitted by the real trainer entrypoint,
-        # after native attestation and state restoration.  Renderer regressions
-        # assert it so a test cannot accidentally exercise only the policy
-        # abstraction in ndm.native_pipeline.
+        # Emitted by the real model-owning role after native attestation and
+        # authoritative restore.  This is the sole production policy marker;
+        # the older serial generation scheduler is a v1 compatibility fixture
+        # and is intentionally not constructed here.
         atomic_metadata(control / f"production-pipeline-{identity}.json", {
-            "schema": "emender-production-delayed-pipeline-v1",
-            "implementation": (
-                "ndm.native_pipeline.LiveNativeGenerationScheduler"),
-            "result_delay_generations": 1,
+            "schema": "emender-production-async-decoupled-v2",
+            "stage": "async_v2_policy",
+            "implementation":
+                "ndm.async_diloco_real.PersistentAsyncTrainingLane",
+            "policy_reference":
+                "ndm.async_diloco_v2.AsyncV2WorkerLane",
+            **v2_policy.manifest(),
+            "sealed_descriptor_capacity": 1,
+            "mutable_interval_capacity": 1,
+            "result_mailbox_capacity": 1,
+            "result_staging_capacity": 1,
             "role_source": str(Path(__file__).resolve()),
             "code_id": args.code_id,
             "run_id": args.run_id,
-            "fence_epoch": _fence_epoch(args),
+            "allocation_fence": _fence_epoch(args),
             "identity": identity,
         })
     for generation in range(start_generation, target_generation):
@@ -2330,7 +2470,11 @@ def trainer(args) -> int:
             delta = {"weight": torch.full_like(state["weight"], float(rank + 1))}
             tokens = rank + 1
         else:
-            from ndm.async_diloco_real import RealAsyncWorkerSpec, _run_real_worker
+            from ndm.async_diloco_real import (
+                PersistentAsyncTrainingLane, PersistentRealWorkerSession,
+                RealAsyncWorkerSpec,
+                _run_real_worker,
+            )
 
             fence = _fence(args, generation)
 
@@ -2341,18 +2485,15 @@ def trainer(args) -> int:
                 record = {
                     "timestamp": time.time(), "monotonic_s": time.monotonic(),
                     "identity": identity, "generation": generation,
+                    "local_window": generation,
+                    "policy_id": v2_policy.policy_id,
+                    "applied_anchor_version": generation,
+                    "local_model_basis": "worker_local",
                     "phase": phase, **details,
                 }
                 with phase_log.open("a", encoding="utf-8") as stream:
                     stream.write(json.dumps(record, sort_keys=True) + "\n")
                     stream.flush()
-                if scheduler is not None and phase in {"training_start", "training_end"}:
-                    scheduler.event(GenerationIdentity(
-                        args.run_id, _fence_epoch(args), generation,
-                        native_plane.metadata.attempt, trainer_incarnation,
-                        native_plane.metadata.layout_digest,
-                        native_plane.metadata.base_digest),
-                        "k40_start" if phase == "training_start" else "k40_end")
                 heartbeat(
                     bulk, identity, generation=generation,
                     step=int(details.get("step", step)),
@@ -2360,31 +2501,8 @@ def trainer(args) -> int:
 
             def publish_trained_delta(base_state, model, tokens):
                 if native:
-                    heartbeat(bulk, identity, generation=generation, step=step,
-                              loss=None, stage="streaming_delta")
-                    marker = native_plane.publish_model_delta(
-                        base_state, model, tokens,
-                        chunk_elements=max(1, args.local_spool_chunk_bytes // 4),
-                        deadline_s=max(.001, generation_deadline - time.monotonic()))
-                    slot = pipeline.reserve(deadline=generation_deadline)
-                    token = pipeline.handoff(
-                        slot, GenerationIdentity(
-                            args.run_id, _fence_epoch(args), generation,
-                            native_plane.metadata.attempt, trainer_incarnation,
-                            native_plane.metadata.layout_digest,
-                            native_plane.metadata.base_digest),
-                        marker, weight=tokens, digest=marker["source_sha256"])
-                    # submit() acknowledged that the persistent service retained
-                    # the sealed memfd, so the producer ownership token is now
-                    # safe to release while outer work continues independently.
-                    pipeline.release(token)
-                    _stage_telemetry(
-                        bulk, identity, generation, "native_direct_memfd",
-                        time.monotonic(), 180.0, trainer_spool_bytes=0,
-                        python_dense_socket_bytes=0,
-                        producer_direct=True, storage_dtype="float32")
-                    heartbeat(bulk, identity, generation=generation, step=step,
-                              loss=None, stage="submitted")
+                    # Native v2 seals below, after an optional prefetched K
+                    # interval has been rebased at this exact safe boundary.
                     return
                 local_spool_started = time.monotonic()
                 bytes_before = spool.bytes_written
@@ -2435,21 +2553,138 @@ def trainer(args) -> int:
                     step=step + local_step, loss=float(metrics["loss"]),
                     stage="training")
 
-            report = _run_real_worker(
-                run_id=args.run_id, generation=generation, base_state=state,
-                train_args=train_args,
-                spec=RealAsyncWorkerSpec(identity, f"node-{node}", args.device,
-                                         args.local_steps, rank),
-                synthetic_token_stream=False, synthetic_vocab_size=256,
-                optimizer_state_dict=optimizer_state, consume_optimizer_state=True,
-                progress_callback=training_progress,
-                delta_consumer=publish_trained_delta,
-                phase_callback=training_phase)
-            if report.update is None:
-                raise RuntimeError(report.error or "real E97 trainer produced no update")
-            delta = report.update.delta
-            optimizer_state = report.optimizer_state_dict or {}
-            tokens, loss = report.tokens, float(report.losses[-1])
+            retained_endpoint: dict[str, torch.Tensor] = {}
+
+            if native:
+                if persistent_worker is None:
+                    persistent_worker = PersistentRealWorkerSession(
+                        base_state=state,
+                        train_args=train_args,
+                        spec=RealAsyncWorkerSpec(
+                            identity, f"node-{node}", args.device,
+                            args.local_steps, rank),
+                        synthetic_token_stream=False,
+                        synthetic_vocab_size=256,
+                        optimizer_state_dict=optimizer_state,
+                        consume_optimizer_state=True,
+                        bootstrap_phase_callback=training_phase)
+                    optimizer_state = {}
+                    _stage_telemetry(
+                        bulk, identity, generation,
+                        "async_v2_persistent_bootstrap",
+                        generation_started, 420.0,
+                        policy_id=v2_policy.policy_id,
+                        **persistent_worker.bootstrap_counts)
+                if prefetched_interval is not None:
+                    if int(prefetched_interval["generation"]) != generation:
+                        raise ValueError(
+                            "v2 mutable interval generation is not adjacent")
+                    interval_start = prefetched_interval["start"]
+                    tokens = int(prefetched_interval["tokens"])
+                    loss = float(prefetched_interval["loss"])
+                    interval_anchor_version = int(
+                        prefetched_interval["anchor_version"])
+                    interval_anchor_digest = str(
+                        prefetched_interval["anchor_digest"])
+                    interval_window_start = int(
+                        prefetched_interval["local_window_start"])
+                    interval_window_end = int(
+                        prefetched_interval["local_window_end"])
+                    interval_window_count = int(
+                        prefetched_interval["window_count"])
+                    if (interval_window_end != next_local_window
+                            or interval_window_count
+                            != interval_window_end - interval_window_start):
+                        raise ValueError(
+                            "v2 coalesced interval window identity changed")
+                    prefetched_interval = None
+                else:
+                    interval_start = state
+                    interval_anchor_version = generation
+                    interval_anchor_digest = state_digest(state).hex()
+                    interval_window_start = next_local_window
+                    window = persistent_worker.run_window(
+                        interval_window_start,
+                        progress_callback=training_progress,
+                        phase_callback=training_phase)
+                    interval_window_end = interval_window_start + 1
+                    interval_window_count = 1
+                    next_local_window = interval_window_end
+                    tokens = window.tokens
+                    loss = float(window.losses[-1])
+                retained_endpoint = persistent_worker.snapshot()
+                delta = {}
+            else:
+                interval_start = state
+                interval_anchor_version = generation
+                interval_anchor_digest = state_digest(state).hex()
+                report = _run_real_worker(
+                    run_id=args.run_id, generation=generation, base_state=state,
+                    train_args=train_args,
+                    spec=RealAsyncWorkerSpec(
+                        identity, f"node-{node}", args.device,
+                        args.local_steps, rank),
+                    synthetic_token_stream=False, synthetic_vocab_size=256,
+                    optimizer_state_dict=optimizer_state,
+                    consume_optimizer_state=True,
+                    progress_callback=training_progress,
+                    delta_consumer=publish_trained_delta,
+                    phase_callback=training_phase)
+                if report.update is None:
+                    raise RuntimeError(
+                        report.error or "real E97 trainer produced no update")
+                delta = report.update.delta
+                optimizer_state = report.optimizer_state_dict or {}
+                tokens, loss = report.tokens, float(report.losses[-1])
+
+            if native:
+                if set(retained_endpoint) != set(interval_start):
+                    raise ValueError("v2 retained endpoint layout differs from interval")
+                lag = generation - interval_anchor_version
+                heartbeat(bulk, identity, generation=generation, step=step,
+                          loss=None, stage="streaming_delta")
+                marker = native_plane.publish_model_delta(
+                    interval_start, persistent_worker.model, tokens,
+                    chunk_elements=max(
+                        1, args.local_spool_chunk_bytes // 4),
+                    deadline_s=max(
+                        .001, generation_deadline - time.monotonic()),
+                    aggregation_weight=(
+                        tokens * (v2_policy.tau_hard + 1 - lag)),
+                    contribution_identity={
+                        "policy_id": v2_policy.policy_id,
+                        "policy_digest": v2_policy.digest,
+                        "code_digest": hashlib.sha256(
+                            args.code_id.encode()).hexdigest(),
+                        "base_global_version": interval_anchor_version,
+                        "base_global_digest": interval_anchor_digest,
+                        "base_lag_at_seal": lag,
+                        "local_window_start": interval_window_start,
+                        "local_window_end": interval_window_end,
+                        "window_count": interval_window_count,
+                        "contribution_sequence": generation,
+                        "local_trainer_set_digest": hashlib.sha256(
+                            f"node-{node}:rank-{rank}".encode()).hexdigest(),
+                    })
+                v2_owned_seconds_max = max(
+                    v2_owned_seconds_max,
+                    float(marker["owned_ack_seconds"]))
+                _stage_telemetry(
+                    bulk, identity, generation, "native_direct_memfd",
+                    time.monotonic(), 180.0, trainer_spool_bytes=0,
+                    python_dense_socket_bytes=0, producer_direct=True,
+                    local_owned=True, fabric_receipt_waited=False,
+                    base_global_version=interval_anchor_version,
+                    base_lag_at_seal=lag,
+                    local_window_start=interval_window_start,
+                    local_window_end=interval_window_end,
+                    window_count=interval_window_count,
+                    exact_tokens=tokens,
+                    aggregation_weight=(
+                        tokens * (v2_policy.tau_hard + 1 - lag)),
+                    storage_dtype="float32")
+                heartbeat(bulk, identity, generation=generation, step=step,
+                          loss=None, stage="submitted")
         fence = _fence(args, generation)
         if args.control:
             heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
@@ -2459,21 +2694,101 @@ def trainer(args) -> int:
                     flatten_tensors(
                         delta, chunk_elements=max(1, args.bulk_chunk_bytes // 4)),
                     tokens=tokens,
-                    deadline_s=max(.001, generation_deadline - time.monotonic()))
-                slot = pipeline.reserve(deadline=generation_deadline)
-                token = pipeline.handoff(
-                    slot, GenerationIdentity(
-                        args.run_id, _fence_epoch(args), generation,
-                        native_plane.metadata.attempt, trainer_incarnation,
-                        native_plane.metadata.layout_digest,
-                        native_plane.metadata.base_digest),
-                    marker, weight=tokens, digest=marker["source_sha256"])
-                pipeline.release(token)
+                    deadline_s=max(.001, generation_deadline - time.monotonic()),
+                    aggregation_weight=tokens * 7,
+                    contribution_identity={
+                        "policy_id": v2_policy.policy_id,
+                        "policy_digest": v2_policy.digest,
+                        "code_digest": hashlib.sha256(
+                            args.code_id.encode()).hexdigest(),
+                        "base_global_version": generation,
+                        "base_global_digest": native_plane.metadata.base_digest,
+                        "base_lag_at_seal": 0,
+                        "local_window_start": generation,
+                        "local_window_end": generation + 1,
+                        "window_count": 1,
+                        "contribution_sequence": generation,
+                    })
             else:
                 spool.publish(fence, rank, flatten_tensors(
                     delta, chunk_elements=max(1, args.bulk_chunk_bytes // 8)),
                     weight=tokens, source_id=args.source_id)
         del delta
+        # V2A02/V2A05: after local OWNED, hand the resident model to the
+        # continuous training lane immediately.  The caller now performs
+        # result/reduction/checkpoint completion independently while this lane
+        # executes adjacent exact K40 windows.  It cumulatively extends one
+        # mutable interval up to sigma_hard; no per-K dense descriptor queues.
+        if (native and not args.control
+                and generation + 1 < target_generation):
+            lookahead_anchor_digest = state_digest(state).hex()
+
+            def make_lookahead_phase(local_window):
+                def lookahead_phase(phase, details):
+                    record = {
+                        "timestamp": time.time(),
+                        "monotonic_s": time.monotonic(),
+                        "identity": identity,
+                        "generation": generation,
+                        "local_window": local_window,
+                        "policy_id": v2_policy.policy_id,
+                        "applied_anchor_version": generation,
+                        "local_model_basis": "worker_local",
+                        "phase": phase,
+                        **details,
+                    }
+                    with phase_log.open("a", encoding="utf-8") as stream:
+                        stream.write(json.dumps(record, sort_keys=True) + "\n")
+                        stream.flush()
+                    heartbeat(
+                        bulk, identity, generation=generation,
+                        step=int(details.get(
+                            "step", local_window * args.local_steps)),
+                        loss=details.get("loss"), stage=phase)
+                return lookahead_phase
+
+            def make_lookahead_progress(local_window):
+                window_deadline = time.monotonic() + 420.0
+
+                def lookahead_progress(local_step, metrics):
+                    if stop["requested"]:
+                        raise InterruptedError(
+                            "allocation TERM requested during async K40")
+                    if time.monotonic() >= window_deadline:
+                        raise TimeoutError(
+                            f"local window {local_window} exceeded 420 seconds")
+                    heartbeat(
+                        bulk, identity, generation=generation,
+                        step=local_window * args.local_steps + local_step,
+                        loss=float(metrics["loss"]), stage="training")
+                return lookahead_progress
+
+            def async_window_start(local_window):
+                _stage_telemetry(
+                    bulk, identity, generation, "async_v2_k40_start",
+                    time.monotonic(), 420.0,
+                    policy_id=v2_policy.policy_id,
+                    local_window=local_window,
+                    base_global_version=generation,
+                    applied_anchor_version=generation,
+                    local_model_basis="worker_local",
+                    prior_contribution_generation=generation,
+                    prior_stage="local_owned")
+
+            if async_training_lane is not None:
+                raise RuntimeError("v2 training lane overlapped two descriptors")
+            async_training_lane = PersistentAsyncTrainingLane(
+                persistent_worker,
+                sigma_hard=v2_policy.sigma_hard,
+                progress_callback_factory=make_lookahead_progress,
+                phase_callback_factory=make_lookahead_phase,
+                window_start_callback=async_window_start,
+            )
+            async_training_lane.start(
+                local_window_start=next_local_window,
+                start_state=retained_endpoint,
+                admission_deadline=time.monotonic() + 1.0,
+            )
         if args.node_count > 1:
             heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
                       stage="local_reduce_wait")
@@ -2493,29 +2808,19 @@ def trainer(args) -> int:
                 deadline=exchange_deadline,
                 chunk_elements=max(1, args.bulk_chunk_bytes // 4))
             manifest, aggregate = native_context.__enter__()
-            committed = CommittedResult(
-                GenerationIdentity(
-                    args.run_id, _fence_epoch(args), generation,
-                    int(manifest["attempt"]), trainer_incarnation,
-                    str(manifest["layout_digest"]), str(manifest["base_digest"])),
-                manifest, str(manifest["result_root"]),
-                str(manifest.get("membership_root", manifest["result_root"])),
-                int(manifest["global_weight"]), time.monotonic_ns())
-            if not pipeline.publish_committed(
-                    committed, verify=finite_result_verifier):
-                native_context.__exit__(None, None, None)
-                raise ValueError("native pipeline rejected committed result")
-            admitted = pipeline.take_at_boundary(
-                trainer_generation=generation, fence=_fence_epoch(args),
-                incarnation=trainer_incarnation,
-                base_digest=str(manifest["base_digest"]))
-            if admitted is None or admitted.payload is not manifest:
-                native_context.__exit__(None, None, None)
-                raise ValueError("native committed result missed safe boundary")
             _stage_telemetry(
-                bulk, identity, generation, "native_generation_pipeline",
+                bulk, identity, generation, "async_v2_native_result_lane",
                 generation_started, args.deadline_s,
-                **pipeline.metrics.__dict__)
+                policy_id=v2_policy.policy_id,
+                allocation_fence=_fence_epoch(args),
+                base_global_version=int(manifest["base_global_version"]),
+                commit_global_version=int(manifest["commit_global_version"]),
+                commit_lag=int(manifest["commit_lag"]),
+                exact_tokens=int(manifest["exact_tokens"]),
+                aggregation_weight=int(manifest["aggregation_weight"]),
+                contribution_digest=str(manifest["result_root"]),
+                dense_result_owned_by_native_service=True,
+                safe_boundary_pending=True)
         else:
             manifest, aggregate = spool.stream_aggregate(
                 fence, deadline=exchange_deadline,
@@ -2539,18 +2844,38 @@ def trainer(args) -> int:
         trainer_apply_started = time.monotonic()
         if not native:
             spool.release_trainer(fence, rank)
+        pending_corrections = None
         state = apply_delta(state, aggregate, eta_outer=args.eta_outer, in_place=True)
         if native:
+            # Materialize the candidate global result and release the bounded
+            # native read view.  It is not yet eligible for the worker:
+            # ScheduleFree x/z translation occurs only after immutable
+            # checkpoint reload verification and fenced latest CAS below.
+            if not args.control:
+                pending_corrections = {
+                    name: state[name].sub(retained_endpoint[name])
+                    for name in sorted(state)
+                }
             native_context.__exit__(None, None, None)
             _stage_telemetry(
-                bulk, identity, generation, "native_trainer_apply",
+                bulk, identity, generation, "native_result_materialize",
                 trainer_apply_started, PoolStageSLO.production().apply_s,
                 lane_rank=rank, result_bytes=int(manifest["result_bytes"]),
-                python_dense_socket_bytes=0)
-            # Release the one-reader lane as soon as native result mapping and
-            # model apply finish.  The durable per-trainer recovery checkpoint
-            # below is independent local I/O; serializing it behind this
-            # credit made later ranks exceed APPLY despite bounded apply work.
+                python_dense_socket_bytes=0,
+                policy_id=v2_policy.policy_id,
+                allocation_fence=_fence_epoch(args),
+                base_global_version=int(manifest["base_global_version"]),
+                commit_global_version=int(manifest["commit_global_version"]),
+                commit_lag=int(manifest["commit_lag"]),
+                anchor_lag_before_apply=1 if prefetched_interval is not None else 0,
+                result_version_lag_at_apply=0,
+                safe_k_boundary=True,
+                exact_tokens=int(manifest["exact_tokens"]),
+                aggregation_weight=int(manifest["aggregation_weight"]),
+                contribution_digest=str(manifest["result_root"]))
+            # Release the one-reader native view immediately.  The result
+            # completion path continues with durable verification while the
+            # persistent model-owning lane is still executing K windows.
             atomic_metadata(
                 control / f"native-result-applied-{generation:08d}-{rank:02d}.json", {
                     "schema": "emender-native-e97-result-applied-lane-v1",
@@ -2564,6 +2889,13 @@ def trainer(args) -> int:
         heartbeat(bulk, identity, generation=completed, step=step, loss=loss,
                   stage="checkpoint_commit" if node == 0 and rank == 0
                   else "redistribution")
+        # Authoritative v2 recovery is global S/O only.  The active local
+        # ScheduleFree state may already contain one disposable lookahead
+        # interval, so serializing it beside S_(g+1) would create a false
+        # model/inner-state pairing.  A restarted incarnation constructs fresh
+        # inner state from the verified latest global checkpoint.
+        checkpoint_optimizer_state = {} if native else optimizer_state
+        checkpoint_publication_started = time.monotonic()
 
         # The authoritative leader proposal is on the first-commit critical
         # path. Its exclusive streamed apply must flow directly into one
@@ -2580,7 +2912,8 @@ def trainer(args) -> int:
             leader_checkpoint.parent.mkdir(parents=True, exist_ok=True)
             temporary = leader_checkpoint.with_suffix(".tmp")
             torch.save({"identity": identity, "model_state_dict": state,
-                        "optimizer_state_dict": optimizer_state,
+                        "optimizer_state_dict": checkpoint_optimizer_state,
+                        "inner_optimizer_restart": "fresh_from_global",
                         "outer_update_state": migration.get("state", {}),
                         "migration": migration, "step": step,
                         "generation": completed, "run_id": args.run_id,
@@ -2645,7 +2978,9 @@ def trainer(args) -> int:
             recovery_checkpoint.parent.mkdir(parents=True, exist_ok=True)
             temporary = recovery_checkpoint.with_suffix(".tmp")
             torch.save({"identity": identity, "model_state_dict": state,
-                        "optimizer_state_dict": optimizer_state, "migration": migration,
+                        "optimizer_state_dict": checkpoint_optimizer_state,
+                        "inner_optimizer_restart": "fresh_from_global",
+                        "migration": migration,
                         "outer_update_state": migration.get("state", {}), "step": step,
                         "generation": completed, "run_id": args.run_id,
                         "source_id": args.source_id, "payload_id": args.payload_id,
@@ -2668,6 +3003,171 @@ def trainer(args) -> int:
                 accepted_tokens=accepted_token_clock,
                 **({"native_runtime_digests": native_runtime} if native else {}))
         if native:
+            # A native result becomes an applied anchor only after the current
+            # fenced publisher has reload-verified the immutable handoff and
+            # advanced authoritative latest.  The independent model lane may
+            # execute old-anchor windows meanwhile; it pauses only now, at the
+            # next exact K boundary, for the audited x/z translation.
+            latest = wait_metadata(
+                run / "handoff/latest.json",
+                deadline=time.monotonic() + min(args.deadline_s, 180.0),
+                expected={"generation": completed,
+                          "fence": _fence_epoch(args)})
+            published_manifest = Path(str(latest["manifest"])).resolve()
+            published_manifest.relative_to((run / "handoff").resolve())
+            manifest_bytes = published_manifest.read_bytes()
+            manifest_digest = hashlib.sha256(manifest_bytes).hexdigest()
+            if manifest_digest != latest.get("manifest_sha256"):
+                raise ValueError(
+                    "async v2 authoritative latest manifest digest mismatch")
+            published = json.loads(manifest_bytes)
+            if (not published.get("finalized")
+                    or int(published.get("generation", -1)) != completed
+                    or int(dict(published.get("fence", {})).get(
+                        "coordinator_epoch", -1)) != _fence_epoch(args)):
+                raise ValueError(
+                    "async v2 authoritative latest was not reload verified")
+            safe_apply_started = time.monotonic()
+            mutable_report = None
+            if not args.control:
+                if pending_corrections is None:
+                    raise RuntimeError(
+                        "verified async v2 result lacks correction ledger")
+                if async_training_lane is not None:
+                    mutable_report = async_training_lane.finish_at_boundary(
+                        deadline=time.monotonic() + 420.0,
+                        corrections=pending_corrections,
+                    )
+                    prefetched_interval = {
+                        "generation": generation + 1,
+                        "start": dict(async_training_lane.start_state),
+                        "tokens": mutable_report.exact_tokens,
+                        "loss": float(mutable_report.losses[-1]),
+                        # Rebase translates the interval start and endpoint but
+                        # never relabels the original global anchor.
+                        "anchor_version": generation,
+                        "anchor_digest": lookahead_anchor_digest,
+                        "local_window_start":
+                            mutable_report.local_window_start,
+                        "local_window_end": mutable_report.local_window_end,
+                        "window_count": mutable_report.window_count,
+                    }
+                    next_local_window = mutable_report.local_window_end
+                    v2_mutable_high_water = max(
+                        v2_mutable_high_water,
+                        mutable_report.window_count)
+                    if mutable_report.reached_hard_bound:
+                        v2_pause_count += 1
+                    safe_apply_started = (
+                        time.monotonic()
+                        - mutable_report.translation_elapsed_s)
+                    async_training_lane = None
+                else:
+                    # Terminal generation: there is no speculative interval,
+                    # but applying the verified result still occurs at the
+                    # completed K boundary and preserves audited inner state.
+                    safe_apply_started = time.monotonic()
+                    persistent_worker.translate(pending_corrections)
+            semantic_result = {
+                "policy_id": v2_policy.policy_id,
+                "allocation_fence": _fence_epoch(args),
+                "base_global_version": int(manifest["base_global_version"]),
+                "commit_global_version": int(
+                    manifest["commit_global_version"]),
+                "commit_lag": int(manifest["commit_lag"]),
+                "exact_tokens": int(manifest["exact_tokens"]),
+                "aggregation_weight": int(manifest["aggregation_weight"]),
+                "contribution_digest": str(manifest["result_root"]),
+            }
+            _stage_telemetry(
+                bulk, identity, generation, "native_trainer_apply",
+                safe_apply_started, PoolStageSLO.production().apply_s,
+                lane_rank=rank, result_bytes=int(manifest["result_bytes"]),
+                python_dense_socket_bytes=0,
+                anchor_lag_before_apply=completed - generation,
+                result_version_lag_at_apply=0,
+                speculative_window_lag=(
+                    0 if mutable_report is None
+                    else mutable_report.window_count),
+                local_window_start=(
+                    generation + 1 if args.control
+                    else interval_window_end if mutable_report is None
+                    else mutable_report.local_window_start),
+                local_window_end=(
+                    generation + 1 if args.control
+                    else interval_window_end if mutable_report is None
+                    else mutable_report.local_window_end),
+                safe_k_boundary=True,
+                result_reload_verified=True,
+                latest_cas_verified=True,
+                **semantic_result)
+            _stage_telemetry(
+                bulk, identity, generation, "checkpoint_publication",
+                checkpoint_publication_started, 420.0,
+                checkpoint_bytes=int(published["checkpoint_bytes"]),
+                reload_verified=True, latest_cas_verified=True,
+                **semantic_result)
+            control_integrity_started = time.monotonic()
+            _stage_telemetry(
+                bulk, identity, generation, "control_handoff_integrity",
+                control_integrity_started, 420.0,
+                manifest_digest=manifest_digest,
+                reload_verified=True, latest_cas_verified=True,
+                **semantic_result)
+            application_window = (
+                generation + 1 if args.control
+                else interval_window_end if mutable_report is None
+                else mutable_report.local_window_end)
+            apply_receipt = {
+                "timestamp": time.time(),
+                "identity": identity,
+                "generation": generation,
+                "local_window": application_window,
+                "stage": "safe_boundary_apply",
+                "policy_id": v2_policy.policy_id,
+                "allocation_fence": _fence_epoch(args),
+                "known_global_version": completed,
+                "result_version": completed,
+                "applied_anchor_version": generation,
+                "anchor_lag_before_apply": 1,
+                "result_version_lag_at_apply": 0,
+                "speculative_window_lag": (
+                    0 if mutable_report is None
+                    else mutable_report.window_count),
+                "result_digest": str(manifest["result_root"]),
+                "manifest_digest": manifest_digest,
+                "reload_verified": True,
+                "latest_cas_verified": True,
+                "accepted_contribution_digest": str(
+                    manifest["result_root"]),
+            }
+            with (bulk / "telemetry" /
+                  f"{identity}-pool.jsonl").open(
+                      "a", encoding="utf-8") as stream:
+                stream.write(
+                    json.dumps(apply_receipt, sort_keys=True) + "\n")
+                stream.flush()
+            if node == 0 and rank == 0:
+                correctness = {
+                    "timestamp": time.time(),
+                    "identity": identity,
+                    "generation": generation,
+                    "stage": "async_v2_correctness",
+                    "policy_id": v2_policy.policy_id,
+                    "allocation_fence": _fence_epoch(args),
+                    "freeze_to_latest_s": (
+                        time.monotonic() - checkpoint_publication_started),
+                    "checkpoint_bytes": int(published["checkpoint_bytes"]),
+                    "manifest_digest": manifest_digest,
+                    "reload_verified": True,
+                    "latest_cas_verified": True,
+                }
+                with (bulk / "telemetry" /
+                      f"{identity}-pool.jsonl").open(
+                          "a", encoding="utf-8") as stream:
+                    stream.write(
+                        json.dumps(correctness, sort_keys=True) + "\n")
+                    stream.flush()
             native_plane.close()
             atomic_metadata(
                 control / f"native-applied-{generation:08d}-{rank:02d}.json", {
@@ -2678,8 +3178,45 @@ def trainer(args) -> int:
                     "accepted_tokens": accepted_token_clock,
                 })
         heartbeat(bulk, identity, generation=generation + 1, step=step, loss=loss, stage="applied")
-    if scheduler is not None:
-        scheduler.close()
+    if native and not args.control:
+        bounds = {
+            "timestamp": time.time(),
+            "identity": identity,
+            "generation": completed,
+            "stage": "async_v2_bounds",
+            "policy_id": v2_policy.policy_id,
+            "allocation_fence": _fence_epoch(args),
+            "sealed_descriptor_capacity": 1,
+            "mutable_interval_capacity": 1,
+            "result_mailbox_capacity": 1,
+            "result_staging_capacity": 1,
+            "sealed_descriptor_high_water": 1,
+            "mutable_interval_high_water": (
+                1 if v2_mutable_high_water else 0),
+            "mutable_window_high_water": v2_mutable_high_water,
+            "result_mailbox_high_water": 1,
+            "result_staging_high_water": 0,
+            "native_owned_seconds_max": v2_owned_seconds_max,
+            "resident_admission_bytes":
+                ASYNC_V2_E97_NATIVE_RESIDENT_BYTES,
+            "resident_limit_bytes": args.max_spool_bytes,
+            "resident_headroom_bytes": (
+                args.max_spool_bytes
+                - ASYNC_V2_E97_NATIVE_RESIDENT_BYTES),
+            "python_dense_socket_bytes": 0,
+            "lustre_dense_hot_path_bytes": 0,
+            "pause_count": v2_pause_count,
+            "drop_count": 0,
+            "windows_completed": persistent_worker.windows_completed,
+            **persistent_worker.bootstrap_counts,
+        }
+        with (bulk / "telemetry" /
+              f"{identity}-pool.jsonl").open(
+                  "a", encoding="utf-8") as stream:
+            stream.write(json.dumps(bounds, sort_keys=True) + "\n")
+            stream.flush()
+    if persistent_worker is not None:
+        persistent_worker.close()
     return 0
 
 
@@ -2691,6 +3228,13 @@ def main() -> int:
         raise ValueError("local spool chunk bound must be positive and within the byte ledger")
     if not 0 < args.bulk_chunk_bytes <= args.max_spool_bytes:
         raise ValueError("owner transport chunk bound must be positive and within the byte ledger")
+    args._async_v2_policy = _async_v2_policy(args)
+    backend, _production, _full_layout = _dataplane_policy(args)
+    if (not args.control and backend != PYTHON_TCP_DEBUG
+            and args.max_spool_bytes
+            < ASYNC_V2_E97_NATIVE_RESIDENT_BYTES):
+        raise ValueError(
+            "async-v2 E97 native resident formula exceeds configured cap")
     args._dataplane_attestation = _attest_dataplane(
         args)  # hard gate before trainer calls ``_load_real``
     return manager(args) if args.role == "manager" else trainer(args)

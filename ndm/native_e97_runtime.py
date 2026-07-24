@@ -29,6 +29,7 @@ from ndm.native_dataplane import (
 
 
 SCHEMA = "emender-native-e97-generation-v1"
+ASYNC_V2_SCHEMA = "emender-native-e97-generation-v2"
 
 
 def atomic_metadata(path: str | Path, value: Mapping[str, object]) -> Path:
@@ -371,10 +372,17 @@ class GenerationMetadata:
     plan_digest: str
     deadline_unix_ns: int
     runtime_digests: Mapping[str, object]
+    policy_id: str = ""
+    policy_digest: str = ""
+    code_digest: str = ""
+    base_global_version: int = 0
+    local_window_start: int = 0
+    local_window_end: int = 1
 
     @classmethod
     def from_json(cls, value: Mapping[str, object]) -> "GenerationMetadata":
-        if value.get("schema") != SCHEMA:
+        schema = value.get("schema")
+        if schema not in {SCHEMA, ASYNC_V2_SCHEMA}:
             raise ValueError("native E97 generation schema mismatch")
         integer_fields = ("fence_epoch", "generation", "attempt", "owner_epoch",
                           "total_elements", "deadline_unix_ns")
@@ -388,6 +396,12 @@ class GenerationMetadata:
             str(value["layout_digest"]), str(value["base_digest"]),
             str(value["plan_digest"]), int(value["deadline_unix_ns"]),
             dict(value["runtime_digests"]),
+            str(value.get("policy_id", "")),
+            str(value.get("policy_digest", "")),
+            str(value.get("code_digest", "")),
+            int(value.get("base_global_version", value["generation"])),
+            int(value.get("local_window_start", value["generation"])),
+            int(value.get("local_window_end", int(value["generation"]) + 1)),
         )
         if (not result.run_id or result.fence_epoch <= 0 or result.generation < 0
                 or result.attempt <= 0 or result.owner_epoch <= 0
@@ -398,10 +412,23 @@ class GenerationMetadata:
                        for item in (result.layout_digest, result.base_digest,
                                     result.plan_digest))):
             raise ValueError("native E97 generation identity is invalid")
+        if result.policy_id:
+            if (schema != ASYNC_V2_SCHEMA
+                    or result.policy_id != "async-decoupled-v2.0-exp"
+                    or len(result.policy_digest) != 64
+                    or len(result.code_digest) != 64
+                    or result.base_global_version < 0
+                    or result.local_window_start < 0
+                    or result.local_window_end <= result.local_window_start
+                    or result.local_window_end - result.local_window_start > 8):
+                raise ValueError("native E97 async-v2 metadata identity is invalid")
+        elif schema != SCHEMA:
+            raise ValueError("native E97 v2 schema requires explicit policy identity")
         return result
 
     def as_json(self) -> dict[str, object]:
-        return {"schema": SCHEMA, **self.__dict__,
+        return {"schema": (ASYNC_V2_SCHEMA if self.policy_id else SCHEMA),
+                **self.__dict__,
                 "runtime_digests": dict(self.runtime_digests)}
 
 
@@ -454,7 +481,10 @@ class NativeTrainerDataPlane:
 
     def publish_model_delta(self, base_state: Mapping[str, torch.Tensor], model,
                             tokens: int, *, chunk_elements: int,
-                            deadline_s: float) -> dict[str, object]:
+                            deadline_s: float,
+                            aggregation_weight: int | None = None,
+                            contribution_identity: Mapping[str, object] | None = None,
+                            ) -> dict[str, object]:
         """Fill final service-owned f32 storage without a trainer-sized spool."""
         if self.buffer is None or tokens <= 0 or chunk_elements <= 0:
             raise RuntimeError("native trainer delta buffer/tokens are not ready")
@@ -478,9 +508,59 @@ class NativeTrainerDataPlane:
                     cursor += encoded.size
         if cursor != self.metadata.total_elements:
             raise ValueError("native trainer wrote an incomplete flat layout")
-        return self._seal_submit(tokens=tokens, deadline_s=deadline_s)
+        return self._seal_submit(
+            tokens=tokens, aggregation_weight=aggregation_weight,
+            contribution_identity=contribution_identity,
+            deadline_s=deadline_s)
 
-    def publish_flat_shards(self, shards, *, tokens: int, deadline_s: float) -> dict[str, object]:
+    def publish_state_delta(
+        self,
+        base_state: Mapping[str, torch.Tensor],
+        endpoint_state: Mapping[str, torch.Tensor],
+        tokens: int,
+        *,
+        chunk_elements: int,
+        deadline_s: float,
+        aggregation_weight: int | None = None,
+        contribution_identity: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
+        """Seal a post-K endpoint after a prior result was applied at boundary.
+
+        The v2 trainer deliberately retains its mutable interval endpoint until
+        the preceding immutable descriptor is released.  This variant streams
+        that endpoint directly into the same service-owned memfd and therefore
+        does not require rebuilding a model or materializing a Python delta.
+        """
+        if self.buffer is None or tokens <= 0 or chunk_elements <= 0:
+            raise RuntimeError("native trainer endpoint/tokens are not ready")
+        if tuple(sorted(base_state)) != tuple(sorted(endpoint_state)):
+            raise ValueError("native trainer endpoint layout changed")
+        cursor = 0
+        with self.buffer.mapped(DType.F32, write=True) as target:
+            for name in sorted(base_state):
+                endpoint = endpoint_state[name].detach().reshape(-1)
+                base = base_state[name].detach().reshape(-1)
+                if endpoint.numel() != base.numel():
+                    raise ValueError(f"trainer state layout changed for {name}")
+                for offset in range(0, endpoint.numel(), chunk_elements):
+                    end = min(offset + chunk_elements, endpoint.numel())
+                    piece = endpoint[offset:end].to(
+                        device="cpu", dtype=base_state[name].dtype).sub(
+                            base[offset:end])
+                    encoded = piece.to(torch.float32).contiguous().numpy()
+                    target[cursor:cursor + encoded.size] = encoded
+                    cursor += encoded.size
+        if cursor != self.metadata.total_elements:
+            raise ValueError("native trainer wrote an incomplete flat layout")
+        return self._seal_submit(
+            tokens=tokens, aggregation_weight=aggregation_weight,
+            contribution_identity=contribution_identity,
+            deadline_s=deadline_s)
+
+    def publish_flat_shards(self, shards, *, tokens: int, deadline_s: float,
+                            aggregation_weight: int | None = None,
+                            contribution_identity: Mapping[str, object] | None = None,
+                            ) -> dict[str, object]:
         """Control-fixture companion using the identical direct memfd admission."""
         if self.buffer is None or tokens <= 0:
             raise RuntimeError("native trainer delta buffer/tokens are not ready")
@@ -492,31 +572,72 @@ class NativeTrainerDataPlane:
                 cursor += encoded.size
         if cursor != self.metadata.total_elements:
             raise ValueError("native trainer wrote an incomplete flat layout")
-        return self._seal_submit(tokens=tokens, deadline_s=deadline_s)
+        return self._seal_submit(
+            tokens=tokens, aggregation_weight=aggregation_weight,
+            contribution_identity=contribution_identity,
+            deadline_s=deadline_s)
 
-    def _seal_submit(self, *, tokens: int, deadline_s: float) -> dict[str, object]:
+    def _seal_submit(self, *, tokens: int, deadline_s: float,
+                     aggregation_weight: int | None = None,
+                     contribution_identity: Mapping[str, object] | None = None,
+                     ) -> dict[str, object]:
         assert self.buffer is not None
+        weight = int(tokens if aggregation_weight is None else aggregation_weight)
+        if tokens <= 0 or weight <= 0:
+            raise ValueError("native exact tokens and aggregation weight must be positive")
+        identity = dict(contribution_identity or {})
+        if identity:
+            required = {
+                "policy_id", "policy_digest", "code_digest",
+                "base_global_version", "base_global_digest",
+                "base_lag_at_seal", "local_window_start", "local_window_end",
+                "window_count", "contribution_sequence",
+            }
+            if not required <= identity.keys():
+                raise ValueError("native async-v2 contribution identity is incomplete")
+            lag = int(identity["base_lag_at_seal"])
+            if (identity["policy_id"] != "async-decoupled-v2.0-exp"
+                    or not 0 <= lag <= 6
+                    or weight != int(tokens) * (7 - lag)
+                    or int(identity["window_count"])
+                    != int(identity["local_window_end"])
+                    - int(identity["local_window_start"])):
+                raise ValueError("native async-v2 token/lag/window identity is invalid")
         digest = self.buffer.sha256()
+        if identity:
+            identity.setdefault("payload_digest", digest.hex())
+            # The endpoint identity is reconstructable from the verified base
+            # and immutable cumulative delta without a second full-model read.
+            identity.setdefault(
+                "interval_endpoint_digest",
+                hashlib.sha256(
+                    bytes.fromhex(self.metadata.base_digest) + digest).hexdigest())
         self.buffer.seal()
+        owned_started = time.monotonic()
         self.submission = self.client.submit(
             self.buffer, trainer_key=self.identity,
             trainer_incarnation=self.incarnation,
-            submission_seq=self.rank, weight=int(tokens), source_dtype=DType.F32,
+            submission_seq=self.rank, weight=weight, source_dtype=DType.F32,
             source_sha256=digest, deadline_s=deadline_s)
         # Releasing the producer's public handle is safe: the persistent service
         # retained the immutable memfd before acknowledging submission.
         self.buffer.close(); self.buffer = None
         marker = {
-            "schema": "emender-native-e97-submission-v1",
+            "schema": (
+                "emender-native-e97-submission-v2"
+                if identity else "emender-native-e97-submission-v1"),
             "run_id": self.metadata.run_id,
             "fence_epoch": self.metadata.fence_epoch,
             "generation": self.metadata.generation,
             "attempt": self.metadata.attempt, "rank": self.rank,
             "trainer": self.identity, "incarnation": self.incarnation,
             "submission_seq": self.rank, "tokens": int(tokens),
+            "aggregation_weight": weight,
+            "owned_ack_seconds": time.monotonic() - owned_started,
             "source_sha256": digest.hex(),
             "layout_digest": self.metadata.layout_digest,
             "dense_files_written": 0, "trainer_spool_bytes": 0,
+            **identity,
         }
         atomic_metadata(
             self.control_root /
@@ -545,6 +666,20 @@ class NativeTrainerDataPlane:
                 or int(value.get("global_weight", 0)) <= 0
                 or len(str(value.get("result_root", ""))) != 64):
             raise ValueError("native result marker identity/root is invalid")
+        if self.metadata.policy_id and (
+                value.get("policy_id") != self.metadata.policy_id
+                or value.get("policy_digest") != self.metadata.policy_digest
+                or int(value.get("commit_global_version", -1))
+                != self.metadata.base_global_version
+                or not 0 <= int(value.get("commit_lag", -1)) <= 6
+                or int(value.get("base_global_version", -1))
+                != int(value.get("commit_global_version", -1))
+                   - int(value.get("commit_lag", -1))
+                or int(value.get("exact_tokens", 0)) <= 0
+                or int(value.get("aggregation_weight", 0))
+                != int(value.get("exact_tokens", 0))
+                   * (7 - int(value.get("commit_lag", -1)))):
+            raise ValueError("native async-v2 result identity/weight is invalid")
         # The two-node owner plane replaces local attempt 1 with the exact
         # global attempt 2.  Refresh the persistent trainer connection from
         # the controller-published fenced marker before requesting its view;
@@ -608,7 +743,8 @@ def exact_weighted_reference(contributions: Sequence[np.ndarray],
 
 
 __all__ = [
-    "GenerationMetadata", "NativeTrainerDataPlane", "SCHEMA", "artifact_path",
+    "ASYNC_V2_SCHEMA", "GenerationMetadata", "NativeTrainerDataPlane",
+    "SCHEMA", "artifact_path",
     "atomic_metadata", "decode_credit_frame_fd", "decode_owner_frame_fd",
     "encode_credit_frame_fd", "encode_owner_frame_fd",
     "exact_weighted_reference", "fd_sha256", "layout_identity", "runtime_digests",

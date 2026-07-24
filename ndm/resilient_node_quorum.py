@@ -100,10 +100,12 @@ class Contribution:
     policy_digest: str
     layout_digest: str
     code_digest: str
+    aggregation_weight: int = 0
 
     @classmethod
     def create(cls, fence: GenerationFence, worker_id: str, incarnation: str,
                contribution_seq: int, accepted_tokens: int, payload: bytes, *,
+               aggregation_weight: int | None = None,
                base_digest: str, policy_digest: str, layout_digest: str,
                code_digest: str) -> "Contribution":
         identity = ContributionIdentity(
@@ -111,12 +113,15 @@ class Contribution:
             worker_id, incarnation, contribution_seq,
         )
         payload = bytes(payload)
-        return cls(identity, accepted_tokens, payload, _digest(payload), base_digest,
-                   policy_digest, layout_digest, code_digest)
+        aggregate = (int(accepted_tokens) if aggregation_weight is None
+                     else int(aggregation_weight))
+        return cls(identity, accepted_tokens, payload, _digest(payload),
+                   base_digest, policy_digest, layout_digest, code_digest, aggregate)
 
     def content_digest(self) -> str:
         value = {
             "identity": self.identity.__dict__, "accepted_tokens": self.accepted_tokens,
+            "aggregation_weight": self.aggregation_weight,
             "payload_digest": self.payload_digest, "base_digest": self.base_digest,
             "policy_digest": self.policy_digest, "layout_digest": self.layout_digest,
             "code_digest": self.code_digest,
@@ -218,7 +223,9 @@ class GenerationAdmission:
         elif (identity.worker_id, identity.incarnation) not in self.ready_snapshot:
             receipt = self._receipt(contribution, "rejected_not_ready", now)
         elif (_digest(contribution.payload) != contribution.payload_digest
-              or contribution.accepted_tokens <= 0 or identity.contribution_seq < 0):
+              or contribution.accepted_tokens <= 0
+              or contribution.aggregation_weight <= 0
+              or identity.contribution_seq < 0):
             receipt = self._receipt(contribution, "rejected_corrupt", now)
         elif (contribution.base_digest != self.base_digest
               or contribution.policy_digest != self.policy_digest

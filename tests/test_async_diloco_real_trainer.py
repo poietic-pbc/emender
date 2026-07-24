@@ -5,6 +5,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,8 @@ from ndm.async_diloco import AsyncDiLoCoCheckpointCadence
 from ndm.async_diloco import AsyncDiLoCoGenerationMetrics, AsyncDiLoCoUpdate
 from ndm.async_diloco_compiled_mpich import COMPILED_MPICH_TRANSPORT
 from ndm.async_diloco_real import (
+    PersistentAsyncTrainingLane,
+    PersistentRealWorkerSession,
     RealAsyncDiLoCoConfig,
     RealAsyncFileRankConfig,
     RealAsyncNodeResult,
@@ -482,6 +485,188 @@ def test_real_async_worker_converts_model_to_bf16_before_training(monkeypatch):
     assert report.update.delta["weight"].dtype is torch.float32
     assert report.losses == (2.0,)
     assert progress == [(1, 2.0)]
+
+
+def test_persistent_worker_bootstraps_once_across_multiple_exact_windows(monkeypatch):
+    import ndm.async_diloco_real as real
+
+    counts = {"model": 0, "optimizer": 0, "iterator": 0}
+    hidden_seen = []
+
+    class OneParamModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.zeros(1))
+
+    class ScheduleFreeFixture:
+        def __init__(self, parameters):
+            parameter = tuple(parameters)[0]
+            self.param_groups = [{"params": [parameter], "lr": 0.1}]
+            self.state = {
+                parameter: {
+                    "z": parameter.detach().clone(),
+                    "exp_avg_sq": torch.tensor([9.0]),
+                    "step": 0,
+                },
+            }
+
+    def build_model(_args):
+        counts["model"] += 1
+        return OneParamModel()
+
+    def build_optimizer(model, _args):
+        counts["optimizer"] += 1
+        return ScheduleFreeFixture(model.parameters())
+
+    iterator = object()
+
+    def build_iterator(*_args, **_kwargs):
+        counts["iterator"] += 1
+        return iterator
+
+    def train_step(model, optimizer, _args, **kwargs):
+        assert kwargs["batch_iter"] is iterator
+        hidden_seen.append(kwargs["hidden_state"])
+        with torch.no_grad():
+            model.weight.add_(1.0)
+        optimizer.state[model.weight]["step"] += 1
+        return {
+            "loss": 1.0,
+            "tokens_processed": 3,
+            "hidden_state": len(hidden_seen),
+        }
+
+    monkeypatch.setattr(real.train, "build_training_model", build_model)
+    monkeypatch.setattr(real.train, "build_training_optimizer", build_optimizer)
+    monkeypatch.setattr(real, "_build_batch_iter", build_iterator)
+    monkeypatch.setattr(real.train, "train_one_optimizer_step", train_step)
+    phases = []
+    session = PersistentRealWorkerSession(
+        base_state={"weight": torch.zeros(1)},
+        train_args=real.Namespace(seed=7, bf16=False, lr=0.1),
+        spec=RealAsyncWorkerSpec("trainer", "node-0", "cpu", 2, 0),
+        synthetic_token_stream=False,
+        synthetic_vocab_size=8,
+        bootstrap_phase_callback=lambda phase, _details: phases.append(phase),
+    )
+    model_identity = id(session.model)
+    optimizer_identity = id(session.optimizer)
+    first = session.run_window(0)
+    second = session.run_window(1)
+
+    assert first.tokens == second.tokens == 6
+    assert session.windows_completed == 2
+    assert id(session.model) == model_identity
+    assert id(session.optimizer) == optimizer_identity
+    assert counts == {"model": 1, "optimizer": 1, "iterator": 1}
+    assert session.bootstrap_counts == {
+        "model_build": 1,
+        "optimizer_build": 1,
+        "data_iterator_build": 1,
+    }
+    assert phases.count("model_build_start") == 1
+    assert phases.count("optimizer_built") == 1
+    assert phases.count("data_iterator_ready") == 1
+    assert hidden_seen == [None, 1, 2, 3]
+
+    moment = session.optimizer.state[session.model.weight][
+        "exp_avg_sq"].clone()
+    session.translate({"weight": torch.tensor([5.0])})
+    torch.testing.assert_close(
+        session.model.weight.detach(), torch.tensor([9.0]))
+    torch.testing.assert_close(
+        session.optimizer.state[session.model.weight]["z"],
+        torch.tensor([5.0]))
+    torch.testing.assert_close(
+        session.optimizer.state[session.model.weight]["exp_avg_sq"], moment)
+    session.close()
+
+
+def test_persistent_lane_progresses_and_coalesces_while_result_is_delayed(
+        monkeypatch):
+    import ndm.async_diloco_real as real
+
+    first_forward = threading.Event()
+    allow_forward = threading.Event()
+    result_completed = threading.Event()
+
+    class OneParamModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.zeros(1))
+
+    class ScheduleFreeFixture:
+        def __init__(self, parameters):
+            parameter = tuple(parameters)[0]
+            self.param_groups = [{"params": [parameter], "lr": 0.1}]
+            self.state = {
+                parameter: {
+                    "z": parameter.detach().clone(),
+                    "exp_avg_sq": torch.tensor([4.0]),
+                },
+            }
+
+    iterator = iter(())
+    monkeypatch.setattr(
+        real.train, "build_training_model", lambda _args: OneParamModel())
+    monkeypatch.setattr(
+        real.train, "build_training_optimizer",
+        lambda model, _args: ScheduleFreeFixture(model.parameters()))
+    monkeypatch.setattr(real, "_build_batch_iter", lambda *_args, **_kwargs: iterator)
+
+    def train_step(model, _optimizer, _args, **_kwargs):
+        first_forward.set()
+        assert allow_forward.wait(1)
+        with torch.no_grad():
+            model.weight.add_(1.0)
+        return {"loss": 1.0, "tokens_processed": 5, "hidden_state": None}
+
+    monkeypatch.setattr(real.train, "train_one_optimizer_step", train_step)
+    session = PersistentRealWorkerSession(
+        base_state={"weight": torch.zeros(1)},
+        train_args=real.Namespace(seed=7, bf16=False, lr=0.1),
+        spec=RealAsyncWorkerSpec("trainer", "node-0", "cpu", 1, 0),
+        synthetic_token_stream=False,
+        synthetic_vocab_size=8,
+    )
+    lane = PersistentAsyncTrainingLane(session, sigma_hard=3)
+    lane.start(
+        local_window_start=1,
+        start_state=session.snapshot(),
+        admission_deadline=time.monotonic() + 1,
+    )
+
+    assert first_forward.wait(1)
+    assert not result_completed.is_set()
+    allow_forward.set()
+    deadline = time.monotonic() + 1
+    while session.windows_completed < 3 and time.monotonic() < deadline:
+        time.sleep(.001)
+    assert session.windows_completed == 3
+    assert not result_completed.is_set()
+
+    result_completed.set()
+    interval = lane.finish_at_boundary(
+        deadline=time.monotonic() + 1,
+        corrections={"weight": torch.tensor([7.0])},
+    )
+    assert (interval.local_window_start, interval.local_window_end) == (1, 4)
+    assert interval.window_count == 3
+    assert interval.exact_tokens == 15
+    assert interval.reached_hard_bound
+    torch.testing.assert_close(
+        session.model.weight.detach(), torch.tensor([10.0]))
+    torch.testing.assert_close(
+        session.optimizer.state[session.model.weight]["z"],
+        torch.tensor([7.0]))
+    torch.testing.assert_close(
+        lane.start_state["weight"], torch.tensor([7.0]))
+    assert session.bootstrap_counts == {
+        "model_build": 1,
+        "optimizer_build": 1,
+        "data_iterator_build": 1,
+    }
+    session.close()
 
 
 def test_real_async_trainer_checkpoint_cadence_records_recovery_and_finalization(tmp_path):

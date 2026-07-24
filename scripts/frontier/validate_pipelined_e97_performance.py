@@ -1,20 +1,52 @@
 #!/usr/bin/env python3
-"""Fail-closed live K40 overlap, foreground-idle, and cadence validator."""
+"""Fail-closed semantic validator for bounded-lag async DiLoCo v2.
+
+This validator deliberately does not infer a generation from a thread name or
+accept the former contradictory "tau=0 background overlaps g+1" label.  It
+requires explicit v2 policy, local-window/applied-anchor identity, versioned
+background work, bounded queue evidence, reload/CAS-verified application, and
+independent correctness latency.
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 import statistics
-from typing import Any
+from typing import Any, Iterable
 
 
+POLICY_ID = "async-decoupled-v2.0-exp"
+K_LOCAL_STEPS = 40
+TAU_HARD = 6
+TAU_TARGET = 2
+SIGMA_HARD = 8
+SIGMA_TARGET = 2
+EXPECTED_TRAINERS = 16
+WARMUP_WINDOWS = 2
+MEASURED_WINDOWS = 10
 MAX_IDLE_FRACTION = 0.10
 MAX_CADENCE_MULTIPLE = 1.25
+MAX_LOCAL_OWNED_S = 1.0
+MAX_CORRECTNESS_S = 420.0
+E97_NATIVE_RESIDENT_BYTES = 64_001_671_648
+
 BACKGROUND_STAGES = frozenset({
-    "native_local_reduction", "native_owner_redistribution",
-    "native_trainer_apply", "fenced_atomic_commit",
+    "native_local_reduction",
+    "native_owner_redistribution",
+    "native_trainer_apply",
+    "checkpoint_publication",
+    "fenced_atomic_commit",
+    "control_handoff_integrity",
+})
+REQUIRED_STAGE_CLASSES = frozenset({
+    "native_local_reduction",
+    "native_owner_redistribution",
+    "native_trainer_apply",
+    "checkpoint_publication",
+    "control_handoff_integrity",
 })
 
 
@@ -29,97 +61,500 @@ def _records(root: Path) -> list[dict[str, Any]]:
     return values
 
 
-def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
-    trainer: dict[str, dict[int, dict[str, list[float]]]] = {}
-    backgrounds: list[tuple[int, str, float, float]] = []
-    for value in records:
-        generation = int(value.get("generation", -1))
-        if generation < 0:
+def _integer(value: Any, name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be an integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{name} must be an integer") from error
+    if isinstance(value, float) and value != parsed:
+        raise ValueError(f"{name} must be an integer")
+    return parsed
+
+
+def _finite(value: Any, name: str) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{name} must be finite") from error
+    if not math.isfinite(parsed):
+        raise ValueError(f"{name} must be finite")
+    return parsed
+
+
+def _digest(value: Any, name: str) -> str:
+    encoded = str(value)
+    if len(encoded) != 64:
+        raise ValueError(f"{name} must be a SHA-256 digest")
+    try:
+        bytes.fromhex(encoded)
+    except ValueError as error:
+        raise ValueError(f"{name} must be a SHA-256 digest") from error
+    return encoded
+
+
+def _percentile(values: Iterable[int | float], fraction: float) -> float:
+    ordered = sorted(float(value) for value in values)
+    if not ordered:
+        raise ValueError("cannot compute a percentile from no values")
+    index = max(0, math.ceil(fraction * len(ordered)) - 1)
+    return ordered[index]
+
+
+def _policy(records: list[dict[str, Any]]) -> tuple[dict[str, Any], int]:
+    policies = [value for value in records
+                if value.get("stage") == "async_v2_policy"]
+    if not policies:
+        raise ValueError("missing async-v2 policy declaration; false tau=0 is forbidden")
+    required = {
+        "policy_id": POLICY_ID,
+        "tau_hard": TAU_HARD,
+        "tau_target": TAU_TARGET,
+        "sigma_hard": SIGMA_HARD,
+        "sigma_target": SIGMA_TARGET,
+        "k_local_steps": K_LOCAL_STEPS,
+        "sealed_descriptor_capacity": 1,
+        "mutable_interval_capacity": 1,
+        "result_mailbox_capacity": 1,
+        "result_staging_capacity": 1,
+    }
+    fences = set()
+    for value in policies:
+        if value.get("policy_id") != POLICY_ID or _integer(
+                value.get("tau_hard", -1), "tau_hard") == 0:
+            raise ValueError("false tau=0 labeling or non-v2 policy declaration")
+        if any(value.get(name) != expected for name, expected in required.items()):
+            raise ValueError("rendered async-v2 policy differs from reviewed constants")
+        fence = _integer(value.get("allocation_fence"), "allocation fence")
+        if fence <= 0:
+            raise ValueError("allocation fence must be positive")
+        fences.add(fence)
+    if len(fences) != 1:
+        raise ValueError("performance artifact crosses allocation fences")
+    return required, fences.pop()
+
+
+def _background(
+    records: list[dict[str, Any]], *, fence: int,
+) -> list[dict[str, Any]]:
+    values: list[dict[str, Any]] = []
+    for record in records:
+        stage = str(record.get("stage", ""))
+        if stage not in BACKGROUND_STAGES:
             continue
-        phase = str(value.get("phase", ""))
-        if phase in {"optimizer_step_start", "optimizer_step_end"}:
+        elapsed = _finite(record.get("elapsed_s"), f"{stage} elapsed")
+        ended = _finite(record.get("timestamp"), f"{stage} timestamp")
+        if elapsed <= 0 or record.get("within_slo") is not True:
+            raise ValueError(f"invalid or failed background telemetry: {stage}")
+        if record.get("policy_id") != POLICY_ID:
+            raise ValueError("false tau=0 background labeling")
+        if _integer(record.get("allocation_fence"), "background fence") != fence:
+            raise ValueError("background work is not under the current fence")
+        base = _integer(record.get("base_global_version"), "background base version")
+        committed = _integer(
+            record.get("commit_global_version"), "background commit version")
+        lag = _integer(record.get("commit_lag"), "background commit lag")
+        if base < 0 or committed < base or committed - base != lag:
+            raise ValueError("background base/commit/lag identity is inconsistent")
+        if not 0 <= lag <= TAU_HARD:
+            raise ValueError(f"background hard lag violation: {lag}")
+        exact_tokens = _integer(record.get("exact_tokens"), "background exact tokens")
+        weight = _integer(
+            record.get("aggregation_weight"), "background aggregation weight")
+        if (
+            exact_tokens <= 0
+            or weight != exact_tokens * (TAU_HARD + 1 - lag)
+        ):
+            raise ValueError("background token/staleness weight is unverifiable")
+        values.append({
+            "stage": stage,
+            "begin": ended - elapsed,
+            "end": ended,
+            "base_global_version": base,
+            "commit_global_version": committed,
+            "commit_lag": lag,
+            "contribution_digest": _digest(
+                record.get("contribution_digest"), "background contribution"),
+        })
+    if not values:
+        raise ValueError("no accurately versioned background work")
+    present = {value["stage"] for value in values}
+    if not REQUIRED_STAGE_CLASSES <= present:
+        missing = sorted(REQUIRED_STAGE_CLASSES - present)
+        raise ValueError(
+            f"background stages are not independently timed: {missing}")
+    return values
+
+
+def _bounds(
+    records: list[dict[str, Any]], trainers: set[str],
+) -> dict[str, int | float]:
+    by_identity: dict[str, dict[str, Any]] = {}
+    for value in records:
+        if value.get("stage") == "async_v2_bounds":
             identity = str(value.get("identity", ""))
-            if not identity or "monotonic_s" not in value:
-                raise ValueError("trainer step telemetry lacks identity/monotonic timestamp")
-            trainer.setdefault(identity, {}).setdefault(generation, {}).setdefault(
-                phase, []).append(float(value["monotonic_s"]))
-        stage = str(value.get("stage", ""))
-        if stage in BACKGROUND_STAGES:
-            elapsed = float(value.get("elapsed_s", -1))
-            ended = float(value.get("timestamp", -1))
-            if elapsed < 0 or ended < 0 or value.get("within_slo") is not True:
-                raise ValueError(f"invalid or failed background telemetry: {stage}")
-            backgrounds.append((generation, stage, ended - elapsed, ended))
-    if not trainer:
-        raise ValueError("no real trainer step telemetry")
+            if not identity or identity in by_identity:
+                raise ValueError("duplicate or missing bounded queue identity")
+            by_identity[identity] = value
+    if set(by_identity) != trainers:
+        raise ValueError("bounded queue evidence is missing for one or more trainers")
+    high = {
+        "sealed_descriptor_high_water": 0,
+        "mutable_interval_high_water": 0,
+        "mutable_window_high_water": 0,
+        "result_mailbox_high_water": 0,
+        "result_staging_high_water": 0,
+    }
+    ownership = 0.0
+    for value in by_identity.values():
+        exact_caps = {
+            "sealed_descriptor_capacity": 1,
+            "mutable_interval_capacity": 1,
+            "result_mailbox_capacity": 1,
+            "result_staging_capacity": 1,
+        }
+        if any(_integer(value.get(name), name) != expected
+               for name, expected in exact_caps.items()):
+            raise ValueError("bounded queue capacity differs from reviewed v2 policy")
+        limits = {
+            "sealed_descriptor_high_water": 1,
+            "mutable_interval_high_water": 1,
+            "mutable_window_high_water": SIGMA_HARD,
+            "result_mailbox_high_water": 1,
+            "result_staging_high_water": 1,
+        }
+        for name, limit in limits.items():
+            observed = _integer(value.get(name), name)
+            if not 0 <= observed <= limit:
+                raise ValueError(f"bounded queue high-water violation: {name}")
+            high[name] = max(high[name], observed)
+        local_owned = _finite(
+            value.get("native_owned_seconds_max"), "local OWNED latency")
+        if not 0 <= local_owned <= MAX_LOCAL_OWNED_S:
+            raise ValueError("local OWNED acknowledgement exceeded one second")
+        ownership = max(ownership, local_owned)
+        admitted = _integer(
+            value.get("resident_admission_bytes"),
+            "resident admission bytes")
+        resident_limit = _integer(
+            value.get("resident_limit_bytes"), "resident limit bytes")
+        headroom = _integer(
+            value.get("resident_headroom_bytes"),
+            "resident headroom bytes")
+        if (
+            admitted != E97_NATIVE_RESIDENT_BYTES
+            or resident_limit < admitted
+            or headroom != resident_limit - admitted
+        ):
+            raise ValueError(
+                "native resident formula/cap is incomplete or unbounded")
+        for forbidden in (
+            "python_dense_socket_bytes", "lustre_dense_hot_path_bytes",
+        ):
+            if _integer(value.get(forbidden), forbidden) != 0:
+                raise ValueError(f"forbidden dense hot path observed: {forbidden}")
+        for count in ("pause_count", "drop_count"):
+            if _integer(value.get(count), count) < 0:
+                raise ValueError(f"{count} cannot be negative")
+        for bootstrap in (
+            "model_build", "optimizer_build", "data_iterator_build",
+        ):
+            if _integer(value.get(bootstrap), bootstrap) != 1:
+                raise ValueError(
+                    "training lane is not one persistent resident session")
+        if _integer(value.get("windows_completed"), "windows completed") < (
+                WARMUP_WINDOWS + MEASURED_WINDOWS):
+            raise ValueError(
+                "persistent training session lacks the measured K windows")
+    return {**high, "native_owned_seconds_max": ownership}
+
+
+def _applications(
+    records: list[dict[str, Any]], *, trainers: set[str], fence: int,
+    measured_windows: Mapping[str, set[int]],
+) -> tuple[list[int], list[int], list[int]]:
+    applications: dict[tuple[str, int], dict[str, Any]] = {}
+    for value in records:
+        if value.get("stage") != "safe_boundary_apply":
+            continue
+        identity = str(value.get("identity", ""))
+        window = _integer(value.get("local_window"), "apply local window")
+        key = (identity, window)
+        if key in applications:
+            raise ValueError("duplicate safe-boundary application receipt")
+        applications[key] = value
+    anchor_lags: list[int] = []
+    result_lags: list[int] = []
+    speculative_lags: list[int] = []
+    for identity in trainers:
+        measured = measured_windows[identity]
+        first_window, last_window = min(measured), max(measured)
+        selected = [
+            value
+            for (owner, window), value in sorted(applications.items())
+            if owner == identity and first_window <= window <= last_window + 1
+        ]
+        # Results are latest-only, not mandatory per-window barriers.  Requiring
+        # one receipt for every K would silently recreate the serial policy.
+        # Every application that does occur in the measured interval must be
+        # independently versioned and verified, and at least one is required.
+        if not selected:
+            raise ValueError(
+                "unverifiable application: measured interval has no "
+                "safe-boundary receipt")
+        for value in selected:
+            if (
+                _integer(value.get("allocation_fence"), "apply fence") != fence
+                or value.get("reload_verified") is not True
+                or value.get("latest_cas_verified") is not True
+            ):
+                raise ValueError("unverifiable application: reload/latest CAS absent")
+            _digest(value.get("result_digest"), "applied result")
+            _digest(value.get("manifest_digest"), "applied manifest")
+            known = _integer(
+                value.get("known_global_version"), "known global version")
+            result = _integer(value.get("result_version"), "result version")
+            anchor = _integer(
+                value.get("applied_anchor_version"), "applied anchor version")
+            anchor_lag = _integer(
+                value.get("anchor_lag_before_apply"), "anchor lag")
+            result_lag = _integer(
+                value.get("result_version_lag_at_apply"), "result lag")
+            speculative = _integer(
+                value.get("speculative_window_lag"), "speculative lag")
+            if result > known or anchor > known or result_lag != known - result:
+                raise ValueError("unverifiable application version identity")
+            if not 0 <= anchor_lag <= TAU_HARD:
+                raise ValueError(f"application hard lag violation: {anchor_lag}")
+            if not 0 <= result_lag <= TAU_HARD:
+                raise ValueError(f"result hard lag violation: {result_lag}")
+            if not 0 <= speculative <= SIGMA_HARD:
+                raise ValueError(f"speculative hard lag violation: {speculative}")
+            anchor_lags.append(anchor_lag)
+            result_lags.append(result_lag)
+            speculative_lags.append(speculative)
+    return anchor_lags, result_lags, speculative_lags
+
+
+def _correctness(records: list[dict[str, Any]], *, fence: int) -> dict[str, Any]:
+    values = [value for value in records
+              if value.get("stage") == "async_v2_correctness"]
+    if not values:
+        raise ValueError("missing separate freeze-to-latest correctness evidence")
+    latencies = []
+    for value in values:
+        if (
+            value.get("policy_id") != POLICY_ID
+            or _integer(value.get("allocation_fence"), "correctness fence") != fence
+            or value.get("reload_verified") is not True
+            or value.get("latest_cas_verified") is not True
+        ):
+            raise ValueError("correctness publication is not reload/CAS verified")
+        latency = _finite(
+            value.get("freeze_to_latest_s"), "freeze-to-latest latency")
+        if not 0 <= latency <= MAX_CORRECTNESS_S:
+            raise ValueError("freeze-to-latest correctness deadline exceeded")
+        if _integer(value.get("checkpoint_bytes"), "checkpoint bytes") <= 0:
+            raise ValueError("correctness checkpoint extent is missing")
+        _digest(value.get("manifest_digest"), "correctness manifest")
+        latencies.append(latency)
+    return {
+        "freeze_to_latest_seconds_max": max(latencies),
+        "deadline_seconds": MAX_CORRECTNESS_S,
+        "passed": True,
+    }
+
+
+def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
+    policy, fence = _policy(records)
+    backgrounds = _background(records, fence=fence)
+
+    trainer: dict[str, dict[int, dict[str, list[dict[str, Any]]]]] = {}
+    for value in records:
+        phase = str(value.get("phase", ""))
+        if phase not in {"optimizer_step_start", "optimizer_step_end"}:
+            continue
+        identity = str(value.get("identity", ""))
+        window = _integer(
+            value.get("local_window", value.get("generation", -1)),
+            "local window",
+        )
+        if (
+            not identity
+            or window < 0
+            or "monotonic_s" not in value
+            or "timestamp" not in value
+        ):
+            raise ValueError(
+                "trainer step telemetry lacks identity/window/paired timestamps")
+        if value.get("policy_id") != POLICY_ID:
+            raise ValueError("false tau=0 trainer labeling")
+        trainer.setdefault(identity, {}).setdefault(window, {}).setdefault(
+            phase, []).append(value)
+    if len(trainer) != EXPECTED_TRAINERS:
+        raise ValueError(
+            f"semantic performance gate requires exactly {EXPECTED_TRAINERS} trainers")
 
     raw: list[float] = []
     cadence: list[float] = []
     idle: list[float] = []
     overlaps: list[dict[str, Any]] = []
-    for identity, generations in trainer.items():
-        ordered = sorted(generations)
-        if len(ordered) < 2:
-            raise ValueError(f"{identity} lacks two steady-state K40 generations")
-        windows: dict[int, tuple[float, float]] = {}
-        for generation in ordered:
-            phases = generations[generation]
-            starts, ends = phases.get("optimizer_step_start", []), phases.get("optimizer_step_end", [])
-            if len(starts) != 40 or len(ends) != 40:
-                raise ValueError(f"{identity} generation {generation} lacks exact K40 step timestamps")
-            start, end = min(starts), max(ends)
-            if end <= start:
+    measured_windows: dict[str, set[int]] = {}
+    for identity, windows_by_id in trainer.items():
+        ordered = sorted(windows_by_id)
+        if len(ordered) < WARMUP_WINDOWS + MEASURED_WINDOWS:
+            raise ValueError(
+                f"{identity} lacks two warm-up plus ten measured K40 windows")
+        selected = ordered[-MEASURED_WINDOWS:]
+        measured_windows[identity] = set(selected)
+        windows: dict[int, tuple[float, float, float]] = {}
+        for window in selected:
+            phases = windows_by_id[window]
+            starts = phases.get("optimizer_step_start", [])
+            ends = phases.get("optimizer_step_end", [])
+            if len(starts) != K_LOCAL_STEPS or len(ends) != K_LOCAL_STEPS:
+                raise ValueError(
+                    f"{identity} local window {window} lacks exact K40 step timestamps")
+            monotonic_start = min(
+                _finite(value["monotonic_s"], "K40 monotonic start")
+                for value in starts)
+            monotonic_end = max(
+                _finite(value["monotonic_s"], "K40 monotonic end")
+                for value in ends)
+            if monotonic_end <= monotonic_start:
                 raise ValueError("non-positive K40 compute interval")
-            windows[generation] = (start, end)
-            raw.append(end - start)
-        for previous, current in zip(ordered, ordered[1:]):
-            previous_window, current_window = windows[previous], windows[current]
+            first = min(starts, key=lambda item: float(item["monotonic_s"]))
+            if (
+                first.get("local_model_basis") != "worker_local"
+                or _integer(first.get("applied_anchor_version"),
+                            "window applied anchor") < 0
+            ):
+                raise ValueError(
+                    "K-window pretends it used an unavailable global base")
+            offset = _finite(first["timestamp"], "K40 wall timestamp") - _finite(
+                first["monotonic_s"], "K40 monotonic timestamp")
+            windows[window] = (monotonic_start, monotonic_end, offset)
+            raw.append(monotonic_end - monotonic_start)
+        identity_matches = 0
+        for previous, current in zip(selected, selected[1:]):
+            previous_window = windows[previous]
+            current_window = windows[current]
             observed_cadence = current_window[0] - previous_window[0]
+            if observed_cadence <= 0:
+                raise ValueError("training local-window order is not monotonic")
             control_idle = max(0.0, current_window[0] - previous_window[1])
             cadence.append(observed_cadence)
             idle.append(control_idle)
-            # Background telemetry uses wall clock while trainer events retain
-            # both clocks. Translate the next K40 window through its first
-            # step's paired wall/monotonic timestamp.
-            current_starts = [
-                value for value in records
-                if value.get("identity") == identity
-                and int(value.get("generation", -1)) == current
-                and value.get("phase") == "optimizer_step_start"
+            wall = (
+                current_window[0] + current_window[2],
+                current_window[1] + current_window[2],
+            )
+            matched = [
+                value for value in backgrounds
+                if value["begin"] < wall[1] and value["end"] > wall[0]
             ]
-            first = min(current_starts, key=lambda value: float(value["monotonic_s"]))
-            offset = float(first["timestamp"]) - float(first["monotonic_s"])
-            next_wall = (current_window[0] + offset, current_window[1] + offset)
-            matched = [stage for generation, stage, began, ended in backgrounds
-                       if generation == previous and began < next_wall[1] and ended > next_wall[0]]
             if not matched:
                 raise ValueError(
-                    f"generation {previous} background did not overlap {current} K40 compute"
-                )
-            overlaps.append({"identity": identity, "background_generation": previous,
-                             "foreground_generation": current, "stages": sorted(set(matched))})
+                    f"{identity} local window {current} lacks true versioned "
+                    "background overlap")
+            identity_matches += 1
+            overlaps.append({
+                "identity": identity,
+                "local_window": current,
+                "applied_anchor_version": _integer(
+                    min(
+                        windows_by_id[current]["optimizer_step_start"],
+                        key=lambda item: float(item["monotonic_s"]),
+                    ).get("applied_anchor_version"),
+                    "window applied anchor",
+                ),
+                "background": [
+                    {
+                        "stage": value["stage"],
+                        "base_global_version": value["base_global_version"],
+                        "commit_global_version": value["commit_global_version"],
+                        "commit_lag": value["commit_lag"],
+                        "contribution_digest": value["contribution_digest"],
+                    }
+                    for value in matched
+                ],
+            })
+        if identity_matches != MEASURED_WINDOWS - 1:
+            raise ValueError("training lane overlap sample is incomplete")
 
     raw_k40 = statistics.median(raw)
     cadence_s = statistics.median(cadence)
-    idle_fraction = sum(idle) / sum(cadence)
-    background_max = max((ended - began for _g, _s, began, ended in backgrounds), default=0.0)
-    background_fits = background_max <= raw_k40
     cadence_multiple = cadence_s / raw_k40
-    if background_fits and cadence_multiple > MAX_CADENCE_MULTIPLE:
+    idle_fraction = sum(idle) / sum(cadence)
+    if cadence_multiple > MAX_CADENCE_MULTIPLE:
         raise ValueError(
-            f"steady-state cadence {cadence_multiple:.6f}x exceeds 1.25x raw K40"
-        )
+            f"training-lane cadence {cadence_multiple:.6f}x exceeds 1.25x raw K40")
     if idle_fraction >= MAX_IDLE_FRACTION:
-        raise ValueError(f"foreground control-plane idle {idle_fraction:.6f} is not below 0.10")
+        raise ValueError(
+            f"training-lane foreground idle {idle_fraction:.6f} is not below 0.10")
+
+    bounds = _bounds(records, set(trainer))
+    anchor_lags, result_lags, speculative_lags = _applications(
+        records,
+        trainers=set(trainer),
+        fence=fence,
+        measured_windows=measured_windows,
+    )
+    commit_lags = [int(value["commit_lag"]) for value in backgrounds]
+    for name, values, target in (
+        ("commit", commit_lags, TAU_TARGET),
+        ("anchor", anchor_lags, TAU_TARGET),
+        ("speculative", speculative_lags, SIGMA_TARGET),
+    ):
+        if max(values) > target or _percentile(values, .99) > target:
+            raise ValueError(f"{name} lag exceeds the clean promotion target")
+    correctness = _correctness(records, fence=fence)
+    stage_seconds = {
+        stage: [
+            value["end"] - value["begin"]
+            for value in backgrounds if value["stage"] == stage
+        ]
+        for stage in sorted({value["stage"] for value in backgrounds})
+    }
     return {
-        "schema": "emender-pipelined-e97-performance-v1", "status": "passed",
-        "raw_k40_compute_seconds": raw_k40, "steady_state_cadence_seconds": cadence_s,
+        "schema": "emender-async-decoupled-e97-performance-v2",
+        "status": "passed",
+        "policy": policy,
+        "allocation_fence": fence,
+        "measured_trainers": len(trainer),
+        "warmup_windows_per_trainer": WARMUP_WINDOWS,
+        "measured_windows_per_trainer": MEASURED_WINDOWS,
+        "raw_k40_compute_seconds": raw_k40,
+        "steady_state_cadence_seconds": cadence_s,
         "steady_state_cadence_multiple": cadence_multiple,
         "foreground_control_plane_idle_fraction": idle_fraction,
-        "background_max_stage_seconds": background_max,
-        "background_fits_k40_window": background_fits, "overlaps": overlaps,
-        "policy": {"foreground_idle_fraction_strict_max": MAX_IDLE_FRACTION,
-                   "cadence_multiple_max_when_background_fits": MAX_CADENCE_MULTIPLE},
+        "overlaps": overlaps,
+        "stage_seconds": {
+            name: {
+                "count": len(values),
+                "median": statistics.median(values),
+                "maximum": max(values),
+            }
+            for name, values in stage_seconds.items()
+        },
+        "lag": {
+            "commit_p99": _percentile(commit_lags, .99),
+            "commit_max": max(commit_lags),
+            "anchor_p99": _percentile(anchor_lags, .99),
+            "anchor_max": max(anchor_lags),
+            "result_version_p99": _percentile(result_lags, .99),
+            "result_version_max": max(result_lags),
+            "speculative_p99": _percentile(speculative_lags, .99),
+            "speculative_max": max(speculative_lags),
+        },
+        "bounds": bounds,
+        "correctness": correctness,
+        "training_lane": {
+            "cadence_multiple_max": MAX_CADENCE_MULTIPLE,
+            "foreground_idle_fraction_strict_max": MAX_IDLE_FRACTION,
+            "passed": True,
+        },
     }
 
 

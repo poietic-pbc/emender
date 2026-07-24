@@ -333,6 +333,8 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
             GenerationFence(self.config.run_id, generation, attempt, self.config.fence),
             str(request["worker_id"]), str(request["incarnation"]),
             int(request["contribution_seq"]), int(request["accepted_tokens"]), payload,
+            aggregation_weight=int(request.get(
+                "aggregation_weight", request["accepted_tokens"])),
             base_digest=str(request.get("base_digest", self.config.base_digest)),
             policy_digest=str(request.get("policy_digest", self.config.policy_digest)),
             layout_digest=str(request.get("layout_digest", self.config.layout_digest)),
@@ -365,7 +367,7 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
                 if item.identity in close.frozen_identities
             },
             "accepted_weights": {
-                item.identity.worker_id: item.accepted_tokens
+                item.identity.worker_id: item.aggregation_weight
                 for item in admission._accepted.values()
                 if item.identity in close.frozen_identities
             },
@@ -558,18 +560,24 @@ class PoolControlClient:
 
     def contribute(self, generation: int, attempt: int, worker_id: str,
                    incarnation: str, contribution_seq: int, accepted_tokens: int,
-                   payload_digest: str) -> dict[str, object]:
+                   payload_digest: str, *,
+                   aggregation_weight: int | None = None) -> dict[str, object]:
         return self._rpc("contribute", payload=payload_digest.encode(), generation=generation,
                          attempt=attempt, worker_id=worker_id, incarnation=incarnation,
                          contribution_seq=contribution_seq,
-                         accepted_tokens=accepted_tokens)
+                         accepted_tokens=accepted_tokens,
+                         aggregation_weight=(accepted_tokens if aggregation_weight is None
+                                             else aggregation_weight))
 
     def contribute_and_freeze(self, *, generation: int, attempt: int,
                               worker_id: str, incarnation: str,
                               contribution_seq: int, accepted_tokens: int,
-                              payload_digest: str, deadline: float) -> dict[str, object]:
+                              payload_digest: str, deadline: float,
+                              aggregation_weight: int | None = None,
+                              ) -> dict[str, object]:
         receipt = self.contribute(generation, attempt, worker_id, incarnation,
-                                  contribution_seq, accepted_tokens, payload_digest)
+                                  contribution_seq, accepted_tokens, payload_digest,
+                                  aggregation_weight=aggregation_weight)
         if receipt["status"] != "accepted":
             return receipt
         while time.monotonic() < deadline:
