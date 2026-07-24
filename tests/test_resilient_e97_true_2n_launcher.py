@@ -1333,7 +1333,8 @@ def test_production_k_next_starts_after_local_owned_before_prior_result_apply_ch
     result = trainer.index("native_plane.result_shards(", next_k)
     apply = trainer.index("state = apply_delta(", result)
     checkpoint = trainer.index("torch.save(", apply)
-    verified = trainer.index("latest = wait_metadata(", checkpoint)
+    verified = trainer.index(
+        "_reload_verified_async_v2_latest(", checkpoint)
     boundary = trainer.index(
         "async_training_lane.finish_at_boundary(", verified)
 

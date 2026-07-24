@@ -144,6 +144,102 @@ def apply_delta(base: Mapping[str, torch.Tensor], shards: Iterable[torch.Tensor]
     return result
 
 
+def apply_delta_with_correction_ledger(
+        base: Mapping[str, torch.Tensor],
+        shards: Iterable[torch.Tensor],
+        *,
+        eta_outer: float,
+        interval_start: Mapping[str, torch.Tensor],
+        interval_endpoint: Mapping[str, torch.Tensor],
+        accepted_own_interval: bool,
+        in_place: bool = False,
+        ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+    """Apply a global result and construct its safe-boundary correction.
+
+    The correction is computed from the same bounded native result shards that
+    advance the worker's global anchor:
+
+    ``(S_h - S_a) - C_i(a,h)``.
+
+    For the currently sealed local interval, ``C_i`` is the exact interval
+    endpoint minus its mutable start only when the fenced accepted-set identity
+    names that descriptor; it is zero for unaccepted work.  Constructing the
+    global shift directly from the result shards avoids retaining another
+    model-sized copy of ``S_a`` after the in-place anchor update.  The returned
+    correction is the one bounded cohort consumed by the resident
+    ScheduleFree model/``z`` translation at a verified K boundary.
+    """
+    names = tuple(sorted(base))
+    if (names != tuple(sorted(interval_start))
+            or names != tuple(sorted(interval_endpoint))):
+        raise ValueError(
+            "correction-ledger tensor layout differs from global state")
+    if not isinstance(accepted_own_interval, bool):
+        raise TypeError("accepted_own_interval must be a bool")
+
+    result: dict[str, torch.Tensor] = {}
+    corrections: dict[str, torch.Tensor] = {}
+    iterator = iter(shards)
+    shard = None
+    shard_offset = 0
+    for name in names:
+        value = base[name]
+        start = interval_start[name]
+        endpoint = interval_endpoint[name]
+        if (start.shape != value.shape or endpoint.shape != value.shape
+                or not start.is_floating_point()
+                or not endpoint.is_floating_point()):
+            raise ValueError(
+                f"correction-ledger interval layout invalid for {name}")
+        updated = (value if in_place else value.clone()).reshape(-1)
+        start_flat = start.detach().reshape(-1)
+        endpoint_flat = endpoint.detach().reshape(-1)
+        correction = torch.empty_like(updated)
+        value_offset = 0
+        while value_offset < value.numel():
+            if shard is None:
+                try:
+                    shard = next(iterator).reshape(-1)
+                except StopIteration as error:
+                    raise ValueError(
+                        "aggregate shard count does not match trainer state") from error
+                if shard.numel() <= 0:
+                    raise ValueError(
+                        "aggregate shard count does not match trainer state")
+            take = min(
+                value.numel() - value_offset,
+                shard.numel() - shard_offset,
+            )
+            aggregate_piece = shard[shard_offset:shard_offset + take]
+            if not torch.isfinite(aggregate_piece).all():
+                raise ValueError(f"aggregate shard layout invalid for {name}")
+            target_piece = aggregate_piece.to(updated)
+            correction_piece = correction[
+                value_offset:value_offset + take]
+            correction_piece.copy_(target_piece).mul_(float(eta_outer))
+            if accepted_own_interval:
+                local_delta = endpoint_flat[
+                    value_offset:value_offset + take].to(updated).sub(
+                        start_flat[
+                            value_offset:value_offset + take].to(updated))
+                if not torch.isfinite(local_delta).all():
+                    raise ValueError(
+                        f"correction-ledger local delta invalid for {name}")
+                correction_piece.sub_(local_delta)
+            updated[value_offset:value_offset + take].add_(
+                target_piece, alpha=float(eta_outer))
+            value_offset += take
+            shard_offset += take
+            if shard_offset == shard.numel():
+                shard = None
+                shard_offset = 0
+        result[name] = updated.reshape(value.shape)
+        corrections[name] = correction.reshape(value.shape)
+    if shard is not None or next(iterator, None) is not None:
+        raise ValueError("aggregate shard count does not match trainer state")
+    return result, corrections
+
+
 class SplitManagerLoop:
     """Model-free local manager which releases contributions after publication."""
     def __init__(self, spool: LocalTrainerSpool, *, quorum: int, source_id: str,

@@ -14,9 +14,10 @@ import pytest
 import torch
 
 from ndm.resilient_e97_roles import LocalFence, LocalTrainerSpool
-from ndm.resilient_e97_runtime import (apply_delta, finalize_checkpoint,
-                                       assert_node_local_path, flatten_tensors,
-                                       outer_state_migration)
+from ndm.resilient_e97_runtime import (
+    apply_delta, apply_delta_with_correction_ledger, assert_node_local_path,
+    finalize_checkpoint, flatten_tensors, outer_state_migration,
+)
 from ndm.fenced_admission import FenceRejected, SQLiteFencedControlStore
 from ndm.native_e97_runtime import GenerationMetadata, SCHEMA, state_digest
 
@@ -194,6 +195,48 @@ def test_restarted_trainer_resolves_newer_authoritative_handoff(tmp_path):
     with pytest.raises(ValueError, match="not authoritative"):
         role._authoritative_trainer_resume_handoff(
             tmp_path, args, (Store(), "lease"))
+
+
+def test_async_v2_boundary_rejects_latest_that_differs_from_fenced_cas(
+        tmp_path):
+    from scripts.frontier import resilient_e97_role as role
+
+    handoff = tmp_path / "handoff"
+    handoff.mkdir()
+    manifest = handoff / "generation-00000001-fence-00000001.json"
+    manifest.write_text(json.dumps({
+        "run_id": "run",
+        "generation": 1,
+        "fence": {"coordinator_epoch": 1},
+        "finalized": True,
+    }))
+    digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    (handoff / "latest.json").write_text(json.dumps({
+        "generation": 1,
+        "fence": 1,
+        "manifest": str(manifest),
+        "manifest_sha256": digest,
+    }))
+
+    class Store:
+        def assert_current(self, lease):
+            assert lease == "lease"
+
+        def read_publication(self, *_args):
+            return {
+                "generation": 1,
+                "fence": 1,
+                "manifest_sha256": "0" * 64,
+            }
+
+    with pytest.raises(ValueError, match="fenced authoritative CAS"):
+        role._reload_verified_async_v2_latest(
+            tmp_path,
+            SimpleNamespace(run_id="run", coordinator_epoch=1),
+            (Store(), "lease"),
+            generation=1,
+            deadline=time.monotonic() + 1,
+        )
 
 
 def test_native_apply_lanes_receive_fresh_post_exchange_deadline():
@@ -660,7 +703,8 @@ def test_production_async_lane_keeps_result_and_checkpoint_off_next_k_path():
     result_wait = trainer.index("native_plane.result_shards(", lane_start)
     candidate_apply = trainer.index("state = apply_delta(", result_wait)
     checkpoint = trainer.index("torch.save(", candidate_apply)
-    verified_latest = trainer.index("latest = wait_metadata(", checkpoint)
+    verified_latest = trainer.index(
+        "_reload_verified_async_v2_latest(", checkpoint)
     safe_boundary = trainer.index(
         "async_training_lane.finish_at_boundary(", verified_latest)
     verified_apply = trainer.index(
@@ -680,6 +724,447 @@ def test_production_async_lane_keeps_result_and_checkpoint_off_next_k_path():
     assert "self.session.run_window(" in lane
     assert ">= self.sigma_hard" in lane
     assert "self.session.translate(corrections)" in lane
+    assert "result_shards(" not in lane
+    assert "apply_delta(" not in lane
+    assert "torch.save(" not in lane
+    assert "wait_metadata(" not in lane
+
+
+def test_production_trainer_entrypoint_overlaps_blocked_native_result_and_applies_at_boundary(
+        tmp_path, monkeypatch):
+    """Drive the real role entrypoint through two commits with a blocked q result.
+
+    The fake endpoints replace only the model math and native service.  The
+    production ``trainer`` orchestration still owns bootstrap, descriptor
+    sealing, the persistent K lane, checkpoint creation, fenced-latest reload,
+    correction-ledger application, telemetry, and recovery receipts.
+    """
+    import ndm.async_diloco_real as real
+    from ndm.async_diloco_v2 import ASYNC_DECOUPLED_V2
+    from ndm.native_artifacts import NATIVE_TEST
+    from scripts.frontier import resilient_e97_role as role
+
+    run = tmp_path / "run"
+    bulk_root = tmp_path / "bulk"
+    run.mkdir()
+    runtime_identity = {
+        "schema": "fake-native-runtime",
+        "provider": "tcp;ofi_rxm",
+        "source_commit": "test-source",
+    }
+    result_pending = threading.Event()
+    release_background = threading.Event()
+    next_k_started = threading.Event()
+    next_k_completed = threading.Event()
+    following_k_started = threading.Event()
+    allow_following_k_finish = threading.Event()
+    publication_verified = threading.Event()
+    first_apply = threading.Event()
+    releaser_errors = []
+    stage_trace = []
+    model_builds = []
+    optimizer_builds = []
+    iterator_builds = []
+    train_calls = {"count": 0}
+    published_intervals = []
+    translated = []
+
+    class OneParamModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.zeros(1))
+
+    class ScheduleFreeFixture:
+        def __init__(self, parameters):
+            parameter = tuple(parameters)[0]
+            self.param_groups = [{"params": [parameter], "lr": 0.1}]
+            self.state = {
+                parameter: {
+                    "z": parameter.detach().clone(),
+                    "exp_avg_sq": torch.tensor([7.0]),
+                    "step": 0,
+                },
+            }
+
+    def build_model(_args):
+        model = OneParamModel()
+        model_builds.append(model)
+        return model
+
+    def build_optimizer(model, _args):
+        optimizer = ScheduleFreeFixture(model.parameters())
+        optimizer_builds.append(optimizer)
+        return optimizer
+
+    def build_iterator(*_args, **_kwargs):
+        iterator_builds.append(object())
+        return iterator_builds[-1]
+
+    def train_step(model, optimizer, _args, **kwargs):
+        call = train_calls["count"] + 1
+        train_calls["count"] = call
+        if call == 41:
+            next_k_started.set()
+        if call == 81:
+            following_k_started.set()
+            assert allow_following_k_finish.wait(2)
+        with torch.no_grad():
+            model.weight.add_(0.025)
+            optimizer.state[model.weight]["z"].add_(0.025)
+        optimizer.state[model.weight]["step"] += 1
+        if call == 80:
+            next_k_completed.set()
+        return {
+            "loss": 1.0,
+            "tokens_processed": 1,
+            "hidden_state": call,
+        }
+
+    monkeypatch.setattr(real.train, "build_training_model", build_model)
+    monkeypatch.setattr(real.train, "build_training_optimizer", build_optimizer)
+    monkeypatch.setattr(real, "_build_batch_iter", build_iterator)
+    monkeypatch.setattr(real.train, "train_one_optimizer_step", train_step)
+
+    original_translate = real.PersistentRealWorkerSession.translate
+
+    def traced_translate(self, corrections):
+        before = (
+            float(self.model.weight.detach()),
+            float(self.optimizer.state[self.model.weight]["z"]),
+        )
+        original_translate(self, corrections)
+        after = (
+            float(self.model.weight.detach()),
+            float(self.optimizer.state[self.model.weight]["z"]),
+        )
+        translated.append({
+            "before": before,
+            "after": after,
+            "correction": float(corrections["weight"]),
+            "publication_verified": publication_verified.is_set(),
+            "windows_completed": self.windows_completed,
+        })
+        first_apply.set()
+
+    monkeypatch.setattr(
+        real.PersistentRealWorkerSession, "translate", traced_translate)
+
+    class FencedStore:
+        authoritative = None
+        checks = 0
+
+        def assert_current(self, lease):
+            assert lease.fence == 1
+            self.checks += 1
+
+        def read_publication(self, run_id, namespace, key):
+            assert (run_id, namespace, key) == (
+                "entrypoint-overlap", "latest", "authoritative")
+            return self.authoritative
+
+    store = FencedStore()
+    lease = SimpleNamespace(fence=1)
+
+    class ResultContext:
+        def __init__(self, plane):
+            self.plane = plane
+
+        def __enter__(self):
+            generation = self.plane.generation
+            if generation == 0:
+                stage_trace.extend([
+                    "result_shards_pending",
+                    "native_reduce_pending",
+                    "outer_commit_pending",
+                    "checkpoint_publication_pending",
+                ])
+                result_pending.set()
+                assert release_background.wait(2)
+            marker = self.plane.marker
+            local_delta = float(self.plane.local_delta)
+            manifest = {
+                "attempt": 2,
+                "layout_digest": "1" * 64,
+                "base_digest": "2" * 64,
+                "result_root": f"{generation + 3:x}" * 64,
+                "global_weight": int(marker["aggregation_weight"]),
+                "weight": int(marker["tokens"]),
+                "exact_tokens": int(marker["tokens"]),
+                "aggregation_weight": int(marker["aggregation_weight"]),
+                "base_global_version": int(
+                    marker["base_global_version"]),
+                "commit_global_version": generation,
+                "commit_lag": (
+                    generation
+                    - int(marker["base_global_version"])),
+                "result_bytes": 4,
+                "members": [0],
+                "accepted_peers": ["node-0"],
+                "accepted_local_contributions": [{
+                    name: marker[name] for name in (
+                        "rank", "trainer", "incarnation",
+                        "contribution_sequence", "local_window_start",
+                        "local_window_end", "window_count",
+                        "base_global_version", "payload_digest",
+                        "descriptor_digest",
+                    )
+                }],
+            }
+            return manifest, iter((torch.tensor([local_delta]),))
+
+        def __exit__(self, *_args):
+            stage_trace.append(
+                f"result_view_released_g{self.plane.generation}")
+
+    class FakeNativePlane:
+        instances = []
+
+        def __init__(self, generation, rank, identity, incarnation):
+            self.generation = generation
+            self.rank = rank
+            self.identity = identity
+            self.incarnation = incarnation
+            self.metadata = SimpleNamespace(
+                runtime_digests=runtime_identity)
+            self.marker = None
+            self.local_delta = None
+            self.closed = False
+            self.__class__.instances.append(self)
+
+        @classmethod
+        def connect(cls, **kwargs):
+            return cls(
+                kwargs["generation"], kwargs["rank"],
+                kwargs["identity"], kwargs["incarnation"])
+
+        def allocate_delta(self, **_kwargs):
+            return object()
+
+        def publish_model_delta(
+                self, base_state, model, tokens, *,
+                aggregation_weight, contribution_identity, **_kwargs):
+            base_value = float(base_state["weight"])
+            endpoint_value = float(model.weight.detach())
+            self.local_delta = endpoint_value - base_value
+            payload_digest = hashlib.sha256(
+                f"payload:{self.generation}:{self.local_delta}".encode()
+            ).hexdigest()
+            descriptor_digest = hashlib.sha256(
+                f"descriptor:{self.generation}:"
+                f"{contribution_identity['local_window_start']}:"
+                f"{contribution_identity['local_window_end']}".encode()
+            ).hexdigest()
+            self.marker = {
+                **contribution_identity,
+                "rank": self.rank,
+                "trainer": self.identity,
+                "incarnation": self.incarnation,
+                "tokens": int(tokens),
+                "aggregation_weight": int(aggregation_weight),
+                "payload_digest": payload_digest,
+                "descriptor_digest": descriptor_digest,
+                "owned_ack_seconds": 0.001,
+            }
+            published_intervals.append({
+                **self.marker,
+                "base_value": base_value,
+                "endpoint_value": endpoint_value,
+                "local_delta": self.local_delta,
+            })
+            stage_trace.append(f"owned_g{self.generation}")
+            return self.marker
+
+        def result_shards(self, **_kwargs):
+            return ResultContext(self)
+
+        def close(self):
+            self.closed = True
+
+    def local_path(path, _shared):
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def fake_latest(path, *, expected, **_kwargs):
+        path = Path(path)
+        assert path.name == "latest.json"
+        generation = int(expected["generation"])
+        checkpoint = next(
+            item for item in (run / "checkpoints").iterdir()
+            if item.name.startswith(f"generation-{generation:08d}"))
+        manifest = run / "handoff" / (
+            f"generation-{generation:08d}-fence-00000001.json")
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(json.dumps({
+            "schema": 1,
+            "run_id": "entrypoint-overlap",
+            "generation": generation,
+            "checkpoint": str(checkpoint),
+            "checkpoint_bytes": checkpoint.stat().st_size,
+            "checkpoint_sha256": hashlib.sha256(
+                checkpoint.read_bytes()).hexdigest(),
+            "payload_id": "payload",
+            "source_id": "source",
+            "fence": {"coordinator_epoch": 1},
+            "finalized": True,
+        }, sort_keys=True))
+        digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+        latest = {
+            "generation": generation,
+            "fence": 1,
+            "manifest": str(manifest),
+            "manifest_sha256": digest,
+        }
+        store.authoritative = {
+            "generation": generation,
+            "fence": 1,
+            "manifest_sha256": digest,
+        }
+        path.write_text(json.dumps(latest, sort_keys=True))
+        publication_verified.set()
+        stage_trace.append(f"latest_cas_g{generation}")
+        return latest
+
+    monkeypatch.setattr(role, "_fenced_control",
+                        lambda _args: (store, lease))
+    monkeypatch.setattr(
+        role, "_dataplane_policy",
+        lambda _args: (NATIVE_TEST, False, False))
+    monkeypatch.setattr(role, "runtime_digests",
+                        lambda **_kwargs: runtime_identity)
+    monkeypatch.setattr(role, "assert_node_local_path", local_path)
+    monkeypatch.setattr(role, "NativeTrainerDataPlane", FakeNativePlane)
+    monkeypatch.setattr(role, "wait_metadata", fake_latest)
+    monkeypatch.setattr(role.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(role, "heartbeat", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        role, "_liveness_heartbeat",
+        lambda *_args, **_kwargs: (
+            SimpleNamespace(set=lambda: None),
+            SimpleNamespace(join=lambda *_args: None),
+        ))
+    monkeypatch.setattr(role, "_load_real", lambda _args: (
+        SimpleNamespace(seed=3, bf16=False, lr=0.1),
+        {"weight": torch.zeros(1)},
+        {},
+        0,
+        {"status": "test", "state": {
+            "mode": "delta_sgd", "eta": .5,
+            "step": 0, "accepted_tokens": 0}},
+    ))
+    monkeypatch.setenv("RESILIENT_E97_NODE_RANK", "0")
+    monkeypatch.setenv("RESILIENT_E97_LOCAL_RANK", "0")
+    monkeypatch.setenv("EMENDER_NDP_SOCKET", str(tmp_path / "native.sock"))
+    monkeypatch.setenv("RESILIENT_E97_FENCE_EPOCH", "1")
+
+    def release_when_next_window_is_honest_and_complete():
+        try:
+            assert result_pending.wait(2)
+            assert next_k_started.wait(2)
+            assert next_k_completed.wait(2)
+            assert not first_apply.is_set()
+            assert len(model_builds) == len(optimizer_builds) == 1
+            assert len(iterator_builds) == 1
+            torch.testing.assert_close(
+                model_builds[0].weight.detach(), torch.tensor([2.0]))
+            torch.testing.assert_close(
+                optimizer_builds[0].state[
+                    model_builds[0].weight]["z"],
+                torch.tensor([2.0]))
+            release_background.set()
+            assert following_k_started.wait(2)
+            assert publication_verified.wait(2)
+            assert not first_apply.is_set()
+            allow_following_k_finish.set()
+        except BaseException as error:
+            releaser_errors.append(error)
+            release_background.set()
+            allow_following_k_finish.set()
+
+    releaser = threading.Thread(
+        target=release_when_next_window_is_honest_and_complete)
+    releaser.start()
+    args = SimpleNamespace(
+        local_steps=40,
+        control=False,
+        run_dir=str(run),
+        bulk_root=str(bulk_root),
+        run_id="entrypoint-overlap",
+        initial_generation=0,
+        generations=2,
+        max_spool_bytes=65_000_000_000,
+        native_build_manifest="unused-native-manifest",
+        bulk_chunk_bytes=16,
+        local_spool_chunk_bytes=16,
+        source_id="source",
+        payload_id="payload",
+        code_id="code",
+        coordinator_epoch=1,
+        deadline_s=5.0,
+        node_count=1,
+        eta_outer=.5,
+        resume_handoff="",
+        seed="unused",
+        train_args_json="unused",
+        data="unused",
+        device="cpu",
+        _async_v2_policy=ASYNC_DECOUPLED_V2,
+        _dataplane_attestation={},
+    )
+
+    assert role.trainer(args) == 0
+    releaser.join(2)
+    assert not releaser.is_alive()
+    if releaser_errors:
+        raise releaser_errors[0]
+
+    assert len(model_builds) == len(optimizer_builds) == 1
+    assert len(iterator_builds) == 1
+    assert train_calls["count"] == 120
+    assert [(item["local_window_start"], item["local_window_end"])
+            for item in published_intervals] == [(0, 1), (1, 3)]
+    assert [item["base_global_version"]
+            for item in published_intervals] == [0, 0]
+    assert [item["local_delta"] for item in published_intervals] == \
+        pytest.approx([1.0, 2.0], abs=1e-5)
+    assert translated[0]["windows_completed"] == 3
+    assert translated[0]["publication_verified"] is True
+    assert translated[0]["before"] == pytest.approx(
+        (3.0, 3.0), abs=1e-5)
+    assert translated[0]["correction"] == pytest.approx(-.5, abs=1e-5)
+    assert translated[0]["after"] == pytest.approx(
+        (2.5, 2.5), abs=1e-5)
+    assert translated[1]["correction"] == pytest.approx(-1.0, abs=1e-5)
+    assert translated[1]["after"] == pytest.approx(
+        (1.5, 1.5), abs=1e-5)
+    assert store.checks >= 6
+
+    records = [
+        json.loads(line)
+        for line in (
+            bulk_root / "entrypoint-overlap" / "node-0" /
+            "telemetry" / "node-0-trainer-0-pool.jsonl"
+        ).read_text().splitlines()
+    ]
+    k_starts = [
+        item for item in records
+        if item["stage"] == "async_v2_k40_start"]
+    apply_receipts = [
+        item for item in records
+        if item["stage"] == "safe_boundary_apply"]
+    assert k_starts[0]["local_window"] == 1
+    assert k_starts[0]["applied_anchor_version"] == 0
+    assert apply_receipts[0]["local_window"] == 3
+    assert apply_receipts[0]["result_version"] == 1
+    assert apply_receipts[0]["anchor_lag_before_apply"] == 1
+    assert apply_receipts[0]["speculative_window_lag"] == 2
+    assert apply_receipts[0]["latest_cas_verified"] is True
+    assert apply_receipts[0]["accepted_contribution_digest"] == \
+        published_intervals[0]["descriptor_digest"]
+    assert stage_trace.index("owned_g0") < stage_trace.index(
+        "result_shards_pending")
+    assert stage_trace.index("result_shards_pending") < stage_trace.index(
+        "latest_cas_g1")
 
 
 def test_native_trainer_generation_timer_covers_every_result_lifecycle_path():
@@ -696,7 +1181,8 @@ def test_native_trainer_generation_timer_covers_every_result_lifecycle_path():
     publish = trainer.index("native_plane.publish_flat_shards(", loop)
     result = trainer.index("native_plane.result_shards(", publish)
     candidate = trainer.index("state = apply_delta(", result)
-    verified = trainer.index("latest = wait_metadata(", candidate)
+    verified = trainer.index(
+        "_reload_verified_async_v2_latest(", candidate)
     telemetry = trainer.index('"native_trainer_apply"', verified)
 
     assert loop < started < stop < publish < result < candidate < verified < telemetry
@@ -983,6 +1469,59 @@ def test_delta_publication_and_apply_are_bounded_across_parameter_boundaries():
     applied = apply_delta(base, shards, eta_outer=.5)
     for name in delta:
         assert torch.equal(applied[name], delta[name] * .5)
+
+
+def test_safe_boundary_correction_ledger_subtracts_accepted_interval_once():
+    anchor = {
+        "a": torch.tensor([10.0, 1.0]),
+        "z": torch.tensor([2.0]),
+    }
+    interval_start = {
+        "a": torch.tensor([13.0, 0.0]),
+        "z": torch.tensor([5.0]),
+    }
+    endpoint = {
+        "a": torch.tensor([16.0, -1.0]),
+        "z": torch.tensor([9.0]),
+    }
+    # eta * aggregate is the global anchor shift: [10,4] and [3].
+    shards = (
+        torch.tensor([20.0, 8.0, 6.0]),
+    )
+
+    updated, correction = apply_delta_with_correction_ledger(
+        anchor, shards, eta_outer=.5,
+        interval_start=interval_start,
+        interval_endpoint=endpoint,
+        accepted_own_interval=True,
+        in_place=True,
+    )
+
+    torch.testing.assert_close(updated["a"], torch.tensor([20.0, 5.0]))
+    torch.testing.assert_close(updated["z"], torch.tensor([5.0]))
+    # ([10,4] - [3,-1]) and ([3] - [4]); the own interval is removed once.
+    torch.testing.assert_close(correction["a"], torch.tensor([7.0, 5.0]))
+    torch.testing.assert_close(correction["z"], torch.tensor([-1.0]))
+
+
+def test_safe_boundary_correction_ledger_preserves_unaccepted_displacement():
+    anchor = {"weight": torch.tensor([2.0])}
+    interval_start = {"weight": torch.tensor([9.0])}
+    endpoint = {"weight": torch.tensor([14.0])}
+
+    updated, correction = apply_delta_with_correction_ledger(
+        anchor, (torch.tensor([8.0]),), eta_outer=.5,
+        interval_start=interval_start,
+        interval_endpoint=endpoint,
+        accepted_own_interval=False,
+        in_place=True,
+    )
+
+    torch.testing.assert_close(updated["weight"], torch.tensor([6.0]))
+    # No accepted identity means C_i=0; all speculative local work survives.
+    torch.testing.assert_close(correction["weight"], torch.tensor([4.0]))
+    torch.testing.assert_close(
+        endpoint["weight"] + correction["weight"], torch.tensor([18.0]))
 
 
 def test_canonical_cold_start_outer_policy_and_immutable_reloadable_handoff(tmp_path):
