@@ -269,7 +269,50 @@ untracked data.
 
 ## Authority push receipt
 
-The first authoritative push receipt and its exact pushed commit are appended
-in a follow-up provenance commit after the remote accepts the reconciled
-history. The final clean-tip equality checks are then performed against a
-fresh fetch and direct `ls-remote` result.
+The reconciled merge plus this validation record were first committed as:
+
+```text
+73d25e1fc72b6fdd95b867858d20661cd341109a
+docs: record async v2 authority reconciliation (reconcile-async-v21-authority)
+```
+
+The exact authoritative push command was:
+
+```bash
+git push origin HEAD:main
+```
+
+The remote accepted the fast-forward and reported:
+
+```text
+To github.com:spinozans/emender
+   92e398c2..73d25e1f  HEAD -> main
+```
+
+The immediate authority checks were:
+
+```bash
+git rev-parse HEAD origin/main
+git ls-remote origin refs/heads/main
+git merge-base --is-ancestor d40b3047 HEAD
+git merge-base --is-ancestor 92e398c2 HEAD
+git merge-base --is-ancestor 0cf241e1 HEAD
+git status --porcelain=v1 --untracked-files=all
+cmp -s AGENTS.md CLAUDE.md
+```
+
+They returned:
+
+```text
+git rev-parse HEAD        73d25e1fc72b6fdd95b867858d20661cd341109a
+git rev-parse origin/main 73d25e1fc72b6fdd95b867858d20661cd341109a
+git ls-remote main        73d25e1fc72b6fdd95b867858d20661cd341109a
+all three ancestry checks exit 0
+status output empty
+cmp exit 0
+```
+
+This follow-up is provenance-only: it records the real push receipt and pushed
+SHA after they exist. After committing and pushing it, the same fetch,
+`rev-parse`, `ls-remote`, ancestry, clean-status, and byte-identity checks are
+repeated, with the final tip recorded in the WG task log.
