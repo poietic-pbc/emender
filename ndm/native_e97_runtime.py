@@ -496,13 +496,22 @@ class NativeTrainerDataPlane:
     def connect(cls, *, build_manifest: str | Path, socket_path: str,
                 run_id: str, fence_epoch: int, generation: int, rank: int,
                 identity: str, incarnation: str, control_root: str | Path,
-                deadline: float) -> "NativeTrainerDataPlane":
+                deadline: float, worker_incarnation: str | None = None,
+                ) -> "NativeTrainerDataPlane":
         root = Path(control_root)
         value = wait_metadata(
             root / f"native-generation-{generation:08d}.json", deadline=deadline,
             expected={"run_id": run_id, "fence_epoch": fence_epoch,
                       "generation": generation})
         metadata = GenerationMetadata.from_json(value)
+        # A restarted trainer cohort must never attach to a generation record
+        # published by the prior manager/service incarnation.  This check is
+        # deliberately before Client.open/attach_generation, so stale local
+        # metadata cannot mutate native operation state.
+        if (worker_incarnation is not None
+                and metadata.worker_incarnation != worker_incarnation):
+            raise ValueError(
+                "native generation metadata belongs to a stale node incarnation")
         client = Client.open(
             library=NativeLibrary(artifact_path(build_manifest, "local_library")),
             role=Role.TRAINER, run_key=run_id, fence_epoch=fence_epoch,

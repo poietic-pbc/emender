@@ -1660,8 +1660,6 @@ class AtomicEightTrainerApply:
         trainer_incarnation: str,
         recovery_digest: str,
     ) -> Mapping[str, object]:
-        if self.ready:
-            raise ValueError("node apply transaction is already committed")
         if rank not in range(self.trainer_count) or not trainer_incarnation:
             raise ValueError("invalid trainer apply identity")
         _require_digest(recovery_digest, "recovery digest")
@@ -1678,10 +1676,15 @@ class AtomicEightTrainerApply:
             "recovery_digest": recovery_digest,
         }
         old = self._records.get(rank)
+        # Identical duplicate or delayed receipts remain idempotent even when
+        # the node marker was already committed.  A conflicting late receipt
+        # can never rewrite the atomic transaction.
         if old is not None:
             if old != value:
                 raise ValueError("conflicting trainer apply marker")
             return old
+        if self.ready:
+            raise ValueError("node apply transaction is already committed")
         self._atomic_write(self._trainer_path(rank), value)
         self._records[rank] = value
         return value
@@ -1700,7 +1703,9 @@ class AtomicEightTrainerApply:
             or record["result_digest"] != self.result_digest
             or record["result_version"] != self.result_version
             for record in trainers
-        ):
+        ) or len({
+            str(record["trainer_incarnation"]) for record in trainers
+        }) != self.trainer_count:
             raise ValueError("trainer apply markers do not form one node transaction")
         value: dict[str, object] = {
             "schema": self.SCHEMA,
@@ -1731,14 +1736,19 @@ class AtomicEightTrainerApply:
             or any(not value for value in trainer_incarnations)
         ):
             raise ValueError("restart requires fresh node and eight trainer incarnations")
-        # These files are explicitly volatile partial-apply state.  The
-        # durable verified latest/result remains untouched.
+        # These files are explicitly volatile partial-apply state.  Preserve
+        # them below their failed fenced incarnation for diagnosis, but remove
+        # them from the active transaction namespace.  The durable verified
+        # latest/result remains untouched.
+        failed = self.root / "failed-cohorts" / self.node_incarnation
+        failed.mkdir(parents=True, exist_ok=True)
         for rank in range(self.trainer_count):
             path = self._trainer_path(rank)
             if path.exists():
-                path.unlink()
+                os.replace(path, failed / path.name)
         if self.node_marker_path.exists():
-            self.node_marker_path.unlink()
+            os.replace(
+                self.node_marker_path, failed / self.node_marker_path.name)
         return AtomicEightTrainerApply(
             root=self.root,
             run_id=self.run_id,
