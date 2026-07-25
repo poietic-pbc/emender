@@ -28,6 +28,8 @@ from typing import Mapping, Sequence
 
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 POLICY_ID = "async-decoupled-v2.1-simple"
 POLICY_SCHEMA = "emender-async-policy-v2.1"
 PAYLOAD_SCHEMA = "emender-async-v21-qualification-payload-v1"

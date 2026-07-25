@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 
@@ -53,6 +54,37 @@ def test_native_g2_scheduler_logs_do_not_dirty_authoritative_source():
             check=False,
         )
         assert completed.returncode == 0
+
+
+def test_controller_direct_execution_bootstraps_repo_import_path(
+    tmp_path: Path,
+):
+    repo = Path(__file__).resolve().parents[1]
+    script = repo / "scripts/frontier/run_async_v21_qualification.py"
+    probe = """
+import runpy
+import sys
+from pathlib import Path
+
+repo = Path(sys.argv[1]).resolve()
+script = Path(sys.argv[2]).resolve()
+sys.path[:] = [
+    entry for entry in sys.path
+    if not entry or Path(entry).resolve() != repo
+]
+runpy.run_path(str(script), run_name="controller_import_probe")
+assert str(repo) in sys.path
+__import__("scripts.frontier.materialize_e97_s3_seed")
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", probe, str(repo), str(script)],
+        cwd=tmp_path,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 @pytest.mark.parametrize("gate", ("clean", "faults", "convergence"))
