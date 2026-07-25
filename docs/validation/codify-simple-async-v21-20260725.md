@@ -1,7 +1,9 @@
 # Simple asynchronous DiLoCo v2.1 authority handoff
 
-Date: 2026-07-25 UTC  
-Task: `codify-simple-async-v21`  
+Date: 2026-07-25 UTC
+
+Task: `codify-simple-async-v21`
+
 Reviewed design commit:
 `c3d687dab3b1eb56e6b3ceb1258a16e6d4dfe04d`
 
