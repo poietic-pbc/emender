@@ -548,6 +548,106 @@ def test_manager_rejoin_restarts_same_node_native_service(tmp_path, monkeypatch)
     assert event["manager_identity"] == manager.identity
 
 
+def test_job_5068873_partial_apply_restarts_atomic_eight_trainer_cohort(
+        tmp_path, monkeypatch):
+    """Four missing apply receipts must not leak into generation one.
+
+    This is the retained job-5068873 ordering: trainers 0--3 completed the
+    generation-zero result while trainers 4--7 never emitted their durable
+    recovery receipt, the manager crossed its metadata deadline, and stale
+    generation-one metadata was left behind.  Recovery is a single node
+    operation: archive the incomplete transaction, replace the service and
+    manager, and reconstruct all eight trainers under one fresh incarnation.
+    """
+    service = Child("native-service", 1, "node001", None, "service")
+    manager = Child("manager", 1, "node001", None, "manager")
+    trainers = [
+        Child("trainer", 1, "node001", rank, f"trainer-{rank}")
+        for rank in range(8)
+    ]
+    supervisor = AllocationSupervisor(
+        tmp_path, [service, manager, *trainers],
+        heartbeat_s=2, progress_s=3, max_restarts=2, startup_s=1,
+        poll_s=.001, launch_backend="node-local-child")
+    old_incarnation = supervisor.node_incarnation(1)
+
+    control = tmp_path / "node-1-control"
+    control.mkdir()
+    monkeypatch.setattr(supervisor, "_node_control_root", lambda _node: control)
+    for rank in range(4):
+        (control / f"native-applied-00000000-{rank:02d}.json").write_text(
+            json.dumps({
+                "run_id": "run", "fence_epoch": 7, "generation": 0,
+                "rank": rank, "node_incarnation": old_incarnation,
+            }))
+    (control / "native-generation-00000001.json").write_text(json.dumps({
+        "run_id": "run", "fence_epoch": 7, "generation": 1,
+        "worker_incarnation": old_incarnation,
+    }))
+    (control / "native-submit-00000001-00.json").write_text(json.dumps({
+        "run_id": "run", "fence_epoch": 7, "generation": 1,
+        "worker_incarnation": old_incarnation,
+    }))
+
+    handoff = tmp_path / "handoff"
+    handoff.mkdir()
+    manifest = handoff / "generation-00000001-fence-00000007.json"
+    manifest.write_text(json.dumps({
+        "finalized": True, "run_id": "run", "generation": 1,
+    }, sort_keys=True))
+    (handoff / "latest.json").write_text(json.dumps({
+        "generation": 1, "fence": 7, "manifest": str(manifest),
+        "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+    }, sort_keys=True))
+
+    actions = []
+
+    def fake_stop(children, reason, **_kwargs):
+        actions.append(("stop", tuple(child.identity for child in children), reason))
+
+    def fake_start(child):
+        actions.append((
+            "start", child.identity, supervisor.node_incarnation(child.node_rank)))
+        child.process = type(
+            "Process", (), {"poll": lambda self: None, "pid": 124})()
+
+    monkeypatch.setattr(supervisor, "stop_children", fake_stop)
+    monkeypatch.setattr(supervisor, "start", fake_start)
+    monkeypatch.setattr(
+        supervisor, "_manager_ready_for_trainers", lambda _manager: True)
+    socket_path = tmp_path / "ndp.sock"
+    monkeypatch.setenv("EMENDER_NDP_SOCKET", str(socket_path))
+    monkeypatch.setattr(Path, "is_socket", lambda self: self == socket_path)
+
+    assert supervisor._restart_native_node_cohort(
+        [service], manager, trainers,
+        "job_5068873_generation_0_apply_deadline")
+
+    new_incarnation = supervisor.node_incarnation(1)
+    assert new_incarnation != old_incarnation
+    assert [action[1] for action in actions if action[0] == "start"] == [
+        service.identity, manager.identity,
+        *(trainer.identity for trainer in trainers),
+    ]
+    assert {
+        action[2] for action in actions if action[0] == "start"
+    } == {new_incarnation}
+    failed = control / "failed-cohorts" / old_incarnation
+    assert sorted(path.name for path in failed.glob("native-applied-*.json")) == [
+        f"native-applied-00000000-{rank:02d}.json" for rank in range(4)
+    ]
+    assert (failed / "native-generation-00000001.json").exists()
+    assert (failed / "native-submit-00000001-00.json").exists()
+    assert not tuple(control.glob("native-applied-*.json"))
+    transaction = json.loads(
+        (control / "atomic-cohort-recovery.json").read_text())
+    assert transaction["failed_incarnation"] == old_incarnation
+    assert transaction["node_incarnation"] == new_incarnation
+    assert transaction["authoritative_generation"] == 1
+    assert transaction["status"] == "reconstructed"
+    assert transaction["required_trainers"] == list(range(8))
+
+
 def test_node_local_supervisor_waits_for_manager_ready_before_cold_trainers(
         tmp_path, monkeypatch):
     manager = Child("manager", 0, "node000", None, "manager")

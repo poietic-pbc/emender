@@ -61,6 +61,12 @@ def heartbeat(run_dir: Path, identity: str, *, generation: int, step: int,
     atomic_json(run_dir / "supervision" / f"{identity}.json", {
         "identity": identity, "heartbeat_time": time.time(), "progress_time": time.time(),
         "generation": generation, "step": step, "loss": loss, "stage": stage,
+        "process_incarnation":
+            os.environ.get("RESILIENT_E97_PROCESS_INCARNATION", ""),
+        "node_incarnation":
+            os.environ.get("RESILIENT_E97_NODE_INCARNATION", ""),
+        "cohort_restart_sequence": int(
+            os.environ.get("RESILIENT_E97_COHORT_RESTART_SEQUENCE", "0")),
     })
 
 

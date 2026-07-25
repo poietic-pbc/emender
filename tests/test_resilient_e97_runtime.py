@@ -109,6 +109,45 @@ def test_generation_identity_rejects_stale_partial_corrupt_nonfinite_and_obsolet
         GenerationMetadata.from_json(value)
 
 
+def test_reconstructed_trainer_rejects_stale_manager_metadata_before_native_open(
+        monkeypatch):
+    """A prior node incarnation cannot attach or mutate the fresh service."""
+    import ndm.native_e97_runtime as native_runtime
+
+    metadata = GenerationMetadata(
+        run_id="run", fence_epoch=7, generation=1, attempt=1,
+        owner_epoch=1, total_elements=1,
+        layout_digest="1" * 64, base_digest="2" * 64,
+        plan_digest="3" * 64, deadline_unix_ns=time.time_ns() + 10**12,
+        runtime_digests={"schema": "runtime"},
+        policy_id="async-decoupled-v2.1-simple",
+        policy_digest="4" * 64, code_digest="5" * 64,
+        base_global_version=1, local_window_start=1, local_window_end=2,
+        policy_schema="emender-async-policy-v2.1",
+        contribution_schema="emender-native-e97-submission-v2.1",
+        native_abi=0x00020001, wire_protocol_major=2,
+        wire_protocol_minor=1, stable_worker_id="node-1",
+        worker_incarnation="failed-node-incarnation",
+    )
+    monkeypatch.setattr(
+        native_runtime, "wait_metadata",
+        lambda *_args, **_kwargs: metadata.as_json())
+
+    class MustNotOpen:
+        @classmethod
+        def open(cls, **_kwargs):
+            raise AssertionError("stale metadata reached native mutation")
+
+    monkeypatch.setattr(native_runtime, "Client", MustNotOpen)
+    with pytest.raises(ValueError, match="stale node incarnation"):
+        native_runtime.NativeTrainerDataPlane.connect(
+            build_manifest="unused", socket_path="unused",
+            run_id="run", fence_epoch=7, generation=1, rank=4,
+            identity="node-1-trainer-4", incarnation="fresh-trainer",
+            worker_incarnation="fresh-node-incarnation",
+            control_root="unused", deadline=time.monotonic() + 1)
+
+
 def test_native_state_digest_hashes_exact_bfloat16_storage_bits():
     state = {"bf": torch.tensor([1.0, -2.0], dtype=torch.bfloat16)}
     expected = hashlib.sha256(b"emender-native-e97-base-v1\0")
@@ -197,6 +236,42 @@ def test_restarted_trainer_resolves_newer_authoritative_handoff(tmp_path):
     with pytest.raises(ValueError, match="not authoritative"):
         role._authoritative_trainer_resume_handoff(
             tmp_path, args, (Store(), "lease"))
+
+
+def test_atomic_cohort_recovery_rejects_stale_fence_incarnation_and_generation(
+        tmp_path, monkeypatch):
+    from scripts.frontier import resilient_e97_role as role
+
+    control = tmp_path / "control"
+    control.mkdir()
+    path = control / "atomic-cohort-recovery.json"
+    value = {
+        "schema": "emender-async-v21-atomic-cohort-recovery-v1",
+        "run_id": "run", "allocation_fence": 7, "node_rank": 1,
+        "failed_incarnation": "failed-node",
+        "node_incarnation": "fresh-node", "restart_sequence": 2,
+        "authoritative_generation": 1,
+        "required_trainers": list(range(8)),
+        "status": "reconstructed",
+    }
+    path.write_text(json.dumps(value))
+    monkeypatch.setenv("RESILIENT_E97_COHORT_RESTART_SEQUENCE", "2")
+    monkeypatch.setenv("RESILIENT_E97_FENCE_EPOCH", "7")
+    args = SimpleNamespace(run_id="run", coordinator_epoch=7)
+
+    assert role._validate_atomic_cohort_recovery(
+        control, args, node=1, node_incarnation="fresh-node",
+        generation=1, admitted_statuses=("reconstructed",)) == value
+    for mutation in (
+        {"allocation_fence": 6},
+        {"node_incarnation": "failed-node"},
+        {"authoritative_generation": 0},
+    ):
+        path.write_text(json.dumps({**value, **mutation}))
+        with pytest.raises(ValueError, match="identity/fence"):
+            role._validate_atomic_cohort_recovery(
+                control, args, node=1, node_incarnation="fresh-node",
+                generation=1, admitted_statuses=("reconstructed",))
 
 
 def test_async_v2_boundary_rejects_latest_that_differs_from_fenced_cas(

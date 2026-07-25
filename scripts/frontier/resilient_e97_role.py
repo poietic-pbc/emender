@@ -51,6 +51,12 @@ def _role_import_heartbeat() -> tuple[threading.Event, threading.Thread] | None:
                 "progress_time": progress_started,
                 "generation": 0, "step": 0, "loss": None,
                 "stage": "runtime_import", "bootstrap_pid": os.getpid(),
+                "process_incarnation": os.environ.get(
+                    "RESILIENT_E97_PROCESS_INCARNATION", ""),
+                "node_incarnation": os.environ.get(
+                    "RESILIENT_E97_NODE_INCARNATION", ""),
+                "cohort_restart_sequence": int(os.environ.get(
+                    "RESILIENT_E97_COHORT_RESTART_SEQUENCE", "0")),
             }, sort_keys=True))
             os.replace(temporary, state)
             stop.wait(5)
@@ -455,6 +461,43 @@ def _publish_role_recovery(control: Path, identity: str, args, generation: int,
         "schema": 1, "identity": identity, "run_id": args.run_id,
         "payload_id": args.payload_id, "source_id": args.source_id,
         "coordinator_epoch": _fence_epoch(args), "generation": generation, **extra})
+
+
+def _cohort_restart_sequence() -> int:
+    value = int(os.environ.get("RESILIENT_E97_COHORT_RESTART_SEQUENCE", "0"))
+    if value < 0:
+        raise ValueError("atomic cohort restart sequence cannot be negative")
+    return value
+
+
+def _validate_atomic_cohort_recovery(
+        control: Path, args, *, node: int, node_incarnation: str,
+        generation: int, admitted_statuses: tuple[str, ...],
+        ) -> dict[str, object] | None:
+    """Validate the supervisor's fenced all-eight reconstruction record."""
+    sequence = _cohort_restart_sequence()
+    if sequence == 0:
+        return None
+    path = control / "atomic-cohort-recovery.json"
+    try:
+        value = json.loads(path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError) as error:
+        raise ValueError(
+            "atomic cohort restart lacks valid recovery authority") from error
+    if (
+        value.get("schema")
+        != "emender-async-v21-atomic-cohort-recovery-v1"
+        or value.get("run_id") != args.run_id
+        or int(value.get("allocation_fence", -1)) != _fence_epoch(args)
+        or int(value.get("node_rank", -1)) != node
+        or value.get("node_incarnation") != node_incarnation
+        or int(value.get("restart_sequence", -1)) != sequence
+        or int(value.get("authoritative_generation", -1)) != generation
+        or value.get("required_trainers") != list(range(8))
+        or value.get("status") not in admitted_statuses
+    ):
+        raise ValueError("atomic cohort recovery identity/fence mismatch")
+    return value
 
 
 def _native_manager_resume_point(
@@ -1720,7 +1763,8 @@ def _native_manager(args) -> int:
     digests = runtime_digests(
         build_manifest=args.native_build_manifest, config_path=config_path,
         provider=provider, attestation=args._dataplane_attestation)
-    incarnation = uuid.uuid4().hex
+    incarnation = (
+        os.environ.get("RESILIENT_E97_NODE_INCARNATION") or uuid.uuid4().hex)
     session = NativeManagerSession.start(
         backend=backend, run_id=args.run_id, fence_epoch=_fence_epoch(args),
         worker_id=f"node-{node}", incarnation=incarnation,
@@ -1734,6 +1778,10 @@ def _native_manager(args) -> int:
     session.write_readiness(control / "native-service-ready.json")
     start_generation, sync_evidence = _native_manager_resume_point(
         run, args, fenced, native_runtime=digests)
+    _validate_atomic_cohort_recovery(
+        control, args, node=node, node_incarnation=incarnation,
+        generation=start_generation,
+        admitted_statuses=("reconstructing", "reconstructed"))
     atomic_metadata(
         control / f"native-manager-sync-{incarnation}.json", {
             "schema": "emender-native-manager-sync-v1",
@@ -1790,7 +1838,11 @@ def _native_manager(args) -> int:
                 control / f"native-layout-{generation:08d}.json",
                 deadline=native_deadline,
                 expected={"run_id": args.run_id, "fence_epoch": _fence_epoch(args),
-                          "generation": generation, "rank": 0})
+                          "generation": generation, "rank": 0,
+                          **({"node_incarnation": incarnation}
+                             if os.environ.get(
+                                 "RESILIENT_E97_NODE_INCARNATION")
+                             else {})})
             elements = int(request["total_elements"])
             expected_layout = layout_identity(
                 elements, payload_max=args.bulk_chunk_bytes)
@@ -1837,7 +1889,8 @@ def _native_manager(args) -> int:
                               "generation": generation, "rank": rank,
                               "layout_digest": expected_layout.hex(),
                               "policy_id": args._async_v21_policy.policy_id,
-                              "policy_digest": args._async_v21_policy.digest})
+                              "policy_digest": args._async_v21_policy.digest,
+                              "worker_incarnation": incarnation})
                 base_version = int(submission.get("base_global_version", -1))
                 lag = generation - base_version
                 if (lag != int(submission.get("base_lag_at_seal", -1))
@@ -2497,6 +2550,9 @@ def trainer(args) -> int:
             }}
         train_args = None
     else:
+        if native and _cohort_restart_sequence() and not args.resume_handoff:
+            raise ValueError(
+                "atomic trainer reconstruction requires authoritative handoff")
         train_args, state, optimizer_state, step, migration = _load_real(args)
     async_chain = [args.seed] if args.seed else []
     accepted_token_clock = int(
@@ -2538,7 +2594,10 @@ def trainer(args) -> int:
                         resume_handoff.read_bytes()).hexdigest()):
                 raise ValueError("resume handoff is not the authoritative fenced latest")
     recovery_manifest = control / "recovery" / f"{identity}.json"
-    recovery = json.loads(recovery_manifest.read_text()) if recovery_manifest.exists() else None
+    recovery = (
+        None if _cohort_restart_sequence()
+        else (json.loads(recovery_manifest.read_text())
+              if recovery_manifest.exists() else None))
     if (recovery is not None and int(recovery.get("coordinator_epoch", -1))
             == _fence_epoch(args)):
         start_generation = _latest_role_generation(control, identity, args)
@@ -2560,6 +2619,11 @@ def trainer(args) -> int:
         accepted_token_clock = int(saved.get("accepted_tokens", 0))
     else:
         start_generation = resume_generation
+    node_incarnation = (
+        os.environ.get("RESILIENT_E97_NODE_INCARNATION") or "")
+    _validate_atomic_cohort_recovery(
+        control, args, node=node, node_incarnation=node_incarnation,
+        generation=start_generation, admitted_statuses=("reconstructed",))
     losses = []
     stop = {"requested": False}
     signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__("requested", True))
@@ -2576,7 +2640,8 @@ def trainer(args) -> int:
     persistent_worker = None
     async_training_lane = None
     next_local_window = start_generation
-    trainer_incarnation = uuid.uuid4().hex
+    trainer_incarnation = (
+        os.environ.get("RESILIENT_E97_PROCESS_INCARNATION") or uuid.uuid4().hex)
     v2_policy = args._async_v21_policy
     if native:
         # Emitted by the real model-owning role after native attestation and
@@ -2633,6 +2698,7 @@ def trainer(args) -> int:
                     "schema": "emender-native-e97-layout-request-v1",
                     "run_id": args.run_id, "fence_epoch": _fence_epoch(args),
                     "generation": generation, "rank": rank,
+                    "node_incarnation": node_incarnation,
                     "total_elements": elements, "layout_digest": layout.hex(),
                     "base_digest": state_digest(state).hex(),
                     "runtime_digests": native_runtime,
@@ -2642,6 +2708,7 @@ def trainer(args) -> int:
                 socket_path=os.environ["EMENDER_NDP_SOCKET"], run_id=args.run_id,
                 fence_epoch=_fence_epoch(args), generation=generation, rank=rank,
                 identity=identity, incarnation=trainer_incarnation,
+                worker_incarnation=node_incarnation or None,
                 control_root=control, deadline=generation_deadline)
             if dict(native_plane.metadata.runtime_digests) != native_runtime:
                 native_plane.close()
@@ -3153,6 +3220,8 @@ def trainer(args) -> int:
                     "run_id": args.run_id, "fence_epoch": _fence_epoch(args),
                     "generation": generation, "result_root": manifest["result_root"],
                     "rank": rank,
+                    "node_incarnation":
+                        native_plane.metadata.worker_incarnation,
                 })
         accepted_token_clock += int(
             manifest["exact_tokens"] if native else manifest["weight"])

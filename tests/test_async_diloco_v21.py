@@ -181,6 +181,17 @@ def test_v21_node_ready_requires_all_eight_apply_markers(tmp_path: Path):
     assert transaction.ready
     assert marker["schema"] == "emender-async-v21-node-applied-v1"
     assert len(marker["trainers"]) == 8
+    assert transaction.record_trainer(
+        rank=0,
+        trainer_incarnation="trainer-0-boot-a",
+        recovery_digest=f"{1:064x}",
+    ) == marker["trainers"][0]
+    with pytest.raises(ValueError, match="conflicting"):
+        transaction.record_trainer(
+            rank=0,
+            trainer_incarnation="trainer-0-delayed-conflict",
+            recovery_digest=f"{1:064x}",
+        )
 
     restarted = transaction.restart_from_latest(
         new_node_incarnation="node-boot-b",
@@ -189,6 +200,9 @@ def test_v21_node_ready_requires_all_eight_apply_markers(tmp_path: Path):
     assert not restarted.ready
     assert restarted.node_incarnation == "node-boot-b"
     assert not tuple(tmp_path.glob("trainer-applied-*.json"))
+    failed = tmp_path / "failed-cohorts/node-boot-a"
+    assert len(tuple(failed.glob("trainer-applied-*.json"))) == 8
+    assert len(tuple(failed.glob("node-applied-*.json"))) == 1
 
 
 def test_v21_checkpoint_and_fresh_allocation_restore(tmp_path: Path):

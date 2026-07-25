@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Supervise a bounded 2/4/8-node Frontier allocation without a job-wide step.
 
-Each child owns an independent ``srun --no-kill`` step.  A failed child is
-restarted without waiting for, signalling, or recreating healthy siblings.
-Role programs publish heartbeat/progress JSON through the shared run directory;
-missing deadlines cause only that role's process group to be evicted.
+Each child owns an independent ``srun --no-kill`` step.  Failures remain
+node-local, but the async-v2.1 model-owning lanes form one atomic recovery
+cohort: a manager, service, or trainer failure fences and reconstructs all
+eight local trainers together.  Role programs publish heartbeat/progress JSON
+through the shared run directory; missing deadlines never turn a partial node
+apply into next-generation READY.
 """
 
 from __future__ import annotations
@@ -213,6 +215,12 @@ class AllocationSupervisor:
         self.stopping = False
         self.injected: set[str] = set()
         self._last_shared_stage: dict[str, tuple[int, int, str]] = {}
+        self._node_incarnations = {
+            child.node_rank: uuid.uuid4().hex for child in children
+        }
+        self._cohort_restart_sequence = {
+            node_rank: 0 for node_rank in self._node_incarnations
+        }
         self.native_token_fd = -1
         if any(child.role == "native-service" for child in children):
             self.native_token_fd = create_memfd(
@@ -222,6 +230,29 @@ class AllocationSupervisor:
             seal_memfd(self.native_token_fd)
         (run_dir / "supervision").mkdir(parents=True, exist_ok=True)
         (run_dir / "logs").mkdir(parents=True, exist_ok=True)
+
+    def node_incarnation(self, node_rank: int) -> str:
+        """Return the one incarnation shared by a node's atomic role cohort."""
+        try:
+            return self._node_incarnations[int(node_rank)]
+        except KeyError as error:
+            raise ValueError("unknown node rank for atomic cohort") from error
+
+    def _node_control_root(self, node_rank: int) -> Path:
+        bulk_root = os.environ.get("RESILIENT_E97_BULK_ROOT")
+        run_id = os.environ.get("RESILIENT_E97_RUN_ID")
+        if bulk_root and run_id:
+            return (Path(bulk_root) / run_id / f"node-{node_rank}" /
+                    "control")
+        return self.run_dir / "control"
+
+    @staticmethod
+    def _atomic_json(path: Path, value: dict[str, object]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        temporary.write_text(
+            json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
+        os.replace(temporary, path)
 
     def _durable_generation(self) -> int | None:
         """Return the checksum-verified generation from authoritative handoff."""
@@ -240,9 +271,27 @@ class AllocationSupervisor:
             run_id = os.environ.get("RESILIENT_E97_RUN_ID")
             if run_id and manifest.get("run_id") != run_id:
                 return None
+            database = os.environ.get("RESILIENT_E97_FENCE_DB")
+            encoded_lease = os.environ.get("RESILIENT_E97_ALLOCATION_LEASE")
+            if bool(database) != bool(encoded_lease):
+                return None
+            if database and encoded_lease:
+                lease = AllocationLease(**json.loads(encoded_lease))
+                store = SQLiteFencedControlStore(database)
+                store.assert_current(lease)
+                authoritative = store.read_publication(
+                    lease.run_id, "latest", "authoritative")
+                if (not isinstance(authoritative, dict)
+                        or int(authoritative.get("generation", -1))
+                           != generation
+                        or int(authoritative.get("fence", -1))
+                           != int(latest.get("fence", -1))
+                        or authoritative.get("manifest_sha256")
+                           != latest["manifest_sha256"]):
+                    return None
             return generation
-        except (FileNotFoundError, KeyError, TypeError, ValueError,
-                json.JSONDecodeError, OSError):
+        except (FenceRejected, FileNotFoundError, KeyError, TypeError,
+                ValueError, json.JSONDecodeError, OSError):
             return None
 
     def _apply_progress_time(self, child: Child, generation: int) -> float:
@@ -262,7 +311,11 @@ class AllocationSupervisor:
                 payload = json.loads(receipt.read_text())
                 if (int(payload.get("generation", -1)) == generation
                         and (not os.environ.get("RESILIENT_E97_RUN_ID")
-                             or payload.get("run_id") == os.environ["RESILIENT_E97_RUN_ID"])):
+                             or payload.get("run_id")
+                                == os.environ["RESILIENT_E97_RUN_ID"])
+                        and (not child.incarnation
+                             or payload.get("node_incarnation")
+                                == self.node_incarnation(child.node_rank))):
                     newest = max(newest, receipt.stat().st_mtime)
             except (FileNotFoundError, TypeError, ValueError, json.JSONDecodeError, OSError):
                 continue
@@ -281,6 +334,10 @@ class AllocationSupervisor:
         role_values = {"RESILIENT_E97_ROLE": child.role,
                        "RESILIENT_E97_NODE_RANK": str(child.node_rank),
                        "RESILIENT_E97_PROCESS_INCARNATION": child.incarnation,
+                       "RESILIENT_E97_NODE_INCARNATION":
+                           self.node_incarnation(child.node_rank),
+                       "RESILIENT_E97_COHORT_RESTART_SEQUENCE": str(
+                           self._cohort_restart_sequence[child.node_rank]),
                        "RUN_DIR": str(self.run_dir)}
         role_env = [f"{key}={value}" for key, value in role_values.items()]
         if child.role in {"manager", "native-service"}:
@@ -376,6 +433,12 @@ class AllocationSupervisor:
                 return "startup_deadline"
             return None
         state = json.loads(state_path.read_text())
+        if (child.incarnation
+                and state.get("process_incarnation") != child.incarnation):
+            if (child.started_at is not None
+                    and now - child.started_at > self.startup_s):
+                return "startup_deadline"
+            return None
         liveness_path = state_path.with_name(f"{child.identity}.liveness.json")
         if liveness_path.exists():
             liveness = json.loads(liveness_path.read_text())
@@ -477,6 +540,10 @@ class AllocationSupervisor:
         except (FileNotFoundError, json.JSONDecodeError):
             return False
         return (state.get("identity") == child.identity
+                and (not child.incarnation
+                     or (state.get("process_incarnation") == child.incarnation
+                         and state.get("node_incarnation")
+                            == self.node_incarnation(child.node_rank)))
                 and str(state.get("stage", "runtime_import")) != "runtime_import")
 
     def _share_stage_transition(self, child: Child) -> None:
@@ -540,34 +607,51 @@ class AllocationSupervisor:
         assert child.process is not None
         self.stop_children([child], reason)
 
-    def _restart_native_service_for_manager(
-            self, services: list[Child], manager: Child, reason: str) -> bool:
-        """Give a rejoining manager a fresh native service incarnation.
+    def _archive_incomplete_cohort(
+            self, node_rank: int, failed_incarnation: str) -> Path:
+        """Retain and remove volatile state from an incomplete node apply.
 
-        The persistent service owns the generation lifecycle, memfd result,
-        and CXI endpoint.  A manager that disappears after a completed
-        generation cannot safely adopt those process-local handles.  Restart
-        the one same-node service under the existing allocation admission
-        token before admitting the manager's new incarnation.
+        The stopped cohort can no longer write these files.  Moving them under
+        its fenced incarnation preserves causal evidence while ensuring a new
+        manager/trainer cohort cannot consume a stale generation, submission,
+        candidate result, apply marker, or per-rank recovery manifest.
         """
-        matches = [service for service in services
-                   if service.node_rank == manager.node_rank]
-        if not matches:
-            return True
-        if len(matches) != 1:
-            raise RuntimeError("manager must own exactly one native service")
-        service = matches[0]
-        self.stop_child(service, f"manager_rejoin:{reason}")
-        service.restarts += 1
+        control = self._node_control_root(node_rank)
+        failed = control / "failed-cohorts" / failed_incarnation
+        failed.mkdir(parents=True, exist_ok=True)
+        patterns = (
+            "native-generation-*.json",
+            "native-layout-*.json",
+            "native-submit-*.json",
+            "native-result-*.json",
+            "native-applied-*.json",
+            "native-checkpoint-*.json",
+            "native-manager-sync-*.json",
+            "trainer-applied-*.json",
+            "trainer-proposal-*.json",
+            "leader-apply-release-*.json",
+            "node-applied-*.json",
+            "atomic-cohort-recovery.json",
+        )
+        for pattern in patterns:
+            for source in sorted(control.glob(pattern)):
+                if source.is_file():
+                    os.replace(source, failed / source.name)
+        recovery = control / "recovery"
+        if recovery.is_dir():
+            failed_recovery = failed / "recovery"
+            failed_recovery.mkdir(parents=True, exist_ok=True)
+            for source in sorted(recovery.glob("*.json")):
+                if source.is_file():
+                    os.replace(source, failed_recovery / source.name)
+        return failed
+
+    def _wait_restarted_service(self, service: Child) -> bool:
         socket_value = os.environ.get("EMENDER_NDP_SOCKET", "")
         if not socket_value:
-            raise RuntimeError("native service rejoin requires its socket path")
+            raise RuntimeError("native service restart requires its socket path")
         socket_path = Path(socket_value)
         socket_path.unlink(missing_ok=True)
-        self._event(
-            "native_service_rejoin", service,
-            manager_identity=manager.identity, manager_restart=manager.restarts + 1,
-            reason=reason, service_restart=service.restarts)
         self.start(service)
         deadline = time.monotonic() + self.startup_s
         while time.monotonic() < deadline:
@@ -577,6 +661,117 @@ class AllocationSupervisor:
                 return True
             time.sleep(self.poll_s)
         return False
+
+    def _restart_native_node_cohort(
+            self, services: list[Child], manager: Child,
+            trainers: list[Child], reason: str) -> bool:
+        """Fail and reconstruct one fenced all-eight-trainer node cohort."""
+        node_rank = manager.node_rank
+        matches = [
+            service for service in services if service.node_rank == node_rank
+        ]
+        local_trainers = sorted(
+            (trainer for trainer in trainers
+             if trainer.node_rank == node_rank),
+            key=lambda trainer: int(trainer.local_rank),
+        )
+        if len(matches) != 1 or len(local_trainers) != TRAINERS_PER_NODE:
+            raise RuntimeError(
+                "atomic native restart requires one service and eight trainers")
+        service = matches[0]
+        cohort = [service, manager, *local_trainers]
+        if any(child.restarts >= self.max_restarts for child in cohort):
+            self._event(
+                "cohort_restart_exhausted", manager, reason=reason,
+                required_trainers=list(range(TRAINERS_PER_NODE)))
+            return False
+
+        authoritative_generation = self._durable_generation()
+        if authoritative_generation is None:
+            self._event(
+                "cohort_restart_rejected", manager, reason=reason,
+                rejection="authoritative_latest_unavailable")
+            return False
+        failed_incarnation = self.node_incarnation(node_rank)
+        self.stop_children(cohort, f"atomic_node_apply:{reason}")
+        failed_root = self._archive_incomplete_cohort(
+            node_rank, failed_incarnation)
+
+        self._cohort_restart_sequence[node_rank] += 1
+        new_incarnation = uuid.uuid4().hex
+        self._node_incarnations[node_rank] = new_incarnation
+        for child in cohort:
+            child.restarts += 1
+        control = self._node_control_root(node_rank)
+        recovery_path = control / "atomic-cohort-recovery.json"
+        recovery = {
+            "schema": "emender-async-v21-atomic-cohort-recovery-v1",
+            "run_id": os.environ.get("RESILIENT_E97_RUN_ID", ""),
+            "allocation_fence": int(os.environ.get(
+                "RESILIENT_E97_FENCE_EPOCH", "0")),
+            "node_rank": node_rank,
+            "failed_incarnation": failed_incarnation,
+            "node_incarnation": new_incarnation,
+            "restart_sequence": self._cohort_restart_sequence[node_rank],
+            "authoritative_generation": authoritative_generation,
+            "required_trainers": list(range(TRAINERS_PER_NODE)),
+            "reason": reason,
+            "failed_evidence": str(failed_root),
+            "status": "reconstructing",
+        }
+        self._atomic_json(recovery_path, recovery)
+        self._event(
+            "atomic_cohort_failed", manager, reason=reason,
+            failed_incarnation=failed_incarnation,
+            node_incarnation=new_incarnation,
+            authoritative_generation=authoritative_generation,
+            required_trainers=list(range(TRAINERS_PER_NODE)))
+
+        if not self._wait_restarted_service(service):
+            return False
+        self.start(manager)
+        deadline = time.monotonic() + self.startup_s
+        while time.monotonic() < deadline:
+            if manager.process is None or manager.process.poll() is not None:
+                return False
+            if self._manager_ready_for_trainers(manager):
+                break
+            time.sleep(self.poll_s)
+        else:
+            return False
+
+        recovery["status"] = "reconstructed"
+        self._atomic_json(recovery_path, recovery)
+        for trainer in local_trainers:
+            self.start(trainer)
+        self._event(
+            "atomic_cohort_reconstructed", manager, reason=reason,
+            failed_incarnation=failed_incarnation,
+            node_incarnation=new_incarnation,
+            authoritative_generation=authoritative_generation,
+            trainer_incarnations={
+                str(trainer.local_rank): trainer.incarnation
+                for trainer in local_trainers
+            })
+        return True
+
+    def _restart_native_service_for_manager(
+            self, services: list[Child], manager: Child, reason: str) -> bool:
+        """Compatibility helper for startup-only manager rejoin fixtures."""
+        matches = [service for service in services
+                   if service.node_rank == manager.node_rank]
+        if not matches:
+            return True
+        if len(matches) != 1:
+            raise RuntimeError("manager must own exactly one native service")
+        service = matches[0]
+        self.stop_child(service, f"manager_rejoin:{reason}")
+        service.restarts += 1
+        self._event(
+            "native_service_rejoin", service,
+            manager_identity=manager.identity, manager_restart=manager.restarts + 1,
+            reason=reason, service_restart=service.restarts)
+        return self._wait_restarted_service(service)
 
     def run(self) -> int:
         if self.launch_backend == "node-local-child":
@@ -646,6 +841,8 @@ class AllocationSupervisor:
                 self.start(child)
         monitored = [child for child in self.children if child.role != "native-service"]
         services = [child for child in self.children if child.role == "native-service"]
+        managers = [child for child in monitored if child.role == "manager"]
+        trainers = [child for child in monitored if child.role == "trainer"]
         completed: set[str] = set()
         while not self.stopping:
             now = time.time()
@@ -653,12 +850,31 @@ class AllocationSupervisor:
                 reason = self._deadline_reason(child, now)
                 if reason == "injected_native_service_stage":
                     self.stop_child(child, reason)
-            if any(child.process is not None and child.process.poll() is not None
-                   for child in services):
-                self.stop_children(
-                    [child for child in monitored if child.identity not in completed],
-                    "native_service_lost")
-                return 1
+            failed_services = [
+                child for child in services
+                if child.process is not None and child.process.poll() is not None
+            ]
+            for service in failed_services:
+                local_managers = [
+                    manager for manager in managers
+                    if manager.node_rank == service.node_rank
+                ]
+                if (self.launch_backend != "node-local-child"
+                        or len(local_managers) != 1
+                        or local_managers[0].identity in completed
+                        or not self._restart_native_node_cohort(
+                            services, local_managers[0], trainers,
+                            "native_service_lost")):
+                    self.stop_children(
+                        [child for child in monitored
+                         if child.identity not in completed],
+                        "native_service_lost")
+                    return 1
+                for child in (
+                        local_managers
+                        + [trainer for trainer in trainers
+                           if trainer.node_rank == service.node_rank]):
+                    completed.discard(child.identity)
             for child in monitored:
                 if child.identity in completed:
                     continue
@@ -669,6 +885,26 @@ class AllocationSupervisor:
                 if reason == "exit:0":
                     completed.add(child.identity)
                     self._event("completed", child, exit_code=0)
+                    continue
+                if (self.launch_backend == "node-local-child"
+                        and services
+                        and child.role in {"manager", "trainer"}):
+                    local_managers = [
+                        manager for manager in managers
+                        if manager.node_rank == child.node_rank
+                    ]
+                    if (len(local_managers) != 1
+                            or not self._restart_native_node_cohort(
+                                services, local_managers[0], trainers, reason)):
+                        self._event(
+                            "restart_exhausted", child, reason=reason,
+                            restart_scope="atomic_eight_trainer_node")
+                        return 1
+                    for local in (
+                            local_managers
+                            + [trainer for trainer in trainers
+                               if trainer.node_rank == child.node_rank]):
+                        completed.discard(local.identity)
                     continue
                 self.stop_child(child, reason)
                 if child.restarts >= self.max_restarts:
