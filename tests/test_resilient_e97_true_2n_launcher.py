@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import signal
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -1176,6 +1177,47 @@ def test_restart_restores_first_atomic_deadline_from_durable_checkpoint(
     latest["manifest_sha256"] = "0" * 64
     (handoff / "latest.json").write_text(json.dumps(latest))
     assert supervisor._deadline_reason(child, 800) == "first_atomic_generation_deadline"
+
+
+def test_durable_generation_diagnostic_treats_sqlite_lock_as_unavailable(
+        tmp_path, monkeypatch):
+    """A transient constructor lock cannot terminate a healthy allocation.
+
+    Job 5072235 reached generation eight before two node supervisors raced a
+    lease renewal and ``PRAGMA synchronous=FULL``.  The authoritative handoff
+    remained intact; this deadline diagnostic must fail closed for that poll
+    and retry on the next one instead of leaking ``OperationalError``.
+    """
+    from scripts.frontier import resilient_e97_allocation_supervisor as module
+
+    supervisor = AllocationSupervisor(
+        tmp_path, [], heartbeat_s=60, progress_s=60, max_restarts=0)
+    handoff = tmp_path / "handoff"
+    handoff.mkdir()
+    manifest = handoff / "generation-00000008-fence-00000001.json"
+    manifest.write_text(json.dumps({
+        "finalized": True, "run_id": "run", "generation": 8,
+    }, sort_keys=True))
+    (handoff / "latest.json").write_text(json.dumps({
+        "generation": 8,
+        "fence": 1,
+        "manifest": str(manifest),
+        "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+    }))
+    monkeypatch.setenv("RESILIENT_E97_RUN_ID", "run")
+    monkeypatch.setenv("RESILIENT_E97_FENCE_DB", str(tmp_path / "pool.sqlite3"))
+    monkeypatch.setenv("RESILIENT_E97_ALLOCATION_LEASE", json.dumps({
+        "run_id": "run", "allocation_id": "5072235",
+        "incarnation": "allocation", "fence": 1,
+        "acquired_at": 1.0, "renewed_at": 2.0, "expires_at": 100.0,
+        "protocol_id": "pool", "config_id": "config",
+    }))
+
+    def locked(_path):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(module, "SQLiteFencedControlStore", locked)
+    assert supervisor._durable_generation() is None
 
 
 def test_all_real_roles_publish_import_liveness_without_generation_progress():
