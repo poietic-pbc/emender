@@ -97,6 +97,24 @@ void test_wire_codec() {
   CHECK(roundtrip.header.fence_epoch == p.fence_epoch);
   CHECK(roundtrip.payload == payload);
 
+  // V2.1 is an additive wire identity. Historical experimental 2.0 is not
+  // accepted under the reviewed production protocol.
+  decoded.header.protocol_major = 2;
+  decoded.header.protocol_minor = 1;
+  CHECK(encode_frame(decoded.header, payload.data(), payload.size(), &encoded) ==
+        NDP_T_OK);
+  CHECK(encoded[5] == static_cast<std::uint8_t>('2'));
+  CHECK(decode_frame(encoded.data(), encoded.size(), 16, &roundtrip) == NDP_T_OK);
+  CHECK(roundtrip.header.protocol_major == 2);
+  CHECK(roundtrip.header.protocol_minor == 1);
+  decoded.header.protocol_minor = 0;
+  CHECK(encode_frame(decoded.header, payload.data(), payload.size(), &encoded) ==
+        NDP_T_EVERSION);
+  decoded.header.protocol_major = 1;
+  decoded.header.protocol_minor = 0;
+  CHECK(encode_frame(decoded.header, payload.data(), payload.size(), &encoded) ==
+        NDP_T_OK);
+
   // Partial/truncated local writes cannot become valid frames.
   for (const std::size_t length : {std::size_t{0}, std::size_t{20}, kHeaderBytes - 1,
                                    encoded.size() - 1}) {

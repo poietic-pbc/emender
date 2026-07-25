@@ -23,14 +23,22 @@ def _records(
     background: bool = True,
 ):
     values = [{
-        "stage": "async_v2_policy",
-        "policy_id": "async-decoupled-v2.0-exp",
-        "tau_hard": 6,
-        "tau_target": 2,
-        "sigma_hard": 8,
-        "sigma_target": 2,
+        "stage": "async_v21_policy",
+        "policy_id": "async-decoupled-v2.1-simple",
+        "policy_schema": "emender-async-policy-v2.1",
+        "contribution_schema": "emender-native-e97-submission-v2.1",
+        "manifest_schema": "emender-native-e97-generation-v2.1",
+        "checkpoint_schema": "emender-async-v21-reference-checkpoint-v1",
+        "native_abi": 0x00020001,
+        "wire_protocol_major": 2,
+        "wire_protocol_minor": 1,
+        "max_commit_lag": 2,
+        "max_anchor_lag": 2,
+        "max_result_lag": 2,
+        "max_speculative_windows": 2,
+        "eta_outer": 1.0,
         "k_local_steps": 40,
-        "sealed_descriptor_capacity": 1,
+        "owned_descriptor_capacity": 1,
         "mutable_interval_capacity": 1,
         "result_mailbox_capacity": 1,
         "result_staging_capacity": 1,
@@ -50,7 +58,7 @@ def _records(
                         "phase": "optimizer_step_start",
                         "monotonic_s": began,
                         "timestamp": 1000.0 + began,
-                        "policy_id": "async-decoupled-v2.0-exp",
+                        "policy_id": "async-decoupled-v2.1-simple",
                         "local_model_basis": "worker_local",
                         "applied_anchor_version": max(0, window - 1),
                     },
@@ -61,7 +69,7 @@ def _records(
                         "phase": "optimizer_step_end",
                         "monotonic_s": began + 2.4,
                         "timestamp": 1002.4 + began,
-                        "policy_id": "async-decoupled-v2.0-exp",
+                        "policy_id": "async-decoupled-v2.1-simple",
                     },
                 ])
             values.append({
@@ -82,7 +90,7 @@ def _records(
             })
         values.append({
             "identity": identity,
-            "stage": "async_v2_bounds",
+            "stage": "async_v21_bounds",
             "sealed_descriptor_capacity": 1,
             "sealed_descriptor_high_water": 1,
             "mutable_interval_capacity": 1,
@@ -123,19 +131,18 @@ def _records(
                     "elapsed_s": ended - began,
                     "timestamp": 1000.0 + ended,
                     "within_slo": True,
-                    "policy_id": "async-decoupled-v2.0-exp",
+                    "policy_id": "async-decoupled-v2.1-simple",
                     "allocation_fence": 7,
                     "base_global_version": max(0, version - 1),
                     "commit_global_version": version,
                     "commit_lag": min(1, version),
                     "contribution_digest": f"{version + 10:064x}",
                     "exact_tokens": 3_934_080,
-                    "aggregation_weight": 3_934_080 * (7 - min(1, version)),
                 })
             values.append({
                 "identity": "node-0-manager",
-                "stage": "async_v2_correctness",
-                "policy_id": "async-decoupled-v2.0-exp",
+                "stage": "async_v21_correctness",
+                "policy_id": "async-decoupled-v2.1-simple",
                 "allocation_fence": 7,
                 "base_global_version": version - 1,
                 "result_version": version,
@@ -151,7 +158,7 @@ def _records(
 def test_semantic_validator_accepts_true_decoupling_and_bounded_lag():
     result = MODULE.validate(_records())
     assert result["status"] == "passed"
-    assert result["schema"] == "emender-async-decoupled-e97-performance-v2"
+    assert result["schema"] == "emender-async-decoupled-e97-performance-v2.1"
     assert result["foreground_control_plane_idle_fraction"] < 0.10
     assert result["steady_state_cadence_multiple"] <= 1.25
     assert result["measured_trainers"] == 16
@@ -175,18 +182,17 @@ def test_semantic_validator_accepts_latest_only_non_barrier_applications():
     assert result["lag"]["speculative_max"] <= 2
 
 
-def test_semantic_validator_rejects_false_tau_zero_labeling():
+def test_semantic_validator_rejects_v20_identity():
     records = _records()
-    records[0]["policy_id"] = "strict-tau-zero-v1"
-    records[0]["tau_hard"] = 0
-    with pytest.raises(ValueError, match="false tau=0"):
+    records[0]["policy_id"] = "async-decoupled-v2.0-exp"
+    with pytest.raises(ValueError, match="historical"):
         MODULE.validate(records)
 
 
 def test_semantic_validator_rejects_missing_or_unbounded_queue_evidence():
     records = _records()
     for value in records:
-        if value.get("stage") == "async_v2_bounds":
+        if value.get("stage") == "async_v21_bounds":
             value["sealed_descriptor_capacity"] = 2
             break
     with pytest.raises(ValueError, match="bounded queue"):
@@ -195,7 +201,7 @@ def test_semantic_validator_rejects_missing_or_unbounded_queue_evidence():
     records = _records()
     bounds = next(
         value for value in records
-        if value.get("stage") == "async_v2_bounds")
+        if value.get("stage") == "async_v21_bounds")
     bounds["resident_limit_bytes"] = 64_001_671_647
     bounds["resident_headroom_bytes"] = -1
     with pytest.raises(ValueError, match="resident formula"):
@@ -206,7 +212,7 @@ def test_semantic_validator_rejects_per_window_model_rebootstrap():
     records = _records()
     bounds = next(
         value for value in records
-        if value.get("stage") == "async_v2_bounds")
+        if value.get("stage") == "async_v21_bounds")
     bounds["model_build"] = 12
     with pytest.raises(ValueError, match="persistent resident session"):
         MODULE.validate(records)

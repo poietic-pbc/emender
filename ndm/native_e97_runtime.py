@@ -29,7 +29,12 @@ from ndm.native_dataplane import (
 
 
 SCHEMA = "emender-native-e97-generation-v1"
-ASYNC_V2_SCHEMA = "emender-native-e97-generation-v2"
+ASYNC_V21_SCHEMA = "emender-native-e97-generation-v2.1"
+ASYNC_V21_SUBMISSION_SCHEMA = "emender-native-e97-submission-v2.1"
+NDP_ABI_V21 = 0x00020001
+NDP_WIRE_V21 = (2, 1)
+# Import compatibility only; no historical v2.0 schema is accepted.
+ASYNC_V2_SCHEMA = ASYNC_V21_SCHEMA
 
 
 def atomic_metadata(path: str | Path, value: Mapping[str, object]) -> Path:
@@ -172,7 +177,9 @@ def encode_owner_frame_fd(*, source_fd: int, payload_offset: int, payload_bytes:
                           chunk_index: int, chunk_count: int,
                           deadline_unix_ns: int,
                           message_seq: int | None = None,
-                          source_offset: int | None = None) -> tuple[int, int]:
+                          source_offset: int | None = None,
+                          protocol_major: int = 1,
+                          protocol_minor: int = 0) -> tuple[int, int]:
     """Encode one normative native result-data frame around a memfd slice."""
     local_offset = payload_offset if source_offset is None else int(source_offset)
     if (source_fd < 0 or payload_bytes <= 0 or payload_bytes > payload_max
@@ -194,9 +201,12 @@ def encode_owner_frame_fd(*, source_fd: int, payload_offset: int, payload_bytes:
     run_key = hashlib.sha256(run_id.encode()).digest()[:16]
     worker_key = hashlib.sha256(worker_id.encode()).digest()[:16]
     boot_key = hashlib.sha256(incarnation.encode()).digest()[:16]
-    header = bytearray()
-    header.extend(b"EMNDP1\0\0")
-    header.extend(struct.pack("<HHHHII", 1, 0, 8, 0, 320, 0))  # result_data
+    if (protocol_major, protocol_minor) not in {(1, 0), NDP_WIRE_V21}:
+        raise ValueError("native owner frame protocol is unsupported")
+    header = bytearray(
+        b"EMNDP2\0\0" if protocol_major == 2 else b"EMNDP1\0\0")
+    header.extend(struct.pack(
+        "<HHHHII", protocol_major, protocol_minor, 8, 0, 320, 0))
     header.extend(run_key)
     header.extend(struct.pack("<QQIIQQ", fence_epoch, generation, attempt,
                               chunk_index, owner_epoch, generation))
@@ -230,7 +240,9 @@ def encode_credit_frame_fd(*, payload_offset: int, payload_bytes: int,
                            layout_digest: bytes, base_digest: bytes,
                            permitted_root: bytes, weight: int,
                            chunk_index: int, chunk_count: int,
-                           deadline_unix_ns: int, message_seq: int) -> int:
+                           deadline_unix_ns: int, message_seq: int,
+                           protocol_major: int = 1,
+                           protocol_minor: int = 0) -> int:
     """Grant one exact frozen result chunk independently of CQ completion."""
     if (payload_bytes <= 0 or payload_bytes > payload_max or payload_offset < 0
             or generation < 0 or generation >= (1 << 32) or weight <= 0
@@ -241,8 +253,12 @@ def encode_credit_frame_fd(*, payload_offset: int, payload_bytes: int,
                           bytes(permitted_root))
     if any(len(item) != 32 for item in (layout, base, root)) or root == bytes(32):
         raise ValueError("native credit frame digest width is invalid")
-    header = bytearray(b"EMNDP1\0\0")
-    header.extend(struct.pack("<HHHHII", 1, 0, 3, 0, 320, 0))
+    if (protocol_major, protocol_minor) not in {(1, 0), NDP_WIRE_V21}:
+        raise ValueError("native credit frame protocol is unsupported")
+    header = bytearray(
+        b"EMNDP2\0\0" if protocol_major == 2 else b"EMNDP1\0\0")
+    header.extend(struct.pack(
+        "<HHHHII", protocol_major, protocol_minor, 3, 0, 320, 0))
     header.extend(hashlib.sha256(run_id.encode()).digest()[:16])
     header.extend(struct.pack("<QQIIQQ", fence_epoch, generation, attempt,
                               chunk_index, owner_epoch, generation))
@@ -266,14 +282,18 @@ def encode_credit_frame_fd(*, payload_offset: int, payload_bytes: int,
 
 
 def decode_credit_frame_fd(fd: int, *, payload_max: int,
-                           expected: Mapping[str, object]) -> dict[str, object]:
+                           expected: Mapping[str, object],
+                           protocol_major: int = 1,
+                           protocol_minor: int = 0) -> dict[str, object]:
     """Validate one exact byte-credit grant before sending its result chunk."""
     if fd < 0 or os.fstat(fd).st_size < 320:
         raise ValueError("received native credit frame extent is invalid")
     header = os.pread(fd, 320, 0)
-    if len(header) != 320 or header[:8] != b"EMNDP1\0\0":
+    magic = b"EMNDP2\0\0" if protocol_major == 2 else b"EMNDP1\0\0"
+    if len(header) != 320 or header[:8] != magic:
         raise ValueError("received native credit frame magic is invalid")
-    if struct.unpack_from("<HHHHII", header, 8) != (1, 0, 3, 0, 320, 0):
+    if struct.unpack_from("<HHHHII", header, 8) != (
+            protocol_major, protocol_minor, 3, 0, 320, 0):
         raise ValueError("received native credit frame version/type is invalid")
     if _crc32c(header[:312]) != struct.unpack_from("<I", header, 312)[0]:
         raise ValueError("received native credit frame checksum mismatch")
@@ -312,14 +332,18 @@ def decode_credit_frame_fd(fd: int, *, payload_max: int,
 
 
 def decode_owner_frame_fd(fd: int, *, frame_bytes: int, payload_max: int,
-                          expected: Mapping[str, object]) -> dict[str, object]:
+                          expected: Mapping[str, object],
+                          protocol_major: int = 1,
+                          protocol_minor: int = 0) -> dict[str, object]:
     """Independently validate a frame already authenticated by native fabric."""
     if fd < 0 or not 320 < frame_bytes <= payload_max + 320:
         raise ValueError("received native owner frame extent is invalid")
     header = os.pread(fd, 320, 0)
-    if len(header) != 320 or header[:8] != b"EMNDP1\0\0":
+    magic = b"EMNDP2\0\0" if protocol_major == 2 else b"EMNDP1\0\0"
+    if len(header) != 320 or header[:8] != magic:
         raise ValueError("received native owner frame magic is invalid")
-    if struct.unpack_from("<HHHHII", header, 8) != (1, 0, 8, 0, 320, 0):
+    if struct.unpack_from("<HHHHII", header, 8) != (
+            protocol_major, protocol_minor, 8, 0, 320, 0):
         raise ValueError("received native owner frame version/type is invalid")
     if _crc32c(header[:312]) != struct.unpack_from("<I", header, 312)[0]:
         raise ValueError("received native owner frame header checksum mismatch")
@@ -378,11 +402,18 @@ class GenerationMetadata:
     base_global_version: int = 0
     local_window_start: int = 0
     local_window_end: int = 1
+    policy_schema: str = ""
+    contribution_schema: str = ""
+    native_abi: int = 0
+    wire_protocol_major: int = 0
+    wire_protocol_minor: int = 0
+    stable_worker_id: str = ""
+    worker_incarnation: str = ""
 
     @classmethod
     def from_json(cls, value: Mapping[str, object]) -> "GenerationMetadata":
         schema = value.get("schema")
-        if schema not in {SCHEMA, ASYNC_V2_SCHEMA}:
+        if schema not in {SCHEMA, ASYNC_V21_SCHEMA}:
             raise ValueError("native E97 generation schema mismatch")
         integer_fields = ("fence_epoch", "generation", "attempt", "owner_epoch",
                           "total_elements", "deadline_unix_ns")
@@ -402,6 +433,13 @@ class GenerationMetadata:
             int(value.get("base_global_version", value["generation"])),
             int(value.get("local_window_start", value["generation"])),
             int(value.get("local_window_end", int(value["generation"]) + 1)),
+            str(value.get("policy_schema", "")),
+            str(value.get("contribution_schema", "")),
+            int(value.get("native_abi", 0)),
+            int(value.get("wire_protocol_major", 0)),
+            int(value.get("wire_protocol_minor", 0)),
+            str(value.get("stable_worker_id", "")),
+            str(value.get("worker_incarnation", "")),
         )
         if (not result.run_id or result.fence_epoch <= 0 or result.generation < 0
                 or result.attempt <= 0 or result.owner_epoch <= 0
@@ -413,21 +451,32 @@ class GenerationMetadata:
                                     result.plan_digest))):
             raise ValueError("native E97 generation identity is invalid")
         if result.policy_id:
-            if (schema != ASYNC_V2_SCHEMA
-                    or result.policy_id != "async-decoupled-v2.0-exp"
+            if (schema != ASYNC_V21_SCHEMA
+                    or result.policy_id != "async-decoupled-v2.1-simple"
+                    or result.policy_schema != "emender-async-policy-v2.1"
+                    or result.contribution_schema
+                    != ASYNC_V21_SUBMISSION_SCHEMA
+                    or result.native_abi != NDP_ABI_V21
+                    or (
+                        result.wire_protocol_major,
+                        result.wire_protocol_minor,
+                    ) != NDP_WIRE_V21
+                    or not result.stable_worker_id
+                    or not result.worker_incarnation
                     or len(result.policy_digest) != 64
                     or len(result.code_digest) != 64
                     or result.base_global_version < 0
                     or result.local_window_start < 0
                     or result.local_window_end <= result.local_window_start
-                    or result.local_window_end - result.local_window_start > 8):
-                raise ValueError("native E97 async-v2 metadata identity is invalid")
+                    or result.local_window_end - result.local_window_start > 2):
+                raise ValueError(
+                    "native E97 async-v2.1 metadata identity is invalid")
         elif schema != SCHEMA:
             raise ValueError("native E97 v2 schema requires explicit policy identity")
         return result
 
     def as_json(self) -> dict[str, object]:
-        return {"schema": (ASYNC_V2_SCHEMA if self.policy_id else SCHEMA),
+        return {"schema": (ASYNC_V21_SCHEMA if self.policy_id else SCHEMA),
                 **self.__dict__,
                 "runtime_digests": dict(self.runtime_digests)}
 
@@ -482,7 +531,6 @@ class NativeTrainerDataPlane:
     def publish_model_delta(self, base_state: Mapping[str, torch.Tensor], model,
                             tokens: int, *, chunk_elements: int,
                             deadline_s: float,
-                            aggregation_weight: int | None = None,
                             contribution_identity: Mapping[str, object] | None = None,
                             ) -> dict[str, object]:
         """Fill final service-owned f32 storage without a trainer-sized spool."""
@@ -509,8 +557,7 @@ class NativeTrainerDataPlane:
         if cursor != self.metadata.total_elements:
             raise ValueError("native trainer wrote an incomplete flat layout")
         return self._seal_submit(
-            tokens=tokens, aggregation_weight=aggregation_weight,
-            contribution_identity=contribution_identity,
+            tokens=tokens, contribution_identity=contribution_identity,
             deadline_s=deadline_s)
 
     def publish_state_delta(
@@ -521,7 +568,6 @@ class NativeTrainerDataPlane:
         *,
         chunk_elements: int,
         deadline_s: float,
-        aggregation_weight: int | None = None,
         contribution_identity: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
         """Seal a post-K endpoint after a prior result was applied at boundary.
@@ -553,12 +599,10 @@ class NativeTrainerDataPlane:
         if cursor != self.metadata.total_elements:
             raise ValueError("native trainer wrote an incomplete flat layout")
         return self._seal_submit(
-            tokens=tokens, aggregation_weight=aggregation_weight,
-            contribution_identity=contribution_identity,
+            tokens=tokens, contribution_identity=contribution_identity,
             deadline_s=deadline_s)
 
     def publish_flat_shards(self, shards, *, tokens: int, deadline_s: float,
-                            aggregation_weight: int | None = None,
                             contribution_identity: Mapping[str, object] | None = None,
                             ) -> dict[str, object]:
         """Control-fixture companion using the identical direct memfd admission."""
@@ -573,36 +617,55 @@ class NativeTrainerDataPlane:
         if cursor != self.metadata.total_elements:
             raise ValueError("native trainer wrote an incomplete flat layout")
         return self._seal_submit(
-            tokens=tokens, aggregation_weight=aggregation_weight,
-            contribution_identity=contribution_identity,
+            tokens=tokens, contribution_identity=contribution_identity,
             deadline_s=deadline_s)
 
     def _seal_submit(self, *, tokens: int, deadline_s: float,
-                     aggregation_weight: int | None = None,
                      contribution_identity: Mapping[str, object] | None = None,
                      ) -> dict[str, object]:
         assert self.buffer is not None
-        weight = int(tokens if aggregation_weight is None else aggregation_weight)
-        if tokens <= 0 or weight <= 0:
-            raise ValueError("native exact tokens and aggregation weight must be positive")
+        weight = int(tokens)
+        if tokens <= 0:
+            raise ValueError("native exact tokens must be positive")
         identity = dict(contribution_identity or {})
         if identity:
             required = {
-                "policy_id", "policy_digest", "code_digest",
+                "policy_id", "policy_schema", "contribution_schema",
+                "policy_digest", "code_digest", "native_abi",
+                "wire_protocol_major", "wire_protocol_minor",
+                "worker_id", "worker_incarnation",
                 "base_global_version", "base_global_digest",
                 "base_lag_at_seal", "local_window_start", "local_window_end",
                 "window_count", "contribution_sequence",
+                "local_trainer_set_digest",
+                "endpoint_digest", "anchor_lag", "result_lag",
+                "speculative_window_lag",
             }
             if not required <= identity.keys():
                 raise ValueError("native async-v2 contribution identity is incomplete")
             lag = int(identity["base_lag_at_seal"])
-            if (identity["policy_id"] != "async-decoupled-v2.0-exp"
-                    or not 0 <= lag <= 6
-                    or weight != int(tokens) * (7 - lag)
+            if (identity["policy_id"] != "async-decoupled-v2.1-simple"
+                    or identity["policy_schema"] != "emender-async-policy-v2.1"
+                    or identity["contribution_schema"]
+                    != ASYNC_V21_SUBMISSION_SCHEMA
+                    or int(identity["native_abi"]) != NDP_ABI_V21
+                    or (
+                        int(identity["wire_protocol_major"]),
+                        int(identity["wire_protocol_minor"]),
+                    ) != NDP_WIRE_V21
+                    or not 0 <= lag <= 2
+                    or any(
+                        not 0 <= int(identity[name]) <= 2
+                        for name in (
+                            "anchor_lag", "result_lag",
+                            "speculative_window_lag",
+                        )
+                    )
                     or int(identity["window_count"])
                     != int(identity["local_window_end"])
                     - int(identity["local_window_start"])):
-                raise ValueError("native async-v2 token/lag/window identity is invalid")
+                raise ValueError(
+                    "native async-v2.1 exact-token/lag/window identity is invalid")
         digest = self.buffer.sha256()
         if identity:
             identity.setdefault("payload_digest", digest.hex())
@@ -618,21 +681,28 @@ class NativeTrainerDataPlane:
             self.buffer, trainer_key=self.identity,
             trainer_incarnation=self.incarnation,
             submission_seq=self.rank, weight=weight, source_dtype=DType.F32,
-            source_sha256=digest, deadline_s=deadline_s)
+            source_sha256=digest,
+            v21_identity=({
+                **identity,
+                "commit_lag": int(identity["base_lag_at_seal"]),
+                "base_digest": str(identity["base_global_digest"]),
+            } if identity else None),
+            deadline_s=deadline_s)
         # Releasing the producer's public handle is safe: the persistent service
         # retained the immutable memfd before acknowledging submission.
         self.buffer.close(); self.buffer = None
         marker = {
             "schema": (
-                "emender-native-e97-submission-v2"
+                ASYNC_V21_SUBMISSION_SCHEMA
                 if identity else "emender-native-e97-submission-v1"),
             "run_id": self.metadata.run_id,
             "fence_epoch": self.metadata.fence_epoch,
             "generation": self.metadata.generation,
             "attempt": self.metadata.attempt, "rank": self.rank,
             "trainer": self.identity, "incarnation": self.incarnation,
-            "submission_seq": self.rank, "tokens": int(tokens),
-            "aggregation_weight": weight,
+            "submission_seq": self.rank,
+            **({"exact_tokens": int(tokens)}
+               if identity else {"tokens": int(tokens), "weight": weight}),
             "owned_ack_seconds": time.monotonic() - owned_started,
             "source_sha256": digest.hex(),
             "layout_digest": self.metadata.layout_digest,
@@ -653,7 +723,7 @@ class NativeTrainerDataPlane:
                 "base_global_digest": marker["base_global_digest"],
                 "policy_digest": marker["policy_digest"],
                 "code_digest": marker["code_digest"],
-                "exact_tokens": marker["tokens"],
+                "exact_tokens": marker["exact_tokens"],
                 "base_lag_at_seal": marker["base_lag_at_seal"],
                 "payload_digest": marker["payload_digest"],
             }
@@ -692,15 +762,18 @@ class NativeTrainerDataPlane:
                 or value.get("policy_digest") != self.metadata.policy_digest
                 or int(value.get("commit_global_version", -1))
                 != self.metadata.base_global_version
-                or not 0 <= int(value.get("commit_lag", -1)) <= 6
+                or value.get("schema")
+                != "emender-native-e97-result-v2.1"
+                or not 0 <= int(value.get("commit_lag", -1)) <= 2
                 or int(value.get("base_global_version", -1))
                 != int(value.get("commit_global_version", -1))
                    - int(value.get("commit_lag", -1))
                 or int(value.get("exact_tokens", 0)) <= 0
-                or int(value.get("aggregation_weight", 0))
+                or int(value.get("global_weight", 0))
                 != int(value.get("exact_tokens", 0))
-                   * (7 - int(value.get("commit_lag", -1)))):
-            raise ValueError("native async-v2 result identity/weight is invalid")
+                or "aggregation_weight" in value):
+            raise ValueError(
+                "native async-v2.1 result identity/exact-token field is invalid")
         if self.metadata.policy_id:
             accepted = value.get("accepted_local_contributions")
             if not isinstance(accepted, list) or not accepted:
@@ -792,7 +865,9 @@ def exact_weighted_reference(contributions: Sequence[np.ndarray],
 
 
 __all__ = [
-    "ASYNC_V2_SCHEMA", "GenerationMetadata", "NativeTrainerDataPlane",
+    "ASYNC_V21_SCHEMA", "ASYNC_V21_SUBMISSION_SCHEMA", "ASYNC_V2_SCHEMA",
+    "NDP_ABI_V21", "NDP_WIRE_V21",
+    "GenerationMetadata", "NativeTrainerDataPlane",
     "SCHEMA", "artifact_path",
     "atomic_metadata", "decode_credit_frame_fd", "decode_owner_frame_fd",
     "encode_credit_frame_fd", "encode_owner_frame_fd",

@@ -152,6 +152,10 @@ class PoolControlConfig:
     production: bool = False
     full_layout: bool = False
     artifact_bundle_sha256: str = ""
+    scale_close_offset_s: float | None = None
+    scale_stable_diversity_floor: int | None = None
+    scale_per_ready_worker_token_floor: int | None = None
+    scale_closure_digest: str = ""
 
     def __post_init__(self) -> None:
         GenerationClosePolicy(self.q_min, self.t_min, self.ready_fraction)
@@ -166,6 +170,24 @@ class PoolControlConfig:
                 raise ValueError("native pool requires an attested artifact bundle digest")
         elif self.artifact_bundle_sha256:
             raise ValueError("Python TCP debug pool cannot claim a native artifact bundle")
+        scale = (
+            self.scale_close_offset_s,
+            self.scale_stable_diversity_floor,
+            self.scale_per_ready_worker_token_floor,
+            self.scale_closure_digest,
+        )
+        if any(item not in (None, "") for item in scale):
+            if (
+                self.scale_close_offset_s is None
+                or not math.isfinite(self.scale_close_offset_s)
+                or not 0 < self.scale_close_offset_s <= self.slo.training_hard_s
+                or self.scale_stable_diversity_floor is None
+                or self.scale_stable_diversity_floor < 2
+                or self.scale_per_ready_worker_token_floor is None
+                or self.scale_per_ready_worker_token_floor <= 0
+                or len(self.scale_closure_digest) != 64
+            ):
+                raise ValueError("complete bounded V21S17 scale closure is required")
 
 
 class _ControlHandler(socketserver.StreamRequestHandler):
@@ -297,20 +319,46 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
             "generation": generation, "attempt": attempt,
             "observed_at": snapshot.observed_at, "peers": peers,
         }
-        # The READY snapshot opens before local K40 work. Contributions may
-        # arrive throughout its explicit <=420s training window; once the
-        # token/quorum floor is present, deterministic freeze is immediate.
-        deadline = time.monotonic() + self.config.slo.training_hard_s
+        # The READY snapshot opens before local K40 work. At two nodes, close
+        # is immediate once the reviewed token/diversity floor is present. At
+        # scale, V21S17 pins a finite empirical close over this exact leased
+        # snapshot so every admissible pre-close arrival is included.
+        opened = time.monotonic()
+        deadline = opened + self.config.slo.training_hard_s
+        scale = self.config.scale_close_offset_s is not None
+        close_not_before = (
+            opened + float(self.config.scale_close_offset_s)
+            if scale else None)
+        close_policy = GenerationClosePolicy(
+            int(self.config.scale_stable_diversity_floor)
+            if scale else self.config.q_min,
+            int(self.config.scale_per_ready_worker_token_floor) * snapshot.size
+            if scale else self.config.t_min,
+            None if scale else self.config.ready_fraction,
+        )
         self.admissions[key] = GenerationAdmission.open(
             GenerationFence(self.config.run_id, generation, attempt, self.config.fence),
             ready_snapshot=tuple((peer.worker_id, peer.incarnation) for peer in snapshot.peers),
-            policy=GenerationClosePolicy(self.config.q_min, self.config.t_min,
-                                         self.config.ready_fraction),
+            policy=close_policy,
             deadline=deadline, base_digest=self.config.base_digest,
             policy_digest=self.config.policy_digest,
             layout_digest=self.config.layout_digest, code_digest=self.config.code_digest,
+            close_not_before=close_not_before,
             evidence_path=self.evidence_root / f"generation-{generation:08d}.jsonl")
         value["deadline_after_s"] = self.config.slo.training_hard_s
+        if scale:
+            value["scale_closure"] = {
+                "schema": "emender-v21s17-runtime-close-v1",
+                "close_after_s": self.config.scale_close_offset_s,
+                "stable_diversity_floor":
+                    self.config.scale_stable_diversity_floor,
+                "per_ready_worker_token_floor":
+                    self.config.scale_per_ready_worker_token_floor,
+                "closure_digest": self.config.scale_closure_digest,
+                "close_on_q_min": False,
+                "uses_launched_ranks": False,
+                "wait_for_all_ready": False,
+            }
         self.snapshots[key] = value
         return value
 
@@ -329,12 +377,13 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
     def _contribute(self, request: Mapping[str, object], payload: bytes) -> dict[str, object]:
         generation, attempt = int(request["generation"]), int(request["attempt"])
         admission = self._admission_for_identity(generation, attempt)
+        if "aggregation_weight" in request:
+            raise ValueError(
+                "v2.1 contributions forbid aggregation_weight; accepted_tokens is exact")
         contribution = Contribution.create(
             GenerationFence(self.config.run_id, generation, attempt, self.config.fence),
             str(request["worker_id"]), str(request["incarnation"]),
             int(request["contribution_seq"]), int(request["accepted_tokens"]), payload,
-            aggregation_weight=int(request.get(
-                "aggregation_weight", request["accepted_tokens"])),
             base_digest=str(request.get("base_digest", self.config.base_digest)),
             policy_digest=str(request.get("policy_digest", self.config.policy_digest)),
             layout_digest=str(request.get("layout_digest", self.config.layout_digest)),
@@ -366,8 +415,8 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
                 for item in admission._accepted.values()
                 if item.identity in close.frozen_identities
             },
-            "accepted_weights": {
-                item.identity.worker_id: item.aggregation_weight
+            "exact_tokens_by_worker": {
+                item.identity.worker_id: item.accepted_tokens
                 for item in admission._accepted.values()
                 if item.identity in close.frozen_identities
             },
@@ -457,10 +506,10 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
             raise ValueError("native result-root validation mismatch")
         validated_root, validated_weight, validated_bytes = identities.pop()
         frozen = set(admission.close_result.frozen_identities)
-        aggregation_weight = sum(
-            item.aggregation_weight for item in admission._accepted.values()
+        exact_tokens = sum(
+            item.accepted_tokens for item in admission._accepted.values()
             if item.identity in frozen)
-        if aggregation_weight <= 0 or validated_weight != aggregation_weight:
+        if exact_tokens <= 0 or validated_weight != exact_tokens:
             raise ValueError("native result-root token accounting mismatch")
         return {"status": "validated", "result_root": validated_root,
                 "global_weight": validated_weight, "result_bytes": validated_bytes,
@@ -478,17 +527,17 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
         if (worker_id, incarnation) not in accepted:
             raise ValueError("owner result reporter is outside the frozen accepted set")
         frozen = set(close.frozen_identities)
-        aggregation_weight = sum(
-            item.aggregation_weight for item in admission._accepted.values()
+        exact_tokens = sum(
+            item.accepted_tokens for item in admission._accepted.values()
             if item.identity in frozen)
-        if aggregation_weight <= 0:
-            raise ValueError("frozen aggregation weight is invalid")
+        if exact_tokens <= 0:
+            raise ValueError("frozen exact-token total is invalid")
         root = str(request["result_root"])
         layout_digest = str(request["layout_digest"])
         weight, result_bytes = int(request["global_weight"]), int(request["result_bytes"])
         if (len(root) != 64 or root == "00" * 32
                 or len(layout_digest) != 64 or layout_digest == "00" * 32
-                or weight != aggregation_weight
+                or weight != exact_tokens
                 or result_bytes <= 0):
             raise ValueError("owner result metadata is invalid")
         values = self.owner_results.setdefault((generation, attempt), {})
@@ -503,7 +552,7 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
         if set(values) != accepted_workers:
             return {"status": "waiting", "reported": len(values),
                     "required": len(accepted_workers)}
-        return {"status": "ready", "global_weight": aggregation_weight,
+        return {"status": "ready", "global_weight": exact_tokens,
                 "roots": {worker: str(values[worker]["result_root"])
                           for worker in sorted(values)},
                 "owners": {worker: {
@@ -547,8 +596,12 @@ class PoolControlClient:
         raise TimeoutError(f"pool control RPC deadline expired: {last}")
 
     def ready(self, endpoint: OwnerEndpoint, generation: int, *,
-              run_id: str = "run", fence: int | None = None) -> dict[str, object]:
-        self.run_id = run_id
+              run_id: str | None = None,
+              fence: int | None = None) -> dict[str, object]:
+        if run_id is not None:
+            self.run_id = run_id
+        elif self.run_id is None:
+            self.run_id = "run"
         if fence is not None:
             self.fence = int(fence)
         if self.fence is None:
@@ -570,24 +623,19 @@ class PoolControlClient:
 
     def contribute(self, generation: int, attempt: int, worker_id: str,
                    incarnation: str, contribution_seq: int, accepted_tokens: int,
-                   payload_digest: str, *,
-                   aggregation_weight: int | None = None) -> dict[str, object]:
+                   payload_digest: str) -> dict[str, object]:
         return self._rpc("contribute", payload=payload_digest.encode(), generation=generation,
                          attempt=attempt, worker_id=worker_id, incarnation=incarnation,
                          contribution_seq=contribution_seq,
-                         accepted_tokens=accepted_tokens,
-                         aggregation_weight=(accepted_tokens if aggregation_weight is None
-                                             else aggregation_weight))
+                         accepted_tokens=accepted_tokens)
 
     def contribute_and_freeze(self, *, generation: int, attempt: int,
                               worker_id: str, incarnation: str,
                               contribution_seq: int, accepted_tokens: int,
                               payload_digest: str, deadline: float,
-                              aggregation_weight: int | None = None,
                               ) -> dict[str, object]:
         receipt = self.contribute(generation, attempt, worker_id, incarnation,
-                                  contribution_seq, accepted_tokens, payload_digest,
-                                  aggregation_weight=aggregation_weight)
+                                  contribution_seq, accepted_tokens, payload_digest)
         if receipt["status"] != "accepted":
             return receipt
         while time.monotonic() < deadline:

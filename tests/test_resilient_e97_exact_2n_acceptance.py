@@ -78,9 +78,9 @@ def test_dry_run_renders_exact_real_k40_fenced_acceptance_without_submission(tmp
         "speculative_window_lag_p99_max": 2,
         "freeze_to_latest_seconds_max": 420,
     }
-    assert plan["policy_id"] == "async-decoupled-v2.0-exp"
-    assert plan["conformance"]["async_v2_requirements"] == [
-        f"V2A{i:02d}" for i in range(1, 19)]
+    assert plan["policy_id"] == "async-decoupled-v2.1-simple"
+    assert plan["conformance"]["async_v21_requirements"] == [
+        f"V21S{i:02d}" for i in range(1, 18)]
 
 
 def test_submit_path_is_fail_closed_and_never_contains_4n_submission():

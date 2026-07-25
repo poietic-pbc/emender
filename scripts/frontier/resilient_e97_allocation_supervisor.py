@@ -32,6 +32,7 @@ from ndm.native_dataplane import create_memfd, seal_memfd
 
 
 TRAINERS_PER_NODE = 8
+QUALIFICATION_NODE_LADDER = (2, 4, 8, 16, 32, 64, 256)
 POOL_PROTOCOL_ID = "resilient-diloco-compute-pool-v1"
 GENERATION_BASELINE_S = (212.0, 215.0)
 READY_HARD_S = 180.0
@@ -751,9 +752,30 @@ def _allocation_main() -> int:
         ["scontrol", "show", "hostnames", os.environ["SLURM_JOB_NODELIST"]], text=True
     ).splitlines()
     node_count = int(os.environ.get("RESILIENT_E97_NODE_COUNT", "2"))
-    if node_count != 2:
+    if node_count not in QUALIFICATION_NODE_LADDER:
         raise SystemExit(
-            "async-decoupled-v2 qualification requires exactly two physical nodes")
+            "async-decoupled-v2.1 qualification requires an exact serial-ladder "
+            "node count")
+    if node_count >= 4:
+        if os.environ.get("ASYNC_V21_GATE") != "scale":
+            raise SystemExit(
+                "async-decoupled-v2.1 scale allocation requires the scale gate")
+        required_scale_bindings = (
+            "ASYNC_V21_SCALE_AUTHORIZATION",
+            "ASYNC_V21_SCALE_AUTHORIZATION_DIGEST",
+            "ASYNC_V21_PRIOR_RUNG_PASS",
+            "ASYNC_V21_PRIOR_RUNG_PASS_DIGEST",
+            "ASYNC_V21_SCALE_CLOSURE_DIGEST",
+            "ASYNC_V21_SCALE_CLOSE_OFFSET_NS",
+            "ASYNC_V21_SCALE_STABLE_DIVERSITY_FLOOR",
+            "ASYNC_V21_SCALE_PER_READY_WORKER_TOKEN_FLOOR",
+        )
+        missing = tuple(
+            name for name in required_scale_bindings if not os.environ.get(name))
+        if missing:
+            raise SystemExit(
+                "async-decoupled-v2.1 scale allocation is missing immutable "
+                f"authorization/closure bindings: {', '.join(missing)}")
     if len(nodes) != node_count:
         raise SystemExit("Slurm allocation differs from explicit resilient-pool capacity")
     manager = os.environ["RESILIENT_E97_MANAGER_COMMAND"]

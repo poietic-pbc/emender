@@ -12,8 +12,9 @@ import numpy as np
 import pytest
 
 from ndm.native_dataplane import (
-    ABI_V1, AllocV1, BufferV1, Client, Command, ControlV1, DType, EventV1,
+    ABI_V1, ABI_V21, AllocV1, BufferV1, Client, Command, ControlV1, DType, EventV1,
     LayoutV1, MetricsV1, NativeLibrary, OpenV1, ResultCode, ResultV1, SubmitV1,
+    SubmitV21,
 )
 from tests.native_dataplane_test_support import key, library_path, open_client
 
@@ -21,14 +22,16 @@ from tests.native_dataplane_test_support import key, library_path, open_client
 def test_v1_struct_sizes_soname_and_elastic_symbol_boundary():
     assert {
         OpenV1: 224, LayoutV1: 56, BufferV1: 88, AllocV1: 32,
-        SubmitV1: 128, ControlV1: 216, EventV1: 96, ResultV1: 168,
+        SubmitV1: 128, SubmitV21: 528, ControlV1: 216, EventV1: 96, ResultV1: 168,
         MetricsV1: 184,
     } == {kind: ctypes.sizeof(kind) for kind in (
-        OpenV1, LayoutV1, BufferV1, AllocV1, SubmitV1, ControlV1, EventV1,
+        OpenV1, LayoutV1, BufferV1, AllocV1, SubmitV1, SubmitV21,
+        ControlV1, EventV1,
         ResultV1, MetricsV1,
     )}
     native = NativeLibrary()
     assert native.library.ndp_abi_version() == ABI_V1
+    assert native.library.ndp_abi_version_v21() == ABI_V21
     soname = subprocess.run(
         ["readelf", "-d", native.path], check=True, text=True, capture_output=True
     ).stdout
@@ -38,6 +41,7 @@ def test_v1_struct_sizes_soname_and_elastic_symbol_boundary():
     ).stdout
     assert "ndp_buffer_allocate_v1" in symbols
     assert "ndp_result_view_v1" in symbols
+    assert "ndp_submit_local_v21" in symbols
     assert "MPI_" not in symbols and "PMPI_" not in symbols
 
 

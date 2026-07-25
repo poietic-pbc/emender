@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Fail-closed semantic validator for bounded-lag async DiLoCo v2.
+"""Fail-closed semantic validator for simple async DiLoCo v2.1.
 
-This validator deliberately does not infer a generation from a thread name or
-accept the former contradictory "tau=0 background overlaps g+1" label.  It
-requires explicit v2 policy, local-window/applied-anchor identity, versioned
+This validator does not infer a generation from a thread name. It requires the
+exact versioned v2.1 policy, local-window/applied-anchor identity, versioned
 background work, bounded queue evidence, reload/CAS-verified application, and
 independent correctness latency.
 """
@@ -18,12 +17,14 @@ import statistics
 from typing import Any, Iterable
 
 
-POLICY_ID = "async-decoupled-v2.0-exp"
+POLICY_ID = "async-decoupled-v2.1-simple"
+POLICY_SCHEMA = "emender-async-policy-v2.1"
 K_LOCAL_STEPS = 40
-TAU_HARD = 6
-TAU_TARGET = 2
-SIGMA_HARD = 8
-SIGMA_TARGET = 2
+MAX_COMMIT_LAG = 2
+MAX_ANCHOR_LAG = 2
+MAX_RESULT_LAG = 2
+MAX_SPECULATIVE_WINDOWS = 2
+ETA_OUTER = 1.0
 EXPECTED_TRAINERS = 16
 WARMUP_WINDOWS = 2
 MEASURED_WINDOWS = 10
@@ -104,28 +105,35 @@ def _percentile(values: Iterable[int | float], fraction: float) -> float:
 
 def _policy(records: list[dict[str, Any]]) -> tuple[dict[str, Any], int]:
     policies = [value for value in records
-                if value.get("stage") == "async_v2_policy"]
+                if value.get("stage") == "async_v21_policy"]
     if not policies:
-        raise ValueError("missing async-v2 policy declaration; false tau=0 is forbidden")
+        raise ValueError("missing exact async-v2.1 policy declaration")
     required = {
         "policy_id": POLICY_ID,
-        "tau_hard": TAU_HARD,
-        "tau_target": TAU_TARGET,
-        "sigma_hard": SIGMA_HARD,
-        "sigma_target": SIGMA_TARGET,
+        "policy_schema": POLICY_SCHEMA,
+        "contribution_schema": "emender-native-e97-submission-v2.1",
+        "manifest_schema": "emender-native-e97-generation-v2.1",
+        "checkpoint_schema": "emender-async-v21-reference-checkpoint-v1",
+        "native_abi": 0x00020001,
+        "wire_protocol_major": 2,
+        "wire_protocol_minor": 1,
+        "max_commit_lag": MAX_COMMIT_LAG,
+        "max_anchor_lag": MAX_ANCHOR_LAG,
+        "max_result_lag": MAX_RESULT_LAG,
+        "max_speculative_windows": MAX_SPECULATIVE_WINDOWS,
+        "eta_outer": ETA_OUTER,
         "k_local_steps": K_LOCAL_STEPS,
-        "sealed_descriptor_capacity": 1,
+        "owned_descriptor_capacity": 1,
         "mutable_interval_capacity": 1,
         "result_mailbox_capacity": 1,
         "result_staging_capacity": 1,
     }
     fences = set()
     for value in policies:
-        if value.get("policy_id") != POLICY_ID or _integer(
-                value.get("tau_hard", -1), "tau_hard") == 0:
-            raise ValueError("false tau=0 labeling or non-v2 policy declaration")
+        if value.get("policy_id") != POLICY_ID:
+            raise ValueError("historical or unknown async policy declaration")
         if any(value.get(name) != expected for name, expected in required.items()):
-            raise ValueError("rendered async-v2 policy differs from reviewed constants")
+            raise ValueError("rendered async-v2.1 policy differs from reviewed constants")
         fence = _integer(value.get("allocation_fence"), "allocation fence")
         if fence <= 0:
             raise ValueError("allocation fence must be positive")
@@ -148,7 +156,7 @@ def _background(
         if elapsed <= 0 or record.get("within_slo") is not True:
             raise ValueError(f"invalid or failed background telemetry: {stage}")
         if record.get("policy_id") != POLICY_ID:
-            raise ValueError("false tau=0 background labeling")
+            raise ValueError("background record has a non-v2.1 policy identity")
         if _integer(record.get("allocation_fence"), "background fence") != fence:
             raise ValueError("background work is not under the current fence")
         base = _integer(record.get("base_global_version"), "background base version")
@@ -157,16 +165,11 @@ def _background(
         lag = _integer(record.get("commit_lag"), "background commit lag")
         if base < 0 or committed < base or committed - base != lag:
             raise ValueError("background base/commit/lag identity is inconsistent")
-        if not 0 <= lag <= TAU_HARD:
+        if not 0 <= lag <= MAX_COMMIT_LAG:
             raise ValueError(f"background hard lag violation: {lag}")
         exact_tokens = _integer(record.get("exact_tokens"), "background exact tokens")
-        weight = _integer(
-            record.get("aggregation_weight"), "background aggregation weight")
-        if (
-            exact_tokens <= 0
-            or weight != exact_tokens * (TAU_HARD + 1 - lag)
-        ):
-            raise ValueError("background token/staleness weight is unverifiable")
+        if exact_tokens <= 0 or "aggregation_weight" in record:
+            raise ValueError("background must use only the exact-token quantity")
         values.append({
             "stage": stage,
             "begin": ended - elapsed,
@@ -192,7 +195,7 @@ def _bounds(
 ) -> dict[str, int | float]:
     by_identity: dict[str, dict[str, Any]] = {}
     for value in records:
-        if value.get("stage") == "async_v2_bounds":
+        if value.get("stage") == "async_v21_bounds":
             identity = str(value.get("identity", ""))
             if not identity or identity in by_identity:
                 raise ValueError("duplicate or missing bounded queue identity")
@@ -220,7 +223,7 @@ def _bounds(
         limits = {
             "sealed_descriptor_high_water": 1,
             "mutable_interval_high_water": 1,
-            "mutable_window_high_water": SIGMA_HARD,
+            "mutable_window_high_water": MAX_SPECULATIVE_WINDOWS,
             "result_mailbox_high_water": 1,
             "result_staging_high_water": 1,
         }
@@ -325,11 +328,11 @@ def _applications(
                 value.get("speculative_window_lag"), "speculative lag")
             if result > known or anchor > known or result_lag != known - result:
                 raise ValueError("unverifiable application version identity")
-            if not 0 <= anchor_lag <= TAU_HARD:
+            if not 0 <= anchor_lag <= MAX_ANCHOR_LAG:
                 raise ValueError(f"application hard lag violation: {anchor_lag}")
-            if not 0 <= result_lag <= TAU_HARD:
+            if not 0 <= result_lag <= MAX_RESULT_LAG:
                 raise ValueError(f"result hard lag violation: {result_lag}")
-            if not 0 <= speculative <= SIGMA_HARD:
+            if not 0 <= speculative <= MAX_SPECULATIVE_WINDOWS:
                 raise ValueError(f"speculative hard lag violation: {speculative}")
             anchor_lags.append(anchor_lag)
             result_lags.append(result_lag)
@@ -339,7 +342,7 @@ def _applications(
 
 def _correctness(records: list[dict[str, Any]], *, fence: int) -> dict[str, Any]:
     values = [value for value in records
-              if value.get("stage") == "async_v2_correctness"]
+              if value.get("stage") == "async_v21_correctness"]
     if not values:
         raise ValueError("missing separate freeze-to-latest correctness evidence")
     latencies = []
@@ -389,7 +392,7 @@ def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
             raise ValueError(
                 "trainer step telemetry lacks identity/window/paired timestamps")
         if value.get("policy_id") != POLICY_ID:
-            raise ValueError("false tau=0 trainer labeling")
+            raise ValueError("trainer record has a non-v2.1 policy identity")
         trainer.setdefault(identity, {}).setdefault(window, {}).setdefault(
             phase, []).append(value)
     if len(trainer) != EXPECTED_TRAINERS:
@@ -503,9 +506,9 @@ def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
     )
     commit_lags = [int(value["commit_lag"]) for value in backgrounds]
     for name, values, target in (
-        ("commit", commit_lags, TAU_TARGET),
-        ("anchor", anchor_lags, TAU_TARGET),
-        ("speculative", speculative_lags, SIGMA_TARGET),
+        ("commit", commit_lags, MAX_COMMIT_LAG),
+        ("anchor", anchor_lags, MAX_ANCHOR_LAG),
+        ("speculative", speculative_lags, MAX_SPECULATIVE_WINDOWS),
     ):
         if max(values) > target or _percentile(values, .99) > target:
             raise ValueError(f"{name} lag exceeds the clean promotion target")
@@ -518,7 +521,7 @@ def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
         for stage in sorted({value["stage"] for value in backgrounds})
     }
     return {
-        "schema": "emender-async-decoupled-e97-performance-v2",
+        "schema": "emender-async-decoupled-e97-performance-v2.1",
         "status": "passed",
         "policy": policy,
         "allocation_fence": fence,

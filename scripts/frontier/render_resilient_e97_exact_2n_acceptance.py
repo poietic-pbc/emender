@@ -185,11 +185,18 @@ def build_plan(repo: Path, commit: str, manifest: Path, gate: Path, run_root: Pa
         raise ValueError("retained exact-code G2 full-layout gate is missing")
     common = {
         "nodes": 2, "trainers_per_node": 8, "local_steps": 40,
-        "policy_id": "async-decoupled-v2.0-exp",
+        "policy_id": "async-decoupled-v2.1-simple",
         "policy": {
-            "tau_hard": 6, "tau_target": 2,
-            "sigma_hard": 8, "sigma_target": 2,
-            "eta": 0.5, "q_min": 2, "t_min": 3_934_080,
+            "policy_schema": "emender-async-policy-v2.1",
+            "contribution_schema": "emender-native-e97-submission-v2.1",
+            "manifest_schema": "emender-native-e97-generation-v2.1",
+            "native_abi": 0x00020001,
+            "wire_protocol": [2, 1],
+            "max_commit_lag": 2,
+            "max_anchor_lag": 2,
+            "max_result_lag": 2,
+            "max_speculative_windows": 2,
+            "eta_outer": 1.0, "q_min": 2, "t_min": 3_934_080,
             "group_deadline_s": 420,
             "sealed_descriptor_capacity": 1,
             "mutable_interval_capacity": 1,
@@ -234,9 +241,9 @@ def build_plan(repo: Path, commit: str, manifest: Path, gate: Path, run_root: Pa
             }
         phases.append(phase)
     return {
-        "schema": "emender-real-e97-exact-2n-acceptance-v2",
+        "schema": "emender-real-e97-exact-2n-acceptance-v2.1",
         "source_commit": commit, "node_count": 2, "k_local_steps": 40,
-        "policy_id": "async-decoupled-v2.0-exp",
+        "policy_id": "async-decoupled-v2.1-simple",
         "seed": seed, "seed_config": str(SEED_CONFIG),
         "queue": {"partition": PARTITION, "qos": QOS},
         "payload_parity": {
@@ -252,8 +259,10 @@ def build_plan(repo: Path, commit: str, manifest: Path, gate: Path, run_root: Pa
         "conformance": {"authority": "RESILIENT_DILOCO_COMPUTE_POOL.md version 1",
                         "requirements": [f"R{i:02d}" for i in range(1, 17)],
                         "native_requirements": [f"NDP{i:02d}" for i in range(1, 18)],
-                        "async_v2_authority": "ASYNC_DECOUPLED_DILOCO_V2.md ADR-002",
-                        "async_v2_requirements": [f"V2A{i:02d}" for i in range(1, 19)]},
+                        "async_v21_authority":
+                            "ASYNC_DECOUPLED_DILOCO_V2.md ADR-002 v2.1",
+                        "async_v21_requirements":
+                            [f"V21S{i:02d}" for i in range(1, 18)]},
     }
 
 
@@ -440,9 +449,12 @@ def advance(plan: dict[str, Any], output: Path, state_path: Path, repo: Path) ->
         "RESILIENT_E97_INITIAL_GENERATION": str(phase["initial_generation"]),
         "RESILIENT_E97_COORDINATOR_EPOCH": str(phase["fence_ordinal"]),
         "RESILIENT_E97_GLOBAL_QUORUM": "2", "RESILIENT_E97_GLOBAL_TOKEN_MIN": "3934080",
-        "RESILIENT_E97_DILOCO_POLICY": "async-decoupled-v2.0-exp",
-        "RESILIENT_E97_TAU_HARD": "6", "RESILIENT_E97_TAU_TARGET": "2",
-        "RESILIENT_E97_SIGMA_HARD": "8", "RESILIENT_E97_SIGMA_TARGET": "2",
+        "RESILIENT_E97_DILOCO_POLICY": "async-decoupled-v2.1-simple",
+        "RESILIENT_E97_MAX_COMMIT_LAG": "2",
+        "RESILIENT_E97_MAX_ANCHOR_LAG": "2",
+        "RESILIENT_E97_MAX_RESULT_LAG": "2",
+        "RESILIENT_E97_MAX_SPECULATIVE_WINDOWS": "2",
+        "RESILIENT_E97_ETA_OUTER": "1.0",
         "RESILIENT_E97_STARTUP_SMOKE": "0", "RESILIENT_E97_REQUESTED_WALLTIME": WALLTIME,
         "RESILIENT_E97_BULK_ROOT": f"/tmp/exact-2n-{plan['source_commit'][:12]}-{phase['name']}",
         "RESILIENT_E97_GENERATION_DEADLINE_S": str(STAGE_DEADLINES["quorum_s"]), **phase["injection"],
