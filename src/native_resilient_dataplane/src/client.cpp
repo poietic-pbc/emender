@@ -175,6 +175,7 @@ namespace rpc = emender_ndp::rpc;
 extern "C" {
 
 uint32_t ndp_abi_version(void) { return NDP_ABI_V1; }
+uint32_t ndp_abi_version_v21(void) { return NDP_ABI_V21; }
 
 const char* ndp_error_string(int code) {
     switch (code) {
@@ -390,6 +391,75 @@ int ndp_submit_local_v1(ndp_client_t client, const ndp_submit_v1* input,
             || !rpc::payload_object(response, *output)) return NDP_EROUTE;
         return NDP_OK;
     });
+}
+
+int ndp_submit_local_v21(
+    ndp_client_t client, const ndp_submit_v21* input, ndp_op_t* output) {
+    using namespace emender_ndp::client;
+    if (input == nullptr || output == nullptr) return NDP_EINVAL;
+    if (input->struct_size < sizeof(ndp_submit_v21)
+        || input->abi_version != NDP_ABI_V21) return NDP_EVERSION;
+    constexpr char policy_id[] = "async-decoupled-v2.1-simple";
+    constexpr char policy_schema[] = "emender-async-policy-v2.1";
+    constexpr char contribution_schema[] =
+        "emender-native-e97-submission-v2.1";
+    const auto exact_text = [](const std::uint8_t* actual,
+                               std::uint32_t actual_bytes,
+                               const char* expected,
+                               std::size_t expected_bytes) noexcept {
+        return actual_bytes == expected_bytes
+            && std::memcmp(actual, expected, expected_bytes) == 0;
+    };
+    const auto nonzero = [](const std::uint8_t* value,
+                            std::size_t bytes) noexcept {
+        std::uint8_t combined = 0;
+        for (std::size_t index = 0; index != bytes; ++index) {
+            combined |= value[index];
+        }
+        return combined != 0;
+    };
+    if (!exact_text(input->policy_id, input->policy_id_len, policy_id,
+                    sizeof(policy_id) - 1)
+        || !exact_text(input->policy_schema, input->policy_schema_len,
+                       policy_schema, sizeof(policy_schema) - 1)
+        || !exact_text(input->contribution_schema,
+                       input->contribution_schema_len, contribution_schema,
+                       sizeof(contribution_schema) - 1)
+        || input->reserved0 != 0 || input->flags != 0
+        || input->exact_tokens == 0
+        || input->local_window_end <= input->local_window_start
+        || input->local_window_end - input->local_window_start > 2
+        || input->commit_lag > 2 || input->anchor_lag > 2
+        || input->result_lag > 2 || input->speculative_window_lag > 2
+        || !nonzero(input->policy_digest, sizeof(input->policy_digest))
+        || !nonzero(input->code_digest, sizeof(input->code_digest))
+        || !nonzero(input->base_digest, sizeof(input->base_digest))
+        || !nonzero(input->payload_digest, sizeof(input->payload_digest))
+        || !nonzero(input->local_trainer_set_digest,
+                    sizeof(input->local_trainer_set_digest))
+        || !nonzero(input->endpoint_digest, sizeof(input->endpoint_digest))
+        || std::memcmp(input->payload_digest, input->source_buffer_sha256,
+                       sizeof(input->payload_digest)) != 0) {
+        return NDP_EINVAL;
+    }
+    ndp_submit_v1 compatible{};
+    compatible.struct_size = sizeof(compatible);
+    compatible.abi_version = NDP_ABI_V1;
+    compatible.buffer = input->buffer;
+    std::memcpy(compatible.trainer_key, input->trainer_key,
+                sizeof(compatible.trainer_key));
+    std::memcpy(compatible.trainer_incarnation, input->trainer_incarnation,
+                sizeof(compatible.trainer_incarnation));
+    compatible.submission_seq = input->submission_seq;
+    compatible.weight = input->exact_tokens;
+    compatible.element_offset = input->element_offset;
+    compatible.element_count = input->element_count;
+    compatible.source_dtype = input->source_dtype;
+    compatible.deadline_unix_ns = input->deadline_unix_ns;
+    std::memcpy(compatible.source_buffer_sha256,
+                input->source_buffer_sha256,
+                sizeof(compatible.source_buffer_sha256));
+    return ndp_submit_local_v1(client, &compatible, output);
 }
 
 int ndp_control_v1(ndp_client_t client, const struct ndp_control_v1* input,

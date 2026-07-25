@@ -1,6 +1,7 @@
 #!/bin/bash
-# True resilient E97 bounded-lag v2 gate: one manager and eight real trainers
-# per node.  ADR-002 authorizes exactly the 2-node batch/debug rung only.
+# True resilient E97 async-decoupled-v2.1 gate: one manager and eight real
+# trainers per node. Two-node qualification is the default; 4+ is reachable
+# only through the serial controller's immutable authorization chain.
 # Managers and trainers are separate srun steps; --overlap and --no-kill keep a
 # failed step from cancelling healthy siblings. There are no sentinel ranks;
 # every GPU step is a real trainer. The debug QoS bounds this G3 admission
@@ -25,9 +26,23 @@ APPROVED_EMENDER_CONDA_ENV=/lustre/orion/bif148/scratch/erikgarrison/emender/.en
   echo "EMENDER_CONDA_ENV must resolve to $APPROVED_EMENDER_CONDA_ENV" >&2; exit 64;
 }
 RESILIENT_E97_NODE_COUNT=${RESILIENT_E97_NODE_COUNT:-2}
-[[ $RESILIENT_E97_NODE_COUNT == 2 ]] || {
-  echo "async-decoupled-v2 qualification permits exactly two nodes" >&2; exit 64;
-}
+case "$RESILIENT_E97_NODE_COUNT" in
+  2|4|8|16|32|64|256) ;;
+  *) echo "async-decoupled-v2.1 node count is outside the serial ladder" >&2; exit 64 ;;
+esac
+if ((RESILIENT_E97_NODE_COUNT >= 4)); then
+  [[ ${ASYNC_V21_GATE:-} == scale ]] || {
+    echo "4+ nodes require the canonical v2.1 scale controller" >&2; exit 64;
+  }
+  : "${ASYNC_V21_SCALE_AUTHORIZATION:?missing immutable scale authorization}"
+  : "${ASYNC_V21_SCALE_AUTHORIZATION_DIGEST:?missing scale authorization digest}"
+  : "${ASYNC_V21_PRIOR_RUNG_PASS:?missing immediately preceding passed rung}"
+  : "${ASYNC_V21_PRIOR_RUNG_PASS_DIGEST:?missing prior-rung manifest digest}"
+  : "${ASYNC_V21_SCALE_CLOSURE_DIGEST:?missing reviewed V21S17 closure}"
+  : "${ASYNC_V21_SCALE_CLOSE_OFFSET_NS:?missing empirical V21S17 close}"
+  : "${ASYNC_V21_SCALE_STABLE_DIVERSITY_FLOOR:?missing stable diversity floor}"
+  : "${ASYNC_V21_SCALE_PER_READY_WORKER_TOKEN_FLOOR:?missing exact-token floor}"
+fi
 export EMENDER_CONDA_ENV
 source "$REPO/scripts/frontier/frontier_runtime_env.sh"
 frontier_load_default_modules
@@ -38,6 +53,42 @@ TRAIN_PYTHON_BIN=$(command -v python || command -v python3)
 [[ $(realpath "$TRAIN_PYTHON_BIN") == $(realpath "$APPROVED_EMENDER_CONDA_ENV/bin/python") ]] || {
   echo "activated Python is not the approved immutable runtime" >&2; exit 64;
 }
+if ((RESILIENT_E97_NODE_COUNT >= 4)); then
+  "$TRAIN_PYTHON_BIN" - \
+    "$ASYNC_V21_SCALE_AUTHORIZATION" \
+    "$ASYNC_V21_SCALE_AUTHORIZATION_DIGEST" \
+    "$ASYNC_V21_PRIOR_RUNG_PASS" \
+    "$ASYNC_V21_PRIOR_RUNG_PASS_DIGEST" \
+    "$RESILIENT_E97_NODE_COUNT" <<'PY'
+import hashlib
+import json
+import sys
+
+authorization_path, authorization_digest, prior_path, prior_digest = sys.argv[1:5]
+nodes = int(sys.argv[5])
+predecessor = {4: 2, 8: 4, 16: 8, 32: 16, 64: 32, 256: 64}[nodes]
+
+def verified(path, digest, schema):
+    value = json.load(open(path, encoding="utf-8"))
+    unsigned = {key: item for key, item in value.items()
+                if key != "manifest_digest"}
+    actual = hashlib.sha256(json.dumps(
+        unsigned, sort_keys=True, separators=(",", ":"),
+        allow_nan=False).encode()).hexdigest()
+    if (value.get("schema") != schema or value.get("status") != "passed"
+            or value.get("manifest_digest") != digest or actual != digest):
+        raise SystemExit("immutable v2.1 scale manifest verification failed")
+    return value
+
+authorization = verified(
+    authorization_path, authorization_digest,
+    "emender-async-v21-scale-authorization-v1")
+prior = verified(
+    prior_path, prior_digest, "emender-async-v21-rung-pass-v1")
+if authorization.get("authorized_nodes") != nodes or prior.get("nodes") != predecessor:
+    raise SystemExit("v2.1 scale authorization/predecessor rung mismatch")
+PY
+fi
 RUNTIME_IDENTITY=$($TRAIN_PYTHON_BIN - <<'PY'
 import json, platform, sys
 import torch, triton
@@ -280,17 +331,21 @@ srun --nodes=$RESILIENT_E97_NODE_COUNT --ntasks=$RESILIENT_E97_NODE_COUNT --ntas
 export TIKTOKEN_CACHE_DIR=$RESILIENT_E97_NODE_TIKTOKEN_CACHE
 ROLE="$REPO/scripts/frontier/resilient_e97_role.py"
 RESILIENT_E97_BULK_ROOT=${RESILIENT_E97_BULK_ROOT:-/tmp/resilient-e97}
-RESILIENT_E97_DILOCO_POLICY=${RESILIENT_E97_DILOCO_POLICY:-async-decoupled-v2.0-exp}
-RESILIENT_E97_TAU_HARD=${RESILIENT_E97_TAU_HARD:-6}
-RESILIENT_E97_TAU_TARGET=${RESILIENT_E97_TAU_TARGET:-2}
-RESILIENT_E97_SIGMA_HARD=${RESILIENT_E97_SIGMA_HARD:-8}
-RESILIENT_E97_SIGMA_TARGET=${RESILIENT_E97_SIGMA_TARGET:-2}
-[[ $RESILIENT_E97_DILOCO_POLICY == async-decoupled-v2.0-exp \
-   && $RESILIENT_E97_TAU_HARD == 6 && $RESILIENT_E97_TAU_TARGET == 2 \
-   && $RESILIENT_E97_SIGMA_HARD == 8 && $RESILIENT_E97_SIGMA_TARGET == 2 ]] || {
-  echo "rendered async-v2 policy differs from reviewed ADR-002" >&2; exit 64;
+RESILIENT_E97_DILOCO_POLICY=${RESILIENT_E97_DILOCO_POLICY:-async-decoupled-v2.1-simple}
+RESILIENT_E97_MAX_COMMIT_LAG=${RESILIENT_E97_MAX_COMMIT_LAG:-2}
+RESILIENT_E97_MAX_ANCHOR_LAG=${RESILIENT_E97_MAX_ANCHOR_LAG:-2}
+RESILIENT_E97_MAX_RESULT_LAG=${RESILIENT_E97_MAX_RESULT_LAG:-2}
+RESILIENT_E97_MAX_SPECULATIVE_WINDOWS=${RESILIENT_E97_MAX_SPECULATIVE_WINDOWS:-2}
+RESILIENT_E97_ETA_OUTER=${RESILIENT_E97_ETA_OUTER:-1.0}
+[[ $RESILIENT_E97_DILOCO_POLICY == async-decoupled-v2.1-simple \
+   && $RESILIENT_E97_MAX_COMMIT_LAG == 2 \
+   && $RESILIENT_E97_MAX_ANCHOR_LAG == 2 \
+   && $RESILIENT_E97_MAX_RESULT_LAG == 2 \
+   && $RESILIENT_E97_MAX_SPECULATIVE_WINDOWS == 2 \
+   && $RESILIENT_E97_ETA_OUTER == 1.0 ]] || {
+  echo "rendered async-v2.1 policy differs from reviewed ADR-002" >&2; exit 64;
 }
-COMMON="--run-dir $RUN_DIR --run-id $RESILIENT_E97_RUN_ID --generations ${RESILIENT_E97_GENERATIONS:-1} --initial-generation $RESILIENT_E97_INITIAL_GENERATION --local-steps 40 --node-count $RESILIENT_E97_NODE_COUNT --global-quorum $RESILIENT_E97_GLOBAL_QUORUM --global-token-min $RESILIENT_E97_GLOBAL_TOKEN_MIN --coordinator-host $RESILIENT_E97_COORDINATOR_HOST --coordinator-port ${RESILIENT_E97_COORDINATOR_PORT:-29571} --deadline-s ${RESILIENT_E97_GENERATION_DEADLINE_S:-600} --source-id $RESILIENT_E97_SOURCE_ID --payload-id $RESILIENT_E97_PAYLOAD_ID --code-id ${RESILIENT_E97_CODE_ID:-unknown} --coordinator-epoch ${RESILIENT_E97_COORDINATOR_EPOCH:-1} --bulk-root $RESILIENT_E97_BULK_ROOT --max-spool-bytes ${RESILIENT_E97_MAX_SPOOL_BYTES:-68719476736} --bulk-chunk-bytes ${RESILIENT_E97_BULK_CHUNK_BYTES:-67108864} --local-spool-chunk-bytes ${RESILIENT_E97_LOCAL_SPOOL_CHUNK_BYTES:-67108864} --dataplane-backend $DILOCO_DATAPLANE --native-build-manifest $NDP_BUILD_MANIFEST --native-gate-json $NDP_FULL_LAYOUT_GATE_JSON --diloco-policy $RESILIENT_E97_DILOCO_POLICY --tau-hard $RESILIENT_E97_TAU_HARD --tau-target $RESILIENT_E97_TAU_TARGET --sigma-hard $RESILIENT_E97_SIGMA_HARD --sigma-target $RESILIENT_E97_SIGMA_TARGET --eta-outer 0.5"
+COMMON="--run-dir $RUN_DIR --run-id $RESILIENT_E97_RUN_ID --generations ${RESILIENT_E97_GENERATIONS:-1} --initial-generation $RESILIENT_E97_INITIAL_GENERATION --local-steps 40 --node-count $RESILIENT_E97_NODE_COUNT --global-quorum $RESILIENT_E97_GLOBAL_QUORUM --global-token-min $RESILIENT_E97_GLOBAL_TOKEN_MIN --coordinator-host $RESILIENT_E97_COORDINATOR_HOST --coordinator-port ${RESILIENT_E97_COORDINATOR_PORT:-29571} --deadline-s ${RESILIENT_E97_GENERATION_DEADLINE_S:-600} --source-id $RESILIENT_E97_SOURCE_ID --payload-id $RESILIENT_E97_PAYLOAD_ID --code-id ${RESILIENT_E97_CODE_ID:-unknown} --coordinator-epoch ${RESILIENT_E97_COORDINATOR_EPOCH:-1} --bulk-root $RESILIENT_E97_BULK_ROOT --max-spool-bytes ${RESILIENT_E97_MAX_SPOOL_BYTES:-68719476736} --bulk-chunk-bytes ${RESILIENT_E97_BULK_CHUNK_BYTES:-67108864} --local-spool-chunk-bytes ${RESILIENT_E97_LOCAL_SPOOL_CHUNK_BYTES:-67108864} --dataplane-backend $DILOCO_DATAPLANE --native-build-manifest $NDP_BUILD_MANIFEST --native-gate-json $NDP_FULL_LAYOUT_GATE_JSON --diloco-policy $RESILIENT_E97_DILOCO_POLICY --max-commit-lag $RESILIENT_E97_MAX_COMMIT_LAG --max-anchor-lag $RESILIENT_E97_MAX_ANCHOR_LAG --max-result-lag $RESILIENT_E97_MAX_RESULT_LAG --max-speculative-windows $RESILIENT_E97_MAX_SPECULATIVE_WINDOWS --eta-outer $RESILIENT_E97_ETA_OUTER"
 export RESILIENT_E97_MANAGER_COMMAND="$TRAIN_PYTHON_BIN $ROLE manager $COMMON --local-quorum 8"
 RESUME_ARGS=()
 [[ -z $RESILIENT_E97_RESUME_HANDOFF ]] || RESUME_ARGS=(--resume-handoff "$RESILIENT_E97_RESUME_HANDOFF")

@@ -78,7 +78,8 @@ from ndm.native_e97_runtime import (
 )
 from ndm.native_pool_runtime import NativeManagerSession
 from ndm.async_diloco_v2 import (
-    ASYNC_DECOUPLED_V2, AsyncV2DescriptorService, AsyncV2WorkerLane,
+    ASYNC_DECOUPLED_V21, AsyncV21DescriptorService, AsyncV21WorkerLane,
+    AtomicEightTrainerApply,
     OuterState, ResultEnvelope, ScheduleFreeLocalState,
 )
 from ndm.resilient_e97_reducer import TensorLayout
@@ -95,7 +96,7 @@ from ndm.resilient_pool_runtime import (
 )
 
 
-ASYNC_V2_E97_NATIVE_RESIDENT_BYTES = 64_001_671_648
+ASYNC_V21_E97_NATIVE_RESIDENT_BYTES = 64_001_671_648
 
 
 def production_overlap_probe(*, background_release: threading.Event,
@@ -103,19 +104,19 @@ def production_overlap_probe(*, background_release: threading.Event,
                              timeout_s: float = 2.0) -> list[object]:
     """Exercise the rendered role's actual v2 ownership/continuation edge."""
     digest = "0" * 64
-    lane = AsyncV2WorkerLane(
+    lane = AsyncV21WorkerLane(
         run_id="production-overlap-probe", fence=1,
         worker_id="node-0", incarnation="production-overlap-probe",
         local=ScheduleFreeLocalState(
             x=np.asarray([0.0]), parameter_points={"z": np.asarray([0.0])}),
         anchor_version=0, anchor_state=np.asarray([0.0]),
         anchor_digest=digest, layout_digest="1" * 64, code_digest="2" * 64,
-        policy=ASYNC_DECOUPLED_V2)
+        policy=ASYNC_DECOUPLED_V21)
     lane.finish_window(
         np.asarray([1.0]), exact_tokens=1, begin_ns=1, end_ns=2)
     contribution = lane.seal()
     events: list[object] = []
-    service = AsyncV2DescriptorService(lane=lane, telemetry=events.append)
+    service = AsyncV21DescriptorService(lane=lane, telemetry=events.append)
 
     def certify(_contribution, phase):
         phase("discovery_membership_quorum_start")
@@ -127,7 +128,7 @@ def production_overlap_probe(*, background_release: threading.Event,
             run_id="production-overlap-probe", allocation_fence=1,
             version=1, base_version=0, base_digest=digest,
             state=np.asarray([0.5]), outer=OuterState(step=1, accepted_tokens=1),
-            policy_digest=ASYNC_DECOUPLED_V2.digest,
+            policy_digest=ASYNC_DECOUPLED_V21.digest,
             layout_digest="1" * 64, code_digest="2" * 64,
             manifest_digest="3" * 64,
             selected_contribution_digests=(contribution.digest,),
@@ -259,15 +260,23 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--seed", default=""); value.add_argument("--train-args-json", default="")
     value.add_argument("--data", default=""); value.add_argument("--device", default="cuda:0")
     value.add_argument("--control", action="store_true")
-    value.add_argument("--eta-outer", type=float, default=0.5)
+    value.add_argument("--eta-outer", type=float, default=1.0)
     value.add_argument(
         "--diloco-policy",
         default=os.environ.get("RESILIENT_E97_DILOCO_POLICY",
-                               ASYNC_DECOUPLED_V2.policy_id))
-    value.add_argument("--tau-hard", type=int, default=ASYNC_DECOUPLED_V2.tau_hard)
-    value.add_argument("--tau-target", type=int, default=ASYNC_DECOUPLED_V2.tau_target)
-    value.add_argument("--sigma-hard", type=int, default=ASYNC_DECOUPLED_V2.sigma_hard)
-    value.add_argument("--sigma-target", type=int, default=ASYNC_DECOUPLED_V2.sigma_target)
+                               ASYNC_DECOUPLED_V21.policy_id))
+    value.add_argument(
+        "--max-commit-lag", type=int,
+        default=ASYNC_DECOUPLED_V21.max_commit_lag)
+    value.add_argument(
+        "--max-anchor-lag", type=int,
+        default=ASYNC_DECOUPLED_V21.max_anchor_lag)
+    value.add_argument(
+        "--max-result-lag", type=int,
+        default=ASYNC_DECOUPLED_V21.max_result_lag)
+    value.add_argument(
+        "--max-speculative-windows", type=int,
+        default=ASYNC_DECOUPLED_V21.max_speculative_windows)
     value.add_argument("--migration-policy", default="")
     value.add_argument("--bulk-root", default=os.environ.get("RESILIENT_E97_BULK_ROOT", "/tmp/resilient-e97"))
     # Eight f32 trainer contributions plus the bounded f64 numerator/result
@@ -283,49 +292,68 @@ def parser() -> argparse.ArgumentParser:
     return value
 
 
-def _async_v2_policy(args):
-    """Fail closed before model load on false tau=0 or policy drift."""
+def _async_v21_policy(args):
+    """Fail closed before model load on any v2.1 identity/policy drift."""
     if bool(args.control):
         # The scalar/control fixture may shrink Q/T/deadlines, but it still
         # exercises and labels the exact v2 lag/coalescing/outer policy.  No
         # control fixture is production-promotion eligible.
-        if (str(args.diloco_policy) != ASYNC_DECOUPLED_V2.policy_id
-                or int(args.local_steps) != ASYNC_DECOUPLED_V2.k_local_steps
-                or int(args.tau_hard) != ASYNC_DECOUPLED_V2.tau_hard
-                or int(args.tau_target) != ASYNC_DECOUPLED_V2.tau_target
-                or int(args.sigma_hard) != ASYNC_DECOUPLED_V2.sigma_hard
-                or int(args.sigma_target) != ASYNC_DECOUPLED_V2.sigma_target
-                or float(args.eta_outer) != ASYNC_DECOUPLED_V2.eta):
-            raise ValueError("control fixture mislabeled or changed async-v2 policy")
-        return ASYNC_DECOUPLED_V2
+        if (str(args.diloco_policy) != ASYNC_DECOUPLED_V21.policy_id
+                or int(args.local_steps) != ASYNC_DECOUPLED_V21.k_local_steps
+                or int(args.max_commit_lag)
+                != ASYNC_DECOUPLED_V21.max_commit_lag
+                or int(args.max_anchor_lag)
+                != ASYNC_DECOUPLED_V21.max_anchor_lag
+                or int(args.max_result_lag)
+                != ASYNC_DECOUPLED_V21.max_result_lag
+                or int(args.max_speculative_windows)
+                != ASYNC_DECOUPLED_V21.max_speculative_windows
+                or float(args.eta_outer) != ASYNC_DECOUPLED_V21.eta_outer):
+            raise ValueError(
+                "control fixture mislabeled or changed async-v2.1 policy")
+        return ASYNC_DECOUPLED_V21
     actual = {
         "policy_id": str(args.diloco_policy),
+        "policy_schema": ASYNC_DECOUPLED_V21.policy_schema,
+        "contribution_schema": ASYNC_DECOUPLED_V21.contribution_schema,
+        "manifest_schema": ASYNC_DECOUPLED_V21.manifest_schema,
+        "checkpoint_schema": ASYNC_DECOUPLED_V21.checkpoint_schema,
+        "native_abi": ASYNC_DECOUPLED_V21.native_abi,
+        "wire_protocol_major": ASYNC_DECOUPLED_V21.wire_protocol_major,
+        "wire_protocol_minor": ASYNC_DECOUPLED_V21.wire_protocol_minor,
         "k_local_steps": int(args.local_steps),
-        "tau_hard": int(args.tau_hard),
-        "tau_target": int(args.tau_target),
-        "sigma_hard": int(args.sigma_hard),
-        "sigma_target": int(args.sigma_target),
+        "max_commit_lag": int(args.max_commit_lag),
+        "max_anchor_lag": int(args.max_anchor_lag),
+        "max_result_lag": int(args.max_result_lag),
+        "max_speculative_windows": int(args.max_speculative_windows),
         "q_min": int(args.global_quorum),
         "t_min": int(args.global_token_min),
+        "active_membership_fraction": None,
         "group_deadline_s": min(float(args.deadline_s), 420.0),
+        "ready_deadline_s": 180.0,
+        "owned_deadline_s": 1.0,
+        "catch_up_deadline_s": 420.0,
+        "first_commit_deadline_s": 720.0,
         "generation_attempt_retries": 0,
-        "eta": float(args.eta_outer),
+        "eta_outer": float(args.eta_outer),
         "outer_mode": "delta_sgd",
-        "sealed_descriptor_capacity": 1,
+        "owned_descriptor_capacity": 1,
         "mutable_interval_capacity": 1,
         "result_mailbox_capacity": 1,
         "result_staging_capacity": 1,
         "owner_reassignments": 2,
     }
-    reviewed = ASYNC_DECOUPLED_V2.manifest()
+    reviewed = ASYNC_DECOUPLED_V21.manifest()
     reviewed.pop("policy_digest")
     if actual != reviewed:
-        if actual["tau_hard"] == 0 or actual["policy_id"] != ASYNC_DECOUPLED_V2.policy_id:
-            raise ValueError("false tau=0 or non-v2 production policy labeling")
-        raise ValueError("rendered async-v2 policy differs from reviewed constants")
+        if actual["policy_id"] != ASYNC_DECOUPLED_V21.policy_id:
+            raise ValueError("historical/unknown async policy is not v2.1")
+        raise ValueError(
+            "rendered async-v2.1 policy differs from reviewed constants")
     if args.ready_fraction is not None:
-        raise ValueError("async-v2 initial profile disables active-membership fraction")
-    return ASYNC_DECOUPLED_V2
+        raise ValueError(
+            "async-v2.1 initial profile disables active-membership fraction")
+    return ASYNC_DECOUPLED_V21
 
 
 def _dataplane_policy(args) -> tuple[str, bool, bool]:
@@ -803,14 +831,47 @@ def _pool_hosts(args) -> tuple[str, ...]:
 
 
 def _pool_config(args) -> PoolControlConfig:
-    policy = _async_v2_policy(args).digest
+    policy = _async_v21_policy(args).digest
     backend, production, full_layout = _dataplane_policy(args)
     attestation = getattr(args, "_dataplane_attestation", {})
+    scale = int(args.node_count) >= 4
+    if scale and os.environ.get("ASYNC_V21_GATE") != "scale":
+        raise ValueError(
+            "4+ nodes require the authorized v2.1 scale controller")
+    scale_values = {}
+    if scale:
+        required = (
+            "ASYNC_V21_SCALE_CLOSURE_DIGEST",
+            "ASYNC_V21_SCALE_CLOSE_OFFSET_NS",
+            "ASYNC_V21_SCALE_STABLE_DIVERSITY_FLOOR",
+            "ASYNC_V21_SCALE_PER_READY_WORKER_TOKEN_FLOOR",
+        )
+        if any(not os.environ.get(name) for name in required):
+            raise ValueError(
+                "4+ nodes reject the two-node Q_min early-close path; "
+                "a complete V21S17 closure is required")
+        close_offset_ns = int(
+            os.environ["ASYNC_V21_SCALE_CLOSE_OFFSET_NS"])
+        if close_offset_ns <= 0:
+            raise ValueError("V21S17 close offset must be positive")
+        scale_values = {
+            "scale_close_offset_s": close_offset_ns / 1_000_000_000,
+            "scale_stable_diversity_floor": int(
+                os.environ[
+                    "ASYNC_V21_SCALE_STABLE_DIVERSITY_FLOOR"]),
+            "scale_per_ready_worker_token_floor": int(
+                os.environ[
+                    "ASYNC_V21_SCALE_PER_READY_WORKER_TOKEN_FLOOR"]),
+            "scale_closure_digest":
+                os.environ["ASYNC_V21_SCALE_CLOSURE_DIGEST"],
+        }
     return PoolControlConfig(
         args.run_id, _fence_epoch(args), args.global_quorum, args.global_token_min,
         args.ready_fraction, args.source_id, policy, args.payload_id, args.code_id,
         PoolStageSLO.production(), backend, production, full_layout,
-        str(attestation.get("bundle_sha256", "")) if backend != PYTHON_TCP_DEBUG else "")
+        str(attestation.get("bundle_sha256", ""))
+        if backend != PYTHON_TCP_DEBUG else "",
+        **scale_values)
 
 
 def _copy_frame_payload(frame_fd: int, destination_fd: int, *,
@@ -1046,6 +1107,8 @@ def _native_peer_exchange(session: NativeManagerSession, local_result, *, args,
                 weight=local_result.global_weight, chunk_index=chunk,
                 chunk_count=chunk_count,
                 deadline_unix_ns=frame_deadline(),
+                protocol_major=args._async_v21_policy.wire_protocol_major,
+                protocol_minor=args._async_v21_policy.wire_protocol_minor,
                 message_seq=((local_result.generation + 1) << 32)
                 + sequence_base + chunk)
             try:
@@ -1073,6 +1136,8 @@ def _native_peer_exchange(session: NativeManagerSession, local_result, *, args,
                 permitted_root=peer_root, weight=peer_weight,
                 chunk_index=chunk, chunk_count=chunk_count,
                 deadline_unix_ns=frame_deadline(),
+                protocol_major=args._async_v21_policy.wire_protocol_major,
+                protocol_minor=args._async_v21_policy.wire_protocol_minor,
                 message_seq=((local_result.generation + 1) << 32)
                 + sequence_base + chunk)
             try:
@@ -1110,6 +1175,10 @@ def _native_peer_exchange(session: NativeManagerSession, local_result, *, args,
                     raise ValueError("native owner credit arrived from wrong frozen peer")
                 value = decode_credit_frame_fd(
                     credit_fd, payload_max=payload_max,
+                    protocol_major=
+                        args._async_v21_policy.wire_protocol_major,
+                    protocol_minor=
+                        args._async_v21_policy.wire_protocol_minor,
                     expected={
                         "run_key": __import__("hashlib").sha256(
                             args.run_id.encode()).digest()[:16],
@@ -1165,6 +1234,10 @@ def _native_peer_exchange(session: NativeManagerSession, local_result, *, args,
                     raise ValueError("native owner frame arrived from wrong frozen peer")
                 value = decode_owner_frame_fd(
                     frame_fd, frame_bytes=frame_bytes, payload_max=payload_max,
+                    protocol_major=
+                        args._async_v21_policy.wire_protocol_major,
+                    protocol_minor=
+                        args._async_v21_policy.wire_protocol_minor,
                     expected={
                         "run_key": __import__("hashlib").sha256(
                             args.run_id.encode()).digest()[:16],
@@ -1643,7 +1716,7 @@ def _native_manager(args) -> int:
     backend, production, full_layout = _dataplane_policy(args)
     provider = "cxi" if backend == NATIVE_CXI else os.environ.get(
         "NDP_TEST_PROVIDER", "tcp;ofi_rxm")
-    config_path = ROOT / "configs/frontier/e97_resilient_split_role_flat.json"
+    config_path = ROOT / "configs/frontier/e97_async_256.yaml"
     digests = runtime_digests(
         build_manifest=args.native_build_manifest, config_path=config_path,
         provider=provider, attestation=args._dataplane_attestation)
@@ -1681,9 +1754,10 @@ def _native_manager(args) -> int:
     control_server = control_thread = None
     pool_client = None
     if args.node_count > 1:
-        if args.node_count != 2:
+        if args.node_count not in (2, 4, 8, 16, 32, 64, 256):
             raise ValueError(
-                "async-decoupled-v2 qualification permits exactly two nodes")
+                "async-decoupled-v2.1 qualification requires an exact "
+                "serial-ladder node count")
         if node == 0:
             control_server = PoolControlServer(
                 ("0.0.0.0", args.coordinator_port), pool_config,
@@ -1725,7 +1799,7 @@ def _native_manager(args) -> int:
             base_digest = bytes.fromhex(str(request["base_digest"]))
             plan_digest = __import__("hashlib").sha256(json.dumps(
                 {"generation": generation, "runtime_digests": digests,
-                 "policy_digest": args._async_v2_policy.digest},
+                 "policy_digest": args._async_v21_policy.digest},
                 sort_keys=True, separators=(",", ":")).encode()).digest()
             session.install_generation(
                 total_elements=elements, generation=generation, attempt=1,
@@ -1737,12 +1811,19 @@ def _native_manager(args) -> int:
                 args.run_id, _fence_epoch(args), generation, 1, 1, elements,
                 expected_layout.hex(), base_digest.hex(), plan_digest.hex(),
                 session.local.generation_deadline_ns, digests,
-                policy_id=args._async_v2_policy.policy_id,
-                policy_digest=args._async_v2_policy.digest,
+                policy_id=args._async_v21_policy.policy_id,
+                policy_digest=args._async_v21_policy.digest,
                 code_digest=hashlib.sha256(args.code_id.encode()).hexdigest(),
                 base_global_version=generation,
                 local_window_start=generation,
-                local_window_end=generation + 1)
+                local_window_end=generation + 1,
+                policy_schema=args._async_v21_policy.policy_schema,
+                contribution_schema=args._async_v21_policy.contribution_schema,
+                native_abi=args._async_v21_policy.native_abi,
+                wire_protocol_major=args._async_v21_policy.wire_protocol_major,
+                wire_protocol_minor=args._async_v21_policy.wire_protocol_minor,
+                stable_worker_id=f"node-{node}",
+                worker_incarnation=incarnation)
             atomic_metadata(control / f"native-generation-{generation:08d}.json",
                             metadata.as_json())
             heartbeat(bulk, identity, generation=generation,
@@ -1755,21 +1836,22 @@ def _native_manager(args) -> int:
                     expected={"run_id": args.run_id, "fence_epoch": _fence_epoch(args),
                               "generation": generation, "rank": rank,
                               "layout_digest": expected_layout.hex(),
-                              "policy_id": args._async_v2_policy.policy_id,
-                              "policy_digest": args._async_v2_policy.digest})
+                              "policy_id": args._async_v21_policy.policy_id,
+                              "policy_digest": args._async_v21_policy.digest})
                 base_version = int(submission.get("base_global_version", -1))
                 lag = generation - base_version
                 if (lag != int(submission.get("base_lag_at_seal", -1))
-                        or not 0 <= lag <= args._async_v2_policy.tau_hard
+                        or not 0 <= lag
+                        <= args._async_v21_policy.max_commit_lag
                         or int(submission.get("local_window_end", -1))
                         <= int(submission.get("local_window_start", -1))
                         or len(str(submission.get(
                             "descriptor_digest", ""))) != 64
-                        or int(submission.get("aggregation_weight", 0))
-                        != int(submission.get("tokens", 0))
-                           * (args._async_v2_policy.tau_hard + 1 - lag)):
+                        or int(submission.get("exact_tokens", 0)) <= 0
+                        or "aggregation_weight" in submission):
                     raise ValueError(
-                        "native submission has unverifiable v2 base/lag/weight")
+                        "native submission has unverifiable v2.1 "
+                        "base/lag/exact-token identity")
                 submissions.append(submission)
                 # An accepted rank is monotonic lifecycle progress.  Refresh
                 # the manager deadline at each acceptance instead of expiring
@@ -1777,9 +1859,8 @@ def _native_manager(args) -> int:
                 heartbeat(bulk, identity, generation=generation,
                           step=generation * args.local_steps + len(submissions),
                           loss=None, stage="training_wait")
-            local_weight = sum(int(item["tokens"]) for item in submissions)
-            local_aggregation_weight = sum(
-                int(item["aggregation_weight"]) for item in submissions)
+            local_weight = sum(
+                int(item["exact_tokens"]) for item in submissions)
             contribution_base_versions = {
                 int(item["base_global_version"]) for item in submissions
             }
@@ -1792,13 +1873,13 @@ def _native_manager(args) -> int:
                 sorted(str(item["source_sha256"]) for item in submissions),
                 separators=(",", ":")).encode()).hexdigest()
             local_semantic_identity = {
-                "policy_id": args._async_v2_policy.policy_id,
+                "policy_id": args._async_v21_policy.policy_id,
+                "policy_schema": args._async_v21_policy.policy_schema,
                 "allocation_fence": _fence_epoch(args),
                 "base_global_version": contribution_base_version,
                 "commit_global_version": generation,
                 "commit_lag": commit_lag,
                 "exact_tokens": local_weight,
-                "aggregation_weight": local_aggregation_weight,
                 "contribution_digest": contribution_digest,
             }
             heartbeat(bulk, identity, generation=generation,
@@ -1820,7 +1901,6 @@ def _native_manager(args) -> int:
                     generation=generation, attempt=1, worker_id=f"node-{node}",
                     incarnation=incarnation, contribution_seq=generation,
                     accepted_tokens=local_weight,
-                    aggregation_weight=local_aggregation_weight,
                     payload_digest=local_result.result_root.hex(),
                     deadline=time.monotonic() + pool_config.slo.freeze_s)
                 if close.get("status") != "commit_ready":
@@ -1835,7 +1915,7 @@ def _native_manager(args) -> int:
                     minimum_contributions=args.global_quorum)
                 session.install_routes(endpoints)
                 weights = {str(key): int(value) for key, value in
-                           dict(close["accepted_weights"]).items()}
+                           dict(close["exact_tokens_by_worker"]).items()}
                 roots = {str(key): bytes.fromhex(str(value)) for key, value in
                          dict(close["accepted_payloads"]).items()}
                 heartbeat(bulk, identity, generation=generation,
@@ -1894,10 +1974,6 @@ def _native_manager(args) -> int:
             accepted_tokens = (
                 local_weight if pool_client is None
                 else int(close["accepted_tokens"]))
-            accepted_aggregation_weight = (
-                local_aggregation_weight if pool_client is None
-                else sum(int(value) for value in
-                         dict(close["accepted_weights"]).values()))
             accepted_local_contributions = [{
                 "rank": int(item["rank"]),
                 "trainer": str(item["trainer"]),
@@ -1912,7 +1988,8 @@ def _native_manager(args) -> int:
                 "descriptor_digest": str(item["descriptor_digest"]),
             } for item in submissions]
             result_marker = {
-                "schema": "emender-native-e97-result-v2", "run_id": args.run_id,
+                "schema": "emender-native-e97-result-v2.1",
+                "run_id": args.run_id,
                 "fence_epoch": _fence_epoch(args), "generation": generation,
                 "attempt": final_result.attempt,
                 "owner_epoch": session.local.owner_epoch,
@@ -1923,12 +2000,16 @@ def _native_manager(args) -> int:
                 "base_digest": final_result.base_digest.hex(),
                 "plan_digest": session.local.plan_digest.hex(),
                 "result_root": final_result.result_root.hex(),
-                "global_weight": final_result.global_weight,
-                "weight": accepted_tokens,
+                "global_weight": accepted_tokens,
                 "exact_tokens": accepted_tokens,
-                "aggregation_weight": accepted_aggregation_weight,
-                "policy_id": args._async_v2_policy.policy_id,
-                "policy_digest": args._async_v2_policy.digest,
+                "policy_id": args._async_v21_policy.policy_id,
+                "policy_schema": args._async_v21_policy.policy_schema,
+                "policy_digest": args._async_v21_policy.digest,
+                "native_abi": args._async_v21_policy.native_abi,
+                "wire_protocol_major":
+                    args._async_v21_policy.wire_protocol_major,
+                "wire_protocol_minor":
+                    args._async_v21_policy.wire_protocol_minor,
                 "base_global_version": contribution_base_version,
                 "commit_global_version": generation,
                 "commit_lag": commit_lag,
@@ -1984,22 +2065,39 @@ def _native_manager(args) -> int:
             # legitimately outlast one reader's 60 second apply SLO, while the
             # allocation contract still caps this complete phase at 180s.
             recovery_deadline = time.monotonic() + min(args.deadline_s, 180.0)
+            node_apply = AtomicEightTrainerApply(
+                root=control,
+                run_id=args.run_id,
+                fence=_fence_epoch(args),
+                node_id=f"node-{node}",
+                node_incarnation=incarnation,
+                result_version=generation + 1,
+                result_digest=final_result.result_root.hex(),
+                trainer_count=8,
+            )
             for rank in range(args.local_quorum):
-                wait_metadata(
+                applied = wait_metadata(
                     control / f"native-applied-{generation:08d}-{rank:02d}.json",
                     deadline=recovery_deadline,
                     expected={"run_id": args.run_id,
                               "fence_epoch": _fence_epoch(args),
                               "generation": generation,
                               "result_root": final_result.result_root.hex(),
-                              "rank": rank})
+                              "rank": rank,
+                              "node_incarnation": incarnation})
+                node_apply.record_trainer(
+                    rank=rank,
+                    trainer_incarnation=str(applied["trainer_incarnation"]),
+                    recovery_digest=str(applied["recovery_digest"]),
+                )
+            node_marker = node_apply.commit_node()
             session.commit(
                 publication_manifest=publication, authoritative_latest=latest,
                 deadline_s=pool_config.slo.apply_s)
             final_result.close(); final_operation.close(); freeze.close()
             heartbeat(bulk, identity, generation=generation + 1,
                       step=(generation + 1) * args.local_steps, loss=None,
-                      stage="published")
+                      stage="published_node_applied")
             has_next_generation = generation + 1 < target_generation
             if pool_client is not None and has_next_generation:
                 next_generation = generation + 1
@@ -2351,7 +2449,13 @@ def _load_real(args):
                  "outer_update_state": payload.get("outer_update_state")}
     migration = outer_state_migration(
         seed_meta, policy=args.migration_policy,
-        approved_config={"algorithm": "weighted-mean", "eta_outer": args.eta_outer},
+        approved_config={
+            "mode": "delta_sgd",
+            "eta_outer": args.eta_outer,
+            "step": 0,
+            "accepted_tokens": int(os.environ.get(
+                "RESILIENT_E97_SEED_ACCEPTED_TOKENS", "150793748480")),
+        },
         approved_seed={"step": expected_step, "sha256": expected_sha})
     return train_args, state, payload["optimizer_state_dict"], int(payload.get("step", 0)), migration
 
@@ -2368,7 +2472,7 @@ def trainer(args) -> int:
     native = backend != PYTHON_TCP_DEBUG
     native_runtime = (runtime_digests(
         build_manifest=args.native_build_manifest,
-        config_path=ROOT / "configs/frontier/e97_resilient_split_role_flat.json",
+        config_path=ROOT / "configs/frontier/e97_async_256.yaml",
         provider="cxi" if backend == NATIVE_CXI else os.environ.get(
             "NDP_TEST_PROVIDER", "tcp;ofi_rxm"),
         attestation=args._dataplane_attestation) if native else None)
@@ -2385,12 +2489,18 @@ def trainer(args) -> int:
     target_generation = args.initial_generation + args.generations
     if args.control:
         state, optimizer_state, step, migration = {"weight": torch.tensor([0.0])}, {}, 0, {
-            "status": "control_initialized", "policy": "control"}
+            "status": "control_initialized",
+            "policy": "control",
+            "state": {
+                "mode": "delta_sgd", "eta_outer": 1.0,
+                "step": 0, "accepted_tokens": 0,
+            }}
         train_args = None
     else:
         train_args, state, optimizer_state, step, migration = _load_real(args)
     async_chain = [args.seed] if args.seed else []
-    accepted_token_clock = 0
+    accepted_token_clock = int(
+        dict(migration.get("state", {})).get("accepted_tokens", 0))
     resume_generation = int(args.initial_generation)
     if args.resume_handoff:
         resume_handoff = _authoritative_trainer_resume_handoff(run, args, fenced)
@@ -2467,21 +2577,21 @@ def trainer(args) -> int:
     async_training_lane = None
     next_local_window = start_generation
     trainer_incarnation = uuid.uuid4().hex
-    v2_policy = args._async_v2_policy
+    v2_policy = args._async_v21_policy
     if native:
         # Emitted by the real model-owning role after native attestation and
         # authoritative restore.  This is the sole production policy marker;
         # the older serial generation scheduler is a v1 compatibility fixture
         # and is intentionally not constructed here.
         atomic_metadata(control / f"production-pipeline-{identity}.json", {
-            "schema": "emender-production-async-decoupled-v2",
-            "stage": "async_v2_policy",
+            "schema": "emender-production-async-decoupled-v2.1",
+            "stage": "async_v21_policy",
             "implementation":
                 "ndm.async_diloco_real.PersistentAsyncTrainingLane",
             "policy_reference":
-                "ndm.async_diloco_v2.AsyncV2WorkerLane",
+                "ndm.async_diloco_v2.AsyncV21WorkerLane",
             **v2_policy.manifest(),
-            "sealed_descriptor_capacity": 1,
+            "owned_descriptor_capacity": 1,
             "mutable_interval_capacity": 1,
             "result_mailbox_capacity": 1,
             "result_staging_capacity": 1,
@@ -2644,7 +2754,7 @@ def trainer(args) -> int:
                     optimizer_state = {}
                     _stage_telemetry(
                         bulk, identity, generation,
-                        "async_v2_persistent_bootstrap",
+                        "async_v21_persistent_bootstrap",
                         generation_started, 420.0,
                         policy_id=v2_policy.policy_id,
                         **persistent_worker.bootstrap_counts)
@@ -2722,13 +2832,23 @@ def trainer(args) -> int:
                         1, args.local_spool_chunk_bytes // 4),
                     deadline_s=max(
                         .001, generation_deadline - time.monotonic()),
-                    aggregation_weight=(
-                        tokens * (v2_policy.tau_hard + 1 - lag)),
                     contribution_identity={
                         "policy_id": v2_policy.policy_id,
+                        "policy_schema": v2_policy.policy_schema,
+                        "contribution_schema":
+                            v2_policy.contribution_schema,
                         "policy_digest": v2_policy.digest,
+                        "native_abi": v2_policy.native_abi,
+                        "wire_protocol_major":
+                            v2_policy.wire_protocol_major,
+                        "wire_protocol_minor":
+                            v2_policy.wire_protocol_minor,
                         "code_digest": hashlib.sha256(
                             args.code_id.encode()).hexdigest(),
+                        "worker_id":
+                            native_plane.metadata.stable_worker_id,
+                        "worker_incarnation":
+                            native_plane.metadata.worker_incarnation,
                         "base_global_version": interval_anchor_version,
                         "base_global_digest": interval_anchor_digest,
                         "base_lag_at_seal": lag,
@@ -2738,6 +2858,15 @@ def trainer(args) -> int:
                         "contribution_sequence": generation,
                         "local_trainer_set_digest": hashlib.sha256(
                             f"node-{node}:rank-{rank}".encode()).hexdigest(),
+                        "endpoint_digest": hashlib.sha256(
+                            (native_plane.metadata.stable_worker_id + ":"
+                             + native_plane.metadata.worker_incarnation
+                             ).encode()).hexdigest(),
+                        "anchor_lag": lag,
+                        "result_lag": 0,
+                        "speculative_window_lag": min(
+                            v2_policy.max_speculative_windows,
+                            interval_window_end - generation),
                     })
                 owned_marker = marker
                 v2_owned_seconds_max = max(
@@ -2754,8 +2883,6 @@ def trainer(args) -> int:
                     local_window_end=interval_window_end,
                     window_count=interval_window_count,
                     exact_tokens=tokens,
-                    aggregation_weight=(
-                        tokens * (v2_policy.tau_hard + 1 - lag)),
                     storage_dtype="float32")
                 heartbeat(bulk, identity, generation=generation, step=step,
                           loss=None, stage="submitted")
@@ -2769,12 +2896,23 @@ def trainer(args) -> int:
                         delta, chunk_elements=max(1, args.bulk_chunk_bytes // 4)),
                     tokens=tokens,
                     deadline_s=max(.001, generation_deadline - time.monotonic()),
-                    aggregation_weight=tokens * 7,
                     contribution_identity={
                         "policy_id": v2_policy.policy_id,
+                        "policy_schema": v2_policy.policy_schema,
+                        "contribution_schema":
+                            v2_policy.contribution_schema,
                         "policy_digest": v2_policy.digest,
+                        "native_abi": v2_policy.native_abi,
+                        "wire_protocol_major":
+                            v2_policy.wire_protocol_major,
+                        "wire_protocol_minor":
+                            v2_policy.wire_protocol_minor,
                         "code_digest": hashlib.sha256(
                             args.code_id.encode()).hexdigest(),
+                        "worker_id":
+                            native_plane.metadata.stable_worker_id,
+                        "worker_incarnation":
+                            native_plane.metadata.worker_incarnation,
                         "base_global_version": generation,
                         "base_global_digest": native_plane.metadata.base_digest,
                         "base_lag_at_seal": 0,
@@ -2782,17 +2920,27 @@ def trainer(args) -> int:
                         "local_window_end": generation + 1,
                         "window_count": 1,
                         "contribution_sequence": generation,
+                        "local_trainer_set_digest": hashlib.sha256(
+                            f"node-{node}:rank-{rank}".encode()).hexdigest(),
+                        "endpoint_digest": hashlib.sha256(
+                            (native_plane.metadata.stable_worker_id + ":"
+                             + native_plane.metadata.worker_incarnation
+                             ).encode()).hexdigest(),
+                        "anchor_lag": 0,
+                        "result_lag": 0,
+                        "speculative_window_lag": 1,
                     })
             else:
                 spool.publish(fence, rank, flatten_tensors(
                     delta, chunk_elements=max(1, args.bulk_chunk_bytes // 8)),
                     weight=tokens, source_id=args.source_id)
         del delta
-        # V2A02/V2A05: after local OWNED, hand the resident model to the
+        # V21S02/V21S06: after local OWNED, hand the resident model to the
         # continuous training lane immediately.  The caller now performs
         # result/reduction/checkpoint completion independently while this lane
         # executes adjacent exact K40 windows.  It cumulatively extends one
-        # mutable interval up to sigma_hard; no per-K dense descriptor queues.
+        # mutable interval up to the reviewed two-window bound; no per-K
+        # dense descriptor queues.
         if (native and not args.control
                 and generation + 1 < target_generation):
             lookahead_anchor_digest = state_digest(state).hex()
@@ -2839,7 +2987,7 @@ def trainer(args) -> int:
 
             def async_window_start(local_window):
                 _stage_telemetry(
-                    bulk, identity, generation, "async_v2_k40_start",
+                    bulk, identity, generation, "async_v21_k40_start",
                     time.monotonic(), 420.0,
                     policy_id=v2_policy.policy_id,
                     local_window=local_window,
@@ -2853,7 +3001,7 @@ def trainer(args) -> int:
                 raise RuntimeError("v2 training lane overlapped two descriptors")
             async_training_lane = PersistentAsyncTrainingLane(
                 persistent_worker,
-                sigma_hard=v2_policy.sigma_hard,
+                max_windows=v2_policy.max_speculative_windows,
                 progress_callback_factory=make_lookahead_progress,
                 phase_callback_factory=make_lookahead_phase,
                 window_start_callback=async_window_start,
@@ -2883,7 +3031,7 @@ def trainer(args) -> int:
                 chunk_elements=max(1, args.bulk_chunk_bytes // 4))
             manifest, aggregate = native_context.__enter__()
             _stage_telemetry(
-                bulk, identity, generation, "async_v2_native_result_lane",
+                bulk, identity, generation, "async_v21_native_result_lane",
                 generation_started, args.deadline_s,
                 policy_id=v2_policy.policy_id,
                 allocation_fence=_fence_epoch(args),
@@ -2891,7 +3039,6 @@ def trainer(args) -> int:
                 commit_global_version=int(manifest["commit_global_version"]),
                 commit_lag=int(manifest["commit_lag"]),
                 exact_tokens=int(manifest["exact_tokens"]),
-                aggregation_weight=int(manifest["aggregation_weight"]),
                 contribution_digest=str(manifest["result_root"]),
                 dense_result_owned_by_native_service=True,
                 safe_boundary_pending=True)
@@ -2996,7 +3143,6 @@ def trainer(args) -> int:
                     str(owned_marker["descriptor_digest"])
                     if accepted_own_interval else None),
                 exact_tokens=int(manifest["exact_tokens"]),
-                aggregation_weight=int(manifest["aggregation_weight"]),
                 contribution_digest=str(manifest["result_root"]))
             # Release the one-reader native view immediately.  The result
             # completion path continues with durable verification while the
@@ -3008,7 +3154,25 @@ def trainer(args) -> int:
                     "generation": generation, "result_root": manifest["result_root"],
                     "rank": rank,
                 })
-        accepted_token_clock += int(manifest["weight"])
+        accepted_token_clock += int(
+            manifest["exact_tokens"] if native else manifest["weight"])
+        current_outer = dict(migration.get("state", {}))
+        if (
+            current_outer.get("mode") != "delta_sgd"
+            or float(current_outer.get("eta_outer", -1)) != 1.0
+            or int(current_outer.get("accepted_tokens", -1))
+            > accepted_token_clock
+        ):
+            raise ValueError("v2.1 outer state is unavailable or incompatible")
+        migration = {
+            **migration,
+            "state": {
+                "mode": "delta_sgd",
+                "eta_outer": 1.0,
+                "step": int(current_outer.get("step", 0)) + 1,
+                "accepted_tokens": accepted_token_clock,
+            },
+        }
         step += args.local_steps; losses.append(loss)
         completed = generation + 1
         heartbeat(bulk, identity, generation=completed, step=step, loss=loss,
@@ -3189,7 +3353,6 @@ def trainer(args) -> int:
                     manifest["commit_global_version"]),
                 "commit_lag": int(manifest["commit_lag"]),
                 "exact_tokens": int(manifest["exact_tokens"]),
-                "aggregation_weight": int(manifest["aggregation_weight"]),
                 "contribution_digest": str(manifest["result_root"]),
             }
             _stage_telemetry(
@@ -3266,7 +3429,7 @@ def trainer(args) -> int:
                     "timestamp": time.time(),
                     "identity": identity,
                     "generation": generation,
-                    "stage": "async_v2_correctness",
+                    "stage": "async_v21_correctness",
                     "policy_id": v2_policy.policy_id,
                     "allocation_fence": _fence_epoch(args),
                     "freeze_to_latest_s": (
@@ -3282,22 +3445,27 @@ def trainer(args) -> int:
                     stream.write(
                         json.dumps(correctness, sort_keys=True) + "\n")
                     stream.flush()
-            native_plane.close()
             atomic_metadata(
                 control / f"native-applied-{generation:08d}-{rank:02d}.json", {
-                    "schema": "emender-native-e97-applied-v1",
+                    "schema": "emender-native-e97-applied-v2.1",
                     "run_id": args.run_id, "fence_epoch": _fence_epoch(args),
                     "generation": generation, "result_root": manifest["result_root"],
                     "rank": rank, "checkpoint": str(recovery_checkpoint),
                     "accepted_tokens": accepted_token_clock,
+                    "node_incarnation":
+                        native_plane.metadata.worker_incarnation,
+                    "trainer_incarnation": trainer_incarnation,
+                    "recovery_digest": __import__("hashlib").sha256(
+                        recovery_checkpoint.read_bytes()).hexdigest(),
                 })
+            native_plane.close()
         heartbeat(bulk, identity, generation=generation + 1, step=step, loss=loss, stage="applied")
     if native and not args.control:
         bounds = {
             "timestamp": time.time(),
             "identity": identity,
             "generation": completed,
-            "stage": "async_v2_bounds",
+            "stage": "async_v21_bounds",
             "policy_id": v2_policy.policy_id,
             "allocation_fence": _fence_epoch(args),
             "sealed_descriptor_capacity": 1,
@@ -3312,11 +3480,11 @@ def trainer(args) -> int:
             "result_staging_high_water": 0,
             "native_owned_seconds_max": v2_owned_seconds_max,
             "resident_admission_bytes":
-                ASYNC_V2_E97_NATIVE_RESIDENT_BYTES,
+                ASYNC_V21_E97_NATIVE_RESIDENT_BYTES,
             "resident_limit_bytes": args.max_spool_bytes,
             "resident_headroom_bytes": (
                 args.max_spool_bytes
-                - ASYNC_V2_E97_NATIVE_RESIDENT_BYTES),
+                - ASYNC_V21_E97_NATIVE_RESIDENT_BYTES),
             "python_dense_socket_bytes": 0,
             "lustre_dense_hot_path_bytes": 0,
             "pause_count": v2_pause_count,
@@ -3342,11 +3510,11 @@ def main() -> int:
         raise ValueError("local spool chunk bound must be positive and within the byte ledger")
     if not 0 < args.bulk_chunk_bytes <= args.max_spool_bytes:
         raise ValueError("owner transport chunk bound must be positive and within the byte ledger")
-    args._async_v2_policy = _async_v2_policy(args)
+    args._async_v21_policy = _async_v21_policy(args)
     backend, _production, _full_layout = _dataplane_policy(args)
     if (not args.control and backend != PYTHON_TCP_DEBUG
             and args.max_spool_bytes
-            < ASYNC_V2_E97_NATIVE_RESIDENT_BYTES):
+            < ASYNC_V21_E97_NATIVE_RESIDENT_BYTES):
         raise ValueError(
             "async-v2 E97 native resident formula exceeds configured cap")
     args._dataplane_attestation = _attest_dataplane(

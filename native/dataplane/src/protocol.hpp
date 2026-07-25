@@ -60,6 +60,8 @@ enum class WireReason : std::uint32_t {
 };
 
 struct FrameHeader {
+  std::uint16_t protocol_major{1};
+  std::uint16_t protocol_minor{0};
   MessageType type{MessageType::route_probe};
   std::uint16_t flags{0};
   Key128 run_key{};

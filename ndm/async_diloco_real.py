@@ -1227,7 +1227,7 @@ class PersistentAsyncTrainingLane:
         self,
         session: PersistentRealWorkerSession,
         *,
-        sigma_hard: int,
+        max_windows: int,
         progress_callback_factory: Callable[
             [int], Callable[[int, Mapping[str, Any]], None] | None
         ] | None = None,
@@ -1236,10 +1236,11 @@ class PersistentAsyncTrainingLane:
         ] | None = None,
         window_start_callback: Callable[[int], None] | None = None,
     ):
-        if isinstance(sigma_hard, bool) or not 1 <= int(sigma_hard) <= 8:
-            raise ValueError("persistent async lane requires finite sigma in [1,8]")
+        if isinstance(max_windows, bool) or not 1 <= int(max_windows) <= 8:
+            raise ValueError(
+                "persistent async lane requires a finite window bound in [1,8]")
         self.session = session
-        self.sigma_hard = int(sigma_hard)
+        self.max_windows = int(max_windows)
         self.progress_callback_factory = progress_callback_factory
         self.phase_callback_factory = phase_callback_factory
         self.window_start_callback = window_start_callback
@@ -1292,7 +1293,7 @@ class PersistentAsyncTrainingLane:
                 with self._condition:
                     if (self._stop_requested
                             or self._window_end - self._window_start
-                            >= self.sigma_hard):
+                            >= self.max_windows):
                         self._condition.notify_all()
                         return
                     local_window = self._window_end
@@ -1377,7 +1378,7 @@ class PersistentAsyncTrainingLane:
             losses=tuple(self._losses),
             elapsed_s=max(0.0, time.monotonic() - self._started_s),
             reached_hard_bound=(
-                self._window_end - self._window_start >= self.sigma_hard),
+                self._window_end - self._window_start >= self.max_windows),
             translation_elapsed_s=translation_elapsed_s,
         )
 

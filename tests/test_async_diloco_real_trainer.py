@@ -692,7 +692,7 @@ def test_persistent_lane_progresses_and_coalesces_while_result_is_delayed(
         synthetic_token_stream=False,
         synthetic_vocab_size=8,
     )
-    lane = PersistentAsyncTrainingLane(session, sigma_hard=3)
+    lane = PersistentAsyncTrainingLane(session, max_windows=3)
     lane.start(
         local_window_start=1,
         start_state=session.snapshot(),

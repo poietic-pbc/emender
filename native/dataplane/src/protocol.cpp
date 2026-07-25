@@ -16,6 +16,8 @@ namespace {
 
 constexpr std::array<std::uint8_t, 8> kMagic{
     0x45, 0x4d, 0x4e, 0x44, 0x50, 0x31, 0x00, 0x00};
+constexpr std::array<std::uint8_t, 8> kMagicV21{
+    0x45, 0x4d, 0x4e, 0x44, 0x50, 0x32, 0x00, 0x00};
 constexpr std::string_view kEndpointDomain{"emender-ndp-endpoint-v1\0", 24};
 
 class Writer {
@@ -186,6 +188,9 @@ int encode_frame_impl(const FrameHeader &header,
                       const std::uint8_t *payload, std::size_t payload_bytes,
                       std::vector<std::uint8_t> *out, bool verify_payload) {
   if (out == nullptr || (payload_bytes != 0 && payload == nullptr)) return NDP_T_EINVAL;
+  const bool v1 = header.protocol_major == 1 && header.protocol_minor == 0;
+  const bool v21 = header.protocol_major == 2 && header.protocol_minor == 1;
+  if (!v1 && !v21) return NDP_T_EVERSION;
   const bool has_body = message_has_body(header.type);
   if ((has_body && payload_bytes != header.payload_bytes) ||
       (!has_body && payload_bytes != 0) || header.flags != 0 ||
@@ -198,8 +203,9 @@ int encode_frame_impl(const FrameHeader &header,
   out->clear();
   out->reserve(kHeaderBytes + payload_bytes);
   Writer w(out);
-  w.bytes(kMagic.data(), kMagic.size());
-  w.u16(1); w.u16(0);
+  const auto &magic = v21 ? kMagicV21 : kMagic;
+  w.bytes(magic.data(), magic.size());
+  w.u16(header.protocol_major); w.u16(header.protocol_minor);
   w.u16(static_cast<std::uint16_t>(header.type));
   w.u16(header.flags);
   w.u32(static_cast<std::uint32_t>(kHeaderBytes));
@@ -250,7 +256,9 @@ int decode_frame_view_impl(const std::uint8_t *frame, std::size_t frame_bytes,
       payload_bytes == nullptr) return NDP_T_EINVAL;
   if (frame_bytes < kHeaderBytes || payload_max == 0 ||
       payload_max > NDP_TRANSPORT_MAX_PAYLOAD) return NDP_T_EBOUNDS;
-  if (!std::equal(kMagic.begin(), kMagic.end(), frame)) return NDP_T_EVERSION;
+  const bool magic_v1 = std::equal(kMagic.begin(), kMagic.end(), frame);
+  const bool magic_v21 = std::equal(kMagicV21.begin(), kMagicV21.end(), frame);
+  if (!magic_v1 && !magic_v21) return NDP_T_EVERSION;
   Reader r(frame, kHeaderBytes);
   std::array<std::uint8_t, 8> magic{};
   std::uint16_t major = 0, minor = 0, type = 0, flags = 0;
@@ -274,11 +282,15 @@ int decode_frame_view_impl(const std::uint8_t *frame, std::size_t frame_bytes,
       !r.u32(&h.chunk_index) || !r.u32(&h.chunk_count) || !r.u32(&status) ||
       !r.u32(&reason) || !r.u32(&encoded_crc) || !r.u32(&reserved_tail) ||
       r.remaining() != 0) return NDP_T_EBOUNDS;
-  if (major != 1 || minor != 0 || header_bytes != kHeaderBytes || flags != 0 ||
+  const bool v1 = magic_v1 && major == 1 && minor == 0;
+  const bool v21 = magic_v21 && major == 2 && minor == 1;
+  if ((!v1 && !v21) || header_bytes != kHeaderBytes || flags != 0 ||
       reserved != 0 || reserved_tail != 0 || !valid_type(type) ||
       !valid_status(status) || !valid_reason(reason)) return NDP_T_EVERSION;
   if (encoded_crc != crc32c(frame, kHeaderCrcOffset)) return NDP_T_ECHECKSUM;
   h.type = static_cast<MessageType>(type);
+  h.protocol_major = major;
+  h.protocol_minor = minor;
   h.flags = flags;
   h.status = static_cast<WireStatus>(status);
   h.reason = static_cast<WireReason>(reason);

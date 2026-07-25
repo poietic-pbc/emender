@@ -67,6 +67,8 @@ def test_job_5039258_generation_1_reconnect_identity_is_valid(monkeypatch):
                         lambda *_args, **_kwargs: JOB_5039258_GENERATION_1)
     monkeypatch.setattr(native_runtime, "artifact_path",
                         lambda *_args, **_kwargs: Path("unused-native-library"))
+    monkeypatch.setattr(native_runtime, "NativeLibrary",
+                        lambda *_args, **_kwargs: object())
 
     class ReconnectedClient:
         attached = None
@@ -364,6 +366,8 @@ def test_native_four_node_peer_schedule_is_bounded_and_deterministic():
 
     manager = ROLE.read_text()[ROLE.read_text().index("def _native_manager(args)"):]
     assert "native E97 v1 owner exchange currently requires exactly two nodes" not in manager
+    assert "async-decoupled-v2 qualification permits exactly two nodes" not in manager
+    assert "args.node_count not in (2, 4, 8, 16, 32, 64, 256)" in manager
     assert "for peer_endpoint in remote_endpoints" in manager
     assert "_native_sharded_owner_reduce(" in manager
 
@@ -549,6 +553,7 @@ def test_native_peer_exchange_moves_only_reciprocal_sparse_ranges():
     args = SimpleNamespace(
         run_id="selective-exchange", coordinator_epoch=9,
         bulk_chunk_bytes=32,
+        _async_v21_policy=role.ASYNC_DECOUPLED_V21,
     )
     deadline = time.monotonic() + 3
     exchanges = (
@@ -722,7 +727,7 @@ def test_production_async_lane_keeps_result_and_checkpoint_off_next_k_path():
         real_source.index("def _run_real_worker(")
     ]
     assert "self.session.run_window(" in lane
-    assert ">= self.sigma_hard" in lane
+    assert ">= self.max_windows" in lane
     assert "self.session.translate(corrections)" in lane
     assert "result_shards(" not in lane
     assert "apply_delta(" not in lane
@@ -887,10 +892,8 @@ def test_production_trainer_entrypoint_overlaps_blocked_native_result_and_applie
                 "layout_digest": "1" * 64,
                 "base_digest": "2" * 64,
                 "result_root": f"{generation + 3:x}" * 64,
-                "global_weight": int(marker["aggregation_weight"]),
-                "weight": int(marker["tokens"]),
-                "exact_tokens": int(marker["tokens"]),
-                "aggregation_weight": int(marker["aggregation_weight"]),
+                "global_weight": int(marker["exact_tokens"]),
+                "exact_tokens": int(marker["exact_tokens"]),
                 "base_global_version": int(
                     marker["base_global_version"]),
                 "commit_global_version": generation,
@@ -924,12 +927,15 @@ def test_production_trainer_entrypoint_overlaps_blocked_native_result_and_applie
             self.rank = rank
             self.identity = identity
             self.incarnation = incarnation
-            self.metadata = SimpleNamespace(
-                runtime_digests=runtime_identity)
             self.marker = None
             self.local_delta = None
             self.closed = False
             self.__class__.instances.append(self)
+            self.metadata = SimpleNamespace(
+                runtime_digests=runtime_identity,
+                stable_worker_id="node-0",
+                worker_incarnation=incarnation,
+                base_digest="2" * 64)
 
         @classmethod
         def connect(cls, **kwargs):
@@ -942,7 +948,7 @@ def test_production_trainer_entrypoint_overlaps_blocked_native_result_and_applie
 
         def publish_model_delta(
                 self, base_state, model, tokens, *,
-                aggregation_weight, contribution_identity, **_kwargs):
+                contribution_identity, **_kwargs):
             base_value = float(base_state["weight"])
             endpoint_value = float(model.weight.detach())
             self.local_delta = endpoint_value - base_value
@@ -959,8 +965,7 @@ def test_production_trainer_entrypoint_overlaps_blocked_native_result_and_applie
                 "rank": self.rank,
                 "trainer": self.identity,
                 "incarnation": self.incarnation,
-                "tokens": int(tokens),
-                "aggregation_weight": int(aggregation_weight),
+                "exact_tokens": int(tokens),
                 "payload_digest": payload_digest,
                 "descriptor_digest": descriptor_digest,
                 "owned_ack_seconds": 0.001,
@@ -1049,7 +1054,7 @@ def test_production_trainer_entrypoint_overlaps_blocked_native_result_and_applie
         {},
         0,
         {"status": "test", "state": {
-            "mode": "delta_sgd", "eta": .5,
+            "mode": "delta_sgd", "eta_outer": 1.0,
             "step": 0, "accepted_tokens": 0}},
     ))
     monkeypatch.setenv("RESILIENT_E97_NODE_RANK", "0")
@@ -1102,13 +1107,13 @@ def test_production_trainer_entrypoint_overlaps_blocked_native_result_and_applie
         coordinator_epoch=1,
         deadline_s=5.0,
         node_count=1,
-        eta_outer=.5,
+        eta_outer=1.0,
         resume_handoff="",
         seed="unused",
         train_args_json="unused",
         data="unused",
         device="cpu",
-        _async_v2_policy=ASYNC_DECOUPLED_V2,
+        _async_v21_policy=ASYNC_DECOUPLED_V2,
         _dataplane_attestation={},
     )
 
@@ -1131,12 +1136,12 @@ def test_production_trainer_entrypoint_overlaps_blocked_native_result_and_applie
     assert translated[0]["publication_verified"] is True
     assert translated[0]["before"] == pytest.approx(
         (3.0, 3.0), abs=1e-5)
-    assert translated[0]["correction"] == pytest.approx(-.5, abs=1e-5)
+    assert translated[0]["correction"] == pytest.approx(0.0, abs=1e-5)
     assert translated[0]["after"] == pytest.approx(
-        (2.5, 2.5), abs=1e-5)
-    assert translated[1]["correction"] == pytest.approx(-1.0, abs=1e-5)
+        (3.0, 3.0), abs=1e-5)
+    assert translated[1]["correction"] == pytest.approx(0.0, abs=1e-5)
     assert translated[1]["after"] == pytest.approx(
-        (1.5, 1.5), abs=1e-5)
+        (3.0, 3.0), abs=1e-5)
     assert store.checks >= 6
 
     records = [
@@ -1148,7 +1153,7 @@ def test_production_trainer_entrypoint_overlaps_blocked_native_result_and_applie
     ]
     k_starts = [
         item for item in records
-        if item["stage"] == "async_v2_k40_start"]
+        if item["stage"] == "async_v21_k40_start"]
     apply_receipts = [
         item for item in records
         if item["stage"] == "safe_boundary_apply"]
@@ -1310,9 +1315,9 @@ def test_eight_independent_trainers_advance_three_exact_generations(tmp_path):
             "node-0-generation-*.json")):
         members = json.loads(manifest_path.read_text())["members"]
         reference += sum((rank + 1) ** 2 for rank in members) / sum(rank + 1 for rank in members)
-    # async-decoupled-v2.0-exp applies the reviewed stateless half-step.
+    # async-decoupled-v2.1-simple applies the exact eta_outer=1 update.
     assert checkpoint["model_state_dict"]["weight"].item() == pytest.approx(
-        reference * 0.5)
+        reference)
     handoff = json.loads((tmp_path / "handoff/generation-00000003.json").read_text())
     assert handoff["membership"] == ["node-0"]
     assert handoff["checkpoint_sha256"] == hashlib.sha256(

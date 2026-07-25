@@ -125,7 +125,7 @@ def test_ready_token_floor_distributed_owner_loss_and_late_join(tmp_path):
         assert {item["worker_id"] for item in close["frozen_identities"]} == {"n0", "n1"}
         assert close["accepted_payloads"] == {
             "n0": "payload-0", "n1": "payload-1"}
-        assert close["accepted_weights"] == {"n0": 3, "n1": 7}
+        assert close["exact_tokens_by_worker"] == {"n0": 3, "n1": 7}
 
         # Native endpoints may begin receiving as soon as the provider is
         # bound, but frames are rejected until the frozen peer route is
@@ -279,10 +279,8 @@ def test_ready_token_floor_distributed_owner_loss_and_late_join(tmp_path):
                 pass
 
 
-def test_async_v2_owner_results_use_frozen_aggregation_weight_separate_from_tokens(
-        tmp_path):
+def test_async_v21_owner_results_use_exact_tokens_only(tmp_path):
     exact_tokens = 5_245_440
-    aggregation_weight = 36_718_080
     slo = PoolStageSLO(1, 3, 1, 1, 1, 1, 1, 1)
     control = PoolControlServer(
         ("127.0.0.1", _port()),
@@ -303,21 +301,26 @@ def test_async_v2_owner_results_use_frozen_aggregation_weight_separate_from_toke
                               30000 + index),
                 generation=4, run_id="async-v2")
         clients[0].open_generation(4, attempt=2, deadline=time.monotonic() + 1)
+        with pytest.raises(RuntimeError, match="forbid aggregation_weight"):
+            clients[0]._rpc(
+                "contribute", payload=b"payload-forbidden", generation=4,
+                attempt=2, worker_id="n0", incarnation="i0",
+                contribution_seq=0, accepted_tokens=2_621_440,
+                aggregation_weight=18_350_080)
         assert clients[0].contribute(
-            4, 2, "n0", "i0", 0, 2_621_440, "payload-0",
-            aggregation_weight=18_350_080)["status"] == "accepted"
+            4, 2, "n0", "i0", 0, 2_621_440,
+            "payload-0")["status"] == "accepted"
         assert clients[1].contribute(
-            4, 2, "n1", "i1", 0, 2_624_000, "payload-1",
-            aggregation_weight=18_368_000)["status"] == "accepted"
+            4, 2, "n1", "i1", 0, 2_624_000,
+            "payload-1")["status"] == "accepted"
         close = clients[0]._rpc("close", generation=4, attempt=2)
         assert close["status"] == "commit_ready"
         assert close["accepted_tokens"] == exact_tokens
-        assert close["accepted_weights"] == {
-            "n0": 18_350_080, "n1": 18_368_000}
+        assert close["exact_tokens_by_worker"] == {
+            "n0": 2_621_440, "n1": 2_624_000}
 
         owner_key = (4, 2)
-        for invalid_weight in (0, exact_tokens, aggregation_weight - 1,
-                               aggregation_weight + 1):
+        for invalid_weight in (0, exact_tokens - 1, exact_tokens + 1):
             with pytest.raises(RuntimeError, match="owner result metadata is invalid"):
                 clients[0].announce_owner_result(
                     generation=4, attempt=2, worker_id="n0", incarnation="i0",
@@ -329,7 +332,7 @@ def test_async_v2_owner_results_use_frozen_aggregation_weight_separate_from_toke
         waiting = clients[0]._rpc(
             "owner_result", generation=4, attempt=2, worker_id="n0",
             incarnation="i0", result_root="01" * 32,
-            layout_digest="03" * 32, global_weight=aggregation_weight,
+            layout_digest="03" * 32, global_weight=exact_tokens,
             result_bytes=64)
         assert waiting == {"status": "waiting", "reported": 1, "required": 2}
         prior = dict(control.owner_results[owner_key])
@@ -337,37 +340,34 @@ def test_async_v2_owner_results_use_frozen_aggregation_weight_separate_from_toke
             clients[0].announce_owner_result(
                 generation=4, attempt=2, worker_id="n0", incarnation="i0",
                 result_root="04" * 32, layout_digest="03" * 32,
-                global_weight=aggregation_weight, result_bytes=64,
+                global_weight=exact_tokens, result_bytes=64,
                 deadline=time.monotonic() + 1)
         assert control.owner_results[owner_key] == prior
 
         ready = clients[1].announce_owner_result(
             generation=4, attempt=2, worker_id="n1", incarnation="i1",
             result_root="02" * 32, layout_digest="04" * 32,
-            global_weight=aggregation_weight, result_bytes=68,
+            global_weight=exact_tokens, result_bytes=68,
             deadline=time.monotonic() + 1)
         assert ready["status"] == "ready"
-        assert ready["global_weight"] == aggregation_weight
+        assert ready["global_weight"] == exact_tokens
         assert close["accepted_tokens"] == exact_tokens
 
-        # Job 5066162 generation 0 froze two READY contributions with
-        # 5,245,440 exact tokens.  At commit lag zero ADR-002 assigns the
-        # distinct native aggregation envelope 5,245,440 * 7 = 36,718,080.
-        # Result-root consensus must validate that frozen owner weight, while
-        # continuing to reject both the exact-token clock and any other weight.
+        # Result-root consensus accepts the exact frozen token total and no
+        # separate lag-derived aggregation envelope.
         control.result_roots.pop(owner_key, None)
         admission = control.admissions[owner_key]
 
         assert clients[0]._rpc(
             "result_root", generation=4, attempt=2, worker_id="n0",
             incarnation="i0", result_root="05" * 32,
-            global_weight=exact_tokens, result_bytes=64) == {
+            global_weight=exact_tokens - 1, result_bytes=64) == {
                 "status": "waiting", "reported": 1, "required": 2}
         with pytest.raises(
                 RuntimeError, match="native result-root token accounting mismatch"):
             clients[1].validate_result_root(
                 generation=4, attempt=2, worker_id="n1", incarnation="i1",
-                result_root="05" * 32, global_weight=exact_tokens,
+                result_root="05" * 32, global_weight=exact_tokens - 1,
                 result_bytes=64, deadline=time.monotonic() + 1)
         control.result_roots.pop(owner_key, None)
 
@@ -377,7 +377,7 @@ def test_async_v2_owner_results_use_frozen_aggregation_weight_separate_from_toke
             validated[index] = clients[index].validate_result_root(
                 generation=4, attempt=2, worker_id=f"n{index}",
                 incarnation=f"i{index}", result_root="50" * 32,
-                global_weight=aggregation_weight, result_bytes=5_506_770_496,
+                global_weight=exact_tokens, result_bytes=5_506_770_496,
                 deadline=time.monotonic() + 2)
 
         threads = [
@@ -389,8 +389,63 @@ def test_async_v2_owner_results_use_frozen_aggregation_weight_separate_from_toke
         for thread in threads:
             thread.join()
         assert {item["status"] for item in validated.values()} == {"validated"}
-        assert validated[0]["global_weight"] == aggregation_weight
+        assert validated[0]["global_weight"] == exact_tokens
         assert admission.close_result.accepted_tokens == exact_tokens
+    finally:
+        control.shutdown()
+        control.server_close()
+
+
+def test_v21s17_pool_close_waits_for_finite_close_and_includes_preclose_arrivals(
+        tmp_path):
+    slo = PoolStageSLO(1, 1, 1, 1, 1, 1, 1, 1)
+    control = PoolControlServer(
+        ("127.0.0.1", _port()),
+        PoolControlConfig(
+            "scale-v21", 13, q_min=2, t_min=2, ready_fraction=None,
+            base_digest="base", policy_digest="policy",
+            layout_digest="layout", code_digest="code", slo=slo,
+            scale_close_offset_s=.1,
+            scale_stable_diversity_floor=2,
+            scale_per_ready_worker_token_floor=1,
+            scale_closure_digest="a" * 64,
+        ),
+        evidence_root=tmp_path / "evidence",
+    )
+    threading.Thread(target=control.serve_forever, daemon=True).start()
+    clients = [
+        PoolControlClient(control.server_address, timeout_s=1).bind(
+            "scale-v21", 13)
+        for _ in range(4)
+    ]
+    try:
+        for index, client in enumerate(clients):
+            client.ready(
+                OwnerEndpoint(
+                    f"n{index}", f"i{index}", "127.0.0.1", 31000 + index),
+                generation=0,
+            )
+        opened = clients[0].open_generation(
+            0, attempt=1, deadline=time.monotonic() + 1)
+        assert opened["scale_closure"]["close_on_q_min"] is False
+        assert opened["scale_closure"]["uses_launched_ranks"] is False
+        for index in range(2):
+            assert clients[index].contribute(
+                0, 1, f"n{index}", f"i{index}", 0, 2,
+                f"payload-{index}")["status"] == "accepted"
+        assert clients[0]._rpc(
+            "close", generation=0, attempt=1)["status"] == "open"
+        assert clients[2].contribute(
+            0, 1, "n2", "i2", 0, 2, "payload-2")["status"] == "accepted"
+        time.sleep(.11)
+        close = clients[0]._rpc("close", generation=0, attempt=1)
+        assert close["status"] == "commit_ready"
+        assert {
+            item["worker_id"] for item in close["frozen_identities"]
+        } == {"n0", "n1", "n2"}
+        assert clients[3].contribute(
+            0, 1, "n3", "i3", 0, 2,
+            "payload-late")["status"] == "rejected_stale_fence"
     finally:
         control.shutdown()
         control.server_close()

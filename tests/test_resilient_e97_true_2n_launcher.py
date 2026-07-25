@@ -148,21 +148,28 @@ def test_launcher_discovers_coordinator_and_wires_exact_restart_handoff():
     assert '--resume-handoff "$RESILIENT_E97_RESUME_HANDOFF"' in text
 
 
-def test_v2_launcher_and_supervisor_admit_exactly_two_nodes():
+def test_v21_launcher_defaults_two_nodes_and_scale_requires_serial_ladder():
     launcher = (ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch").read_text()
     supervisor = (
         ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py"
     ).read_text()
 
     assert "RESILIENT_E97_NODE_COUNT=${RESILIENT_E97_NODE_COUNT:-2}" in launcher
-    assert '[[ $RESILIENT_E97_NODE_COUNT == 2 ]]' in launcher
+    assert "2|4|8|16|32|64|256" in launcher
+    assert '[[ ${ASYNC_V21_GATE:-} == scale ]]' in launcher
+    assert "ASYNC_V21_SCALE_AUTHORIZATION" in launcher
+    assert "ASYNC_V21_PRIOR_RUNG_PASS" in launcher
     assert '[[ ${SLURM_JOB_NUM_NODES:?} == "$RESILIENT_E97_NODE_COUNT" ]]' in launcher
     assert "--nodes=$RESILIENT_E97_NODE_COUNT --ntasks=$RESILIENT_E97_NODE_COUNT" in launcher
     assert "--node-count $RESILIENT_E97_NODE_COUNT" in launcher
     assert 'RESILIENT_E97_NODE_COUNT", "2"' in supervisor
-    assert "node_count != 2" in supervisor
+    assert "node_count not in QUALIFICATION_NODE_LADDER" in supervisor
+    assert 'os.environ.get("ASYNC_V21_GATE") != "scale"' in supervisor
+    assert "ASYNC_V21_SCALE_AUTHORIZATION" in supervisor
+    assert "ASYNC_V21_PRIOR_RUNG_PASS" in supervisor
+    assert "ASYNC_V21_SCALE_CLOSURE_DIGEST" in supervisor
     assert 'f"-N{node_count}", f"-n{node_count}"' in supervisor
-    assert "exactly two physical nodes" in supervisor
+    assert "requires exactly two physical nodes" not in supervisor
 
 
 def test_launcher_omits_empty_resume_argument(tmp_path):
@@ -1223,8 +1230,9 @@ def test_terminal_generation_does_not_rejoin_draining_pool():
     assert "target_generation = args.initial_generation + args.generations" in manager
     assert "has_next_generation = generation + 1 < target_generation" in manager
     assert "if pool_client is not None and has_next_generation:" in manager
-    assert manager.index('stage="published"') < manager.index(
-        "has_next_generation =", manager.index('stage="published"'))
+    assert manager.index('stage="published_node_applied"') < manager.index(
+        "has_next_generation =",
+        manager.index('stage="published_node_applied"'))
     assert "terminal_published = False" in manager
     assert "terminal_published = True" in manager
     assert "if pool_client is not None and not terminal_published:" in manager
@@ -1305,7 +1313,7 @@ def test_pool_wiring_preserves_exact_e97_trainer_model_data_optimizer_and_k40():
     assert "RESILIENT_E97_GENERATION_DEADLINE_S:-900" not in launcher
 
 
-def test_frontier_native_trainer_has_one_async_v2_production_authority():
+def test_frontier_native_trainer_has_one_async_v21_production_authority():
     """The v1 mailbox scheduler must not compete with the real v2 lane."""
     role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
     trainer = role[role.index("def trainer(args) -> int:"):]
@@ -1313,13 +1321,13 @@ def test_frontier_native_trainer_has_one_async_v2_production_authority():
     assert "PersistentAsyncTrainingLane(" in trainer
     assert "async_training_lane.start(" in trainer
     assert "async_training_lane.finish_at_boundary(" in trainer
-    assert '"async_v2_native_result_lane"' in trainer
+    assert '"async_v21_native_result_lane"' in trainer
     assert "NativeGenerationPipeline(" not in trainer
     assert "pipeline." not in trainer
 
 
 def test_production_k_next_starts_after_local_owned_before_prior_result_apply_checkpoint():
-    """Guard V2A02 on the rendered trainer, not the synthetic overlap probe.
+    """Guard V21S02 on the rendered trainer, not the synthetic overlap probe.
 
     The persistent lane owns the resident session and starts the capacity-one
     mutable interval before every prior-generation result view, aggregate
@@ -1376,12 +1384,12 @@ def test_exact_renderer_binds_production_delayed_scheduler_marker(tmp_path):
     assert 'launcher": "scripts/frontier/resilient_e97_true_2n.sbatch"' in (
         ROOT / "scripts/frontier/render_resilient_e97_exact_2n_acceptance.py").read_text()
     assert 'ROLE="$REPO/scripts/frontier/resilient_e97_role.py"' in batch
-    assert "AsyncV2DescriptorService(" in source
-    assert "AsyncV2WorkerLane(" in source
-    assert '"schema": "emender-production-async-decoupled-v2"' in source
+    assert "AsyncV21DescriptorService(" in source
+    assert "AsyncV21WorkerLane(" in source
+    assert '"schema": "emender-production-async-decoupled-v2.1"' in source
     assert "LiveNativeGenerationScheduler(" not in source
     assert '"ndm.async_diloco_real.PersistentAsyncTrainingLane"' in source
-    assert '"ndm.async_diloco_v2.AsyncV2WorkerLane"' in source
+    assert '"ndm.async_diloco_v2.AsyncV21WorkerLane"' in source
 
 
 def test_exact_rendered_production_role_starts_g1_without_g0_quorum_permission():

@@ -1,0 +1,713 @@
+#!/usr/bin/env python3
+"""Serial, fail-closed controller for async-decoupled-v2.1 qualification.
+
+This is the only qualification/submission surface for the v2.1 production
+path.  It renders a single immutable payload at a time.  Two-node gates are
+always ``Nodes=2, Partition=batch, QOS=debug``.  Scale requires a separately
+signed promotion manifest, a signed pass from the exact predecessor, and the
+reviewed V21S17 finite close derived from retained passing two-node evidence.
+
+The controller does not use launched ranks as training membership.  A scale
+job receives only the reviewed closure description; the allocation control
+plane evaluates it over the leased READY snapshot taken at group open.
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+from dataclasses import dataclass
+import fcntl
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import subprocess
+import sys
+from typing import Mapping, Sequence
+
+
+ROOT = Path(__file__).resolve().parents[2]
+POLICY_ID = "async-decoupled-v2.1-simple"
+POLICY_SCHEMA = "emender-async-policy-v2.1"
+PAYLOAD_SCHEMA = "emender-async-v21-qualification-payload-v1"
+STATE_SCHEMA = "emender-async-v21-qualification-state-v1"
+AUTHORIZATION_SCHEMA = "emender-async-v21-scale-authorization-v1"
+RUNG_PASS_SCHEMA = "emender-async-v21-rung-pass-v1"
+CLOSURE_SCHEMA = "emender-v21s17-scale-closure-v1"
+CONFIG_PATH = ROOT / "configs/frontier/e97_async_256.yaml"
+LAUNCHER_PATH = ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch"
+SCALE_RUNGS = (4, 8, 16, 32, 64, 256)
+PREDECESSOR = {4: 2, 8: 4, 16: 8, 32: 16, 64: 32, 256: 64}
+TWO_NODE_GATES = ("clean", "faults", "convergence")
+ALL_GATES = (*TWO_NODE_GATES, "scale")
+SEED_STEP = 2_300_930
+SEED_ACCEPTED_TOKENS = 150_793_748_480
+SEED_BYTES = 7_719_680_116
+SEED_SHA256 = (
+    "0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2"
+)
+SEED_NODE_PATH = "/tmp/emender-e97-seed-$SLURM_JOB_ID"
+
+
+def canonical_bytes(value: object) -> bytes:
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")
+
+
+def canonical_digest(value: object) -> str:
+    return hashlib.sha256(canonical_bytes(value)).hexdigest()
+
+
+def _verify_canonical_config() -> None:
+    value = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    seed = value.get("seed") if isinstance(value, Mapping) else None
+    if (
+        not isinstance(seed, Mapping)
+        or seed.get("step") != SEED_STEP
+        or seed.get("tokens") != SEED_ACCEPTED_TOKENS
+        or seed.get("size") != SEED_BYTES
+        or seed.get("sha256") != SEED_SHA256
+    ):
+        raise ValueError("canonical E97 config/seed identity drifted")
+
+
+def _digest(value: object, name: str) -> str:
+    text = str(value)
+    if len(text) != 64:
+        raise ValueError(f"{name} must be a SHA-256 digest")
+    try:
+        bytes.fromhex(text)
+    except ValueError as error:
+        raise ValueError(f"{name} must be a SHA-256 digest") from error
+    return text
+
+
+def _load_json(path: str | Path, *, schema: str) -> dict[str, object]:
+    target = Path(path).resolve()
+    value = json.loads(target.read_text(encoding="utf-8"))
+    if not isinstance(value, dict) or value.get("schema") != schema:
+        raise ValueError(f"{schema} manifest identity is required")
+    encoded_digest = value.get("manifest_digest")
+    unsigned = {key: item for key, item in value.items()
+                if key != "manifest_digest"}
+    if encoded_digest != canonical_digest(unsigned):
+        raise ValueError(f"{schema} manifest digest mismatch")
+    return value
+
+
+def _verify_review_signature(
+    value: Mapping[str, object],
+    *,
+    trusted_reviewer_key: str | Path | None,
+    allow_test_signatures: bool,
+) -> None:
+    signature = value.get("review_signature")
+    if allow_test_signatures:
+        if signature != "signed-for-test":
+            raise ValueError("signed review attestation is required")
+        return
+    if not isinstance(signature, Mapping):
+        raise ValueError("signed Ed25519 review attestation is required")
+    if (
+        signature.get("algorithm") != "ed25519"
+        or trusted_reviewer_key is None
+    ):
+        raise ValueError("trusted Ed25519 reviewer key is required")
+    public_bytes = Path(trusted_reviewer_key).resolve().read_bytes()
+    key_digest = hashlib.sha256(public_bytes).hexdigest()
+    if signature.get("public_key_sha256") != key_digest:
+        raise ValueError("review signature does not use the trusted key")
+    try:
+        encoded = base64.b64decode(
+            str(signature["signature_base64"]), validate=True)
+        from cryptography.hazmat.primitives.serialization import load_pem_public_key
+        key = load_pem_public_key(public_bytes)
+        signed = {
+            key_name: item
+            for key_name, item in value.items()
+            if key_name not in {"manifest_digest", "review_signature"}
+        }
+        key.verify(
+            encoded,
+            b"emender-async-v21-review-v1\0" + canonical_bytes(signed),
+        )
+    except (KeyError, ValueError, TypeError, ImportError) as error:
+        raise ValueError("invalid Ed25519 review signature") from error
+    except Exception as error:
+        raise ValueError("invalid Ed25519 review signature") from error
+
+
+def _manifest_reference(
+    reference: object,
+    *,
+    evidence_root: Path,
+    schema: str,
+    samples_field: str,
+) -> tuple[dict[str, object], list[int]]:
+    if not isinstance(reference, Mapping):
+        raise ValueError("V21S17 evidence reference is missing")
+    relative = Path(str(reference.get("path", "")))
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("V21S17 evidence path must stay under retained evidence")
+    path = (evidence_root / relative).resolve()
+    path.relative_to(evidence_root.resolve())
+    value = _load_json(path, schema=schema)
+    if (
+        value.get("status") != "passed"
+        or value.get("nodes") != 2
+        or reference.get("digest") != value.get("manifest_digest")
+    ):
+        raise ValueError("V21S17 evidence is not a digested passed two-node record")
+    samples = value.get(samples_field)
+    if (
+        not isinstance(samples, list)
+        or len(samples) < 3
+        or any(
+            isinstance(item, bool) or not isinstance(item, int) or item <= 0
+            for item in samples
+        )
+    ):
+        raise ValueError(f"V21S17 {samples_field} evidence is unsupported")
+    return value, [int(item) for item in samples]
+
+
+def _quantile(samples: Sequence[int], numerator: int, denominator: int) -> int:
+    if (
+        not samples
+        or numerator <= 0
+        or denominator <= 0
+        or numerator > denominator
+    ):
+        raise ValueError("unsupported empirical quantile")
+    ordered = sorted(int(item) for item in samples)
+    index = max(0, math.ceil(len(ordered) * numerator / denominator) - 1)
+    return ordered[index]
+
+
+def _scaled(value: int, numerator: int, denominator: int) -> int:
+    if value <= 0 or numerator < denominator or denominator <= 0:
+        raise ValueError("V21S17 margin must be finite and at least one")
+    return (value * numerator + denominator - 1) // denominator
+
+
+def validate_scale_evidence(
+    closure: Mapping[str, object],
+    *,
+    evidence_root: str | Path,
+    ready_count: int,
+) -> dict[str, object]:
+    """Recompute the finite V21S17 arithmetic from retained 2-node samples."""
+    if (
+        not isinstance(closure, Mapping)
+        or closure.get("schema") != CLOSURE_SCHEMA
+        or closure.get("ready_snapshot_source")
+        != "leased-ready-at-group-open"
+        or closure.get("include_all_complete_admissible_preclose") is not True
+        or closure.get("close_on_q_min") is not False
+        or closure.get("uses_launched_ranks") is not False
+        or closure.get("wait_for_all_ready") is not False
+        or isinstance(ready_count, bool)
+        or ready_count < 2
+    ):
+        raise ValueError(
+            "V21S17 evidence-derived leased READY closure is required; "
+            "launched ranks/Q_min early close/unbounded all-ready are forbidden")
+    root = Path(evidence_root).resolve()
+    _arrival_value, arrivals = _manifest_reference(
+        closure.get("arrival_evidence"),
+        evidence_root=root,
+        schema="emender-async-v21-two-node-arrivals-v1",
+        samples_field="samples_ns",
+    )
+    stage_value, stages = _manifest_reference(
+        closure.get("stage_evidence"),
+        evidence_root=root,
+        schema="emender-async-v21-two-node-stages-v1",
+        samples_field="close_to_latest_ns",
+    )
+    cadence = stage_value.get("cadence_ns")
+    if (
+        not isinstance(cadence, list)
+        or len(cadence) < 3
+        or any(
+            isinstance(item, bool) or not isinstance(item, int) or item <= 0
+            for item in cadence
+        )
+    ):
+        raise ValueError("V21S17 cadence derivation lacks passed two-node evidence")
+    quantile = closure.get("quantile")
+    margin = closure.get("margin")
+    if not isinstance(quantile, Mapping) or not isinstance(margin, Mapping):
+        raise ValueError("V21S17 quantile/margin arithmetic is missing")
+    qn, qd = int(quantile.get("numerator", 0)), int(
+        quantile.get("denominator", 0))
+    mn, md = int(margin.get("numerator", 0)), int(
+        margin.get("denominator", 0))
+    arrival_q = _quantile(arrivals, qn, qd)
+    stage_q = _quantile(stages, qn, qd)
+    cadence_q = _quantile([int(item) for item in cadence], qn, qd)
+    close_offset_ns = _scaled(max(arrival_q, cadence_q), mn, md)
+    stage_deadline_ns = _scaled(stage_q, mn, md)
+    cadence_deadline_ns = _scaled(cadence_q, mn, md)
+    diversity = int(closure.get("stable_diversity_floor", 0))
+    tokens_per_worker = int(closure.get("per_ready_worker_token_floor", 0))
+    if diversity < 2 or diversity > ready_count or tokens_per_worker <= 0:
+        raise ValueError("V21S17 stable diversity/exact-token floor is invalid")
+    derived = {
+        "schema": "emender-v21s17-derived-close-v1",
+        "ready_snapshot_source": "leased-ready-at-group-open",
+        "ready_count": int(ready_count),
+        "close_offset_ns": close_offset_ns,
+        "stage_deadline_ns": stage_deadline_ns,
+        "cadence_deadline_ns": cadence_deadline_ns,
+        "stable_diversity_floor": diversity,
+        "per_ready_worker_token_floor": tokens_per_worker,
+        "exact_token_floor": tokens_per_worker * ready_count,
+        "include_all_complete_admissible_preclose": True,
+        "close_on_q_min": False,
+        "uses_launched_ranks": False,
+        "wait_for_all_ready": False,
+        "arrival_evidence_digest": closure["arrival_evidence"]["digest"],
+        "stage_evidence_digest": closure["stage_evidence"]["digest"],
+        "arithmetic": {
+            "quantile": {"numerator": qn, "denominator": qd},
+            "margin": {"numerator": mn, "denominator": md},
+            "close": "ceil(max(arrival_quantile,cadence_quantile)*margin)",
+            "stage": "ceil(close_to_latest_quantile*margin)",
+            "cadence": "ceil(cadence_quantile*margin)",
+        },
+    }
+    expected = closure.get("derived")
+    if expected is not None and expected != derived:
+        raise ValueError("V21S17 stored derivation differs from empirical arithmetic")
+    return derived
+
+
+@dataclass
+class V21ScaleClosure:
+    """One finite group close evaluated only over an open READY snapshot."""
+
+    open_time_ns: int
+    ready_snapshot: Mapping[str, str]
+    derived: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        if (
+            self.open_time_ns < 0
+            or len(self.ready_snapshot) < 2
+            or any(not worker or not incarnation
+                   for worker, incarnation in self.ready_snapshot.items())
+            or self.derived.get("ready_snapshot_source")
+            != "leased-ready-at-group-open"
+            or int(self.derived.get("ready_count", -1))
+            != len(self.ready_snapshot)
+        ):
+            raise ValueError("scale close requires the exact leased READY snapshot")
+        self.close_time_ns = self.open_time_ns + int(
+            self.derived["close_offset_ns"])
+        if self.close_time_ns <= self.open_time_ns:
+            raise ValueError("scale close must be finite and after group open")
+        self._complete: dict[str, dict[str, object]] = {}
+
+    def can_close(
+        self, now_ns: int, *, complete_workers: set[str] | None = None,
+    ) -> bool:
+        del complete_workers
+        # The reviewed close is immutable at group open.  Neither Q_min nor
+        # all-READY completion changes it.
+        return int(now_ns) >= self.close_time_ns
+
+    def record(
+        self,
+        worker_id: str,
+        incarnation: str,
+        received_ns: int,
+        *,
+        exact_tokens: int,
+    ) -> str:
+        if (
+            self.ready_snapshot.get(worker_id) != incarnation
+            or exact_tokens <= 0
+        ):
+            raise ValueError("contribution is not admissible in the leased snapshot")
+        if received_ns > self.close_time_ns:
+            return "late"
+        value = {
+            "worker_id": worker_id,
+            "incarnation": incarnation,
+            "received_ns": int(received_ns),
+            "exact_tokens": int(exact_tokens),
+        }
+        old = self._complete.get(worker_id)
+        if old is not None:
+            if old != value:
+                raise ValueError("conflicting stable-worker contribution")
+            return "duplicate"
+        self._complete[worker_id] = value
+        return "accepted"
+
+    def freeze(self, now_ns: int) -> tuple[dict[str, object], ...]:
+        if not self.can_close(now_ns):
+            raise ValueError("reviewed finite close has not arrived")
+        frozen = tuple(
+            self._complete[worker] for worker in sorted(self._complete))
+        if len(frozen) < int(self.derived["stable_diversity_floor"]):
+            raise ValueError("scale stable-diversity safety floor is not met")
+        if sum(int(item["exact_tokens"]) for item in frozen) < int(
+                self.derived["exact_token_floor"]):
+            raise ValueError("scale exact-token safety floor is not met")
+        return frozen
+
+
+def _state(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {"schema": STATE_SCHEMA, "payloads": {}, "active_job": None}
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(value, dict)
+        or value.get("schema") != STATE_SCHEMA
+        or not isinstance(value.get("payloads"), dict)
+    ):
+        raise ValueError("retained qualification state identity is invalid")
+    return value
+
+
+def _identities_match(
+    value: Mapping[str, object], expected: Mapping[str, str],
+) -> bool:
+    actual = value.get("identities")
+    return isinstance(actual, Mapping) and dict(actual) == dict(expected)
+
+
+def build_plan(
+    *,
+    gate: str,
+    nodes: int,
+    state_path: str | Path,
+    evidence_root: str | Path,
+    source_digest: str,
+    policy_digest: str,
+    bundle_digest: str,
+    seed_digest: str,
+    launcher_digest: str,
+    parameters: Mapping[str, object],
+    authorization_path: str | Path | None = None,
+    predecessor_path: str | Path | None = None,
+    trusted_reviewer_key: str | Path | None = None,
+    allow_test_signatures: bool = False,
+) -> dict[str, object]:
+    _verify_canonical_config()
+    if gate not in ALL_GATES:
+        raise ValueError(f"unsupported qualification gate: {gate}")
+    if isinstance(nodes, bool) or nodes <= 0:
+        raise ValueError("node count must be positive")
+    if gate in TWO_NODE_GATES and nodes != 2:
+        raise ValueError(f"{gate} qualification is exactly two nodes")
+    if gate == "scale" and nodes not in SCALE_RUNGS:
+        raise ValueError("scale nodes must follow 4->8->16->32->64->256")
+    if gate == "scale" and (
+        parameters.get("close_on_q_min") is not False
+        or parameters.get("uses_launched_ranks") is not False
+        or parameters.get("wait_for_all_ready") is not False
+    ):
+        raise ValueError(
+            "scale parameters must explicitly reject Q_min early close, "
+            "launched-rank membership, and an all-READY barrier")
+    identities = {
+        "source_digest": _digest(source_digest, "source"),
+        "policy_digest": _digest(policy_digest, "policy"),
+        "bundle_digest": _digest(bundle_digest, "bundle"),
+        "seed_digest": _digest(seed_digest, "seed"),
+        "launcher_digest": _digest(launcher_digest, "launcher"),
+    }
+    if identities["seed_digest"] != SEED_SHA256:
+        raise ValueError("qualification payload must bind the canonical E97 seed")
+    payload = {
+        "schema": PAYLOAD_SCHEMA,
+        "policy_id": POLICY_ID,
+        "policy_schema": POLICY_SCHEMA,
+        "gate": gate,
+        "nodes": int(nodes),
+        "identities": identities,
+        "parameters": dict(parameters),
+        "config": str(CONFIG_PATH),
+        "seed": {
+            "step": SEED_STEP,
+            "accepted_tokens": SEED_ACCEPTED_TOKENS,
+            "bytes": SEED_BYTES,
+            "sha256": SEED_SHA256,
+            "node_path": SEED_NODE_PATH,
+            "compute_node_network_fetches": 0,
+        },
+    }
+    payload_digest = canonical_digest(payload)
+    retained_state = _state(Path(state_path).resolve())
+    old = retained_state["payloads"].get(payload_digest)
+    if isinstance(old, Mapping) and old.get("status") == "failed":
+        raise ValueError("unchanged failed payload cannot be resubmitted")
+    active = retained_state.get("active_job")
+    if isinstance(active, Mapping) and active.get("job_id"):
+        raise ValueError("at most one active job is permitted")
+
+    scale_evidence = None
+    if gate == "scale":
+        if authorization_path is None or predecessor_path is None:
+            raise ValueError(
+                "signed scale authorization and immediate predecessor pass "
+                "are required")
+        authorization = _load_json(
+            authorization_path, schema=AUTHORIZATION_SCHEMA)
+        _verify_review_signature(
+            authorization,
+            trusted_reviewer_key=trusted_reviewer_key,
+            allow_test_signatures=allow_test_signatures,
+        )
+        if (
+            authorization.get("status") != "passed"
+            or authorization.get("authorized_nodes") != nodes
+            or not _identities_match(authorization, identities)
+        ):
+            raise ValueError("scale authorization does not bind this exact payload/rung")
+        predecessor = _load_json(predecessor_path, schema=RUNG_PASS_SCHEMA)
+        _verify_review_signature(
+            predecessor,
+            trusted_reviewer_key=trusted_reviewer_key,
+            allow_test_signatures=allow_test_signatures,
+        )
+        required_predecessor = PREDECESSOR[nodes]
+        if predecessor.get("nodes") != required_predecessor:
+            raise ValueError(
+                f"exact immediate predecessor {required_predecessor} pass is required")
+        if (
+            predecessor.get("status") != "passed"
+            or not _identities_match(predecessor, identities)
+        ):
+            raise ValueError("immediate predecessor is not a bound passing manifest")
+        reviewed_ready_count = int(
+            authorization.get("reviewed_ready_snapshot_size", 0))
+        scale_evidence = validate_scale_evidence(
+            authorization.get("closure", {}),
+            evidence_root=evidence_root,
+            ready_count=reviewed_ready_count,
+        )
+        payload["scale_authorization_digest"] = authorization["manifest_digest"]
+        payload["predecessor_pass_digest"] = predecessor["manifest_digest"]
+        payload["scale_closure"] = scale_evidence
+        payload_digest = canonical_digest(payload)
+        old = retained_state["payloads"].get(payload_digest)
+        if isinstance(old, Mapping) and old.get("status") == "failed":
+            raise ValueError("unchanged failed payload cannot be resubmitted")
+
+    scheduler = (
+        {"Nodes": 2, "Partition": "batch", "QOS": "debug"}
+        if nodes == 2
+        else {"Nodes": nodes, "Partition": "batch", "QOS": "debug"}
+    )
+    exports = [
+        "ALL",
+        f"ASYNC_V21_GATE={gate}",
+        f"ASYNC_V21_PAYLOAD_DIGEST={payload_digest}",
+        f"ASYNC_V21_POLICY_DIGEST={policy_digest}",
+        f"ASYNC_V21_CONFIG={CONFIG_PATH}",
+        f"RESILIENT_E97_NODE_COUNT={nodes}",
+        f"RESILIENT_E97_DILOCO_POLICY={POLICY_ID}",
+        "RESILIENT_E97_GLOBAL_TOKEN_MIN=3934080",
+        "RESILIENT_E97_ETA_OUTER=1.0",
+        "RESILIENT_E97_MAX_COMMIT_LAG=2",
+        "RESILIENT_E97_MAX_ANCHOR_LAG=2",
+        "RESILIENT_E97_MAX_RESULT_LAG=2",
+        "RESILIENT_E97_MAX_SPECULATIVE_WINDOWS=2",
+        "RESILIENT_E97_COMPUTE_NODE_NETWORK_FETCHES=0",
+    ]
+    if scale_evidence is not None:
+        exports.extend([
+            "ASYNC_V21_SCALE_AUTHORIZATION="
+            + str(Path(authorization_path).resolve()),
+            "ASYNC_V21_SCALE_AUTHORIZATION_DIGEST="
+            + str(payload["scale_authorization_digest"]),
+            "ASYNC_V21_PRIOR_RUNG_PASS="
+            + str(Path(predecessor_path).resolve()),
+            "ASYNC_V21_PRIOR_RUNG_PASS_DIGEST="
+            + str(payload["predecessor_pass_digest"]),
+            "ASYNC_V21_SCALE_EVIDENCE_ROOT="
+            + str(Path(evidence_root).resolve()),
+            "ASYNC_V21_SCALE_CLOSURE_DIGEST="
+            + canonical_digest(scale_evidence),
+            "ASYNC_V21_SCALE_CLOSE_OFFSET_NS="
+            + str(scale_evidence["close_offset_ns"]),
+            "ASYNC_V21_SCALE_STABLE_DIVERSITY_FLOOR="
+            + str(scale_evidence["stable_diversity_floor"]),
+            "ASYNC_V21_SCALE_PER_READY_WORKER_TOKEN_FLOOR="
+            + str(scale_evidence["per_ready_worker_token_floor"]),
+        ])
+        if trusted_reviewer_key is not None:
+            exports.append(
+                "ASYNC_V21_TRUSTED_REVIEWER_KEY="
+                + str(Path(trusted_reviewer_key).resolve()))
+    command = [
+        "sbatch",
+        "--parsable",
+        f"--nodes={nodes}",
+        "--partition=batch",
+        "--qos=debug",
+        f"--export={','.join(exports)}",
+        str(LAUNCHER_PATH),
+    ]
+    return {
+        "payload": payload,
+        "payload_digest": payload_digest,
+        "scheduler": scheduler,
+        "command": command,
+        "state_path": str(Path(state_path).resolve()),
+        "evidence_root": str(Path(evidence_root).resolve()),
+    }
+
+
+def _atomic_json(path: Path, value: Mapping[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_bytes(canonical_bytes(value) + b"\n")
+    os.replace(temporary, path)
+
+
+def submit_plan(plan: Mapping[str, object]) -> str:
+    """Submit exactly one job after a final retained-state active-job check."""
+    state_path = Path(str(plan["state_path"]))
+    lock_path = state_path.with_suffix(state_path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        state = _state(state_path)
+        if isinstance(state.get("active_job"), Mapping):
+            raise ValueError("at most one active job is permitted")
+        completed = subprocess.run(
+            [str(item) for item in plan["command"]],
+            cwd=ROOT,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        job_id = completed.stdout.strip().split(";", 1)[0]
+        if not job_id.isdigit():
+            raise RuntimeError("sbatch did not return one numeric job id")
+        payload_digest = str(plan["payload_digest"])
+        state["active_job"] = {
+            "job_id": job_id,
+            "payload_digest": payload_digest,
+            "status": "submitted",
+        }
+        state["payloads"][payload_digest] = {
+            "status": "submitted",
+            "job_id": job_id,
+        }
+        _atomic_json(state_path, state)
+        return job_id
+
+
+def _file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _source_digest() -> str:
+    completed = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=ROOT,
+        check=True,
+        stdout=subprocess.PIPE,
+    )
+    digest = hashlib.sha256(b"emender-async-v21-source-v1\0")
+    for encoded in completed.stdout.split(b"\0"):
+        if not encoded:
+            continue
+        path = ROOT / os.fsdecode(encoded)
+        if path.is_file():
+            payload = path.read_bytes()
+            digest.update(len(encoded).to_bytes(4, "little"))
+            digest.update(encoded)
+            digest.update(len(payload).to_bytes(8, "little"))
+            digest.update(payload)
+    return digest.hexdigest()
+
+
+def _require_submission_source() -> None:
+    def git(*arguments: str) -> str:
+        return subprocess.run(
+            ["git", *arguments], cwd=ROOT, check=True, text=True,
+            stdout=subprocess.PIPE,
+        ).stdout.strip()
+
+    if (
+        git("branch", "--show-current") != "main"
+        or git("status", "--porcelain", "--untracked-files=all")
+        or git("rev-parse", "HEAD") != git("rev-parse", "origin/main")
+    ):
+        raise ValueError(
+            "submission requires clean authoritative main at origin/main")
+
+
+def _arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--gate", choices=ALL_GATES, required=True)
+    parser.add_argument("--nodes", type=int, required=True)
+    parser.add_argument("--state", required=True)
+    parser.add_argument("--evidence-root", required=True)
+    parser.add_argument("--authorization")
+    parser.add_argument("--prior-rung")
+    parser.add_argument("--trusted-reviewer-key")
+    parser.add_argument("--source-digest")
+    parser.add_argument("--policy-digest")
+    parser.add_argument("--bundle-digest", required=True)
+    parser.add_argument("--seed-digest", default=SEED_SHA256)
+    parser.add_argument("--launcher-digest")
+    parser.add_argument("--parameters-json", default="{}")
+    parser.add_argument("--output", help="retained rendered plan JSON")
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--dry-run", action="store_true")
+    action.add_argument("--submit", action="store_true")
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _arguments(argv)
+    if args.submit:
+        _require_submission_source()
+    parameters = json.loads(args.parameters_json)
+    if not isinstance(parameters, dict):
+        raise ValueError("--parameters-json must encode an object")
+    if not CONFIG_PATH.is_file() or not LAUNCHER_PATH.is_file():
+        raise FileNotFoundError("canonical config or launcher is missing")
+    if SEED_SHA256 != args.seed_digest:
+        _digest(args.seed_digest, "seed")
+    if args.policy_digest is None:
+        from ndm.async_diloco_v2 import ASYNC_DECOUPLED_V21
+        policy_digest = ASYNC_DECOUPLED_V21.digest
+    else:
+        policy_digest = args.policy_digest
+    plan = build_plan(
+        gate=args.gate,
+        nodes=args.nodes,
+        state_path=args.state,
+        evidence_root=args.evidence_root,
+        source_digest=args.source_digest or _source_digest(),
+        policy_digest=policy_digest,
+        bundle_digest=args.bundle_digest,
+        seed_digest=args.seed_digest,
+        launcher_digest=args.launcher_digest or _file_sha256(LAUNCHER_PATH),
+        parameters=parameters,
+        authorization_path=args.authorization,
+        predecessor_path=args.prior_rung,
+        trusted_reviewer_key=args.trusted_reviewer_key,
+    )
+    if args.output:
+        _atomic_json(Path(args.output).resolve(), plan)
+    print(json.dumps(plan, sort_keys=True, indent=2))
+    if args.submit:
+        print(f"submitted_job_id={submit_plan(plan)}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

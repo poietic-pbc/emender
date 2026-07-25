@@ -25,12 +25,13 @@ import os
 from pathlib import Path
 import struct
 import time
-from typing import Iterator, Sequence
+from typing import Iterator, Mapping, Sequence
 
 import numpy as np
 
 
 ABI_V1 = 0x00010000
+ABI_V21 = 0x00020001
 
 
 class ResultCode(IntEnum):
@@ -206,6 +207,44 @@ class SubmitV1(ctypes.Structure):
     ]
 
 
+class SubmitV21(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32), ("abi_version", ctypes.c_uint32),
+        ("buffer", ctypes.c_uint64), ("trainer_key", ctypes.c_uint8 * 16),
+        ("trainer_incarnation", ctypes.c_uint8 * 16),
+        ("submission_seq", ctypes.c_uint64),
+        ("exact_tokens", ctypes.c_uint64),
+        ("element_offset", ctypes.c_uint64),
+        ("element_count", ctypes.c_uint64),
+        ("source_dtype", ctypes.c_uint32), ("flags", ctypes.c_uint32),
+        ("deadline_unix_ns", ctypes.c_uint64),
+        ("source_buffer_sha256", ctypes.c_uint8 * 32),
+        ("stable_worker_key", ctypes.c_uint8 * 16),
+        ("worker_incarnation", ctypes.c_uint8 * 16),
+        ("contribution_sequence", ctypes.c_uint64),
+        ("local_window_start", ctypes.c_uint64),
+        ("local_window_end", ctypes.c_uint64),
+        ("base_global_version", ctypes.c_uint64),
+        ("commit_lag", ctypes.c_uint32),
+        ("anchor_lag", ctypes.c_uint32),
+        ("result_lag", ctypes.c_uint32),
+        ("speculative_window_lag", ctypes.c_uint32),
+        ("policy_digest", ctypes.c_uint8 * 32),
+        ("code_digest", ctypes.c_uint8 * 32),
+        ("base_digest", ctypes.c_uint8 * 32),
+        ("payload_digest", ctypes.c_uint8 * 32),
+        ("local_trainer_set_digest", ctypes.c_uint8 * 32),
+        ("endpoint_digest", ctypes.c_uint8 * 32),
+        ("policy_id_len", ctypes.c_uint32),
+        ("policy_schema_len", ctypes.c_uint32),
+        ("contribution_schema_len", ctypes.c_uint32),
+        ("reserved0", ctypes.c_uint32),
+        ("policy_id", ctypes.c_uint8 * 32),
+        ("policy_schema", ctypes.c_uint8 * 32),
+        ("contribution_schema", ctypes.c_uint8 * 48),
+    ]
+
+
 class ControlV1(ctypes.Structure):
     _fields_ = [
         ("struct_size", ctypes.c_uint32), ("abi_version", ctypes.c_uint32),
@@ -274,7 +313,8 @@ class MetricsV1(ctypes.Structure):
 
 _EXPECTED_SIZES = {
     OpenV1: 224, LayoutV1: 56, BufferV1: 88, AllocV1: 32,
-    SubmitV1: 128, ControlV1: 216, EventV1: 96, ResultV1: 168,
+    SubmitV1: 128, SubmitV21: 528, ControlV1: 216,
+    EventV1: 96, ResultV1: 168,
     MetricsV1: 184,
 }
 for _structure, _expected in _EXPECTED_SIZES.items():
@@ -288,6 +328,12 @@ for _structure, _expected in _EXPECTED_SIZES.items():
 def _versioned(structure: ctypes.Structure) -> ctypes.Structure:
     structure.struct_size = ctypes.sizeof(type(structure))
     structure.abi_version = ABI_V1
+    return structure
+
+
+def _versioned_v21(structure: ctypes.Structure) -> ctypes.Structure:
+    structure.struct_size = ctypes.sizeof(type(structure))
+    structure.abi_version = ABI_V21
     return structure
 
 
@@ -305,6 +351,14 @@ def _digest32(value: bytes, *, field: str) -> bytes:
     if len(raw) != 32:
         raise ValueError(f"{field} must be exactly 32 bytes")
     return raw
+
+
+def _fixed_text(target, value: object, *, field: str) -> int:
+    raw = str(value).encode("utf-8")
+    if not raw or len(raw) > len(target):
+        raise ValueError(f"{field} does not fit the v2.1 ABI record")
+    target[:len(raw)] = raw
+    return len(raw)
 
 
 def _deadline(seconds: float) -> int:
@@ -451,6 +505,8 @@ class NativeLibrary:
         lib = self.library
         lib.ndp_abi_version.argtypes = []
         lib.ndp_abi_version.restype = ctypes.c_uint32
+        lib.ndp_abi_version_v21.argtypes = []
+        lib.ndp_abi_version_v21.restype = ctypes.c_uint32
         lib.ndp_error_string.argtypes = [ctypes.c_int]
         lib.ndp_error_string.restype = ctypes.c_char_p
         lib.ndp_client_open_v1.argtypes = [ctypes.POINTER(OpenV1), ctypes.POINTER(ctypes.c_uint64)]
@@ -475,6 +531,11 @@ class NativeLibrary:
         lib.ndp_submit_local_v1.argtypes = [ctypes.c_uint64, ctypes.POINTER(SubmitV1),
                                             ctypes.POINTER(ctypes.c_uint64)]
         lib.ndp_submit_local_v1.restype = ctypes.c_int
+        lib.ndp_submit_local_v21.argtypes = [
+            ctypes.c_uint64, ctypes.POINTER(SubmitV21),
+            ctypes.POINTER(ctypes.c_uint64),
+        ]
+        lib.ndp_submit_local_v21.restype = ctypes.c_int
         lib.ndp_control_v1.argtypes = [ctypes.c_uint64, ctypes.POINTER(ControlV1),
                                        ctypes.POINTER(ctypes.c_uint64)]
         lib.ndp_control_v1.restype = ctypes.c_int
@@ -493,6 +554,8 @@ class NativeLibrary:
         lib.ndp_client_metrics_v1.restype = ctypes.c_int
         if lib.ndp_abi_version() != ABI_V1:
             raise RuntimeError(f"native data-plane ABI mismatch in {selected}")
+        if lib.ndp_abi_version_v21() != ABI_V21:
+            raise RuntimeError(f"native v2.1 data-plane ABI mismatch in {selected}")
 
     @staticmethod
     def _resolve(path: str | os.PathLike[str] | None) -> Path:
@@ -504,6 +567,7 @@ class NativeLibrary:
             candidates.append(Path(configured))
         repository = Path(__file__).resolve().parents[1]
         candidates.extend([
+            repository / "build/native-dataplane/local-service/libemender_ndp.so",
             repository / "build/native-dataplane/libemender_ndp.so",
             repository / "build/native-dataplane-portable/libemender_ndp.so",
             repository / "build/native-resilient-dataplane/lib/libemender_ndp.so.1",
@@ -974,25 +1038,69 @@ class Client:
                trainer_incarnation: bytes | str, submission_seq: int,
                weight: int, source_dtype: DType | None = None,
                source_sha256: bytes | None = None,
+               v21_identity: Mapping[str, object] | None = None,
                deadline_s: float = 30.0) -> Operation:
         dtype = source_dtype or self.source_dtype
-        request = _versioned(SubmitV1())
+        request = (
+            _versioned_v21(SubmitV21())
+            if v21_identity is not None else _versioned(SubmitV1())
+        )
         request.buffer = buffer.handle
         request.trainer_key[:] = _key16(trainer_key, field="trainer_key")
         request.trainer_incarnation[:] = _key16(
             trainer_incarnation, field="trainer_incarnation"
         )
         request.submission_seq = int(submission_seq)
-        request.weight = int(weight)
+        if v21_identity is None:
+            request.weight = int(weight)
+        else:
+            request.exact_tokens = int(weight)
         request.element_count = self.total_elements
         request.source_dtype = int(dtype)
         request.deadline_unix_ns = min(_deadline(deadline_s), self.generation_deadline_ns)
         digest = source_sha256 if source_sha256 is not None else buffer.sha256()
         request.source_buffer_sha256[:] = _digest32(digest, field="source_sha256")
+        operation = "ndp_submit_local_v1"
+        submit = self.native.library.ndp_submit_local_v1
+        if v21_identity is not None:
+            identity = dict(v21_identity)
+            request.stable_worker_key[:] = _key16(
+                identity["worker_id"], field="worker_id")
+            request.worker_incarnation[:] = _key16(
+                identity["worker_incarnation"], field="worker_incarnation")
+            request.contribution_sequence = int(
+                identity["contribution_sequence"])
+            request.local_window_start = int(identity["local_window_start"])
+            request.local_window_end = int(identity["local_window_end"])
+            request.base_global_version = int(identity["base_global_version"])
+            request.commit_lag = int(identity["commit_lag"])
+            request.anchor_lag = int(identity["anchor_lag"])
+            request.result_lag = int(identity["result_lag"])
+            request.speculative_window_lag = int(
+                identity["speculative_window_lag"])
+            for name in (
+                "policy_digest", "code_digest", "base_digest",
+                "payload_digest", "local_trainer_set_digest",
+                "endpoint_digest",
+            ):
+                raw = identity[name]
+                if isinstance(raw, str):
+                    raw = bytes.fromhex(raw)
+                getattr(request, name)[:] = _digest32(raw, field=name)
+            request.policy_id_len = _fixed_text(
+                request.policy_id, identity["policy_id"], field="policy_id")
+            request.policy_schema_len = _fixed_text(
+                request.policy_schema, identity["policy_schema"],
+                field="policy_schema")
+            request.contribution_schema_len = _fixed_text(
+                request.contribution_schema, identity["contribution_schema"],
+                field="contribution_schema")
+            operation = "ndp_submit_local_v21"
+            submit = self.native.library.ndp_submit_local_v21
         handle = ctypes.c_uint64()
-        self.native.check(self.native.library.ndp_submit_local_v1(
+        self.native.check(submit(
             self.handle, ctypes.byref(request), ctypes.byref(handle)),
-            "ndp_submit_local_v1")
+            operation)
         return Operation(self, handle.value)
 
     def result_view(self, operation: Operation) -> ResultView:

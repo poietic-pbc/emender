@@ -1,4 +1,4 @@
-"""Reviewed bounded-lag asynchronous DiLoCo v2 control policy.
+"""Reviewed simple asynchronous DiLoCo v2.1 control policy.
 
 This module is deliberately model- and transport-agnostic.  It is the single
 Python metadata/control authority around the persistent native E97 service:
@@ -15,8 +15,9 @@ The small NumPy checkpoint helper at the bottom is an executable
 single-process reference fixture.  The production E97 checkpoint publisher
 continues to use the fenced native handoff and torch checkpoint path.
 
-Authority: ``docs/ASYNC_DECOUPLED_DILOCO_V2.md`` (`V2A01`-`V2A18`), together
-with `R01`-`R16` and `NDP01`-`NDP17`.
+Authority: ``docs/ASYNC_DECOUPLED_DILOCO_V2.md`` (`V21S01`-`V21S17`),
+together with `R01`-`R16` and `NDP01`-`NDP17`.  Historical v2.0 records are
+deliberately not decoded or migrated by this module.
 """
 from __future__ import annotations
 
@@ -64,20 +65,32 @@ def digest_array(value: np.ndarray | Sequence[float]) -> str:
 
 
 @dataclass(frozen=True)
-class AsyncV2Policy:
-    policy_id: str = "async-decoupled-v2.0-exp"
+class AsyncV21Policy:
+    policy_id: str = "async-decoupled-v2.1-simple"
+    policy_schema: str = "emender-async-policy-v2.1"
+    contribution_schema: str = "emender-native-e97-submission-v2.1"
+    manifest_schema: str = "emender-native-e97-generation-v2.1"
+    checkpoint_schema: str = "emender-async-v21-reference-checkpoint-v1"
+    native_abi: int = 0x00020001
+    wire_protocol_major: int = 2
+    wire_protocol_minor: int = 1
     k_local_steps: int = 40
-    tau_hard: int = 6
-    tau_target: int = 2
-    sigma_hard: int = 8
-    sigma_target: int = 2
+    max_commit_lag: int = 2
+    max_anchor_lag: int = 2
+    max_result_lag: int = 2
+    max_speculative_windows: int = 2
     q_min: int = 2
     t_min: int = 3_934_080
+    active_membership_fraction: None = None
     group_deadline_s: float = 420.0
+    ready_deadline_s: float = 180.0
+    owned_deadline_s: float = 1.0
+    catch_up_deadline_s: float = 420.0
+    first_commit_deadline_s: float = 720.0
     generation_attempt_retries: int = 0
-    eta: float = 0.5
+    eta_outer: float = 1.0
     outer_mode: str = "delta_sgd"
-    sealed_descriptor_capacity: int = 1
+    owned_descriptor_capacity: int = 1
     mutable_interval_capacity: int = 1
     result_mailbox_capacity: int = 1
     result_staging_capacity: int = 1
@@ -85,26 +98,39 @@ class AsyncV2Policy:
 
     def __post_init__(self) -> None:
         if (
-            self.policy_id != "async-decoupled-v2.0-exp"
+            self.policy_id != "async-decoupled-v2.1-simple"
+            or self.policy_schema != "emender-async-policy-v2.1"
+            or self.contribution_schema != "emender-native-e97-submission-v2.1"
+            or self.manifest_schema != "emender-native-e97-generation-v2.1"
+            or self.checkpoint_schema
+            != "emender-async-v21-reference-checkpoint-v1"
+            or self.native_abi != 0x00020001
+            or self.wire_protocol_major != 2
+            or self.wire_protocol_minor != 1
             or self.k_local_steps != 40
-            or self.tau_hard != 6
-            or self.tau_target != 2
-            or self.sigma_hard != 8
-            or self.sigma_target != 2
+            or self.max_commit_lag != 2
+            or self.max_anchor_lag != 2
+            or self.max_result_lag != 2
+            or self.max_speculative_windows != 2
             or self.q_min != 2
             or self.t_min != 3_934_080
+            or self.active_membership_fraction is not None
             or self.group_deadline_s != 420.0
+            or self.ready_deadline_s != 180.0
+            or self.owned_deadline_s != 1.0
+            or self.catch_up_deadline_s != 420.0
+            or self.first_commit_deadline_s != 720.0
             or self.generation_attempt_retries != 0
-            or self.eta != 0.5
+            or self.eta_outer != 1.0
             or self.outer_mode != "delta_sgd"
-            or self.sealed_descriptor_capacity != 1
+            or self.owned_descriptor_capacity != 1
             or self.mutable_interval_capacity != 1
             or self.result_mailbox_capacity != 1
             or self.result_staging_capacity != 1
             or self.owner_reassignments != 2
         ):
             raise ValueError(
-                "bounded-lag v2 policy fields are reviewed constants; "
+                "simple async v2.1 policy fields are reviewed constants; "
                 "a change requires a new policy version"
             )
 
@@ -116,28 +142,38 @@ class AsyncV2Policy:
         return {**asdict(self), "policy_digest": self.digest}
 
 
-ASYNC_DECOUPLED_V2 = AsyncV2Policy()
+AsyncV2Policy = AsyncV21Policy
+ASYNC_DECOUPLED_V21 = AsyncV21Policy()
+# Compatibility at the Python import surface only.  It names the v2.1 policy,
+# never the historical v2.0 identity or schemas.
+ASYNC_DECOUPLED_V2 = ASYNC_DECOUPLED_V21
 
 
 @dataclass(frozen=True)
 class OuterState:
     mode: str = "delta_sgd"
-    eta: float = 0.5
+    eta_outer: float = 1.0
     step: int = 0
     accepted_tokens: int = 0
 
     def validate(self) -> None:
         if (
             self.mode != "delta_sgd"
-            or self.eta != 0.5
+            or self.eta_outer != 1.0
             or self.step < 0
             or self.accepted_tokens < 0
         ):
-            raise ValueError("invalid authoritative async-v2 outer state")
+            raise ValueError("invalid authoritative async-v2.1 outer state")
 
 
 @dataclass(frozen=True)
 class ContributionIdentity:
+    policy_id: str
+    policy_schema: str
+    contribution_schema: str
+    native_abi: int
+    wire_protocol_major: int
+    wire_protocol_minor: int
     run_id: str
     allocation_fence: int
     worker_id: str
@@ -185,9 +221,15 @@ class ContributionIdentity:
     def digest(self) -> str:
         return _sha256(_canonical(self.canonical_dict()))
 
-    def validate(self, policy: AsyncV2Policy = ASYNC_DECOUPLED_V2) -> None:
+    def validate(self, policy: AsyncV21Policy = ASYNC_DECOUPLED_V21) -> None:
         if (
-            not self.run_id
+            self.policy_id != policy.policy_id
+            or self.policy_schema != policy.policy_schema
+            or self.contribution_schema != policy.contribution_schema
+            or self.native_abi != policy.native_abi
+            or self.wire_protocol_major != policy.wire_protocol_major
+            or self.wire_protocol_minor != policy.wire_protocol_minor
+            or not self.run_id
             or self.allocation_fence <= 0
             or not self.worker_id
             or not self.worker_incarnation
@@ -196,16 +238,17 @@ class ContributionIdentity:
             or self.local_window_end <= self.local_window_start
             or self.window_count
             != self.local_window_end - self.local_window_start
-            or self.window_count > policy.sigma_hard
+            or self.window_count > policy.max_speculative_windows
             or self.base_global_version < 0
             or self.exact_tokens <= 0
-            or not 0 <= self.base_lag_at_seal <= policy.tau_hard
+            or not 0 <= self.base_lag_at_seal <= policy.max_commit_lag
             or not self.finite_checked
             or self.source_dtype not in {"float32", "float64", "bfloat16"}
             or len(self.window_monotonic_ns) != self.window_count
             or not self.shard_roots
         ):
-            raise ValueError("invalid async-v2 contribution identity")
+            raise ValueError(
+                "invalid async-v2.1 policy/schema/ABI contribution identity")
         if self.policy_digest != policy.digest:
             raise ValueError("wrong policy digest")
         for name in (
@@ -240,7 +283,7 @@ class ContributionEnvelope:
     def exact_tokens(self) -> int:
         return self.identity.exact_tokens
 
-    def validate(self, policy: AsyncV2Policy = ASYNC_DECOUPLED_V2) -> None:
+    def validate(self, policy: AsyncV21Policy = ASYNC_DECOUPLED_V21) -> None:
         self.identity.validate(policy)
         array = np.asarray(self.delta, dtype=np.float64)
         if array.size == 0 or not np.isfinite(array).all():
@@ -261,7 +304,7 @@ def build_contribution(
     base_global_version: int,
     base_global_digest: str,
     current_global_version: int,
-    policy: AsyncV2Policy,
+    policy: AsyncV21Policy,
     layout_digest: str,
     code_digest: str,
     exact_tokens: int,
@@ -281,6 +324,12 @@ def build_contribution(
     finite = bool(np.isfinite(start).all() and np.isfinite(end).all()
                   and np.isfinite(delta).all())
     identity = ContributionIdentity(
+        policy_id=policy.policy_id,
+        policy_schema=policy.policy_schema,
+        contribution_schema=policy.contribution_schema,
+        native_abi=policy.native_abi,
+        wire_protocol_major=policy.wire_protocol_major,
+        wire_protocol_minor=policy.wire_protocol_minor,
         run_id=run_id,
         allocation_fence=allocation_fence,
         worker_id=worker_id,
@@ -316,7 +365,6 @@ class AdmittedContribution:
     base_version: int
     commit_lag: int
     exact_tokens: int
-    aggregation_weight: int
     delta: np.ndarray
 
 
@@ -328,7 +376,7 @@ def reference_aggregate(
     current_version: int,
     records: Sequence[ContributionEnvelope],
     *,
-    policy: AsyncV2Policy = ASYNC_DECOUPLED_V2,
+    policy: AsyncV21Policy = ASYNC_DECOUPLED_V21,
 ) -> tuple[np.ndarray, int, tuple[AdmittedContribution, ...]]:
     """Exact deterministic binary64 semantic reference for NDP05/v2 math."""
     if current_version < 0 or not records:
@@ -348,19 +396,16 @@ def reference_aggregate(
         lag = current_version - identity.base_global_version
         if lag < 0:
             raise ValueError("future-base contribution")
-        if lag > policy.tau_hard:
+        if lag > policy.max_commit_lag:
             raise StaleContribution(
-                f"contribution commit lag {lag} exceeds hard lag "
-                f"{policy.tau_hard}"
+                f"contribution lag {lag} exceeds v2.1 maximum lag "
+                f"{policy.max_commit_lag}"
             )
-        if identity.exact_tokens > UINT64_MAX // (policy.tau_hard + 1 - lag):
-            raise OverflowError("aggregation weight overflows uint64")
-        weight = identity.exact_tokens * (policy.tau_hard + 1 - lag)
-        if denominator > UINT64_MAX - weight:
+        if denominator > UINT64_MAX - identity.exact_tokens:
             raise OverflowError("aggregation denominator overflows uint64")
         product = np.multiply(
             np.asarray(record.delta, dtype=np.float64),
-            np.float64(weight),
+            np.float64(identity.exact_tokens),
             dtype=np.float64,
         )
         numerator = (
@@ -368,7 +413,7 @@ def reference_aggregate(
             if numerator is None
             else np.add(numerator, product, dtype=np.float64)
         )
-        denominator += weight
+        denominator += identity.exact_tokens
         if exact_tokens > UINT64_MAX - identity.exact_tokens:
             raise OverflowError("accepted token clock overflows uint64")
         exact_tokens += identity.exact_tokens
@@ -378,7 +423,6 @@ def reference_aggregate(
             base_version=identity.base_global_version,
             commit_lag=lag,
             exact_tokens=identity.exact_tokens,
-            aggregation_weight=weight,
             delta=np.asarray(record.delta, dtype=np.float64),
         ))
     assert numerator is not None and denominator > 0
@@ -773,7 +817,7 @@ def translate_schedulefree_optimizer_points(
         z.add_(value.to(device=z.device, dtype=z.dtype))
 
 
-class AsyncV2WorkerLane:
+class AsyncV21WorkerLane:
     """One continuous model-owning lane with one sealed and one mutable range."""
 
     def __init__(
@@ -789,7 +833,7 @@ class AsyncV2WorkerLane:
         anchor_digest: str,
         layout_digest: str,
         code_digest: str,
-        policy: AsyncV2Policy = ASYNC_DECOUPLED_V2,
+        policy: AsyncV21Policy = ASYNC_DECOUPLED_V21,
     ):
         if not run_id or fence <= 0 or not worker_id or not incarnation:
             raise ValueError("worker lane requires a fenced incarnation")
@@ -828,7 +872,7 @@ class AsyncV2WorkerLane:
         self.paused_reason: str | None = None
         self.stale_drop_count = 0
         self._high_water = {
-            "sealed_descriptors": 0,
+            "owned_descriptors": 0,
             "mutable_intervals": 1,
             "mutable_windows": 0,
         }
@@ -846,7 +890,7 @@ class AsyncV2WorkerLane:
         *,
         local: ScheduleFreeLocalState | None = None,
         anchor_state: np.ndarray | None = None,
-    ) -> "AsyncV2WorkerLane":
+    ) -> "AsyncV21WorkerLane":
         local = local or ScheduleFreeLocalState(
             x=np.asarray([0.0]),
             parameter_points={"z": np.asarray([-1.0])},
@@ -912,10 +956,10 @@ class AsyncV2WorkerLane:
         count = self.mutable_window_count
         self._high_water["mutable_windows"] = max(
             self._high_water["mutable_windows"], count)
-        if self._sealed is not None and count >= self.policy.sigma_hard:
+        if self._sealed is not None and count >= self.policy.max_speculative_windows:
             self.paused_reason = "mutable_interval_limit"
-        elif self.speculative_window_lag > self.policy.sigma_hard:
-            self.paused_reason = "speculative_window_limit"
+        elif self.speculative_window_lag >= self.policy.max_speculative_windows:
+            self.paused_reason = "catch_up_required"
 
     def seal(self) -> ContributionEnvelope:
         if self._sealed is not None:
@@ -947,7 +991,7 @@ class AsyncV2WorkerLane:
         )
         self._sequence += 1
         self._sealed = value
-        self._high_water["sealed_descriptors"] = 1
+        self._high_water["owned_descriptors"] = 1
         # Immediately open the sole mutable successor interval.  It retains
         # the applied global anchor present at this exact safe boundary.
         self._interval_q0 = self.local_window
@@ -976,6 +1020,10 @@ class AsyncV2WorkerLane:
         if self.paused_reason == "mutable_interval_limit":
             self.paused_reason = None
 
+    def release_owned(self, digest: str, *, outcome: str) -> None:
+        """Release the sole immutable descriptor after the native receipt."""
+        self.release_sealed(digest, outcome=outcome)
+
     def record_accepted(
         self, *, commit_version: int, contribution: ContributionEnvelope,
     ) -> None:
@@ -1002,11 +1050,11 @@ class AsyncV2WorkerLane:
         anchor_lag = known_global_version - self.applied_anchor_version
         if anchor_lag < 0:
             raise ValueError("applied anchor is from the future")
-        if anchor_lag > self.policy.tau_hard:
+        if anchor_lag > self.policy.max_anchor_lag:
             raise StaleContribution("worker applied-anchor hard lag exceeded")
         lease = self.mailbox.take()
         if lease is None:
-            if anchor_lag >= self.policy.tau_hard:
+            if anchor_lag >= self.policy.max_anchor_lag:
                 self.paused_reason = "catch_up_required"
             return False
         value = lease.result
@@ -1044,7 +1092,7 @@ class AsyncV2WorkerLane:
             if (
                 self.mutable_window_count > 0
                 and self.newest_verified_version
-                - self._interval_base_version > self.policy.tau_hard
+                - self._interval_base_version > self.policy.max_commit_lag
             ):
                 # The work remains in the disposable local model, but this
                 # over-age interval can never enter an open global group.
@@ -1069,7 +1117,7 @@ class AsyncV2Event:
     details: dict[str, object]
 
 
-class AsyncV2DescriptorService:
+class AsyncV21DescriptorService:
     """One-slot metadata scheduler around the persistent native dense service.
 
     ``handoff`` returns ``OWNED`` after a bounded local queue transfer.  The
@@ -1081,7 +1129,7 @@ class AsyncV2DescriptorService:
     def __init__(
         self,
         *,
-        lane: AsyncV2WorkerLane,
+        lane: AsyncV21WorkerLane,
         telemetry: Callable[[AsyncV2Event], None] | None = None,
     ):
         self.lane = lane
@@ -1211,7 +1259,7 @@ class AsyncV2DescriptorService:
 MAX_LOCAL_OWNED_SECONDS = 1.0
 
 
-class AsyncV2CommitAuthority:
+class AsyncV21CommitAuthority:
     """Fenced global/outer authority with deterministic replay and publication."""
 
     def __init__(
@@ -1222,7 +1270,7 @@ class AsyncV2CommitAuthority:
         state: np.ndarray,
         version: int,
         outer: OuterState,
-        policy: AsyncV2Policy,
+        policy: AsyncV21Policy,
         layout_digest: str,
         code_digest: str,
         version_digests: Mapping[int, str] | None = None,
@@ -1265,14 +1313,14 @@ class AsyncV2CommitAuthority:
         self._last_manifest: dict[str, object] | None = None
 
     @classmethod
-    def for_test(cls) -> "AsyncV2CommitAuthority":
+    def for_test(cls) -> "AsyncV21CommitAuthority":
         return cls(
             run_id="run",
             fence=7,
             state=np.asarray([0.0]),
             version=0,
             outer=OuterState(),
-            policy=ASYNC_DECOUPLED_V2,
+            policy=ASYNC_DECOUPLED_V21,
             layout_digest="1" * 64,
             code_digest="2" * 64,
             version_digests={0: "0" * 64},
@@ -1373,19 +1421,27 @@ class AsyncV2CommitAuthority:
                 raise last_error
         next_state = np.add(
             self.state,
-            np.multiply(mean, np.float64(self.policy.eta), dtype=np.float64),
+            np.multiply(
+                mean, np.float64(self.policy.eta_outer), dtype=np.float64),
             dtype=np.float64,
         )
         if not np.isfinite(next_state).all():
             raise ValueError("nonfinite outer result")
         next_outer = OuterState(
             mode=self.policy.outer_mode,
-            eta=self.policy.eta,
+            eta_outer=self.policy.eta_outer,
             step=self.outer.step + 1,
             accepted_tokens=self.outer.accepted_tokens + accepted_tokens,
         )
         manifest = {
-            "schema": "emender-async-decoupled-commit-v2",
+            "schema": self.policy.manifest_schema,
+            "policy_id": self.policy.policy_id,
+            "policy_schema": self.policy.policy_schema,
+            "native_abi": self.policy.native_abi,
+            "wire_protocol": {
+                "major": self.policy.wire_protocol_major,
+                "minor": self.policy.wire_protocol_minor,
+            },
             "run_id": self.run_id,
             "allocation_fence": self.fence,
             "base_version": self.version,
@@ -1403,7 +1459,6 @@ class AsyncV2CommitAuthority:
                     "base_version": item.base_version,
                     "commit_lag": item.commit_lag,
                     "exact_tokens": item.exact_tokens,
-                    "aggregation_weight": item.aggregation_weight,
                 }
                 for item in admitted
             ],
@@ -1447,11 +1502,15 @@ class AsyncV2CommitAuthority:
             self._receipts[key] = receipt
         return candidate
 
+    @property
+    def last_manifest(self) -> Mapping[str, object] | None:
+        return self._last_manifest
+
     def checkpoint(self, path: str | Path) -> Path:
         """Write a deterministic small-reference checkpoint atomically."""
         target = Path(path)
         value = {
-            "schema": "emender-async-decoupled-reference-checkpoint-v2",
+            "schema": self.policy.checkpoint_schema,
             "run_id": self.run_id,
             "fence": self.fence,
             "version": self.version,
@@ -1482,17 +1541,17 @@ class AsyncV2CommitAuthority:
         *,
         new_fence: int,
         expected_run_id: str,
-        expected_policy: AsyncV2Policy,
+        expected_policy: AsyncV21Policy,
         expected_layout_digest: str,
         expected_code_digest: str,
-    ) -> "AsyncV2CommitAuthority":
+    ) -> "AsyncV21CommitAuthority":
         value = json.loads(Path(path).read_text(encoding="utf-8"))
         digest = value.pop("bundle_digest", None)
         if digest != _sha256(_canonical(value)):
             raise ValueError("checkpoint bundle digest mismatch")
         if (
             value.get("schema")
-            != "emender-async-decoupled-reference-checkpoint-v2"
+            != expected_policy.checkpoint_schema
             or value.get("run_id") != expected_run_id
             or value.get("policy", {}).get("policy_digest")
             != expected_policy.digest
@@ -1530,9 +1589,184 @@ class AsyncV2CommitAuthority:
         return authority
 
 
+class AtomicEightTrainerApply:
+    """Fenced all-lane apply/recovery transaction for one stable node.
+
+    Per-trainer files are volatile preparation evidence.  Only the immutable
+    node marker returned by :meth:`commit_node` permits READY at the result
+    version.  A partial transaction is never promoted; restart removes all
+    partial markers and creates a fresh node/trainer incarnation set.
+    """
+
+    SCHEMA = "emender-async-v21-node-applied-v1"
+
+    def __init__(
+        self,
+        *,
+        root: str | Path,
+        run_id: str,
+        fence: int,
+        node_id: str,
+        node_incarnation: str,
+        result_version: int,
+        result_digest: str,
+        trainer_count: int = 8,
+    ):
+        if (
+            not run_id
+            or fence <= 0
+            or not node_id
+            or not node_incarnation
+            or result_version <= 0
+            or trainer_count != 8
+        ):
+            raise ValueError("v2.1 node apply requires one fenced eight-trainer node")
+        _require_digest(result_digest, "result digest")
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.run_id = run_id
+        self.fence = int(fence)
+        self.node_id = node_id
+        self.node_incarnation = node_incarnation
+        self.result_version = int(result_version)
+        self.result_digest = result_digest
+        self.trainer_count = trainer_count
+        self._records: dict[int, dict[str, object]] = {}
+        self._node_marker: dict[str, object] | None = None
+
+    @property
+    def ready(self) -> bool:
+        return self._node_marker is not None
+
+    def _trainer_path(self, rank: int) -> Path:
+        return self.root / (
+            f"trainer-applied-v{self.result_version:08d}-r{rank:02d}.json")
+
+    @property
+    def node_marker_path(self) -> Path:
+        return self.root / (
+            f"node-applied-v{self.result_version:08d}-{self.node_id}.json")
+
+    @staticmethod
+    def _atomic_write(path: Path, value: Mapping[str, object]) -> None:
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        temporary.write_bytes(_canonical(value) + b"\n")
+        os.replace(temporary, path)
+
+    def record_trainer(
+        self,
+        *,
+        rank: int,
+        trainer_incarnation: str,
+        recovery_digest: str,
+    ) -> Mapping[str, object]:
+        if self.ready:
+            raise ValueError("node apply transaction is already committed")
+        if rank not in range(self.trainer_count) or not trainer_incarnation:
+            raise ValueError("invalid trainer apply identity")
+        _require_digest(recovery_digest, "recovery digest")
+        value = {
+            "schema": "emender-async-v21-trainer-applied-v1",
+            "run_id": self.run_id,
+            "allocation_fence": self.fence,
+            "node_id": self.node_id,
+            "node_incarnation": self.node_incarnation,
+            "result_version": self.result_version,
+            "result_digest": self.result_digest,
+            "rank": int(rank),
+            "trainer_incarnation": trainer_incarnation,
+            "recovery_digest": recovery_digest,
+        }
+        old = self._records.get(rank)
+        if old is not None:
+            if old != value:
+                raise ValueError("conflicting trainer apply marker")
+            return old
+        self._atomic_write(self._trainer_path(rank), value)
+        self._records[rank] = value
+        return value
+
+    def commit_node(self) -> Mapping[str, object]:
+        if self.ready:
+            assert self._node_marker is not None
+            return self._node_marker
+        expected = set(range(self.trainer_count))
+        if set(self._records) != expected:
+            raise Backpressure(
+                "all eight matching trainer apply/recovery markers are required")
+        trainers = [self._records[rank] for rank in sorted(self._records)]
+        if any(
+            record["node_incarnation"] != self.node_incarnation
+            or record["result_digest"] != self.result_digest
+            or record["result_version"] != self.result_version
+            for record in trainers
+        ):
+            raise ValueError("trainer apply markers do not form one node transaction")
+        value: dict[str, object] = {
+            "schema": self.SCHEMA,
+            "run_id": self.run_id,
+            "allocation_fence": self.fence,
+            "node_id": self.node_id,
+            "node_incarnation": self.node_incarnation,
+            "result_version": self.result_version,
+            "result_digest": self.result_digest,
+            "trainers": trainers,
+        }
+        value["transaction_digest"] = _sha256(_canonical(value))
+        self._atomic_write(self.node_marker_path, value)
+        self._node_marker = value
+        return value
+
+    def restart_from_latest(
+        self,
+        *,
+        new_node_incarnation: str,
+        trainer_incarnations: Sequence[str],
+    ) -> "AtomicEightTrainerApply":
+        if (
+            not new_node_incarnation
+            or new_node_incarnation == self.node_incarnation
+            or len(trainer_incarnations) != self.trainer_count
+            or len(set(trainer_incarnations)) != self.trainer_count
+            or any(not value for value in trainer_incarnations)
+        ):
+            raise ValueError("restart requires fresh node and eight trainer incarnations")
+        # These files are explicitly volatile partial-apply state.  The
+        # durable verified latest/result remains untouched.
+        for rank in range(self.trainer_count):
+            path = self._trainer_path(rank)
+            if path.exists():
+                path.unlink()
+        if self.node_marker_path.exists():
+            self.node_marker_path.unlink()
+        return AtomicEightTrainerApply(
+            root=self.root,
+            run_id=self.run_id,
+            fence=self.fence,
+            node_id=self.node_id,
+            node_incarnation=new_node_incarnation,
+            result_version=self.result_version,
+            result_digest=self.result_digest,
+            trainer_count=self.trainer_count,
+        )
+
+
+# The historical class names remain import aliases so adjacent v2 scaffolding
+# can migrate without duplicating implementations.  Their runtime identity is
+# always the fail-closed v2.1 policy above.
+AsyncV2WorkerLane = AsyncV21WorkerLane
+AsyncV2DescriptorService = AsyncV21DescriptorService
+AsyncV2CommitAuthority = AsyncV21CommitAuthority
+
+
 __all__ = [
+    "ASYNC_DECOUPLED_V21",
     "ASYNC_DECOUPLED_V2",
     "AdmittedContribution",
+    "AsyncV21CommitAuthority",
+    "AsyncV21DescriptorService",
+    "AsyncV21Policy",
+    "AsyncV21WorkerLane",
     "AsyncV2CommitAuthority",
     "AsyncV2DescriptorService",
     "AsyncV2Event",
@@ -1542,6 +1776,7 @@ __all__ = [
     "ContributionEnvelope",
     "ContributionIdentity",
     "LatestResultMailbox",
+    "AtomicEightTrainerApply",
     "OuterState",
     "ResultEnvelope",
     "ScheduleFreeLocalState",

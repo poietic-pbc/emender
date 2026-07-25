@@ -14,6 +14,7 @@ extern "C" {
 #endif
 
 #define NDP_ABI_V1 UINT32_C(0x00010000)
+#define NDP_ABI_V21 UINT32_C(0x00020001)
 
 typedef uint64_t ndp_client_t;
 typedef uint64_t ndp_buffer_t;
@@ -172,6 +173,32 @@ struct ndp_submit_v1 {
     uint8_t source_buffer_sha256[32];
 };
 
+/*
+ * V2.1 is additive: it does not grow or reinterpret ndp_submit_v1.  The
+ * complete reviewed semantic identity accompanies the same service-owned
+ * buffer, while exact_tokens is the one and only native numerical weight.
+ */
+struct ndp_submit_v21 {
+    uint32_t struct_size, abi_version;
+    uint64_t buffer;
+    uint8_t trainer_key[16], trainer_incarnation[16];
+    uint64_t submission_seq, exact_tokens, element_offset, element_count;
+    uint32_t source_dtype, flags;
+    uint64_t deadline_unix_ns;
+    uint8_t source_buffer_sha256[32];
+    uint8_t stable_worker_key[16], worker_incarnation[16];
+    uint64_t contribution_sequence, local_window_start, local_window_end;
+    uint64_t base_global_version;
+    uint32_t commit_lag, anchor_lag, result_lag, speculative_window_lag;
+    uint8_t policy_digest[32], code_digest[32], base_digest[32];
+    uint8_t payload_digest[32], local_trainer_set_digest[32];
+    uint8_t endpoint_digest[32];
+    uint32_t policy_id_len, policy_schema_len, contribution_schema_len, reserved0;
+    uint8_t policy_id[32];
+    uint8_t policy_schema[32];
+    uint8_t contribution_schema[48];
+};
+
 struct ndp_control_v1 {
     uint32_t struct_size, abi_version, command, flags;
     uint8_t run_key[16];
@@ -217,6 +244,7 @@ struct ndp_metrics_v1 {
 };
 
 NDP_API uint32_t ndp_abi_version(void);
+NDP_API uint32_t ndp_abi_version_v21(void);
 NDP_API const char *ndp_error_string(int code);
 
 NDP_API int ndp_client_open_v1(const struct ndp_open_v1 *, ndp_client_t *);
@@ -233,6 +261,8 @@ NDP_API int ndp_buffer_release_v1(ndp_client_t, ndp_buffer_t);
 
 NDP_API int ndp_submit_local_v1(ndp_client_t, const struct ndp_submit_v1 *,
                                 ndp_op_t *);
+NDP_API int ndp_submit_local_v21(ndp_client_t, const struct ndp_submit_v21 *,
+                                 ndp_op_t *);
 NDP_API int ndp_control_v1(ndp_client_t, const struct ndp_control_v1 *, ndp_op_t *);
 NDP_API int ndp_poll_v1(ndp_client_t, struct ndp_event_v1 *events,
                         uint32_t capacity, uint32_t *count, int timeout_ms);
@@ -251,6 +281,7 @@ static_assert(sizeof(struct ndp_layout_v1) == 56, "ndp_layout_v1 ABI size");
 static_assert(sizeof(struct ndp_buffer_v1) == 88, "ndp_buffer_v1 ABI size");
 static_assert(sizeof(struct ndp_alloc_v1) == 32, "ndp_alloc_v1 ABI size");
 static_assert(sizeof(struct ndp_submit_v1) == 128, "ndp_submit_v1 ABI size");
+static_assert(sizeof(struct ndp_submit_v21) == 528, "ndp_submit_v21 ABI size");
 static_assert(sizeof(struct ndp_control_v1) == 216, "ndp_control_v1 ABI size");
 static_assert(sizeof(struct ndp_event_v1) == 96, "ndp_event_v1 ABI size");
 static_assert(sizeof(struct ndp_result_v1) == 168, "ndp_result_v1 ABI size");
@@ -261,6 +292,7 @@ _Static_assert(sizeof(struct ndp_layout_v1) == 56, "ndp_layout_v1 ABI size");
 _Static_assert(sizeof(struct ndp_buffer_v1) == 88, "ndp_buffer_v1 ABI size");
 _Static_assert(sizeof(struct ndp_alloc_v1) == 32, "ndp_alloc_v1 ABI size");
 _Static_assert(sizeof(struct ndp_submit_v1) == 128, "ndp_submit_v1 ABI size");
+_Static_assert(sizeof(struct ndp_submit_v21) == 528, "ndp_submit_v21 ABI size");
 _Static_assert(sizeof(struct ndp_control_v1) == 216, "ndp_control_v1 ABI size");
 _Static_assert(sizeof(struct ndp_event_v1) == 96, "ndp_event_v1 ABI size");
 _Static_assert(sizeof(struct ndp_result_v1) == 168, "ndp_result_v1 ABI size");

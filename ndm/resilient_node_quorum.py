@@ -100,12 +100,10 @@ class Contribution:
     policy_digest: str
     layout_digest: str
     code_digest: str
-    aggregation_weight: int = 0
 
     @classmethod
     def create(cls, fence: GenerationFence, worker_id: str, incarnation: str,
                contribution_seq: int, accepted_tokens: int, payload: bytes, *,
-               aggregation_weight: int | None = None,
                base_digest: str, policy_digest: str, layout_digest: str,
                code_digest: str) -> "Contribution":
         identity = ContributionIdentity(
@@ -113,15 +111,12 @@ class Contribution:
             worker_id, incarnation, contribution_seq,
         )
         payload = bytes(payload)
-        aggregate = (int(accepted_tokens) if aggregation_weight is None
-                     else int(aggregation_weight))
         return cls(identity, accepted_tokens, payload, _digest(payload),
-                   base_digest, policy_digest, layout_digest, code_digest, aggregate)
+                   base_digest, policy_digest, layout_digest, code_digest)
 
     def content_digest(self) -> str:
         value = {
             "identity": self.identity.__dict__, "accepted_tokens": self.accepted_tokens,
-            "aggregation_weight": self.aggregation_weight,
             "payload_digest": self.payload_digest, "base_digest": self.base_digest,
             "policy_digest": self.policy_digest, "layout_digest": self.layout_digest,
             "code_digest": self.code_digest,
@@ -172,9 +167,15 @@ class GenerationAdmission:
     def __init__(self, fence: GenerationFence, ready_snapshot: Sequence[tuple[str, str]],
                  policy: GenerationClosePolicy, deadline: float, *, base_digest: str,
                  policy_digest: str, layout_digest: str, code_digest: str,
+                 close_not_before: float | None = None,
                  evidence_path: str | Path | None = None):
         if not math.isfinite(deadline):
             raise ValueError("generation deadline must be finite")
+        if (close_not_before is not None
+                and (not math.isfinite(close_not_before)
+                     or close_not_before <= 0
+                     or close_not_before > deadline)):
+            raise ValueError("authorized close must be finite and within the deadline")
         snapshot = tuple(sorted(set(ready_snapshot)))
         if len(snapshot) != len(ready_snapshot):
             raise ValueError("READY snapshot contains duplicates")
@@ -182,6 +183,7 @@ class GenerationAdmission:
             fence, snapshot, policy, deadline)
         self.base_digest, self.policy_digest = base_digest, policy_digest
         self.layout_digest, self.code_digest = layout_digest, code_digest
+        self.close_not_before = close_not_before
         self.evidence_path = Path(evidence_path) if evidence_path is not None else None
         fraction_count = 0 if policy.ready_fraction is None else min(
             len(snapshot), math.ceil(policy.ready_fraction * len(snapshot)))
@@ -218,13 +220,16 @@ class GenerationAdmission:
                           self.fence.generation, self.fence.attempt)
         actual_fence = (identity.run_id, identity.coordinator_epoch,
                         identity.generation, identity.attempt)
-        if self._terminal_close is not None or actual_fence != expected_fence or now > self.deadline:
+        if (self._terminal_close is not None
+                or actual_fence != expected_fence
+                or now > self.deadline
+                or (self.close_not_before is not None
+                    and now > self.close_not_before)):
             receipt = self._receipt(contribution, "rejected_stale_fence", now)
         elif (identity.worker_id, identity.incarnation) not in self.ready_snapshot:
             receipt = self._receipt(contribution, "rejected_not_ready", now)
         elif (_digest(contribution.payload) != contribution.payload_digest
               or contribution.accepted_tokens <= 0
-              or contribution.aggregation_weight <= 0
               or identity.contribution_seq < 0):
             receipt = self._receipt(contribution, "rejected_corrupt", now)
         elif (contribution.base_digest != self.base_digest
@@ -247,20 +252,30 @@ class GenerationAdmission:
         tokens = sum(item.accepted_tokens for item in accepted)
         floor_met = (len(accepted) >= self.required_contributions
                      and tokens >= self.policy.t_min)
+        if self.close_not_before is not None and now < self.close_not_before:
+            raise RuntimeError("generation is still open")
         if floor_met:
             result = GenerationClose(
                 "commit_ready", "accepted_floor_met", self.fence, self.ready_snapshot,
                 self.required_contributions, tokens,
                 tuple(item.identity for item in accepted), now)
         else:
-            if now < self.deadline:
+            if self.close_not_before is None and now < self.deadline:
                 raise RuntimeError("generation is still open")
-            status = "deferred" if now < run_deadline else "aborted"
+            status = (
+                "deferred"
+                if self.close_not_before is not None or now < run_deadline
+                else "aborted")
             result = GenerationClose(
-                status, "generation_deadline_floor_unavailable", self.fence,
+                status, (
+                    "authorized_close_floor_unavailable"
+                    if self.close_not_before is not None
+                    else "generation_deadline_floor_unavailable"),
+                self.fence,
                 self.ready_snapshot, self.required_contributions, tokens, (), now)
         self._record_close(result)
-        if result.status in ("commit_ready", "aborted"):
+        if (result.status in ("commit_ready", "aborted")
+                or self.close_not_before is not None):
             self._terminal_close = result
         return result
 

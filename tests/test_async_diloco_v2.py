@@ -106,7 +106,7 @@ def result(
     )
 
 
-def test_reference_math_fresh_lagged_unequal_tokens_membership_and_tau_boundary():
+def test_reference_math_lag_two_unequal_tokens_and_lag_three_boundary():
     records = (
         contribution(
             worker="node-a",
@@ -120,9 +120,9 @@ def test_reference_math_fresh_lagged_unequal_tokens_membership_and_tau_boundary(
             worker="node-c",
             incarnation="rejoin-c",
             sequence=4,
-            q0=9,
+            q0=10,
             q1=12,
-            base_version=0,
+            base_version=4,
             current_version=6,
             tokens=5,
             start=(-1.0, 3.0),
@@ -135,23 +135,24 @@ def test_reference_math_fresh_lagged_unequal_tokens_membership_and_tau_boundary(
     expected = []
     for component in range(2):
         fresh_delta = Decimal(str(records[0].delta[component]))
-        tau_delta = Decimal(str(records[1].delta[component]))
-        numerator = Decimal(11 * 7) * fresh_delta + Decimal(5) * tau_delta
-        expected.append(float(numerator / Decimal(11 * 7 + 5)))
+        lagged_delta = Decimal(str(records[1].delta[component]))
+        numerator = Decimal(11) * fresh_delta + Decimal(5) * lagged_delta
+        expected.append(float(numerator / Decimal(16)))
     np.testing.assert_array_equal(mean, np.asarray(expected, dtype=np.float64))
     assert exact_tokens == 16
-    assert [entry.commit_lag for entry in admitted] == [6, 0]
+    assert [entry.commit_lag for entry in admitted] == [0, 2]
     assert {entry.worker_id for entry in admitted} == {"node-a", "node-c"}
 
-    with pytest.raises(StaleContribution, match="lag 7"):
+    with pytest.raises(StaleContribution, match="lag 3"):
         reference_aggregate(
             7,
             (replace(records[1], identity=replace(
-                records[1].identity, base_lag_at_seal=6)),),
+                records[1].identity, base_global_version=4,
+                base_lag_at_seal=2)),),
         )
 
 
-def test_half_step_outer_state_and_current_membership_are_authoritative():
+def test_eta_one_outer_state_and_current_membership_are_authoritative():
     authority = AsyncV2CommitAuthority(
         run_id="run",
         fence=7,
@@ -161,7 +162,7 @@ def test_half_step_outer_state_and_current_membership_are_authoritative():
         policy=ASYNC_DECOUPLED_V2,
         layout_digest=ONE,
         code_digest=TWO,
-        version_digests={6: ZERO, 0: ZERO},
+        version_digests={6: ZERO, 4: ZERO},
         minimum_tokens=1,
     )
     authority.install_membership({"node-a": "boot-a", "node-c": "rejoin-c"})
@@ -170,7 +171,7 @@ def test_half_step_outer_state_and_current_membership_are_authoritative():
         contribution(
             worker="node-c",
             incarnation="rejoin-c",
-            base_version=0,
+            base_version=4,
             current_version=6,
             tokens=5,
             start=(0, 0),
@@ -180,8 +181,9 @@ def test_half_step_outer_state_and_current_membership_are_authoritative():
     committed = authority.commit(records)
     mean, _, _ = reference_aggregate(6, records)
     np.testing.assert_array_equal(
-        committed.state, np.asarray([10.0, 20.0]) + 0.5 * mean)
-    assert committed.outer == OuterState(step=7, accepted_tokens=116)
+        committed.state, np.asarray([10.0, 20.0]) + mean)
+    assert committed.outer == OuterState(
+        eta_outer=1.0, step=7, accepted_tokens=116)
     assert authority.version == 7
 
     late_old_incarnation = contribution(
@@ -249,20 +251,20 @@ def test_one_sealed_one_mutable_coalescing_and_lag_limit_pause_drop_catchup():
     lane = AsyncV2WorkerLane.for_test()
     lane.finish_window(np.asarray([1.0]), exact_tokens=1, begin_ns=1, end_ns=2)
     first = lane.seal()
-    for index in range(2, 10):
+    for index in range(2, 3):
         lane.finish_window(
             np.asarray([float(index)]),
             exact_tokens=index,
             begin_ns=index * 2 - 1,
             end_ns=index * 2,
         )
-    assert lane.mutable_window_range == (1, 9)
-    assert lane.mutable_window_count == ASYNC_DECOUPLED_V2.sigma_hard
-    assert lane.paused_reason == "mutable_interval_limit"
+    assert lane.mutable_window_range == (1, 2)
+    assert lane.mutable_window_count == 1
+    assert lane.paused_reason == "catch_up_required"
     assert lane.high_water == {
-        "sealed_descriptors": 1,
+        "owned_descriptors": 1,
         "mutable_intervals": 1,
-        "mutable_windows": 8,
+        "mutable_windows": 1,
     }
     with pytest.raises(Backpressure, match="paused"):
         lane.finish_window(np.asarray([10.0]), exact_tokens=1, begin_ns=19, end_ns=20)
@@ -270,35 +272,35 @@ def test_one_sealed_one_mutable_coalescing_and_lag_limit_pause_drop_catchup():
     lane.release_sealed(first.digest, outcome="stale_drop")
     second = lane.seal()
     assert second.identity.local_window_start == 1
-    assert second.identity.local_window_end == 9
-    assert second.identity.window_count == 8
-    assert second.exact_tokens == sum(range(2, 10))
+    assert second.identity.local_window_end == 2
+    assert second.identity.window_count == 1
+    assert second.exact_tokens == 2
 
     # A known global version at the hard anchor bound pauses if no verified
     # mailbox result exists; an explicit catch-up result resumes the lane.
-    assert lane.apply_latest_at_boundary(known_global_version=6) is False
+    assert lane.apply_latest_at_boundary(known_global_version=2) is False
     assert lane.paused_reason == "catch_up_required"
-    lane.mailbox.publish(result(version=6, state=(6.0,), base_version=0))
-    assert lane.apply_latest_at_boundary(known_global_version=6)
+    lane.mailbox.publish(result(version=2, state=(2.0,), base_version=1))
+    assert lane.apply_latest_at_boundary(known_global_version=2)
     assert lane.paused_reason is None
-    assert lane.applied_anchor_version == 6
+    assert lane.applied_anchor_version == 2
 
 
-def test_unsealed_interval_drops_beyond_tau_after_verified_catchup():
+def test_unsealed_interval_drops_beyond_lag_two_after_verified_catchup():
     lane = AsyncV2WorkerLane.for_test()
     lane.finish_window(
         np.asarray([1.0]), exact_tokens=5, begin_ns=1, end_ns=2)
-    lane.mailbox.publish(result(version=6, state=(6.0,), base_version=0))
-    assert lane.apply_latest_at_boundary(known_global_version=6)
+    lane.mailbox.publish(result(version=2, state=(2.0,), base_version=1))
+    assert lane.apply_latest_at_boundary(known_global_version=2)
     assert lane.mutable_window_range == (0, 1)
 
-    lane.mailbox.publish(result(version=7, state=(8.0,), base_version=6))
-    assert lane.apply_latest_at_boundary(known_global_version=7)
+    lane.mailbox.publish(result(version=3, state=(4.0,), base_version=2))
+    assert lane.apply_latest_at_boundary(known_global_version=3)
     assert lane.stale_drop_count == 1
     assert lane.mutable_window_range == (1, 1)
     # Dropping an inadmissible contribution interval does not erase the
     # trainer's disposable local displacement.
-    np.testing.assert_array_equal(lane.local.x, np.asarray([9.0]))
+    np.testing.assert_array_equal(lane.local.x, np.asarray([5.0]))
 
 
 def test_latest_only_mailbox_view_staging_idempotence_and_rejections():
@@ -491,7 +493,7 @@ def test_fresh_allocation_checkpoint_restart_restores_only_global_outer_authorit
         restored.commit((value,))
 
 
-def test_native_metadata_abi_carries_exact_tokens_separate_from_lag_weight(tmp_path):
+def test_native_metadata_abi_v21_carries_only_exact_tokens(tmp_path):
     policy = ASYNC_DECOUPLED_V2
     metadata = GenerationMetadata(
         run_id="run",
@@ -511,8 +513,15 @@ def test_native_metadata_abi_carries_exact_tokens_separate_from_lag_weight(tmp_p
         base_global_version=6,
         local_window_start=11,
         local_window_end=13,
+        policy_schema=policy.policy_schema,
+        contribution_schema=policy.contribution_schema,
+        native_abi=policy.native_abi,
+        wire_protocol_major=policy.wire_protocol_major,
+        wire_protocol_minor=policy.wire_protocol_minor,
+        stable_worker_id="worker-0",
+        worker_incarnation="boot-a",
     )
-    assert metadata.as_json()["schema"] == "emender-native-e97-generation-v2"
+    assert metadata.as_json()["schema"] == "emender-native-e97-generation-v2.1"
     assert GenerationMetadata.from_json(metadata.as_json()) == metadata
 
     class Buffer:
@@ -539,8 +548,15 @@ def test_native_metadata_abi_carries_exact_tokens_separate_from_lag_weight(tmp_p
     plane.buffer = Buffer()
     identity = {
         "policy_id": policy.policy_id,
+        "policy_schema": policy.policy_schema,
+        "contribution_schema": policy.contribution_schema,
         "policy_digest": policy.digest,
         "code_digest": TWO,
+        "native_abi": policy.native_abi,
+        "wire_protocol_major": policy.wire_protocol_major,
+        "wire_protocol_minor": policy.wire_protocol_minor,
+        "worker_id": "worker-0",
+        "worker_incarnation": "boot-a",
         "base_global_version": 6,
         "base_global_digest": ZERO,
         "base_lag_at_seal": 2,
@@ -548,28 +564,32 @@ def test_native_metadata_abi_carries_exact_tokens_separate_from_lag_weight(tmp_p
         "local_window_end": 13,
         "window_count": 2,
         "contribution_sequence": 9,
+        "local_trainer_set_digest": THREE,
+        "endpoint_digest": TWO,
+        "anchor_lag": 2,
+        "result_lag": 0,
+        "speculative_window_lag": 2,
     }
     marker = plane._seal_submit(
         tokens=10,
-        aggregation_weight=50,
         contribution_identity=identity,
         deadline_s=1.0,
     )
-    assert client.weight == 50
-    assert marker["tokens"] == 10
-    assert marker["aggregation_weight"] == 50
+    assert client.weight == 10
+    assert marker["exact_tokens"] == 10
+    assert "aggregation_weight" not in marker
     assert marker["base_lag_at_seal"] == 2
     assert marker["payload_digest"] == THREE
-    assert marker["schema"] == "emender-native-e97-submission-v2"
+    assert marker["schema"] == "emender-native-e97-submission-v2.1"
     assert len(marker["interval_endpoint_digest"]) == 64
     assert len(marker["descriptor_digest"]) == 64
 
     plane.buffer = Buffer()
-    with pytest.raises(ValueError, match="token/lag/window"):
+    lag_three = {**identity, "base_lag_at_seal": 3}
+    with pytest.raises(ValueError, match="exact-token/lag/window"):
         plane._seal_submit(
             tokens=10,
-            aggregation_weight=49,
-            contribution_identity=identity,
+            contribution_identity=lag_three,
             deadline_s=1.0,
         )
 
