@@ -6,9 +6,13 @@ Date: 2026-07-05
 > defines the stale-reject quorum baseline implemented by the original local
 > simulation and core tests. Strict `tau = 0` remains a compatibility mode
 > under [Resilient DiLoCo Compute Pool](RESILIENT_DILOCO_COMPUTE_POOL.md).
-> The only reviewed policy for continuous decoupled local windows and stale
+> The only reviewed policy for continuous decoupled local windows and bounded
 > contribution admission is
-> [ADR-002: bounded-lag asynchronous DiLoCo v2](ASYNC_DECOUPLED_DILOCO_V2.md).
+> [ADR-002: simple asynchronous DiLoCo v2.1](ASYNC_DECOUPLED_DILOCO_V2.md),
+> policy `async-decoupled-v2.1-simple`, with its V21S01–V21S17 namespace in the
+> [gap matrix](RESILIENT_DILOCO_GAP_MATRIX.md). Historical
+> `async-decoupled-v2.0-exp` artifacts and V2A requirements are incompatible
+> evidence, not implementation or promotion authority.
 > Where this note calls bounded staleness a future experiment or suggests a
 > transport that conflicts with the native authority, ADR-002 and
 > [Native resilient DiLoCo data plane v1](NATIVE_RESILIENT_DILOCO_DATAPLANE.md)

@@ -9,8 +9,9 @@ native ABI, and tensor-reduction requirements of
 That document remains authoritative for leases, membership, generation closure,
 commit semantics, and training correctness.
 [ADR-002](ASYNC_DECOUPLED_DILOCO_V2.md) is the normative semantic extension
-when bounded-lag v2 is selected; it preserves NDP01–NDP17 but requires a
-versioned protocol/ABI extension rather than relabeling this v1 wire format. The
+when `async-decoupled-v2.1-simple` is selected; it preserves NDP01–NDP17 but
+requires a v2.1 protocol/ABI extension rather than relabeling this v1 wire
+format. The
 [companion gap matrix](RESILIENT_DILOCO_GAP_MATRIX.md) traces both authorities.
 An implementation conforms only if it satisfies both. A contradiction fails
 closed and requires a reviewed design change; it is not resolved by choosing
@@ -34,7 +35,7 @@ appendices and do not change these decisions.
 | Node-local path | Trainers produce directly into XPMEM or service-allocated memfd buffers. Handoff adds no trainer-sized write; redistribution creates one shared node aggregate, not eight files/copies. Disk may retain one reduced node contribution only as an explicit bounded NVMe replay fallback. |
 | Correctness | Python freezes locally complete, checksummed, replayable node contributions. Native owners apply each fenced identity exactly once, in the specified deterministic float64 order, with exact integer weights, checksums, credits, and idempotent receipts. |
 | Checkpoint/commit | Native code returns a fenced read-only aggregate view. Python/PyTorch applies outer state, writes and reload-verifies the policy-selected immutable checkpoint, and advances authoritative `latest` under the current fence. A fabric result is not a commit. |
-| Admission gates | G0 local -> G1 two-node CXI probe -> **G2 full-layout two-node synthetic** -> G3 real two-node -> G4 failure/rejoin -> G5 fresh-allocation restart -> G6 ordered 4/8/32/64/256 scale. No real model or 4+ node native job is allowed before exact-code G2 passes. |
+| Admission gates | G0 local -> G1 two-node CXI probe -> **G2 full-layout two-node synthetic** -> G3 real two-node -> G4 failure/rejoin -> G5 fresh-allocation restart -> G6 ordered 4/8/16/32/64/256 scale. No real model or 4+ node native job is allowed before exact-code G2 passes. |
 
 ## Decisions and requirements
 
@@ -71,8 +72,8 @@ closure, outer-optimizer policy, checkpoint naming/retention, Slurm allocation
 changes, simultaneous-allocation federation, stale updates, GPU-direct fabric,
 or confidentiality in v1. The v1 payload is host-resident float64. GPU-direct
 is a future ABI capability and cannot be enabled by configuration alone.
-ADR-002 resolves stale-update policy above this layer but does not make the v1
-ABI capable of carrying it.
+ADR-002 resolves the v2.1 asynchronous policy above this layer but does not
+make the v1 ABI capable of carrying it.
 
 The existing `scripts/frontier/compiled_mpich_dense_helper.cpp` is the
 fixed-world performance/numerical reference and an explicitly selected
@@ -81,39 +82,46 @@ leader communicator, and launched `world_size` are deliberately nonconforming
 to NDP02. It MUST NOT be used as the membership or failure domain of the
 elastic backend.
 
-### Bounded-lag v2 extension boundary
+### Simple asynchronous v2.1 extension boundary
 
 All NDP01–NDP17 decisions remain mandatory for
-`async-decoupled-v2.0-exp`.
-The native service remains persistent, model-free, point-to-point, credit
-bounded, checksummed, deterministic, and fenced. It still has no authority to
-select lag, membership, accepted sets, weights, outer math, checkpoint cadence,
-or commit state.
+`async-decoupled-v2.1-simple`. The native service remains persistent,
+model-free, point-to-point, credit bounded, checksummed, deterministic, and
+fenced. It still has no authority to select lag, membership, accepted sets,
+exact-token floors, outer math, checkpoint cadence, scale closure, or commit
+state.
 
-The current 76-byte v1 contribution identity, single retained open generation,
-single exact-token `weight` field, and v1 metadata kinds are insufficient for
-ADR-002. A conforming v2 implementation MUST introduce a reviewed
-protocol/ABI version that carries:
+The current 76-byte v1 contribution identity and v1 metadata kinds are
+insufficient. A conforming implementation MUST use
+`NDP_ABI_V21 = 0x00020001`, wire protocol major 2/minor 1, and the exact v2.1
+policy/metadata/manifest identities in ADR-002. It adds v2.1 symbols and
+records; it does not grow a v1 struct or accept historical v2.0 records under
+the new version. The extension carries:
 
-- contribution sequence, cumulative local K-window range, interval endpoint,
-  and coalescing facts separately from the global transition;
-- base global version/digest, commit lag, applied-anchor-before-apply lag,
-  result-version-at-apply lag, and speculative/apply local-window lag as
-  distinct clocks;
-- policy and code digests in addition to layout and payload digests;
-- exact tokens separately from integer staleness-adjusted aggregation weight;
-- bounded one-sealed/one-mutable descriptor ownership and byte admission;
-- accepted-local-delta correction identity for safe-boundary rebase; and
-- versioned latest-only result mailbox publication/replacement/release facts.
+- stable worker plus current incarnation, contribution sequence, cumulative
+  local K-window range, interval endpoint, and eight-trainer cohort identity;
+- base global version/digest, commit lag, applied-anchor lag,
+  result-version-at-apply lag, and speculative-window lag as distinct clocks;
+- policy schema/digest and code digest in addition to layout/payload digests;
+- one positive `exact_tokens` field used for the token floor, accepted-token
+  clock, deterministic NDP05 binary64 multiplication, denominator, manifest,
+  and telemetry;
+- bounded one-owned/one-mutable cohort admission, correction-ledger identity,
+  capacity-one mailbox publication/replacement/release, and all-eight-trainer
+  node-apply/recovery facts; and
+- scale-authorization and leased-READY-snapshot closure digests for any 4+
+  group plan.
 
-It MUST preserve the NDP05 deterministic binary64 arithmetic after substituting
-ADR-002's exact integer aggregation weight. It MUST retain exact tokens
-separately for quorum, accepted-token clocks, and manifests. It MUST NOT encode
-lagged work as a v1 `generation` with `tau = 0`, expand v1 structs under the
-same ABI version, retain unbounded generations, make a trainer wait for fabric
-send/receipt after bounded local `OWNED`, add a dense Python/Lustre path, or
-introduce a collective. Until that protocol and all V2A01–V2A18 gates pass, the
-native v1 implementation remains fresh-only compatibility behavior.
+No v2.1 production record contains a distinct aggregation/effective/staleness
+weight. Owners apply NDP05 in deterministic contribution order using
+`exact_tokens` directly and divide by the checked exact-token sum. The
+extension MUST NOT encode lagged work as a v1 `generation` with `tau = 0`,
+accept a v2.0 policy/schema/digest, retain unbounded generations, make a
+trainer wait for fabric send/receipt after bounded local `OWNED`, add a dense
+Python/Lustre path, introduce a collective, or close a scale group from
+launched-rank state or merely because two contributions arrived. Until the
+versioned extension and V21S01–V21S17 gates pass, native v1 remains fresh-only
+compatibility behavior and v2.0 remains historical evidence only.
 
 ## Plane boundary and process topology
 
@@ -1075,7 +1083,7 @@ Each rung is submitted separately only after the preceding rung's artifact is
 accepted. The exact command shape is:
 
 ```bash
-sbatch --parsable --nodes=<4|8|32|64|256> --time=00:20:00 \
+sbatch --parsable --nodes=<4|8|16|32|64|256> --time=00:20:00 \
   --export=ALL,NDP_GATE=scale,NDP_SCALE_NODES=<same>,NDP_LAYOUT=e97-f64-5506770496,FI_PROVIDER=cxi \
   scripts/frontier/native_dataplane_scale_gate.sbatch
 ```
@@ -1089,15 +1097,19 @@ credit/resident bounds, full release, and p50 no slower than
 injects one owner loss after the clean measurements and requires bounded
 reassignment or a clean no-commit result according to the configured floor.
 
-The 4, 8, 32, 64, and 256 rungs are strictly ordered. A real model scale rung
-is separately authorized only after its same-size synthetic artifact and every
-smaller synthetic/real policy rung. At 256 nodes (2,048 trainer lanes), the
-retained fixed-world compiled reference is `5.304643992334604 s`. Elastic v1
-acceptance requires the native clean reduction-plus-redistribution median no
-greater than twice that value, `10.609287984669208 s`; matching or beating
-`5.304643992334604 s` is the performance target. Correctness without the
-10.609-second cap leaves native CXI unpromoted and the compiled MPICH path as a
-fixed-world fallback only; it does not justify weakening resilience semantics.
+The 4, 8, 16, 32, 64, and 256 rungs are strictly ordered. A real model scale
+rung is separately authorized only after its same-size synthetic artifact and
+every smaller synthetic/real policy rung. V2.1 additionally requires the
+authorization-pinned finite close over the leased READY snapshot defined by
+ADR-002: the v1 clean all-READY measurement is a reference, not permission to
+wait for launched ranks or close at `Q_min=2`. At 256 nodes (2,048 trainer
+lanes), the retained fixed-world compiled reference is
+`5.304643992334604 s`. Elastic v1 acceptance requires the native clean
+reduction-plus-redistribution median no greater than twice that value,
+`10.609287984669208 s`; matching or beating `5.304643992334604 s` is the
+performance target. Correctness without the 10.609-second cap leaves native
+CXI unpromoted and the compiled MPICH path as a fixed-world fallback only; it
+does not justify weakening resilience semantics.
 
 The retained compiled reference itself is requalified, without changing its
 role, by the downstream compiled-transport task using the existing build and
@@ -1119,11 +1131,12 @@ cite applicable matrix IDs R01–R16 plus native IDs NDP01–NDP17. At minimum:
 - compiled reference qualification: R05, R10, R15, R16 and NDP02, NDP03,
   NDP05, NDP16, NDP17, explicitly recording its non-elastic fallback status.
 
-A bounded-lag task MUST additionally cite ADR-002 and V2A01–V2A18. Its native
-artifact must prove the versioned identity/weight/descriptor/coalescing/
-correction/mailbox extensions above while retaining every applicable
-NDP01–NDP17 invariant. Passing the v1 G2/G3 gate is a prerequisite and
-reference, not evidence that v2 lagged transport has passed.
+A v2.1 asynchronous task MUST additionally cite ADR-002 and V21S01–V21S17.
+Its native artifact must prove the versioned identity/exact-token/descriptor/
+coalescing/correction/mailbox/node-apply extensions above while retaining
+every applicable NDP01–NDP17 invariant. A 4+ artifact must also prove the
+reviewed leased-READY scale closure. Passing the v1 G2/G3 gate is a prerequisite
+and reference, not evidence that v2.1 transport has passed.
 
 The acceptance record must contain exact commands, immutable artifacts, code
 and binary digests, provider facts, committed generation/checkpoint evidence,
