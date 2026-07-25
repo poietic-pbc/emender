@@ -2083,6 +2083,7 @@ def _native_manager(args) -> int:
                           "runtime_digests": digests})
             atomic_metadata(control / f"native-result-{generation:08d}.json",
                             result_marker)
+            atomic_commit_started = time.monotonic()
             if node == 0:
                 proposal = wait_metadata(
                     control / f"trainer-proposal-{generation:08d}.json",
@@ -2147,6 +2148,19 @@ def _native_manager(args) -> int:
             session.commit(
                 publication_manifest=publication, authoritative_latest=latest,
                 deadline_s=pool_config.slo.apply_s)
+            if node == 0:
+                _stage_telemetry(
+                    bulk, identity, generation, "fenced_atomic_commit",
+                    atomic_commit_started, min(args.deadline_s, 420.0),
+                    policy_id=args._async_v21_policy.policy_id,
+                    allocation_fence=_fence_epoch(args),
+                    base_global_version=generation,
+                    commit_global_version=generation + 1,
+                    commit_lag=1,
+                    exact_tokens=accepted_tokens,
+                    contribution_digest=final_result.result_root.hex(),
+                    accepted_tokens=int(proposal["accepted_tokens"]),
+                    membership=len(proposal["membership"]))
             final_result.close(); final_operation.close(); freeze.close()
             heartbeat(bulk, identity, generation=generation + 1,
                       step=(generation + 1) * args.local_steps, loss=None,

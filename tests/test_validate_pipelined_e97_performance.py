@@ -121,6 +121,7 @@ def _records(
                 "native_trainer_apply",
                 "checkpoint_publication",
                 "control_handoff_integrity",
+                "fenced_atomic_commit",
             )):
                 began = version * cadence + 10.0 + offset
                 ended = began + 5.0
@@ -166,7 +167,20 @@ def test_semantic_validator_accepts_true_decoupling_and_bounded_lag():
     assert result["lag"]["commit_max"] <= 2
     assert result["lag"]["anchor_max"] <= 2
     assert result["lag"]["speculative_max"] <= 2
+    assert result["atomic_commits"] >= 10
     assert result["overlaps"]
+
+
+def test_semantic_validator_requires_ten_distinct_atomic_commits():
+    records = _records()
+    atomic = [
+        value for value in records
+        if value.get("stage") == "fenced_atomic_commit"
+    ]
+    for value in atomic[9:]:
+        records.remove(value)
+    with pytest.raises(ValueError, match="ten distinct atomic commits"):
+        MODULE.validate(records)
 
 
 def test_semantic_validator_accepts_latest_only_non_barrier_applications():

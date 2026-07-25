@@ -28,6 +28,8 @@ from typing import Mapping, Sequence
 
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 POLICY_ID = "async-decoupled-v2.1-simple"
 POLICY_SCHEMA = "emender-async-policy-v2.1"
 PAYLOAD_SCHEMA = "emender-async-v21-qualification-payload-v1"
@@ -48,6 +50,42 @@ SEED_SHA256 = (
     "0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2"
 )
 SEED_NODE_PATH = "/tmp/emender-e97-seed-$SLURM_JOB_ID"
+CLEAN_WALLTIME = "02:00:00"
+CLEAN_PHASE = "clean-overlap"
+CLEAN_GENERATIONS = 12
+CLEAN_PROGRESS_DEADLINE_S = 45 * 60
+CLEAN_GENERATION_DEADLINE_S = 420
+APPROVED_ENV = (
+    "/lustre/orion/bif148/scratch/erikgarrison/emender/"
+    ".envs/olcf-rocm711-torch210-py312"
+)
+DATA_PATH = Path(
+    "/lustre/orion/bif148/proj-shared/commapile/"
+    "commapile_mainmix_v0.1_1tb.txt"
+)
+TOKENIZER_PATH = Path(
+    "/lustre/orion/bif148/proj-shared/emender/tokenizers/tiktoken/"
+    "p50k_base/ec7223a39ce59f226a68acc30dc1af2788490e15"
+)
+TOKENIZER_SHA256 = (
+    "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069"
+)
+SEED_CACHE_ROOT = Path(
+    "/lustre/orion/bif148/proj-shared/emender/bootstrap/e97-seeds"
+)
+CLEAN_PARAMETERS = {
+    "foreground_idle_fraction_strict_max": 0.10,
+    "freeze_to_latest_seconds_max": 420,
+    "local_owned_latency_seconds_max": 1,
+    "local_steps": 40,
+    "measured_windows_per_trainer": 10,
+    "minimum_atomic_commits": 10,
+    "progress_deadline_seconds": CLEAN_PROGRESS_DEADLINE_S,
+    "real_trainers": 16,
+    "steady_state_cadence_multiple_max": 1.25,
+    "trainers_per_node": 8,
+    "warmup_windows_per_trainer": 2,
+}
 
 
 def canonical_bytes(value: object) -> bytes:
@@ -397,6 +435,7 @@ def build_plan(
     predecessor_path: str | Path | None = None,
     trusted_reviewer_key: str | Path | None = None,
     allow_test_signatures: bool = False,
+    clean_launch: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     _verify_canonical_config()
     if gate not in ALL_GATES:
@@ -415,6 +454,50 @@ def build_plan(
         raise ValueError(
             "scale parameters must explicitly reject Q_min early close, "
             "launched-rank membership, and an all-READY barrier")
+    if clean_launch is not None and gate != "clean":
+        raise ValueError("the reviewed clean launch applies only to the clean gate")
+    launch: dict[str, str] | None = None
+    rendered_parameters = dict(parameters)
+    if clean_launch is not None:
+        required_launch = {
+            "repo", "seed_config", "native_build_manifest",
+            "full_layout_gate", "run_dir", "acceptance_manifest",
+            "seed_cache", "seed_attestation", "seed_attestation_sha256",
+            "train_args", "data", "data_identity_digest", "tokenizer",
+            "tokenizer_sha256", "source_commit",
+            "native_build_manifest_sha256", "full_layout_gate_sha256",
+            "train_args_sha256",
+        }
+        missing = sorted(
+            name for name in required_launch if not clean_launch.get(name))
+        if missing:
+            raise ValueError(
+                "reviewed clean launch is missing immutable bindings: "
+                + ", ".join(missing))
+        launch = {name: str(value) for name, value in clean_launch.items()}
+        for name in (
+            "seed_attestation_sha256", "data_identity_digest",
+            "tokenizer_sha256", "native_build_manifest_sha256",
+            "full_layout_gate_sha256", "train_args_sha256",
+        ):
+            _digest(launch[name], name)
+        if (
+            len(launch["source_commit"]) != 40
+            or any(character not in "0123456789abcdef"
+                   for character in launch["source_commit"])
+        ):
+            raise ValueError("clean launch source commit must be a Git SHA-1")
+        if launch["tokenizer_sha256"] != TOKENIZER_SHA256:
+            raise ValueError("clean launch must bind the reviewed p50k tokenizer")
+        conflicting = {
+            name: value
+            for name, value in rendered_parameters.items()
+            if name in CLEAN_PARAMETERS and value != CLEAN_PARAMETERS[name]
+        }
+        if conflicting:
+            raise ValueError(
+                "clean parameters differ from the reviewed acceptance profile")
+        rendered_parameters = {**CLEAN_PARAMETERS, **rendered_parameters}
     identities = {
         "source_digest": _digest(source_digest, "source"),
         "policy_digest": _digest(policy_digest, "policy"),
@@ -431,8 +514,8 @@ def build_plan(
         "gate": gate,
         "nodes": int(nodes),
         "identities": identities,
-        "parameters": dict(parameters),
-        "config": str(CONFIG_PATH),
+        "parameters": rendered_parameters,
+        "config": launch["seed_config"] if launch else str(CONFIG_PATH),
         "seed": {
             "step": SEED_STEP,
             "accepted_tokens": SEED_ACCEPTED_TOKENS,
@@ -442,6 +525,29 @@ def build_plan(
             "compute_node_network_fetches": 0,
         },
     }
+    if launch is not None:
+        training_inputs = {
+            "data_identity_digest": launch["data_identity_digest"],
+            "full_layout_gate_sha256": launch["full_layout_gate_sha256"],
+            "native_build_manifest_sha256":
+                launch["native_build_manifest_sha256"],
+            "seed_config": launch["seed_config"],
+            "seed_attestation_sha256": launch["seed_attestation_sha256"],
+            "source_commit": launch["source_commit"],
+            "tokenizer_sha256": launch["tokenizer_sha256"],
+            "train_args": launch["train_args"],
+            "train_args_sha256": launch["train_args_sha256"],
+        }
+        for name in (
+            "data_bytes", "data_mtime_ns",
+        ):
+            if name in launch:
+                training_inputs[name] = (
+                    int(launch[name])
+                    if name in {"data_bytes", "data_mtime_ns"}
+                    else launch[name]
+                )
+        payload["training_inputs"] = training_inputs
     payload_digest = canonical_digest(payload)
     retained_state = _state(Path(state_path).resolve())
     old = retained_state["payloads"].get(payload_digest)
@@ -500,17 +606,16 @@ def build_plan(
         if isinstance(old, Mapping) and old.get("status") == "failed":
             raise ValueError("unchanged failed payload cannot be resubmitted")
 
-    scheduler = (
-        {"Nodes": 2, "Partition": "batch", "QOS": "debug"}
-        if nodes == 2
-        else {"Nodes": nodes, "Partition": "batch", "QOS": "debug"}
-    )
+    scheduler = {"Nodes": nodes, "Partition": "batch", "QOS": "debug"}
+    if launch is not None:
+        scheduler["TimeLimit"] = CLEAN_WALLTIME
+    config_path = launch["seed_config"] if launch else str(CONFIG_PATH)
     exports = [
         "ALL",
         f"ASYNC_V21_GATE={gate}",
         f"ASYNC_V21_PAYLOAD_DIGEST={payload_digest}",
         f"ASYNC_V21_POLICY_DIGEST={policy_digest}",
-        f"ASYNC_V21_CONFIG={CONFIG_PATH}",
+        f"ASYNC_V21_CONFIG={config_path}",
         f"RESILIENT_E97_NODE_COUNT={nodes}",
         f"RESILIENT_E97_DILOCO_POLICY={POLICY_ID}",
         "RESILIENT_E97_GLOBAL_TOKEN_MIN=3934080",
@@ -521,6 +626,64 @@ def build_plan(
         "RESILIENT_E97_MAX_SPECULATIVE_WINDOWS=2",
         "RESILIENT_E97_COMPUTE_NODE_NETWORK_FETCHES=0",
     ]
+    if launch is not None:
+        source_commit = launch.get("source_commit", source_digest)
+        exports.extend([
+            f"REPO={launch['repo']}",
+            "RESILIENT_E97_ACCEPTANCE_MANIFEST="
+            + launch["acceptance_manifest"],
+            f"RESILIENT_E97_ACCEPTANCE_PHASE={CLEAN_PHASE}",
+            f"RUN_DIR={launch['run_dir']}",
+            f"NDP_BUILD_MANIFEST={launch['native_build_manifest']}",
+            f"NDP_FULL_LAYOUT_GATE_JSON={launch['full_layout_gate']}",
+            f"EMENDER_CONDA_ENV={APPROVED_ENV}",
+            "DILOCO_DATAPLANE=native-cxi",
+            "FI_PROVIDER=cxi",
+            "FI_MR_CACHE_MONITOR=kdreg2",
+            "FI_CXI_ATS=0",
+            "RESILIENT_E97_RUN_ID=async-v21-clean-" + payload_digest[:16],
+            "RESILIENT_E97_SOURCE_ID="
+            f"step-{SEED_STEP}-tokens-{SEED_ACCEPTED_TOKENS}-"
+            f"sha256-{SEED_SHA256}",
+            "RESILIENT_E97_PAYLOAD_ID=" + payload_digest,
+            f"RESILIENT_E97_CODE_ID={source_commit}",
+            f"RESILIENT_E97_SEED_CONFIG={launch['seed_config']}",
+            f"RESILIENT_E97_SEED_STEP={SEED_STEP}",
+            f"RESILIENT_E97_SEED_TOKENS={SEED_ACCEPTED_TOKENS}",
+            f"RESILIENT_E97_SEED_SIZE={SEED_BYTES}",
+            f"RESILIENT_E97_SEED_SHA256={SEED_SHA256}",
+            f"RESILIENT_E97_SEED_CACHE={launch['seed_cache']}",
+            f"RESILIENT_E97_SEED_ATTESTATION={launch['seed_attestation']}",
+            "RESILIENT_E97_SEED_ATTESTATION_SHA256="
+            + launch["seed_attestation_sha256"],
+            f"RESILIENT_E97_TRAIN_ARGS_JSON={launch['train_args']}",
+            f"RESILIENT_E97_DATA={launch['data']}",
+            "RESILIENT_E97_DATA_IDENTITY_DIGEST="
+            + launch["data_identity_digest"],
+            f"RESILIENT_E97_TIKTOKEN_CACHE_FILE={launch['tokenizer']}",
+            f"RESILIENT_E97_TIKTOKEN_SHA256={launch['tokenizer_sha256']}",
+            f"RESILIENT_E97_GENERATIONS={CLEAN_GENERATIONS}",
+            "RESILIENT_E97_INITIAL_GENERATION=0",
+            "RESILIENT_E97_COORDINATOR_EPOCH=1",
+            "RESILIENT_E97_GLOBAL_QUORUM=2",
+            "RESILIENT_E97_STARTUP_SMOKE=0",
+            f"RESILIENT_E97_REQUESTED_WALLTIME={CLEAN_WALLTIME}",
+            "RESILIENT_E97_LAUNCH_MODE=node-local",
+            "RESILIENT_E97_STARTUP_DEADLINE_S=180",
+            "RESILIENT_E97_HEARTBEAT_DEADLINE_S=60",
+            f"RESILIENT_E97_PROGRESS_DEADLINE_S="
+            f"{CLEAN_PROGRESS_DEADLINE_S}",
+            f"RESILIENT_E97_GENERATION_DEADLINE_S="
+            f"{CLEAN_GENERATION_DEADLINE_S}",
+            "RESILIENT_E97_MAX_RESTARTS=0",
+            "RESILIENT_E97_INJECT_TRAINER=",
+            "RESILIENT_E97_INJECT_MANAGER=",
+            "RESILIENT_E97_INJECT_NODE_STEP=",
+            "RESILIENT_E97_INJECT_NATIVE_SERVICE=",
+            "RESILIENT_E97_DELAY_READY=",
+            "RESILIENT_E97_BULK_ROOT=/tmp/async-v21-clean-"
+            + payload_digest[:16],
+        ])
     if scale_evidence is not None:
         exports.extend([
             "ASYNC_V21_SCALE_AUTHORIZATION="
@@ -552,17 +715,35 @@ def build_plan(
         f"--nodes={nodes}",
         "--partition=batch",
         "--qos=debug",
-        f"--export={','.join(exports)}",
-        str(LAUNCHER_PATH),
     ]
-    return {
+    launcher_path = LAUNCHER_PATH
+    if launch is not None:
+        launcher_path = Path(launch["repo"]) / (
+            "scripts/frontier/resilient_e97_true_2n.sbatch")
+        run_dir = Path(launch["run_dir"])
+        command.extend([
+            f"--time={CLEAN_WALLTIME}",
+            "--network=job_vni",
+            f"--chdir={launch['repo']}",
+            f"--output={run_dir / 'slurm-%j.out'}",
+            f"--error={run_dir / 'slurm-%j.err'}",
+        ])
+    command.extend([
+        f"--export={','.join(exports)}",
+        str(launcher_path),
+    ])
+    plan = {
         "payload": payload,
         "payload_digest": payload_digest,
         "scheduler": scheduler,
         "command": command,
         "state_path": str(Path(state_path).resolve()),
         "evidence_root": str(Path(evidence_root).resolve()),
+        "repo": launch["repo"] if launch else str(ROOT),
     }
+    if launch is not None:
+        plan["clean_launch"] = launch
+    return plan
 
 
 def _atomic_json(path: Path, value: Mapping[str, object]) -> None:
@@ -570,6 +751,35 @@ def _atomic_json(path: Path, value: Mapping[str, object]) -> None:
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     temporary.write_bytes(canonical_bytes(value) + b"\n")
     os.replace(temporary, path)
+
+
+def _verify_clean_plan_immutable(plan: Mapping[str, object]) -> None:
+    launch = plan.get("clean_launch")
+    if not isinstance(launch, Mapping):
+        return
+    repo = Path(str(launch["repo"])).resolve()
+    if _require_submission_source(repo) != launch["source_commit"]:
+        raise ValueError("authoritative source changed after clean plan rendering")
+    for path_name, digest_name in (
+        ("native_build_manifest", "native_build_manifest_sha256"),
+        ("full_layout_gate", "full_layout_gate_sha256"),
+        ("seed_attestation", "seed_attestation_sha256"),
+        ("train_args", "train_args_sha256"),
+        ("tokenizer", "tokenizer_sha256"),
+    ):
+        if _file_sha256(Path(str(launch[path_name]))) != launch[digest_name]:
+            raise ValueError(
+                f"clean launch artifact changed after rendering: {path_name}")
+    data = _data_identity(Path(str(launch["data"])))
+    if data["identity_digest"] != launch["data_identity_digest"]:
+        raise ValueError("reviewed E97 data object changed after rendering")
+    cache = Path(str(launch["seed_cache"]))
+    if (
+        not cache.is_file()
+        or cache.stat().st_size != SEED_BYTES
+        or cache.name != f"sha256-{SEED_SHA256}.pt"
+    ):
+        raise ValueError("verified content-addressed seed cache is unavailable")
 
 
 def submit_plan(plan: Mapping[str, object]) -> str:
@@ -582,9 +792,17 @@ def submit_plan(plan: Mapping[str, object]) -> str:
         state = _state(state_path)
         if isinstance(state.get("active_job"), Mapping):
             raise ValueError("at most one active job is permitted")
+        _verify_clean_plan_immutable(plan)
+        queued = subprocess.run(
+            ["squeue", "-u", os.environ["USER"], "-h", "-o", "%i"],
+            check=True, text=True, stdout=subprocess.PIPE,
+        ).stdout.strip()
+        if queued:
+            raise ValueError(
+                "serial qualification refuses to overlap another allocation")
         completed = subprocess.run(
             [str(item) for item in plan["command"]],
-            cwd=ROOT,
+            cwd=Path(str(plan.get("repo", ROOT))),
             check=True,
             text=True,
             stdout=subprocess.PIPE,
@@ -608,13 +826,17 @@ def submit_plan(plan: Mapping[str, object]) -> str:
 
 
 def _file_sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
-def _source_digest() -> str:
+def _source_digest(repo: Path = ROOT) -> str:
     completed = subprocess.run(
         ["git", "ls-files", "-z"],
-        cwd=ROOT,
+        cwd=repo,
         check=True,
         stdout=subprocess.PIPE,
     )
@@ -622,7 +844,7 @@ def _source_digest() -> str:
     for encoded in completed.stdout.split(b"\0"):
         if not encoded:
             continue
-        path = ROOT / os.fsdecode(encoded)
+        path = repo / os.fsdecode(encoded)
         if path.is_file():
             payload = path.read_bytes()
             digest.update(len(encoded).to_bytes(4, "little"))
@@ -632,34 +854,159 @@ def _source_digest() -> str:
     return digest.hexdigest()
 
 
-def _require_submission_source() -> None:
+def _require_submission_source(repo: Path = ROOT) -> str:
     def git(*arguments: str) -> str:
         return subprocess.run(
-            ["git", *arguments], cwd=ROOT, check=True, text=True,
+            ["git", *arguments], cwd=repo, check=True, text=True,
             stdout=subprocess.PIPE,
         ).stdout.strip()
 
+    commit = git("rev-parse", "HEAD")
     if (
         git("branch", "--show-current") != "main"
         or git("status", "--porcelain", "--untracked-files=all")
-        or git("rev-parse", "HEAD") != git("rev-parse", "origin/main")
+        or commit != git("rev-parse", "origin/main")
     ):
         raise ValueError(
             "submission requires clean authoritative main at origin/main")
+    return commit
+
+
+def _data_identity(path: Path) -> dict[str, object]:
+    """Bind the reviewed Lustre object without rereading the one-terabyte corpus."""
+    metadata = path.stat()
+    value = {
+        "schema": "emender-reviewed-data-object-v1",
+        "path": str(path.resolve()),
+        "bytes": metadata.st_size,
+        "mtime_ns": metadata.st_mtime_ns,
+        "device": metadata.st_dev,
+        "inode": metadata.st_ino,
+    }
+    value["identity_digest"] = canonical_digest(value)
+    return value
+
+
+def _clean_launch_context(
+    *,
+    repo: Path,
+    source_commit: str,
+    seed_config: Path,
+    native_build_manifest: Path,
+    full_layout_gate: Path,
+    run_dir: Path,
+    acceptance_manifest: Path,
+    submit: bool,
+) -> tuple[dict[str, str], str]:
+    for path, name in (
+        (seed_config, "canonical seed config"),
+        (native_build_manifest, "native build manifest"),
+        (full_layout_gate, "passed full-layout G2 gate"),
+        (repo / "configs/frontier/e97_resilient_split_role_flat.json",
+         "approved E97 training arguments"),
+        (repo / "scripts/frontier/resilient_e97_true_2n.sbatch",
+         "canonical two-node launcher"),
+        (DATA_PATH, "reviewed E97 dataset"),
+        (TOKENIZER_PATH, "reviewed p50k tokenizer"),
+    ):
+        if not path.is_file():
+            raise FileNotFoundError(f"{name} is missing: {path}")
+
+    seed = json.loads(seed_config.read_text(encoding="utf-8")).get("seed")
+    if (
+        not isinstance(seed, Mapping)
+        or seed.get("step") != SEED_STEP
+        or seed.get("tokens") != SEED_ACCEPTED_TOKENS
+        or seed.get("size") != SEED_BYTES
+        or seed.get("sha256") != SEED_SHA256
+    ):
+        raise ValueError("selected seed config is not the immutable E97 authority")
+    build = json.loads(native_build_manifest.read_text(encoding="utf-8"))
+    if (
+        not isinstance(build, Mapping)
+        or build.get("schema") != "emender-native-dataplane-build-v1"
+        or build.get("source_commit") != source_commit
+        or build.get("source_tree_dirty") is not False
+    ):
+        raise ValueError(
+            "native build manifest is not current clean authoritative source")
+    bundle_digest = _digest(build.get("bundle_sha256"), "native bundle")
+
+    subprocess.run([
+        sys.executable,
+        str(repo / "scripts/frontier/attest_native_dataplane.py"),
+        "verify",
+        "--backend", "native-cxi",
+        "--production",
+        "--full-layout",
+        "--build-manifest", str(native_build_manifest),
+        "--gate-json", str(full_layout_gate),
+        "--source-root", str(repo),
+    ], cwd=repo, check=True)
+    if _file_sha256(TOKENIZER_PATH) != TOKENIZER_SHA256:
+        raise ValueError("reviewed p50k tokenizer digest mismatch")
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+    if submit:
+        from scripts.frontier.materialize_e97_s3_seed import prefetch
+        seed_cache, seed_attestation = prefetch(
+            dict(seed),
+            Path(os.environ.get(
+                "RESILIENT_E97_SUBMIT_SEED_CACHE_ROOT",
+                str(SEED_CACHE_ROOT))),
+            run_dir / "seed-bootstrap-attestation.json",
+        )
+    else:
+        seed_cache = SEED_CACHE_ROOT / f"sha256-{SEED_SHA256}.pt"
+        seed_attestation = run_dir / "seed-bootstrap-attestation.json"
+    data_identity = _data_identity(DATA_PATH)
+    train_args = (
+        repo / "configs/frontier/e97_resilient_split_role_flat.json").resolve()
+    context = {
+        "repo": str(repo),
+        "source_commit": source_commit,
+        "seed_config": str(seed_config),
+        "native_build_manifest": str(native_build_manifest),
+        "native_build_manifest_sha256": _file_sha256(native_build_manifest),
+        "full_layout_gate": str(full_layout_gate),
+        "full_layout_gate_sha256": _file_sha256(full_layout_gate),
+        "run_dir": str(run_dir),
+        "acceptance_manifest": str(acceptance_manifest),
+        "seed_cache": str(seed_cache),
+        "seed_attestation": str(seed_attestation),
+        "seed_attestation_sha256": (
+            _file_sha256(seed_attestation) if submit else "0" * 64),
+        "train_args": str(train_args),
+        "train_args_sha256": _file_sha256(train_args),
+        "data": str(DATA_PATH),
+        "data_bytes": str(data_identity["bytes"]),
+        "data_mtime_ns": str(data_identity["mtime_ns"]),
+        "data_identity_digest": str(data_identity["identity_digest"]),
+        "tokenizer": str(TOKENIZER_PATH),
+        "tokenizer_sha256": TOKENIZER_SHA256,
+    }
+    return context, bundle_digest
 
 
 def _arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gate", choices=ALL_GATES, required=True)
     parser.add_argument("--nodes", type=int, required=True)
+    parser.add_argument("--repo", type=Path, default=ROOT)
+    parser.add_argument(
+        "--seed-config", type=Path,
+        default=Path("configs/frontier/e97_async_256.yaml"))
+    parser.add_argument("--native-build-manifest", type=Path)
+    parser.add_argument("--full-layout-gate", type=Path)
+    parser.add_argument("--run-root", type=Path)
     parser.add_argument("--state", required=True)
-    parser.add_argument("--evidence-root", required=True)
+    parser.add_argument("--evidence-root")
     parser.add_argument("--authorization")
     parser.add_argument("--prior-rung")
     parser.add_argument("--trusted-reviewer-key")
     parser.add_argument("--source-digest")
     parser.add_argument("--policy-digest")
-    parser.add_argument("--bundle-digest", required=True)
+    parser.add_argument("--bundle-digest")
     parser.add_argument("--seed-digest", default=SEED_SHA256)
     parser.add_argument("--launcher-digest")
     parser.add_argument("--parameters-json", default="{}")
@@ -672,12 +1019,24 @@ def _arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _arguments(argv)
-    if args.submit:
-        _require_submission_source()
+    repo = args.repo.resolve()
+    source_commit = (
+        _require_submission_source(repo)
+        if args.submit
+        else subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, check=True, text=True,
+            stdout=subprocess.PIPE,
+        ).stdout.strip()
+    )
     parameters = json.loads(args.parameters_json)
     if not isinstance(parameters, dict):
         raise ValueError("--parameters-json must encode an object")
-    if not CONFIG_PATH.is_file() or not LAUNCHER_PATH.is_file():
+    launcher_path = repo / "scripts/frontier/resilient_e97_true_2n.sbatch"
+    seed_config = args.seed_config
+    if not seed_config.is_absolute():
+        seed_config = repo / seed_config
+    seed_config = seed_config.resolve()
+    if not seed_config.is_file() or not launcher_path.is_file():
         raise FileNotFoundError("canonical config or launcher is missing")
     if SEED_SHA256 != args.seed_digest:
         _digest(args.seed_digest, "seed")
@@ -686,20 +1045,68 @@ def main(argv: Sequence[str] | None = None) -> int:
         policy_digest = ASYNC_DECOUPLED_V21.digest
     else:
         policy_digest = args.policy_digest
+    clean_launch = None
+    bundle_digest = args.bundle_digest
+    if args.gate == "clean" and any((
+        args.native_build_manifest,
+        args.full_layout_gate,
+        args.run_root,
+    )):
+        if not all((
+            args.native_build_manifest,
+            args.full_layout_gate,
+            args.run_root,
+            args.output,
+        )):
+            raise ValueError(
+                "integrated clean launch requires --native-build-manifest, "
+                "--full-layout-gate, --run-root, and --output")
+        clean_launch, derived_bundle = _clean_launch_context(
+            repo=repo,
+            source_commit=source_commit,
+            seed_config=seed_config,
+            native_build_manifest=args.native_build_manifest.resolve(),
+            full_layout_gate=args.full_layout_gate.resolve(),
+            run_dir=(args.run_root.resolve() / CLEAN_PHASE),
+            acceptance_manifest=Path(args.output).resolve(),
+            submit=args.submit,
+        )
+        if bundle_digest is not None and bundle_digest != derived_bundle:
+            raise ValueError(
+                "explicit bundle digest differs from the native build manifest")
+        bundle_digest = derived_bundle
+    if args.submit and args.gate == "clean" and clean_launch is None:
+        raise ValueError(
+            "clean submission requires the integrated build/G2/run launch")
+    if bundle_digest is None:
+        raise ValueError(
+            "--bundle-digest or an integrated native build manifest is required")
+    evidence_root = (
+        Path(args.evidence_root).resolve()
+        if args.evidence_root is not None
+        else (
+            args.run_root.resolve()
+            if args.run_root is not None
+            else None
+        )
+    )
+    if evidence_root is None:
+        raise ValueError("--evidence-root or --run-root is required")
     plan = build_plan(
         gate=args.gate,
         nodes=args.nodes,
         state_path=args.state,
-        evidence_root=args.evidence_root,
-        source_digest=args.source_digest or _source_digest(),
+        evidence_root=evidence_root,
+        source_digest=args.source_digest or _source_digest(repo),
         policy_digest=policy_digest,
-        bundle_digest=args.bundle_digest,
+        bundle_digest=bundle_digest,
         seed_digest=args.seed_digest,
-        launcher_digest=args.launcher_digest or _file_sha256(LAUNCHER_PATH),
+        launcher_digest=args.launcher_digest or _file_sha256(launcher_path),
         parameters=parameters,
         authorization_path=args.authorization,
         predecessor_path=args.prior_rung,
         trusted_reviewer_key=args.trusted_reviewer_key,
+        clean_launch=clean_launch,
     )
     if args.output:
         _atomic_json(Path(args.output).resolve(), plan)

@@ -19,6 +19,7 @@ from pathlib import Path
 import shlex
 import signal
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -291,7 +292,7 @@ class AllocationSupervisor:
                     return None
             return generation
         except (FenceRejected, FileNotFoundError, KeyError, TypeError,
-                ValueError, json.JSONDecodeError, OSError):
+                ValueError, json.JSONDecodeError, OSError, sqlite3.Error):
             return None
 
     def _apply_progress_time(self, child: Child, generation: int) -> float:
