@@ -3,7 +3,6 @@ import hashlib
 import json
 import os
 import signal
-import sqlite3
 import subprocess
 import sys
 import threading
@@ -11,12 +10,78 @@ import time
 
 import pytest
 
+from ndm.manifest_peer_control import ManifestPeerAuthority
 from scripts.frontier.resilient_e97_allocation_supervisor import AllocationSupervisor, Child
 from scripts.frontier.check_resilient_e97_parity import compare
 
 
 ROOT = Path(__file__).parents[1]
 APPROVED_ENV = Path("/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312")
+
+
+def _publish_commit_chain(
+        root: Path, *, fence: int, generation: int, run_id: str = "run",
+        payload_id: str = "payload", source_id: str = "source",
+        code_id: str = "code", native_runtime: dict | None = None):
+    authority = ManifestPeerAuthority(root)
+    claim = authority.claim(
+        run_id=run_id,
+        allocation_id=f"job-{fence}",
+        incarnation=f"allocation-{fence}",
+        fence=fence,
+        protocol_id="async-decoupled-v2.1-simple",
+        config_id="config",
+    )
+    prior_root = ""
+    receipt = authority.current_commit(claim)
+    start = 1 if receipt is None else receipt.generation + 1
+    for item in range(start, generation + 1):
+        checkpoint = (
+            root / "checkpoints"
+            / f"generation-{item:08d}-fence-{fence:08d}.pt")
+        checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint.write_bytes(f"checkpoint:{run_id}:{fence}:{item}".encode())
+        checkpoint_sha = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+        result_root = hashlib.sha256(
+            f"result:{run_id}:{fence}:{item}".encode()).hexdigest()
+        manifest = (
+            root / "handoff"
+            / f"generation-{item:08d}-fence-{fence:08d}.json")
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(json.dumps({
+            "schema": 2,
+            "finalized": True,
+            "run_id": run_id,
+            "payload_id": payload_id,
+            "source_id": source_id,
+            "code_id": code_id,
+            "generation": item,
+            "step": item * 40,
+            "checkpoint": str(checkpoint.resolve()),
+            "checkpoint_bytes": checkpoint.stat().st_size,
+            "checkpoint_sha256": checkpoint_sha,
+            "accepted_tokens": item * 3_934_080,
+            "outer_update_state": {
+                "mode": "delta_sgd",
+                "eta_outer": 1.0,
+                "step": item,
+                "accepted_tokens": item * 3_934_080,
+            },
+            "membership": [
+                {"worker_id": "node-0", "incarnation": f"node-0-{fence}"},
+                {"worker_id": "node-1", "incarnation": f"node-1-{fence}"},
+            ],
+            "fence": {"coordinator_epoch": fence},
+            "digests": {
+                "result_root": result_root,
+                "previous_result_root": prior_root or "00" * 32,
+                **({"native_runtime": native_runtime}
+                   if native_runtime is not None else {}),
+            },
+        }, sort_keys=True) + "\n")
+        receipt = authority.publish_checkpoint(claim, manifest)
+        prior_root = result_root
+    return authority, claim, receipt
 
 
 def _fake_native_manifest(root: Path) -> Path:
@@ -590,16 +655,7 @@ def test_job_5068873_partial_apply_restarts_atomic_eight_trainer_cohort(
         "worker_incarnation": old_incarnation,
     }))
 
-    handoff = tmp_path / "handoff"
-    handoff.mkdir()
-    manifest = handoff / "generation-00000001-fence-00000007.json"
-    manifest.write_text(json.dumps({
-        "finalized": True, "run_id": "run", "generation": 1,
-    }, sort_keys=True))
-    (handoff / "latest.json").write_text(json.dumps({
-        "generation": 1, "fence": 7, "manifest": str(manifest),
-        "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
-    }, sort_keys=True))
+    _publish_commit_chain(tmp_path, fence=7, generation=1)
 
     actions = []
 
@@ -842,28 +898,29 @@ def test_allocation_fence_is_acquired_before_roles_and_loser_is_zero_work(
     monkeypatch.setenv("RESILIENT_E97_RUN_ID", "run")
     monkeypatch.setenv("RESILIENT_E97_SOURCE_ID", "seed")
     monkeypatch.setenv("RESILIENT_E97_PAYLOAD_ID", "layout")
-    monkeypatch.setenv("RESILIENT_E97_FENCE_DB", str(tmp_path / "pool.sqlite"))
     monkeypatch.setenv("RESILIENT_E97_ALLOCATION_ID", "job-a")
     monkeypatch.setenv("RESILIENT_E97_ALLOCATION_INCARNATION", "inc-a")
-    monkeypatch.setenv("RESILIENT_E97_LEASE_TTL_S", "10")
-    monkeypatch.setenv("RESILIENT_E97_LEASE_RENEW_S", "1")
+    monkeypatch.setenv("RESILIENT_E97_ALLOCATION_FENCE", "10")
     # Admission publishes these keys directly. Register their original values
     # with monkeypatch so later subprocess integration tests cannot inherit a
-    # lease after its database path has been restored.
-    monkeypatch.setenv("RESILIENT_E97_ALLOCATION_LEASE", "")
+    # claim after the authority tree has been restored.
+    monkeypatch.setenv("RESILIENT_E97_ALLOCATION_CLAIM", "")
     monkeypatch.setenv("RESILIENT_E97_FENCE_EPOCH", "0")
     first = module._allocation_admission(tmp_path)
     try:
-        assert isinstance(first, module.AllocationLeaseGuard)
-        assert int(os.environ["RESILIENT_E97_FENCE_EPOCH"]) == first.lease.fence
-        telemetry = json.loads((tmp_path / "supervision/allocation-lease.json").read_text())
+        assert isinstance(first, module.AllocationFenceGuard)
+        assert int(os.environ["RESILIENT_E97_FENCE_EPOCH"]) == first.claim.fence
+        telemetry = json.loads((tmp_path / "supervision/allocation-fence.json").read_text())
         assert telemetry["stage"] == "admitted_before_model_load"
+        assert telemetry["live_authority"] == "native_peer_memory"
+        assert telemetry["restart_authority"] == "immutable_commit_receipt_chain"
         assert telemetry["ready_hard_s"] == 180
         assert telemetry["k40_hard_s"] == 420
         assert telemetry["exchange_commit_hard_s"] == 180
         assert telemetry["first_commit_hard_s"] == 720
         monkeypatch.setenv("RESILIENT_E97_ALLOCATION_ID", "job-b")
         monkeypatch.setenv("RESILIENT_E97_ALLOCATION_INCARNATION", "inc-b")
+        monkeypatch.setenv("RESILIENT_E97_ALLOCATION_FENCE", "9")
         assert module._allocation_admission(tmp_path) is False
     finally:
         first.close()
@@ -980,12 +1037,8 @@ def test_fresh_allocation_manager_syncs_older_authoritative_handoff(
         tmp_path, monkeypatch):
     from types import SimpleNamespace
 
-    from ndm.fenced_admission import SQLiteFencedControlStore
     from scripts.frontier import resilient_e97_role as role
 
-    handoff = tmp_path / "handoff"
-    handoff.mkdir()
-    manifest = handoff / "generation-00000003-fence-00000001.json"
     old_runtime = {
         "schema": "emender-native-e97-runtime-digests-v1",
         "source_commit": "old-code", "build_manifest_sha256": "old-manifest",
@@ -999,28 +1052,40 @@ def test_fresh_allocation_manager_syncs_older_authoritative_handoff(
         **old_runtime, "source_commit": "new-code",
         "build_manifest_sha256": "new-manifest",
     }
-    manifest.write_text(json.dumps({
-        "finalized": True, "run_id": "run", "payload_id": "payload",
-        "source_id": "source", "code_id": "old-code", "generation": 3,
-        "fence": {"coordinator_epoch": 1},
-        "digests": {"native_runtime": old_runtime},
-    }, sort_keys=True))
-    digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
-    latest = {
-        "generation": 3, "fence": 1, "manifest": str(manifest),
-        "manifest_sha256": digest,
-    }
-    (handoff / "latest.json").write_text(json.dumps(latest, sort_keys=True))
-
-    store = SQLiteFencedControlStore(tmp_path / "control.sqlite3")
-    old = store.acquire(
-        run_id="run", allocation_id="job-old", incarnation="old",
-        protocol_id="pool-v1", config_id="config", ttl_s=60)
-    store.publish(old, kind="latest", name="authoritative", payload=latest)
-    store.release(old)
-    current = store.acquire(
-        run_id="run", allocation_id="job-fresh", incarnation="fresh",
-        protocol_id="pool-v1", config_id="config", ttl_s=60)
+    authority, old, receipt = _publish_commit_chain(
+        tmp_path,
+        fence=1,
+        generation=3,
+        code_id="old-code",
+        native_runtime=old_runtime,
+    )
+    apply_receipts = []
+    for node in range(2):
+        apply_receipts.append(authority.record_node_apply(
+            old,
+            receipt,
+            node_id=f"node-{node}",
+            node_incarnation=f"node-{node}-old",
+            trainer_receipts=[
+                (
+                    rank,
+                    f"node-{node}-trainer-{rank}-old",
+                    hashlib.sha256(
+                        f"node-{node}-recovery-{rank}".encode()).hexdigest(),
+                )
+                for rank in range(8)
+            ],
+        ))
+    manifest = receipt.manifest_path
+    digest = receipt.manifest_sha256
+    current = authority.claim(
+        run_id="run",
+        allocation_id="job-fresh",
+        incarnation="fresh",
+        fence=2,
+        protocol_id="pool-v1",
+        config_id="config",
+    )
     assert current.fence == 2
     monkeypatch.setenv("RESILIENT_E97_FENCE_EPOCH", str(current.fence))
     args = SimpleNamespace(
@@ -1029,7 +1094,7 @@ def test_fresh_allocation_manager_syncs_older_authoritative_handoff(
         coordinator_epoch=current.fence)
 
     generation, evidence = role._native_manager_resume_point(
-        tmp_path, args, (store, current), native_runtime=current_runtime)
+        tmp_path, args, (authority, current), native_runtime=current_runtime)
 
     assert generation == 3
     assert evidence == {
@@ -1037,6 +1102,14 @@ def test_fresh_allocation_manager_syncs_older_authoritative_handoff(
         "source_fence": 1, "source_code_id": "old-code",
         "manifest": str(manifest.resolve()),
         "manifest_sha256": digest,
+        "commit_receipt_digest": receipt.receipt_digest,
+        "accepted_tokens": receipt.accepted_tokens,
+        "result_root": receipt.result_root,
+        "apply_receipts": [
+            {"worker_id": item.node_id,
+             "receipt_digest": item.receipt_digest}
+            for item in apply_receipts
+        ],
     }
 
 
@@ -1147,7 +1220,7 @@ def test_pipelined_trainer_apply_receipts_refresh_manager_progress(tmp_path, mon
     assert supervisor._deadline_reason(child, 145) == "progress_deadline"
 
 
-def test_restart_restores_first_atomic_deadline_from_durable_checkpoint(
+def test_live_diagnostic_uses_peer_commit_and_restart_checks_immutable_checkpoint(
         tmp_path, monkeypatch):
     child = Child("manager", 0, "node000", None, "python manager.py")
     supervisor = AllocationSupervisor(tmp_path, [child], heartbeat_s=60,
@@ -1156,68 +1229,62 @@ def test_restart_restores_first_atomic_deadline_from_durable_checkpoint(
     state = tmp_path / "supervision" / "node-0-manager.json"
     state.write_text(json.dumps({"heartbeat_time": 800, "progress_time": 800,
                                  "generation": 0, "stage": "training_wait"}))
-    handoff = tmp_path / "handoff"
-    handoff.mkdir()
-    manifest = handoff / "generation-00000002-fence-00000001.json"
-    manifest.write_text(json.dumps({"finalized": True, "run_id": "run",
-                                    "generation": 2}, sort_keys=True))
-    (handoff / "latest.json").write_text(json.dumps({
-        "generation": 2, "manifest": str(manifest),
-        "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
-    }))
+    _authority, _claim, receipt = _publish_commit_chain(
+        tmp_path, fence=1, generation=1)
     monkeypatch.setenv("RESILIENT_E97_RUN_ID", "run")
     monkeypatch.setenv("RESILIENT_E97_INITIAL_GENERATION", "0")
     monkeypatch.setenv("RESILIENT_E97_ALLOCATION_ADMITTED_AT", "0")
     monkeypatch.delenv("RESILIENT_E97_BULK_ROOT", raising=False)
 
+    assert supervisor._deadline_reason(
+        child, 800) == "first_atomic_generation_deadline"
+
+    # The hot supervisor diagnostic consumes the manager's native-peer
+    # commit/apply acknowledgement and performs no shared-manifest scan.
+    state.write_text(json.dumps({
+        "heartbeat_time": 800,
+        "progress_time": 800,
+        "generation": 1,
+        "authoritative_generation": 1,
+        "stage": "published_node_applied",
+        "commit_receipt_digest": receipt.receipt_digest,
+        "node_apply_receipt_digest": "ab" * 32,
+    }))
+    monkeypatch.setattr(
+        "scripts.frontier.resilient_e97_allocation_supervisor."
+        "ManifestPeerAuthority",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("live diagnostic read immutable filesystem authority")),
+    )
     assert supervisor._deadline_reason(child, 800) is None
 
-    # A corrupt pointer cannot suppress the fail-closed first-commit budget.
-    latest = json.loads((handoff / "latest.json").read_text())
-    latest["manifest_sha256"] = "0" * 64
-    (handoff / "latest.json").write_text(json.dumps(latest))
-    assert supervisor._deadline_reason(child, 800) == "first_atomic_generation_deadline"
+    # An actual restart still verifies immutable authority and fails closed on
+    # corruption; it is deliberately separate from the live diagnostic.
+    monkeypatch.undo()
+    monkeypatch.setenv("RESILIENT_E97_RUN_ID", "run")
+    receipt.manifest_path.write_text('{"corrupt":true}\n')
+    assert supervisor._durable_generation() is None
 
 
-def test_durable_generation_diagnostic_treats_sqlite_lock_as_unavailable(
+def test_durable_generation_diagnostic_never_opens_sqlite(
         tmp_path, monkeypatch):
-    """A transient constructor lock cannot terminate a healthy allocation.
+    """The job-5072235 diagnostic path uses immutable receipts only.
 
-    Job 5072235 reached generation eight before two node supervisors raced a
-    lease renewal and ``PRAGMA synchronous=FULL``.  The authoritative handoff
-    remained intact; this deadline diagnostic must fail closed for that poll
-    and retry on the next one instead of leaking ``OperationalError``.
+    Poisoning sqlite3.connect is covered by the dedicated compute-closure
+    tripwire; this regression retains the observed generation-eight shape and
+    proves the supervisor resolves it without a database symbol or path.
     """
     from scripts.frontier import resilient_e97_allocation_supervisor as module
 
     supervisor = AllocationSupervisor(
         tmp_path, [], heartbeat_s=60, progress_s=60, max_restarts=0)
-    handoff = tmp_path / "handoff"
-    handoff.mkdir()
-    manifest = handoff / "generation-00000008-fence-00000001.json"
-    manifest.write_text(json.dumps({
-        "finalized": True, "run_id": "run", "generation": 8,
-    }, sort_keys=True))
-    (handoff / "latest.json").write_text(json.dumps({
-        "generation": 8,
-        "fence": 1,
-        "manifest": str(manifest),
-        "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
-    }))
+    authority, claim, _receipt = _publish_commit_chain(
+        tmp_path, fence=5072235, generation=8)
     monkeypatch.setenv("RESILIENT_E97_RUN_ID", "run")
-    monkeypatch.setenv("RESILIENT_E97_FENCE_DB", str(tmp_path / "pool.sqlite3"))
-    monkeypatch.setenv("RESILIENT_E97_ALLOCATION_LEASE", json.dumps({
-        "run_id": "run", "allocation_id": "5072235",
-        "incarnation": "allocation", "fence": 1,
-        "acquired_at": 1.0, "renewed_at": 2.0, "expires_at": 100.0,
-        "protocol_id": "pool", "config_id": "config",
-    }))
-
-    def locked(_path):
-        raise sqlite3.OperationalError("database is locked")
-
-    monkeypatch.setattr(module, "SQLiteFencedControlStore", locked)
-    assert supervisor._durable_generation() is None
+    monkeypatch.setenv("RESILIENT_E97_ALLOCATION_CLAIM", claim.encode())
+    assert authority.current_commit(claim).generation == 8
+    assert supervisor._durable_generation() == 8
+    assert "sqlite" not in module.__dict__
 
 
 def test_all_real_roles_publish_import_liveness_without_generation_progress():

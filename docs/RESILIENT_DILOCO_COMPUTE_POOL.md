@@ -12,11 +12,31 @@ is [Native resilient DiLoCo data plane v1](NATIVE_RESILIENT_DILOCO_DATAPLANE.md)
 Detailed implementation evidence and gaps live in
 [the companion matrix](RESILIENT_DILOCO_GAP_MATRIX.md). An implementation must
 satisfy all applicable authorities; the native specialization cannot weaken
-the lease, membership, weighting, fencing, atomicity, or recovery rules here.
+the admission, membership, weighting, fencing, atomicity, or recovery rules here.
 Existing experiments may finish; these documents do not authorize cancelling
 or mutating jobs.
 
-The practical Frontier MVP is one Slurm allocation of any supported size. It acquires an exclusive, expiring, fenced lease for a logical run. Peers inside that allocation become contributors only after synchronizing and advertising READY; they may appear late, disappear, and return without defining a fixed world size or imposing an all-rank barrier. The same protocol applies to a future very large, potentially system-scale, single allocation.
+The practical Frontier MVP is one Slurm allocation of any supported size. It
+binds a monotonically increasing scheduler fence to an immutable allocation
+claim before model load. The in-memory native peer-control protocol owns live
+membership, incarnation fencing, generation/commit state, and recovery
+handshakes for the allocation. Peers become contributors only after
+synchronizing and advertising READY; they may appear late, disappear, and
+return without defining a fixed world size or imposing an all-rank barrier.
+The same protocol applies to a future very large, potentially system-scale,
+single allocation.
+
+**2026-07-25 no-database amendment.** “Lease” below denotes the logical,
+deadline-bounded READY/incarnation relationship maintained by native peer
+control; it MUST NOT be implemented by a shared-filesystem database or lock.
+No allocation supervisor, manager, trainer, native service, diagnostic,
+heartbeat, generation, apply, checkpoint, or restart path may open SQLite.
+The Slurm job ID (or an authenticated backend-equivalent monotonically
+increasing token) is the allocation fence. Immutable allocation claims,
+digest-linked commit receipts, complete checkpoint manifests, and node-apply
+receipts are durable evidence, not a live coordination store. A compatibility
+`latest.json` is never authority. Historical SQLite may be read only by an
+offline submit-side migration tool and is not a production launch dependency.
 
 Normative words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** have their RFC 2119 meanings.
 
@@ -24,14 +44,30 @@ Normative words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** have their RFC 2
 
 The goal is a versioned compute pool that makes bounded progress through committed DiLoCo generations despite ordinary process or node churn. Correctness means exact token/sample-weighted aggregation over an explicitly frozen accepted set, fenced atomic publication, bounded waiting, deterministic recovery, and evidence tied to committed generations.
 
-The MVP includes an exclusive allocation lease, leased READY membership, fresh-generation contributions, quorum/deadline closure, sharded point-to-point aggregation, redistribution, periodic immutable checkpoints, and fresh-allocation continuation. It does **not** promise dynamic Slurm node addition, simultaneous allocations, survival of unlimited failures, exact resurrection of unfinished local work, or continuation after all compute disappears without a durable checkpoint. Version 1 remains strict `tau = 0`. The separately versioned `async-decoupled-v2.1-simple` policy uses the finite bounds and exact math in ADR-002; it is not enabled by changing a v1 configuration field, and v2.0 artifacts are incompatible. Neither mode may use a failure-sensitive all-rank collective/barrier, Lustre for update/aggregate/heartbeat/membership/redistribution payloads, or a central full-model broker.
+The MVP includes an exclusive scheduler-fenced allocation claim, peer-owned
+READY membership, fresh-generation contributions, quorum/deadline closure,
+sharded point-to-point aggregation, redistribution, periodic immutable
+checkpoints, and fresh-allocation continuation. It does **not** promise dynamic
+Slurm node addition, simultaneous allocations, survival of unlimited failures,
+exact resurrection of unfinished local work, or continuation after all compute
+disappears without a durable checkpoint. Version 1 remains strict `tau = 0`.
+The separately versioned `async-decoupled-v2.1-simple` policy uses the finite
+bounds and exact math in ADR-002; it is not enabled by changing a v1
+configuration field, and v2.0 artifacts are incompatible. Neither mode may
+use a failure-sensitive all-rank collective/barrier, Lustre for
+update/aggregate/heartbeat/membership/redistribution payloads, a shared
+filesystem database for control, or a central full-model broker.
 
 Minimum progress is policy, not launch size: at least `Q_min` complete node-peer contributions and `T_min > 0` accepted tokens are required for a commit. A deployment MAY also require an active-membership fraction, but MUST cap the resulting threshold by the active READY snapshot, not launched ranks. If the floor is unavailable at the generation deadline, the generation does not commit; the owner retries only within a bounded run deadline, then checkpoints any previously committed state, releases the lease, and exits so a later allocation can resume.
 
 ## Model and terminology
 
 - **Logical run:** stable run ID, configuration/code identity, generation history, token clock, and immutable checkpoints.
-- **Allocation lease holder:** the sole MVP writer/committer; normally a model-free control process in the allocation.
+- **Allocation claim:** immutable binding of run/config/allocation identity,
+  unique incarnation, scheduler fence, and exact base commit receipt.
+- **Native peer-control authority:** the model-free in-memory protocol that
+  owns READY membership, incarnation expiry, generation closure, commit
+  agreement, node-apply receipts, and recovery handshakes for one allocation.
 - **Node peer / manager:** stable node identity plus a unique boot **incarnation**. It owns membership, local supervision, bounded spools, and network transport, but no model or optimizer.
 - **Local trainers:** model-owning GPU processes. Their inner optimizer and unfinished generation are local and disposable.
 - **Contribution pool:** protocol-visible READY peers and their fenced, checksummed generation contributions.
@@ -40,9 +76,9 @@ Minimum progress is policy, not launch size: at least `Q_min` complete node-peer
 - **External scheduler:** Slurm today or another backend later; it supplies resources and termination signals, not training membership semantics.
 
 ```text
- scheduler -> allocation -> acquire RUN LEASE(epoch E)
+ scheduler -> allocation -> publish CLAIM(fence E, exact base receipt)
                               |
-             peers: DISCOVER -> BOOT -> SYNC(g) -> READY(lease,incarnation)
+             peers: DISCOVER -> BOOT -> SYNC(g) -> READY(peer,incarnation)
                               |                    |
                               +---- local train <--+
                                         |
@@ -59,10 +95,10 @@ Minimum progress is policy, not launch size: at least `Q_min` complete node-peer
 
 | State | Admission and transition |
 |---|---|
-| `DISCOVER` | Peer locates the lease holder and validates run/config identity. It is not active. |
+| `DISCOVER` | Peer locates native peer control and validates run/config/allocation-claim identity. It is not active. |
 | `BOOTING` | Manager starts trainers under first-heartbeat and boot deadlines. Slow peers do not block others. |
 | `SYNCING` | Peer obtains and checksum-validates the latest committed base and required outer state. |
-| `READY / ACTIVE` | Peer advertises `(worker_id, incarnation, base_generation, lease_expiry)` and renews it. It is ACTIVE only while READY, live, and synchronized to the open generation. |
+| `READY / ACTIVE` | Peer advertises `(worker_id, incarnation, base_generation, peer_deadline)` and renews it in memory. It is ACTIVE only while READY, live, and synchronized to the open generation. |
 | `DRAINING` | Peer stops new local work, releases buffers after receipts, and may report final state. It is excluded from later snapshots. |
 | `EXPIRED` | Lease/heartbeat elapsed or incarnation was superseded. Contributions from it are inadmissible unless already frozen into a commit. |
 
@@ -70,7 +106,10 @@ Worker identity is stable for accounting; every manager restart generates a new 
 
 ## Generation protocol and invariants
 
-For committed state `S_g`, the lease holder opens generation `g` with `(run_id, fence_epoch, generation, attempt, base_digest, policy_digest, deadline)`. It snapshots eligible READY incarnations for accounting, without waiting for every member. New peers normally defer to `g+1`.
+For committed state `S_g`, native peer control opens generation `g` with
+`(run_id, fence_epoch, generation, attempt, base_digest, policy_digest,
+deadline)`. It snapshots eligible READY incarnations for accounting, without
+waiting for every member. New peers normally defer to `g+1`.
 
 Each admitted peer trains from exactly `S_g` for a bounded local-step or token budget and submits a contribution identity
 `(run_id, epoch, g, attempt, worker_id, incarnation, contribution_seq)`, positive accepted-token/sample weight `w_i`, layout/code/base digests, and bounded checksummed chunks. An identity is idempotent: identical replay receives the original result; conflicting reuse is rejected. Corrupt, nonfinite, wrong-layout, wrong-fence, duplicate-conflicting, or stale input is rejected and recorded.
@@ -84,7 +123,17 @@ delta_j = sum(i in accepted, w_i * delta_ij) / sum(i in accepted, w_i)
 S_(g+1) = OuterApply(S_g, delta, committed_outer_state)
 ```
 
-The full manifest binds the frozen identities, weights, rejection counts, shard checksums, base/result digests, optimizer state, token clock, policy, code, and fence. Commit is atomic: immutable state and manifest become durable before a compare-and-swap-like `latest` pointer advances under the current allocation fence. There is one authoritative result or none. Only after commit may redistribution announce `g+1`; peers checksum it, apply/catch up, and advertise READY for the next generation.
+The full manifest binds the frozen identities, weights, rejection counts,
+shard checksums, base/result digests, optimizer state, token clock, policy,
+code, and fence. Commit is atomic: the immutable complete state, manifest, and
+digest-linked commit receipt extend the current allocation claim exactly once;
+every native peer validates that exact generation/result/token/prior-receipt
+identity before advancing its volatile live state or acknowledging the commit.
+There is one authoritative result or none.
+`latest.json` may mirror a receipt for operators but cannot authorize apply or
+restart. Only after all eight local trainer apply receipts are reduced to one
+peer-acknowledged node-apply receipt may that node advertise READY for the next
+generation.
 
 Version 1 stale policy is strict: accept only
 `base_generation == open_generation` and the current attempt/epoch. Late work
@@ -98,15 +147,44 @@ atomic eight-trainer node apply, restart, performance, and convergence gates.
 Those semantics are not compatible with v1 or historical v2.0 by implication,
 field reuse, migration, or telemetry relabeling.
 
-## Admission lease, state, and recovery
+## Allocation claim, state, and recovery
 
-Before loading a model or mutating run state, an allocation attempts to acquire a durable lease containing run ID, Slurm job/allocation identity (or backend equivalent), allocation incarnation, monotonically increasing fencing epoch/token, acquired/renewed/expires timestamps, and protocol/config identity. Acquisition and renewal MUST be atomic and linearizable enough to reject stale owners. Failure to acquire is a successful no-op exit: do not load the checkpoint or write run state.
+Before loading a model or mutating run state, an allocation publishes an
+immutable claim containing run ID, Slurm job/allocation identity (or backend
+equivalent), unique allocation incarnation, monotonically increasing scheduler
+fence, protocol/config identity, and the exact base generation/commit-receipt
+digest. A claim whose fence is not strictly newer than the current claim is a
+successful no-op exit: do not load the checkpoint or write run state. Claim
+creation is create-once and conflict detecting; it has no renewal transaction,
+database, mutable lock row, or filesystem heartbeat.
 
-A static lock is insufficient because its owner can die or partition indefinitely and a stale process can resume after replacement. The expiring lease permits takeover; the strictly newer fence makes every membership record, contribution attempt, commit, checkpoint, and latest-pointer update from the former owner fail. Loss of renewal stops new generation admission and publication immediately. Security assumes allocation identities cannot forge a newer fence and the durable control mechanism enforces authenticated writer/CAS permissions; tensor confidentiality is outside MVP scope.
+The scheduler owns allocation lifetime. Native peer control binds every live
+command to the current claim/fence and owns peer expiry, manager/trainer
+incarnations, READY membership, generation admission, exact-once commit
+agreement, and recovery handshakes. A strictly newer claim makes every old
+membership record, contribution, peer command, commit, checkpoint publication,
+and apply receipt stale. Native services independently reject lower-fence or
+wrong-incarnation commands and frames. Loss of peer-control authority stops
+new generation admission and publication immediately.
 
-Globally authoritative state is only a committed manifest/checkpoint chain: model state, required outer optimizer state, committed generation and accepted-token clock, policy/code/layout identities, and lease fence. Small lease/checkpoint metadata MAY use an approved durable control store, including Lustre if atomicity is proven. Dense hot-path data MUST NOT. Membership, heartbeats, accumulators, cached bases, unfinished trainer state, and inner optimizer work MAY be reconstructed or discarded. Local inner optimizer restoration is optional and never a prerequisite for correctness.
+Globally authoritative restart state is only the immutable
+claim/commit-receipt/checkpoint-manifest chain: model state, required outer
+optimizer state, committed generation and accepted-token clock,
+policy/code/layout identities, result roots, frozen membership, node-apply
+receipts, and fence/incarnation. These records MAY live on Lustre because they
+are append-only restart evidence, never polled live membership/heartbeat state.
+No correctness or liveness decision may depend on a shared-filesystem
+database. Membership, heartbeats, accumulators, cached bases, unfinished
+trainer state, and inner optimizer work are volatile and MAY be reconstructed
+or discarded. Local inner optimizer restoration is optional and never a
+prerequisite for correctness.
 
-After all compute disappears, a later allocation acquires a newer fence and loads the latest complete immutable checkpoint; work after that checkpoint may be lost. Missing/corrupt global model or required outer state is unrecoverable and fails closed. Checkpoint publication verifies completeness/digests and current fence before and while advancing `latest`.
+After all compute disappears, a later allocation publishes a strictly newer
+claim anchored to the newest valid commit receipt, reloads and independently
+verifies the complete immutable checkpoint/manifest chain, and rejoins through
+the native peer recovery handshake. Missing/corrupt model, outer state, token
+clock, result root, fence/incarnation, or apply evidence is unrecoverable and
+fails closed. No database bootstrap or mutable `latest` pointer is consulted.
 
 ## Failure semantics
 
@@ -119,9 +197,9 @@ After all compute disappears, a later allocation acquires a newer fence and load
 | Late/stale or duplicate input | Reject strict stale/conflicting duplicate; idempotently acknowledge identical replay; instruct catch-up. |
 | Corrupt/nonfinite input | Reject, retain evidence, and quarantine/expire the source according to policy. |
 | Network partition | Isolate unreachable peers; only the current fenced holder may commit. Pause when quorum/fence safety is uncertain. |
-| Lease-holder loss | Stop publication; allocation may elect/restart only through the durable newer-fence protocol, otherwise exit for later allocation. |
-| Whole-allocation loss | Later job takes a newer lease and resumes latest immutable checkpoint. |
-| Shared-filesystem/control outage | Continue only while lease safety and hot-path state are valid; do not checkpoint/publish. Pause before lease expiry or checkpoint deadline. |
+| Peer-control leader loss | Stop publication; reconstruct its volatile state from the exact peer-agreed commit and immutable receipt, with a new incarnation, or exit for a later allocation. |
+| Whole-allocation loss | Later job publishes a newer scheduler-fenced claim and resumes the newest valid immutable commit/checkpoint chain. |
+| Shared-filesystem/checkpoint outage | Native live control may finish only already admitted bounded work; do not publish a commit/checkpoint and never substitute mutable filesystem state for peer authority. |
 | Return/rejoin | New incarnation, latest-state sync, READY lease, next admissible generation; never resurrect old work. |
 
 Whole-allocation restart is reserved for allocation/scheduler loss, run-lease loss, unrecoverable partition, quorum collapse, or an explicit fail-fast deadline—not an ordinary trainer/node failure.
@@ -130,7 +208,10 @@ Whole-allocation restart is reserved for allocation/scheduler loss, run-lease lo
 
 Changing participation changes effective batch and update variance. Weight by accepted tokens/samples (not nominal steps or ranks), and drive learning-rate/data schedules by committed accepted tokens and/or committed generations. Manifests MUST expose accepted/missing membership, weights, effective batch, deadline reason, staleness and rejection counts. Research must evaluate bias from heterogeneous data/token counts, quorum selection, outer-optimizer sensitivity, and reproducibility. Tests MUST compare incremental sharded math to a high-precision single-process reference; the all-fresh equal-weight/full-cohort case must match synchronous DiLoCo within a stated tolerance.
 
-Every stage has a configured deadline: first heartbeat, boot/sync, generation progress, aggregation/freeze, apply/redistribution, lease renewal, checkpoint publication, and graceful shutdown. Logs and volatile heartbeats diagnose; an immutable committed generation/checkpoint is authoritative progress evidence.
+Every stage has a configured deadline: first heartbeat, boot/sync, generation
+progress, aggregation/freeze, apply/redistribution, peer recovery, checkpoint
+publication, and graceful shutdown. Logs and volatile heartbeats diagnose; an
+immutable committed generation/checkpoint is authoritative restart evidence.
 
 Scale admission is sequential: deterministic simulation/unit/reference math;
 then a 2-node scripted gate covering delayed boot, late join, disappearance,
@@ -146,7 +227,9 @@ Frontier allocation uses this identical protocol.
 ### Conformance checklist (required in every implementation/runner/scale task Validation)
 
 - Cite this document/version and name the requirement IDs from the companion matrix.
-- Show READY leased membership, bounded waits, and no launched-rank/all-rank invariant.
+- Show peer-owned READY membership, bounded waits, and no launched-rank/all-rank invariant.
+- Prove the rendered compute-role closure has no SQLite import, connection,
+  database path, store construction, filesystem lock, or metadata heartbeat.
 - Show fenced generation identity, deterministic weighted math, idempotence, stale/corrupt rejection, and atomic committed evidence.
 - Show bounded non-Lustre hot-path transport, backpressure/release, and no central full-model broker.
 - Exercise the applicable failure/deadline and recovery path; state the minimum progress floor.
@@ -187,7 +270,7 @@ and time; a third dense cohort is forbidden. `OWNED` transfers descriptor
 responsibility to the persistent service, so trainers do not wait for fabric
 send or receipt completion.
 
-V2.1 preserves the v1 lease/fence, READY membership, model-free compiled
+V2.1 preserves the v1 scheduler claim/fence, READY membership, model-free compiled
 point-to-point transport, no-all-rank-wait, no-Lustre/Python-dense-hot-path,
 no-central-full-model-broker, and atomic checkpoint requirements. It requires
 the v2.1 policy/schema/digest and native ABI/protocol boundary; v1 and v2.0
@@ -200,10 +283,11 @@ next rung.
 
 The production elastic dense path is bound to
 [`NATIVE_RESILIENT_DILOCO_DATAPLANE.md`](NATIVE_RESILIENT_DILOCO_DATAPLANE.md),
-version 1 (requirements NDP01–NDP17). Python remains the control plane for the
-allocation lease/fence, READY membership, generation admission and closure,
-owner reassignment policy, checkpoint policy/publication, and Slurm
-supervision. A persistent model-free C++17 service on every node owns local
+version 1 (requirements NDP01–NDP17). The model-free native peer-control
+protocol owns the allocation fence/incarnations, READY membership, generation
+admission/closure/commit state, and recovery handshakes. Python remains
+responsible for scheduler adaptation, outer/checkpoint policy and publication,
+and Slurm supervision. A persistent model-free C++17 service on every node owns local
 XPMEM/memfd handoff, exact native reduction, libfabric `FI_EP_RDM`/Frontier
 `cxi` payload movement, bounded replay, and redistribution. Python TCP and
 Python object serialization MUST NOT carry production dense contributions or
@@ -225,12 +309,26 @@ replace the sequential lifecycle/failure/restart ladder above.
 
 ## Backend mapping and decision record
 
-Frontier/Slurm supplies a fixed allocation envelope; one model-free allocation holder acquires the run lease, launches independent node managers/trainers and one persistent native data service per node, maps shard owners deterministically among available peers, and reacts to Slurm shutdown signals. The native services select libfabric `FI_EP_RDM` with exact provider `cxi`; the Python holder exchanges their opaque endpoints through leased membership. Slurm node count is capacity only. Hyperscale-local infrastructure maps a service lease, host agents, and local/NVMe/network transports to the same identities, lifecycle, generations, and commits, using a separately qualified provider without changing the protocol. Other schedulers do likewise.
+Frontier/Slurm supplies a fixed allocation envelope; the supervisor publishes
+one immutable scheduler-fenced claim, launches independent node
+managers/trainers and one persistent native data service per node, and reacts
+to Slurm shutdown signals. Native peer control maps shard owners
+deterministically among available peers and exchanges opaque service endpoints.
+The native services select libfabric `FI_EP_RDM` with exact provider `cxi`.
+Slurm node count is capacity only. Other backends map an authenticated
+monotonic allocation fence, host agents, and local/network transports to the
+same identities and protocol.
 
-**ADR-001:** The MVP chooses exactly one allocation write/commit lease for operational simplicity and safe continuation across queued jobs. Simultaneous independent allocations do not join one live run. A future federation may allow them to join through the same pool protocol, but requires a highly available lease/control service, cross-allocation discovery/authentication, shard-owner placement, and partition semantics. It MUST preserve all fences, membership, generation, weighting, and commit invariants; it is an extension, not the organizing design.
+**ADR-001 (amended 2026-07-25):** The MVP chooses exactly one
+scheduler-fenced allocation claim for operational simplicity and safe
+continuation across queued jobs. Simultaneous independent allocations do not
+join one live run. The native peer protocol, not a shared database, owns live
+control. A future federation requires a separately reviewed highly available
+control service, cross-allocation authentication, shard-owner placement, and
+partition semantics while preserving every fence and commit invariant.
 
-Unresolved decisions are intentionally explicit: the approved durable
-lease/CAS mechanism on Frontier; v1 production `Q_min`, `T_min`, optional
+Unresolved decisions are intentionally explicit: v1 production `Q_min`,
+`T_min`, optional
 fraction and retry deadlines per model size; v1 outer optimizer and checkpoint
 cadence; production shard placement/reassignment; and whether trainer inner
 state is ever checkpointed. ADR-002 fixes asynchronous math only for its exact

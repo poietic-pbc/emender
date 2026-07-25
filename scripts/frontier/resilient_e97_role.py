@@ -89,7 +89,11 @@ from ndm.async_diloco_v2 import (
     OuterState, ResultEnvelope, ScheduleFreeLocalState,
 )
 from ndm.resilient_e97_reducer import TensorLayout
-from ndm.fenced_admission import AllocationLease, SQLiteFencedControlStore
+from ndm.manifest_peer_control import (
+    AllocationClaim,
+    CommitReceipt,
+    ManifestPeerAuthority,
+)
 from ndm.resilient_e97_runtime import (
     SplitManagerLoop, apply_delta, apply_delta_with_correction_ledger,
     atomic_json, assert_node_local_path, finalize_checkpoint, flatten_tensors,
@@ -423,19 +427,18 @@ def _native_runtime_resume_compatible(
                 if key not in provenance})
 
 
-def _fenced_control(args) -> tuple[SQLiteFencedControlStore, AllocationLease] | None:
-    database = os.environ.get("RESILIENT_E97_FENCE_DB")
-    encoded = os.environ.get("RESILIENT_E97_ALLOCATION_LEASE")
-    if not database and not encoded:
+def _peer_authority(
+        args,
+        ) -> tuple[ManifestPeerAuthority, AllocationClaim] | None:
+    encoded = os.environ.get("RESILIENT_E97_ALLOCATION_CLAIM")
+    if not encoded:
         return None  # direct local protocol fixtures do not own an allocation
-    if not database or not encoded:
-        raise ValueError("allocation fence database and lease must be supplied together")
-    lease = AllocationLease(**json.loads(encoded))
-    if lease.run_id != args.run_id or lease.fence != _fence_epoch(args):
-        raise ValueError("role allocation lease does not match run/fence")
-    store = SQLiteFencedControlStore(database)
-    store.assert_current(lease)
-    return store, lease
+    claim = AllocationClaim.decode(encoded)
+    if claim.run_id != args.run_id or claim.fence != _fence_epoch(args):
+        raise ValueError("role allocation claim does not match run/fence")
+    authority = ManifestPeerAuthority(args.run_dir)
+    authority.assert_current(claim)
+    return authority, claim
 
 
 def _latest_role_generation(control: Path, identity: str, args) -> int:
@@ -502,7 +505,7 @@ def _validate_atomic_cohort_recovery(
 
 def _native_manager_resume_point(
         run: Path, args,
-        fenced: tuple[SQLiteFencedControlStore, AllocationLease] | None,
+        fenced: tuple[ManifestPeerAuthority, AllocationClaim] | None,
         *, native_runtime: dict[str, object] | None = None,
         ) -> tuple[int, dict[str, object]]:
     """Resolve a restarted model-free manager against fenced committed state.
@@ -515,26 +518,37 @@ def _native_manager_resume_point(
     """
     initial = int(args.initial_generation)
     target = initial + int(args.generations)
+    commit = None if fenced is None else fenced[0].current_commit(fenced[1])
     latest_path = run / "handoff" / "latest.json"
-    if not latest_path.exists():
+    if commit is None and not latest_path.exists():
         return initial, {"status": "cold_start", "generation": initial,
                          "fence": _fence_epoch(args)}
-    latest = json.loads(latest_path.read_text())
-    generation = int(latest.get("generation", -1))
-    source_fence = int(latest.get("fence", -1))
+    latest = (
+        json.loads(latest_path.read_text())
+        if commit is None else commit.pointer())
+    generation = int(
+        latest.get("generation", -1) if commit is None else commit.generation)
+    source_fence = int(
+        latest.get("fence", -1)
+        if commit is None else commit.allocation_fence)
     current_fence = _fence_epoch(args)
     if generation < initial or generation > target:
         raise ValueError("authoritative latest generation is outside this run bound")
     if source_fence <= 0 or source_fence > current_fence:
         raise ValueError("manager rejoin latest fence is invalid or newer than allocation")
-    manifest = Path(str(latest.get("manifest", ""))).resolve()
+    manifest = Path(
+        str(latest.get("manifest", ""))
+        if commit is None else commit.manifest_path).resolve()
     try:
         manifest.relative_to((run / "handoff").resolve())
     except ValueError as error:
         raise ValueError("manager rejoin manifest escapes the handoff root") from error
     encoded = manifest.read_bytes()
     manifest_sha256 = hashlib.sha256(encoded).hexdigest()
-    if manifest_sha256 != latest.get("manifest_sha256"):
+    expected_manifest_sha = (
+        latest.get("manifest_sha256")
+        if commit is None else commit.manifest_sha256)
+    if manifest_sha256 != expected_manifest_sha:
         raise ValueError("manager rejoin manifest checksum mismatch")
     value = json.loads(encoded)
     source_code_id = str(value.get("code_id", ""))
@@ -552,21 +566,30 @@ def _native_manager_resume_point(
             or int(value.get("fence", {}).get("coordinator_epoch", -1))
             != source_fence):
         raise ValueError("manager rejoin manifest identity mismatch")
-    if fenced is not None:
-        fenced[0].assert_current(fenced[1])
-        authoritative = fenced[0].read_publication(
-            args.run_id, "latest", "authoritative")
-        if (authoritative is None
-                or int(authoritative.get("generation", -1)) != generation
-                or int(authoritative.get("fence", -1)) != source_fence
-                or authoritative.get("manifest_sha256") != manifest_sha256):
-            raise ValueError("manager rejoin handoff is not authoritative")
+    if fenced is not None and (
+        commit is None
+        or commit.generation != generation
+        or commit.manifest_sha256 != manifest_sha256
+    ):
+        raise ValueError("manager rejoin handoff is not authoritative")
     evidence = {
         "status": "synchronized", "generation": generation,
         "fence": current_fence, "source_fence": source_fence,
         "manifest": str(manifest),
         "manifest_sha256": manifest_sha256,
     }
+    if commit is not None:
+        apply_receipts = fenced[0].node_apply_receipts(commit)
+        evidence.update({
+            "commit_receipt_digest": commit.receipt_digest,
+            "accepted_tokens": commit.accepted_tokens,
+            "result_root": commit.result_root,
+            "apply_receipts": [
+                {"worker_id": item.node_id,
+                 "receipt_digest": item.receipt_digest}
+                for item in apply_receipts
+            ],
+        })
     if source_code_id != args.code_id:
         evidence["source_code_id"] = source_code_id
     return generation, evidence
@@ -574,7 +597,7 @@ def _native_manager_resume_point(
 
 def _authoritative_trainer_resume_handoff(
         run: Path, args,
-        fenced: tuple[SQLiteFencedControlStore, AllocationLease] | None,
+        fenced: tuple[ManifestPeerAuthority, AllocationClaim] | None,
         ) -> Path:
     """Resolve a trainer restart to the latest exact committed handoff.
 
@@ -587,13 +610,11 @@ def _authoritative_trainer_resume_handoff(
     configured = Path(args.resume_handoff).resolve()
     if fenced is None:
         return configured
-    store, lease = fenced
-    store.assert_current(lease)
-    authoritative = store.read_publication(
-        args.run_id, "latest", "authoritative")
+    authority, claim = fenced
+    authoritative = authority.current_commit(claim)
     if authoritative is None:
-        raise ValueError("resume handoff has no authoritative fenced latest")
-    generation = int(authoritative.get("generation", -1))
+        raise ValueError("resume handoff has no authoritative immutable commit")
+    generation = authoritative.generation
     initial = int(args.initial_generation)
     target = initial + int(args.generations)
     if generation < initial or generation > target:
@@ -601,26 +622,20 @@ def _authoritative_trainer_resume_handoff(
     if generation == initial:
         return configured
 
-    latest_path = run / "handoff" / "latest.json"
-    latest = json.loads(latest_path.read_text())
-    manifest = Path(str(latest.get("manifest", ""))).resolve()
+    manifest = authoritative.manifest_path.resolve()
     try:
         manifest.relative_to((run / "handoff").resolve())
     except ValueError as error:
         raise ValueError("trainer resume manifest escapes the handoff root") from error
     manifest_sha256 = hashlib.sha256(manifest.read_bytes()).hexdigest()
-    source_fence = int(latest.get("fence", -1))
-    if (int(latest.get("generation", -1)) != generation
-            or int(authoritative.get("fence", -1)) != source_fence
-            or latest.get("manifest_sha256") != manifest_sha256
-            or authoritative.get("manifest_sha256") != manifest_sha256):
-        raise ValueError("trainer resume latest pointer is not authoritative")
+    if authoritative.manifest_sha256 != manifest_sha256:
+        raise ValueError("trainer resume manifest receipt is not authoritative")
     return manifest
 
 
 def _reload_verified_async_v2_latest(
         run: Path, args,
-        fenced: tuple[SQLiteFencedControlStore, AllocationLease] | None,
+        fenced: tuple[ManifestPeerAuthority, AllocationClaim] | None,
         *, generation: int, deadline: float,
         ) -> tuple[dict[str, object], dict[str, object], str]:
     """Reload and fence-check the only result eligible for a K-boundary apply.
@@ -631,10 +646,38 @@ def _reload_verified_async_v2_latest(
     ``latest/authoritative`` CAS record.  This check deliberately lives in the
     real trainer entrypoint instead of a probe or post-run validator.
     """
-    latest = wait_metadata(
-        run / "handoff/latest.json", deadline=deadline,
-        expected={"generation": int(generation),
-                  "fence": _fence_epoch(args)})
+    commit: CommitReceipt | None = None
+    if fenced is None:
+        latest = wait_metadata(
+            run / "handoff/latest.json", deadline=deadline,
+            expected={"generation": int(generation),
+                      "fence": _fence_epoch(args)})
+    else:
+        authority, claim = fenced
+        node = int(os.environ.get("RESILIENT_E97_NODE_RANK", "0"))
+        node_control = (
+            Path(args.bulk_root) / args.run_id / f"node-{node}" / "control")
+        peer_commit = wait_metadata(
+            node_control / f"peer-commit-{generation:08d}.json",
+            deadline=deadline,
+            expected={
+                "generation": int(generation),
+                "fence": _fence_epoch(args),
+            },
+        )
+        # The manager discovers commit through peer memory and names the exact
+        # receipt in a node-local handoff.  Trainers read immutable authority
+        # once for reload verification; they never poll a shared directory.
+        commit = authority.current_commit(claim)
+        if (
+            commit is None
+            or commit.generation != int(generation)
+            or commit.receipt_digest
+            != str(peer_commit.get("commit_receipt_digest", ""))
+        ):
+            raise ValueError(
+                "node-local peer commit differs from immutable authority")
+        latest = commit.pointer()
     published_manifest = Path(str(latest.get("manifest", ""))).resolve()
     try:
         published_manifest.relative_to((run / "handoff").resolve())
@@ -655,20 +698,14 @@ def _reload_verified_async_v2_latest(
                 "coordinator_epoch", -1)) != _fence_epoch(args)):
         raise ValueError(
             "async v2 authoritative latest was not reload verified")
-    if fenced is not None:
-        store, lease = fenced
-        store.assert_current(lease)
-        authoritative = store.read_publication(
-            args.run_id, "latest", "authoritative")
-        if (not isinstance(authoritative, dict)
-                or int(authoritative.get("generation", -1))
-                != int(generation)
-                or int(authoritative.get("fence", -1))
-                != _fence_epoch(args)
-                or authoritative.get("manifest_sha256") != manifest_digest):
-            raise ValueError(
-                "async v2 latest does not match fenced authoritative CAS")
-        store.assert_current(lease)
+    if fenced is not None and (
+        commit is None
+        or commit.generation != int(generation)
+        or commit.allocation_fence != _fence_epoch(args)
+        or commit.manifest_sha256 != manifest_digest
+    ):
+        raise ValueError(
+            "async v2 latest does not match immutable commit authority")
     return latest, published, manifest_digest
 
 
@@ -873,7 +910,14 @@ def _pool_hosts(args) -> tuple[str, ...]:
     return hosts
 
 
-def _pool_config(args) -> PoolControlConfig:
+def _pool_config(
+        args, *, committed_generation: int = 0,
+        committed_receipt_digest: str = "",
+        committed_accepted_tokens: int = 0,
+        committed_manifest_digest: str = "",
+        committed_result_root: str = "",
+        committed_apply_receipts: tuple[tuple[str, str], ...] = (),
+        ) -> PoolControlConfig:
     policy = _async_v21_policy(args).digest
     backend, production, full_layout = _dataplane_policy(args)
     attestation = getattr(args, "_dataplane_attestation", {})
@@ -914,7 +958,13 @@ def _pool_config(args) -> PoolControlConfig:
         PoolStageSLO.production(), backend, production, full_layout,
         str(attestation.get("bundle_sha256", ""))
         if backend != PYTHON_TCP_DEBUG else "",
-        **scale_values)
+        **scale_values,
+        committed_generation=committed_generation,
+        committed_receipt_digest=committed_receipt_digest,
+        committed_accepted_tokens=committed_accepted_tokens,
+        committed_manifest_digest=committed_manifest_digest,
+        committed_result_root=committed_result_root,
+        committed_apply_receipts=committed_apply_receipts)
 
 
 def _copy_frame_payload(frame_fd: int, destination_fd: int, *,
@@ -1755,7 +1805,7 @@ def _native_manager(args) -> int:
     identity = f"node-{node}-manager"
     bulk = assert_node_local_path(
         Path(args.bulk_root) / args.run_id / f"node-{node}", run)
-    fenced = _fenced_control(args)
+    fenced = _peer_authority(args)
     backend, production, full_layout = _dataplane_policy(args)
     provider = "cxi" if backend == NATIVE_CXI else os.environ.get(
         "NDP_TEST_PROVIDER", "tcp;ofi_rxm")
@@ -1798,7 +1848,24 @@ def _native_manager(args) -> int:
         term_requested["value"] = True
 
     signal.signal(signal.SIGTERM, request_term)
-    pool_config = _pool_config(args)
+    pool_config = _pool_config(
+        args,
+        committed_generation=start_generation,
+        committed_receipt_digest=str(
+            sync_evidence.get("commit_receipt_digest", "")),
+        committed_accepted_tokens=int(
+            sync_evidence.get("accepted_tokens", 0)),
+        committed_manifest_digest=str(
+            sync_evidence.get("manifest_sha256", ""))
+        if start_generation > 0 else "",
+        committed_result_root=str(
+            sync_evidence.get("result_root", ""))
+        if start_generation > 0 else "",
+        committed_apply_receipts=tuple(
+            (str(item["worker_id"]), str(item["receipt_digest"]))
+            for item in sync_evidence.get("apply_receipts", [])
+        ),
+    )
     control_server = control_thread = None
     pool_client = None
     if args.node_count > 1:
@@ -1816,6 +1883,34 @@ def _native_manager(args) -> int:
             (args.coordinator_host, args.coordinator_port),
             timeout_s=min(args.deadline_s, pool_config.slo.sync_s)).bind(
                 args.run_id, _fence_epoch(args))
+        recovery_handshake = pool_client.recover(
+            worker_id=f"node-{node}",
+            incarnation=incarnation,
+            known_generation=start_generation,
+            known_receipt_digest=str(
+                sync_evidence.get("commit_receipt_digest", "")),
+        )
+        if (
+            recovery_handshake.get("status") != "recover"
+            or int(recovery_handshake.get("generation", -1))
+            != start_generation
+            or str(recovery_handshake.get("receipt_digest", ""))
+            != str(sync_evidence.get("commit_receipt_digest", ""))
+            or (
+                start_generation > 0
+                and (
+                    recovery_handshake.get("manifest_digest")
+                    != sync_evidence.get("manifest_sha256")
+                    or recovery_handshake.get("result_root")
+                    != sync_evidence.get("result_root")
+                    or int(recovery_handshake.get("accepted_tokens", -1))
+                    != int(sync_evidence.get("accepted_tokens", -2))
+                    or recovery_handshake.get("apply_receipts", [])
+                    != sync_evidence.get("apply_receipts", [])
+                )
+            )
+        ):
+            raise ValueError("native peer recovery handshake disagrees with manifest")
         if _wait_native_ready_delay(
                 control, args, node=node, generation=start_generation,
                 incarnation=incarnation, term_requested=term_requested):
@@ -1828,8 +1923,6 @@ def _native_manager(args) -> int:
         for generation in range(start_generation, target_generation):
             if term_requested["value"]:
                 break
-            if fenced is not None:
-                fenced[0].assert_current(fenced[1])
             native_deadline = time.monotonic() + min(args.deadline_s, 420.0)
             snapshot = (pool_client.open_generation(
                 generation, 1, deadline=time.monotonic() + pool_config.slo.sync_s)
@@ -2100,19 +2193,80 @@ def _native_manager(args) -> int:
                     accepted_tokens=int(proposal["accepted_tokens"]),
                     generation_identity=proposal["generation_identity"],
                     digests=proposal["digests"],
-                    control_store=None if fenced is None else fenced[0],
-                    allocation_lease=None if fenced is None else fenced[1])
-            else:
-                latest_wait = wait_metadata(
+                    peer_authority=None if fenced is None else fenced[0],
+                    allocation_claim=None if fenced is None else fenced[1])
+            if fenced is None:
+                latest = wait_metadata(
                     run / "handoff" / "latest.json",
                     deadline=time.monotonic() + pool_config.slo.apply_s,
-                    expected={"generation": generation + 1})
-                publication = Path(str(latest_wait["manifest"]))
-            latest = wait_metadata(
-                run / "handoff" / "latest.json",
-                deadline=time.monotonic() + pool_config.slo.apply_s,
-                expected={"generation": generation + 1,
-                          "fence": _fence_epoch(args)})
+                    expected={"generation": generation + 1,
+                              "fence": _fence_epoch(args)})
+                publication = Path(str(latest["manifest"]))
+                commit_receipt = None
+            else:
+                if pool_client is None:
+                    committed_peer_state = None
+                    commit_receipt = fenced[0].current_commit(fenced[1])
+                elif node == 0:
+                    commit_receipt = fenced[0].current_commit(fenced[1])
+                    if (
+                        commit_receipt is None
+                        or commit_receipt.generation != generation + 1
+                    ):
+                        raise RuntimeError(
+                            "publisher did not create the expected commit receipt")
+                    committed_peer_state = pool_client.commit_authority(
+                        result_generation=generation + 1,
+                        attempt=1,
+                        receipt_digest=commit_receipt.receipt_digest,
+                        previous_receipt_digest=(
+                            commit_receipt.previous_receipt_digest),
+                        manifest_digest=commit_receipt.manifest_sha256,
+                        result_root=commit_receipt.result_root,
+                        accepted_tokens=commit_receipt.accepted_tokens,
+                    )
+                else:
+                    committed_peer_state = pool_client.wait_for_commit(
+                        result_generation=generation + 1,
+                        deadline=time.monotonic() + pool_config.slo.apply_s,
+                    )
+                    commit_receipt = fenced[0].current_commit(fenced[1])
+                if (
+                    commit_receipt is None
+                    or commit_receipt.generation != generation + 1
+                    or (
+                        committed_peer_state is not None
+                        and (
+                            committed_peer_state.get("status") != "committed"
+                            or committed_peer_state.get("receipt_digest")
+                            != commit_receipt.receipt_digest
+                            or committed_peer_state.get("manifest_digest")
+                            != commit_receipt.manifest_sha256
+                            or committed_peer_state.get("result_root")
+                            != commit_receipt.result_root
+                            or int(committed_peer_state.get(
+                                "accepted_tokens", -1))
+                            != commit_receipt.accepted_tokens
+                        )
+                    )
+                ):
+                    raise RuntimeError(
+                        "native peer commit differs from immutable authority")
+                latest = commit_receipt.pointer()
+                publication = commit_receipt.manifest_path
+                atomic_metadata(
+                    control / f"peer-commit-{generation + 1:08d}.json", {
+                        "schema": "emender-native-peer-commit-handoff-v1",
+                        "run_id": args.run_id,
+                        "fence": _fence_epoch(args),
+                        "generation": generation + 1,
+                        "commit_receipt_digest":
+                            commit_receipt.receipt_digest,
+                        "manifest_sha256": commit_receipt.manifest_sha256,
+                        "result_root": commit_receipt.result_root,
+                        "accepted_tokens": commit_receipt.accepted_tokens,
+                        "source": "native_peer_memory",
+                    })
             # Each trainer's native result apply remains bounded by APPLY.
             # Waiting for all eight independent durable recovery receipts is
             # the aggregate exchange/commit phase: live E97 checkpoint I/O can
@@ -2129,6 +2283,7 @@ def _native_manager(args) -> int:
                 result_digest=final_result.result_root.hex(),
                 trainer_count=8,
             )
+            durable_trainer_receipts = []
             for rank in range(args.local_quorum):
                 applied = wait_metadata(
                     control / f"native-applied-{generation:08d}-{rank:02d}.json",
@@ -2144,7 +2299,36 @@ def _native_manager(args) -> int:
                     trainer_incarnation=str(applied["trainer_incarnation"]),
                     recovery_digest=str(applied["recovery_digest"]),
                 )
+                durable_trainer_receipts.append((
+                    rank,
+                    str(applied["trainer_incarnation"]),
+                    str(applied["recovery_digest"]),
+                ))
             node_marker = node_apply.commit_node()
+            apply_receipt_digest = ""
+            if fenced is not None:
+                if commit_receipt is None:
+                    raise RuntimeError(
+                        "node apply lacks immutable commit receipt")
+                durable_node_apply = fenced[0].record_node_apply(
+                    fenced[1],
+                    commit_receipt,
+                    node_id=f"node-{node}",
+                    node_incarnation=incarnation,
+                    trainer_receipts=durable_trainer_receipts,
+                )
+                apply_receipt_digest = durable_node_apply.receipt_digest
+                if pool_client is not None:
+                    applied_peer_state = pool_client.node_applied(
+                        generation=generation + 1,
+                        worker_id=f"node-{node}",
+                        incarnation=incarnation,
+                        receipt_digest=apply_receipt_digest,
+                        commit_receipt_digest=commit_receipt.receipt_digest,
+                    )
+                    if applied_peer_state.get("status") != "node_applied":
+                        raise RuntimeError(
+                            "native peer node-apply handshake was not admitted")
             session.commit(
                 publication_manifest=publication, authoritative_latest=latest,
                 deadline_s=pool_config.slo.apply_s)
@@ -2164,7 +2348,12 @@ def _native_manager(args) -> int:
             final_result.close(); final_operation.close(); freeze.close()
             heartbeat(bulk, identity, generation=generation + 1,
                       step=(generation + 1) * args.local_steps, loss=None,
-                      stage="published_node_applied")
+                      stage="published_node_applied",
+                      authoritative_generation=generation + 1,
+                      commit_receipt_digest=(
+                          "" if commit_receipt is None
+                          else commit_receipt.receipt_digest),
+                      node_apply_receipt_digest=apply_receipt_digest)
             has_next_generation = generation + 1 < target_generation
             if pool_client is not None and has_next_generation:
                 next_generation = generation + 1
@@ -2173,7 +2362,8 @@ def _native_manager(args) -> int:
                         incarnation=incarnation, term_requested=term_requested):
                     pool_client.ready(session.owner_endpoint, next_generation,
                                       run_id=args.run_id,
-                                      fence=_fence_epoch(args))
+                                      fence=_fence_epoch(args),
+                                      apply_receipt_digest=apply_receipt_digest)
             elif not has_next_generation:
                 terminal_published = True
     except BaseException:
@@ -2212,7 +2402,7 @@ def _python_debug_manager(args) -> int:
     identity = f"node-{node}-manager"
     bulk = Path(args.bulk_root) / args.run_id / f"node-{node}"
     bulk = assert_node_local_path(bulk, run)
-    fenced = _fenced_control(args)
+    fenced = _peer_authority(args)
     spool = LocalTrainerSpool(bulk / "mailbox", args.max_spool_bytes)
     loop = SplitManagerLoop(spool, quorum=args.local_quorum, source_id=args.source_id,
                             aggregation_deadline_s=min(args.deadline_s, 420.0))
@@ -2257,8 +2447,6 @@ def _python_debug_manager(args) -> int:
     liveness_stop, liveness_thread = _liveness_heartbeat(bulk, identity)
     try:
         for generation in range(start_generation, target_generation):
-            if fenced is not None:
-                fenced[0].assert_current(fenced[1])
             fence = _fence(args, generation)
             heartbeat(bulk, identity, generation=generation, step=generation * args.local_steps,
                       loss=None, stage="collecting")
@@ -2451,8 +2639,8 @@ def _python_debug_manager(args) -> int:
                 accepted_tokens=int(value["accepted_tokens"]),
                 generation_identity=value["generation_identity"],
                 digests=value.get("digests", {}),
-                control_store=None if fenced is None else fenced[0],
-                allocation_lease=None if fenced is None else fenced[1])
+                peer_authority=None if fenced is None else fenced[0],
+                allocation_claim=None if fenced is None else fenced[1])
             _stage_telemetry(bulk, identity, int(value["generation"]),
                              "fenced_atomic_commit", commit_started, 60.0,
                              accepted_tokens=int(value["accepted_tokens"]),
@@ -2534,7 +2722,7 @@ def trainer(args) -> int:
     rank = int(os.environ.get("RESILIENT_E97_LOCAL_RANK", "0")); identity = f"node-{node}-trainer-{rank}"
     bulk = Path(args.bulk_root) / args.run_id / f"node-{node}"
     bulk = assert_node_local_path(bulk, run)
-    fenced = _fenced_control(args)
+    fenced = _peer_authority(args)
     backend, _, _ = _dataplane_policy(args)
     native = backend != PYTHON_TCP_DEBUG
     native_runtime = (runtime_digests(
@@ -2601,12 +2789,6 @@ def trainer(args) -> int:
                 or int(handoff["fence"]["coordinator_epoch"]) > _fence_epoch(args)
                 or not handoff.get("finalized")):
             raise ValueError("resume handoff membership/identity/fence mismatch")
-        if fenced is not None:
-            latest = fenced[0].read_publication(args.run_id, "latest", "authoritative")
-            if (latest is None or int(latest["generation"]) != resume_generation
-                    or latest["manifest_sha256"] != __import__("hashlib").sha256(
-                        resume_handoff.read_bytes()).hexdigest()):
-                raise ValueError("resume handoff is not the authoritative fenced latest")
     recovery_manifest = control / "recovery" / f"{identity}.json"
     recovery = (
         None if _cohort_restart_sequence()
@@ -2691,8 +2873,6 @@ def trainer(args) -> int:
         generation_started = time.monotonic()
         if stop["requested"]:
             break
-        if fenced is not None:
-            fenced[0].assert_current(fenced[1])
         # One deadline covers the complete generation, including real local
         # training, publication, quorum aggregation, and apply.  Starting a
         # fresh timeout only after the expensive 40-step train can let a live

@@ -16,13 +16,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import signal
 import shutil
-import sqlite3
 import subprocess
 import sys
-import threading
 import time
 import uuid
 
@@ -30,7 +29,11 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from ndm.fenced_admission import AllocationLease, FenceRejected, SQLiteFencedControlStore
+from ndm.manifest_peer_control import (
+    AllocationClaim,
+    FenceRejected,
+    ManifestPeerAuthority,
+)
 from ndm.native_dataplane import create_memfd, seal_memfd
 
 
@@ -44,43 +47,46 @@ EXCHANGE_COMMIT_HARD_S = 180.0
 FIRST_COMMIT_HARD_S = 720.0
 
 
-class AllocationLeaseGuard:
-    """Renew the sole allocation fence while roles run beneath this process."""
+class AllocationFenceGuard:
+    """Hold one immutable scheduler claim while native peers own live state."""
 
-    def __init__(self, store: SQLiteFencedControlStore, lease: AllocationLease, *,
-                 ttl_s: float, renew_s: float):
-        if not 0 < renew_s < ttl_s:
-            raise ValueError("lease renewal interval must be positive and below TTL")
-        self.store, self.lease = store, lease
-        self.ttl_s, self.renew_s = float(ttl_s), float(renew_s)
-        self.stop = threading.Event()
+    def __init__(self, authority: ManifestPeerAuthority, claim: AllocationClaim):
+        self.authority, self.claim = authority, claim
         self.error: BaseException | None = None
-        self.thread = threading.Thread(target=self._renew, name="allocation-fence-renewal",
-                                       daemon=True)
 
     def start(self) -> None:
-        self.thread.start()
-
-    def _renew(self) -> None:
-        while not self.stop.wait(self.renew_s):
-            try:
-                self.lease = self.store.renew(self.lease, ttl_s=self.ttl_s)
-            except BaseException as error:
-                self.error = error
-                self.stop.set()
-                return
+        # Scheduler lifetime plus the persistent native peer protocol owns
+        # liveness.  No filesystem heartbeat or renewal transaction exists.
+        self.authority.assert_current(self.claim)
 
     def close(self) -> None:
-        self.stop.set()
-        self.thread.join(self.renew_s + 1)
-        if self.error is None:
-            try:
-                self.store.release(self.lease)
-            except FenceRejected:
-                pass
+        # Claims and commit receipts are immutable restart evidence.  A later
+        # allocation supersedes this claim with a strictly larger scheduler
+        # fence; deleting/releasing it would permit fence reuse.
+        return None
 
 
-def _allocation_admission(run_dir: Path) -> AllocationLeaseGuard | None | bool:
+def _scheduler_fence() -> int:
+    """Return the monotonic scheduler token used by native peer identities."""
+    explicit = os.environ.get("RESILIENT_E97_ALLOCATION_FENCE")
+    if explicit:
+        fence = int(explicit)
+    else:
+        scheduler_id = os.environ.get("SLURM_JOB_ID", "")
+        match = re.match(r"^([0-9]+)", scheduler_id)
+        if match is not None:
+            fence = int(match.group(1))
+        else:
+            # Direct local protocol fixtures have no scheduler.  Their
+            # explicit coordinator epoch is already part of every native
+            # command/frame and remains deterministic.
+            fence = int(os.environ.get("RESILIENT_E97_COORDINATOR_EPOCH", "1"))
+    if fence <= 0:
+        raise ValueError("allocation scheduler fence must be positive")
+    return fence
+
+
+def _allocation_admission(run_dir: Path) -> AllocationFenceGuard | None | bool:
     """Acquire before any manager/trainer can load a model.
 
     ``False`` means another live allocation owns the run and the caller must
@@ -90,10 +96,7 @@ def _allocation_admission(run_dir: Path) -> AllocationLeaseGuard | None | bool:
     run_id = os.environ.get("RESILIENT_E97_RUN_ID")
     if not run_id:
         return None
-    database = Path(os.environ.get(
-        "RESILIENT_E97_FENCE_DB", str(run_dir / "control" / "pool-v1.sqlite3")))
-    store = SQLiteFencedControlStore(
-        database, timeout_s=float(os.environ.get("RESILIENT_E97_CONTROL_TIMEOUT_S", "5")))
+    authority = ManifestPeerAuthority(run_dir)
     allocation_id = os.environ.get(
         "RESILIENT_E97_ALLOCATION_ID", os.environ.get("SLURM_JOB_ID", f"local-{os.getpid()}"))
     incarnation = os.environ.get("RESILIENT_E97_ALLOCATION_INCARNATION", uuid.uuid4().hex)
@@ -108,34 +111,40 @@ def _allocation_admission(run_dir: Path) -> AllocationLeaseGuard | None | bool:
     }
     config_id = hashlib.sha256(json.dumps(
         config_material, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    ttl_s = float(os.environ.get("RESILIENT_E97_LEASE_TTL_S", "60"))
-    lease = store.acquire(
-        run_id=run_id, allocation_id=allocation_id, incarnation=incarnation,
-        protocol_id=POOL_PROTOCOL_ID, config_id=config_id, ttl_s=ttl_s)
-    if lease is None:
+    claim = authority.claim(
+        run_id=run_id,
+        allocation_id=allocation_id,
+        incarnation=incarnation,
+        fence=_scheduler_fence(),
+        protocol_id=POOL_PROTOCOL_ID,
+        config_id=config_id,
+    )
+    if claim is None:
         print(f"resilient_pool_admission=lost run_id={run_id}; exiting before model load")
         return False
-    os.environ["RESILIENT_E97_FENCE_DB"] = str(database)
-    os.environ["RESILIENT_E97_ALLOCATION_LEASE"] = json.dumps(lease.__dict__, sort_keys=True)
-    os.environ["RESILIENT_E97_FENCE_EPOCH"] = str(lease.fence)
-    os.environ["RESILIENT_E97_ALLOCATION_ADMITTED_AT"] = str(lease.acquired_at)
-    telemetry = run_dir / "supervision" / "allocation-lease.json"
+    os.environ["RESILIENT_E97_ALLOCATION_CLAIM"] = claim.encode()
+    os.environ["RESILIENT_E97_FENCE_EPOCH"] = str(claim.fence)
+    admitted_at = time.time()
+    os.environ["RESILIENT_E97_ALLOCATION_ADMITTED_AT"] = str(admitted_at)
+    telemetry = run_dir / "supervision" / "allocation-fence.json"
     telemetry.parent.mkdir(parents=True, exist_ok=True)
     temporary = telemetry.with_suffix(f".{os.getpid()}.tmp")
     temporary.write_text(json.dumps({
         "stage": "admitted_before_model_load", "run_id": run_id,
         "allocation_id": allocation_id, "incarnation": incarnation,
-        "fence": lease.fence, "protocol": POOL_PROTOCOL_ID,
+        "fence": claim.fence, "protocol": POOL_PROTOCOL_ID,
+        "claim_digest": claim.claim_digest,
+        "base_generation": claim.base_generation,
+        "base_commit_digest": claim.base_commit_digest,
+        "live_authority": "native_peer_memory",
+        "restart_authority": "immutable_commit_receipt_chain",
         "generation_baseline_s": list(GENERATION_BASELINE_S),
         "ready_hard_s": READY_HARD_S, "k40_hard_s": K40_HARD_S,
         "exchange_commit_hard_s": EXCHANGE_COMMIT_HARD_S,
         "first_commit_hard_s": FIRST_COMMIT_HARD_S,
-        "lease_ttl_s": ttl_s,
     }, sort_keys=True) + "\n")
     os.replace(temporary, telemetry)
-    guard = AllocationLeaseGuard(
-        store, lease, ttl_s=ttl_s,
-        renew_s=float(os.environ.get("RESILIENT_E97_LEASE_RENEW_S", "10")))
+    guard = AllocationFenceGuard(authority, claim)
     guard.start()
     return guard
 
@@ -256,43 +265,23 @@ class AllocationSupervisor:
         os.replace(temporary, path)
 
     def _durable_generation(self) -> int | None:
-        """Return the checksum-verified generation from authoritative handoff."""
-        latest_path = self.run_dir / "handoff" / "latest.json"
+        """Return the generation selected by the immutable receipt lineage."""
         try:
-            latest = json.loads(latest_path.read_text())
-            manifest_path = Path(str(latest["manifest"]))
-            raw = manifest_path.read_bytes()
-            if hashlib.sha256(raw).hexdigest() != str(latest["manifest_sha256"]):
+            authority = ManifestPeerAuthority(self.run_dir)
+            encoded_claim = os.environ.get("RESILIENT_E97_ALLOCATION_CLAIM")
+            claim = (
+                AllocationClaim.decode(encoded_claim)
+                if encoded_claim
+                else authority.current_claim(os.environ.get("RESILIENT_E97_RUN_ID"))
+            )
+            if claim is None:
                 return None
-            manifest = json.loads(raw)
-            generation = int(latest["generation"])
-            if (not manifest.get("finalized")
-                    or int(manifest.get("generation", -1)) != generation):
+            commit = authority.current_commit(claim)
+            if commit is None:
                 return None
-            run_id = os.environ.get("RESILIENT_E97_RUN_ID")
-            if run_id and manifest.get("run_id") != run_id:
-                return None
-            database = os.environ.get("RESILIENT_E97_FENCE_DB")
-            encoded_lease = os.environ.get("RESILIENT_E97_ALLOCATION_LEASE")
-            if bool(database) != bool(encoded_lease):
-                return None
-            if database and encoded_lease:
-                lease = AllocationLease(**json.loads(encoded_lease))
-                store = SQLiteFencedControlStore(database)
-                store.assert_current(lease)
-                authoritative = store.read_publication(
-                    lease.run_id, "latest", "authoritative")
-                if (not isinstance(authoritative, dict)
-                        or int(authoritative.get("generation", -1))
-                           != generation
-                        or int(authoritative.get("fence", -1))
-                           != int(latest.get("fence", -1))
-                        or authoritative.get("manifest_sha256")
-                           != latest["manifest_sha256"]):
-                    return None
-            return generation
+            return commit.generation
         except (FenceRejected, FileNotFoundError, KeyError, TypeError,
-                ValueError, json.JSONDecodeError, OSError, sqlite3.Error):
+                ValueError, json.JSONDecodeError, OSError):
             return None
 
     def _apply_progress_time(self, child: Child, generation: int) -> float:
@@ -512,8 +501,22 @@ class AllocationSupervisor:
             return "progress_deadline"
         admitted_at = float(os.environ.get("RESILIENT_E97_ALLOCATION_ADMITTED_AT", now))
         initial_generation = int(os.environ.get("RESILIENT_E97_INITIAL_GENERATION", "0"))
-        durable_generation = self._durable_generation()
-        if ((durable_generation is None or durable_generation <= initial_generation)
+        # This is a hot diagnostic/liveness loop.  Native peer control already
+        # made the manager's all-eight-trainer apply receipt a prerequisite for
+        # this stage marker, so do not poll immutable manifests (and never a
+        # shared control store) here.  Receipt-chain reads are reserved for an
+        # actual cohort/fresh-allocation recovery.
+        peer_committed_generation = (
+            int(state.get("authoritative_generation", initial_generation))
+            if (
+                child.role in {"manager", "node-supervisor"}
+                and stage == "published_node_applied"
+                and len(str(state.get("commit_receipt_digest", ""))) == 64
+                and len(str(state.get("node_apply_receipt_digest", ""))) == 64
+            )
+            else initial_generation
+        )
+        if (peer_committed_generation <= initial_generation
                 and int(state.get("generation", initial_generation)) <= initial_generation
                 and now - admitted_at > FIRST_COMMIT_HARD_S):
             return "first_atomic_generation_deadline"
@@ -1060,11 +1063,11 @@ def main() -> int:
         return 0
     try:
         result = _allocation_main()
-        if isinstance(admission, AllocationLeaseGuard) and admission.error is not None:
-            raise FenceRejected(f"allocation lease renewal failed: {admission.error}")
+        if isinstance(admission, AllocationFenceGuard) and admission.error is not None:
+            raise FenceRejected(f"allocation fence failed: {admission.error}")
         return result
     finally:
-        if isinstance(admission, AllocationLeaseGuard):
+        if isinstance(admission, AllocationFenceGuard):
             admission.close()
 
 

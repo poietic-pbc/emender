@@ -1,10 +1,12 @@
-"""Durable, fenced allocation admission and small publication metadata.
+"""Historical SQLite admission records for offline submit-side migration.
 
-This is the R01/R07 control-plane adapter from version 1 of
-``docs/RESILIENT_DILOCO_COMPUTE_POOL.md``.  SQLite supplies a transactional
-compare-and-swap implementation; deployments must place the database on an
-approved control store whose locking semantics have been validated.  No model,
-tensor, membership, or heartbeat payload belongs in this database.
+This module preserves the pre-2026-07-25 R01/R07 record reader and its focused
+history tests.  It is not part of the resilient E97 production import graph.
+Allocation supervisors, managers, trainers, native services, diagnostics,
+generation/apply/checkpoint code, and restart paths MUST NOT import or
+construct this store.  Live control now belongs to the native peer protocol;
+immutable claims, commit receipts, checkpoint manifests, and apply receipts
+are the durable restart authority.
 """
 
 from __future__ import annotations

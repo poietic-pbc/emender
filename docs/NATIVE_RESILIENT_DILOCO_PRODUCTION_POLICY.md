@@ -70,7 +70,7 @@ exact qualification bounds:
 
 | Stage | Retained observation | Production hard bound | Required response at bound |
 |---|---:|---:|---|
-| Allocation lease | renewed every 10 s | TTL 60 s | Renewal failure immediately stops admission/publication. |
+| Allocation claim/fence | one immutable claim before model load | Slurm allocation lifetime plus peer deadlines | A stale/conflicting claim exits zero-work; peer-control loss stops admission/publication. |
 | Manager/native READY | 14.784 s maximum | 180 s | Exclude/restart the role; do not wait for launched ranks. |
 | Heartbeat / loss detection | native-service loss observed at 19.015 s | 60 s | Expire the incarnation and evaluate floors. |
 | Real K40 training | 137.010 s maximum | 420 s | Discard unfinished local work; node contribution is absent. |
@@ -150,11 +150,13 @@ The production packager must materialize a candidate record and pass it to
 `ndm.native_pool_production_policy.validate_production_candidate` (or its
 module CLI). Admission is conjunctive; there is no warning-only mode.
 
-1. **Exclusive current lease (R01, R07, R12; NDP06, NDP15).** Acquire the
-   logical run lease before loading a model. A live competing owner produces a
-   successful zero-work exit. The admitted allocation must hold the current
-   60-second lease, renew every 10 seconds, and have a strictly newer fence
-   than a resumed checkpoint.
+1. **Exclusive current claim (R01, R07, R12; NDP01, NDP06, NDP15).** Publish
+   an immutable logical-run claim before loading a model. A stale/conflicting
+   owner produces a successful zero-work exit. The claim binds one unique
+   allocation incarnation, the monotonically increasing Slurm fence, config
+   identity, and the exact base commit receipt. Native peer deadlines own live
+   membership; no shared database, lease renewal row, lock, or filesystem
+   heartbeat is permitted.
 2. **Exact native backend/provider (R08, R10, R13; NDP01–NDP03, NDP07).** The
    backend is exactly `native-cxi`, effective provider exactly `cxi`, endpoint
    exactly `FI_EP_RDM`, and network `job_vni`. `python-tcp-debug`,
@@ -176,12 +178,13 @@ module CLI). Admission is conjunctive; there is no warning-only mode.
    memory fields match the JSON. A defaulted or omitted value is a mismatch.
 6. **Fresh checkpoint/fence (R01, R04, R07, R11–R12; NDP06, NDP10, NDP15).**
    Cold start accepts only the pinned seed SHA-256. Resume requires zero
-   committed-generation lag: authoritative SQLite `latest`, immutable
+   committed-generation lag: the digest-linked immutable commit receipt,
    manifest, and independently recomputed checkpoint must have identical
-   generation, accepted-token clock, and digest. The new allocation fence is
-   strictly greater than the checkpoint/latest fence. Dynamic compatibility
-   `latest.json`, node-local recovery, a same-fence allocation, or any stale
-   generation cannot authorize resume.
+   generation, accepted-token clock, outer step, result root, membership, and
+   digests. The new allocation fence is strictly greater than the receipt
+   fence and its claim anchors the receipt exactly. Compatibility
+   `latest.json`, historical SQLite, node-local recovery, a same-fence
+   allocation, or any stale generation cannot authorize resume.
 7. **Promotion parity.** The retained validation qualification, normalized
    validation payload, and production payload have the same SHA-256. Only the
    scheduler envelope differences described below are permitted.
@@ -205,8 +208,8 @@ rank count. The following thresholds are production behavior, not suggestions:
 | Owner/route loss before commit | At most two deterministic owner reassignments and `2*L` replay per sender; never reset transfer deadline. | A qualified plan still has at least two owners and all frozen sources. | Bound exhaustion, missing replay source, or `<2` owners aborts and exits. |
 | Corrupt/nonfinite/stale/conflicting contribution | Reject without accumulator mutation; quarantine/expire its incarnation; identical replay gets the original receipt. | Frozen complete set still meets Q/T by the 600-second deadline. | Otherwise abort; no same-generation retry. |
 | Q/T deadline miss | Do not freeze or publish. | Never for the expired attempt. | Preserve the prior commit, drain, and exit nonzero for later fresh-allocation recovery. |
-| Checkpoint/publication failure | Applied trainer state is speculative; do not advance authoritative `latest`; reload `S_g`. | Only if publication succeeds inside the same current-fence deadline. | At 180/600-second expiry, abort and exit from `S_g`. |
-| Lease renewal/current-fence loss | Immediately stop new admission, native finalize, checkpoint publication, and `latest` CAS. | Never under the stale allocation. | Abort/drain within 45 seconds; a later allocation must acquire a newer fence. |
+| Checkpoint/publication failure | Applied trainer state is speculative; do not acknowledge a commit receipt or next-generation READY; reload `S_g`. | Only if peer agreement and immutable publication succeed inside the same current-fence deadline. | At 180/600-second expiry, abort and exit from `S_g`. |
+| Peer-control/current-claim loss | Immediately stop new admission, native finalize, checkpoint publication, and commit acknowledgement. | Never under the stale allocation. | Abort/drain within 45 seconds; a later allocation must publish a newer claim. |
 | Throughput below the live health floor after a valid commit | Retain the valid commit and evidence. | Do not continue in the same allocation. | Drain cleanly and require a new qualification/diagnosis before another production generation. |
 | Scheduler/allocation loss | No attempt to resurrect node-local or unfinished trainer state. | Never in the lost allocation. | Later job acquires a newer fence and reloads only the last immutable authoritative checkpoint. |
 
@@ -225,7 +228,7 @@ The supervisor exits the whole allocation when any of these becomes true:
 - checkpoint cadence/freshness cannot be maintained; or
 - less than 645 seconds remains before walltime for a new steady generation.
 
-The only non-error allocation exit is losing the initial exclusive lease: it
+The only non-error allocation exit is losing the initial exclusive claim: it
 must exit successfully before model load and before any run-state write.
 
 ## Checkpoint cadence, freshness, and rollback
@@ -233,9 +236,11 @@ must exit successfully before model load and before any run-state write.
 Every committed generation writes and independently reload/verifies one
 immutable checkpoint containing model, required outer optimizer, inner state
 selected by the E97 payload, accepted-token clock, membership, policy/config,
-native digests, and fence. The checkpoint, manifest, and authoritative SQLite
-`latest` advance atomically under the current fence. Maximum staleness is zero
-committed generations; wall-clock freshness is not a substitute.
+native digests, and fence. The checkpoint, manifest, and digest-linked
+immutable commit receipt extend the current claim exactly once. Native peers
+validate that exact result/token/receipt identity before advancing live commit
+state or acknowledging it. Maximum staleness is zero committed generations;
+wall-clock freshness and mutable `latest.json` are not substitutes.
 
 Rollback never edits or decrements `latest` and never reuses a fence:
 
@@ -245,8 +250,8 @@ Rollback never edits or decrements `latest` and never reuses a fence:
 3. Leave the latest independently verified immutable checkpoint untouched.
 4. Start a fresh allocation only through normal admission, with a strictly
    newer fence and the last production-qualified byte-identical payload.
-5. Reload and recompute all checkpoint/manifest/control-store digests before
-   READY or model mutation.
+5. Reload and recompute all checkpoint/manifest/receipt digests and complete
+   the native peer recovery handshake before READY or model mutation.
 
 If there is no earlier production-qualified native payload, rollback means
 **halt**. Python TCP, a test provider, fixed-world MPICH, an older checkpoint,
