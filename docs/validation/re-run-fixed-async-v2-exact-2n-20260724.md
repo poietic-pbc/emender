@@ -4,8 +4,8 @@ Date: 2026-07-24
 
 Task: `re-run-fixed`
 
-Status: **CLEAN JOB FAILED AFTER GENERATION 0 — changed-payload correction
-under validation**
+Status: **CHANGED-PAYLOAD CLEAN JOB FAILED AFTER GENERATION 0 — sequence
+stopped**
 
 ## Authority and scope
 
@@ -183,3 +183,82 @@ restricted to the clean phase on exactly two `batch`/`debug` nodes. Pending
 state is checked at most 30 minutes apart; running state is checked every 2–5
 minutes with generation/deadline progress inspection and immediate terminal
 harvest.
+
+## Changed-payload G2 and clean terminal result
+
+The correction commit was `92e398c2914194847e2aa460f2f7bd0482f2fad4`.
+It was published to authoritative `main`, snapshotted cleanly, rebuilt after
+canonical Frontier activation, and passed the focused Python suites (28/28)
+and all native CTests (10/10).
+
+The required new exact-source full-layout G2 ran before any changed-payload
+clean admission:
+
+```text
+5068822|native-ndp-g2-clean|COMPLETED|0:0|2|batch|debug
+```
+
+Queued/running scheduler evidence named `Nodes=2`, `Partition=batch`, and
+`QOS=debug`. Terminal accounting independently named `NNodes=2`,
+`Partition=batch`, and `QOS=debug`. The immutable G2 gate is:
+
+```text
+/lustre/orion/bif148/proj-shared/emender/validation/re-run-fixed-92e398c2-20260724/native-g2-evidence/5068822/full-layout-gate.json
+```
+
+Only after that pass, the serialized controller submitted the changed-payload
+clean phase as job `5068873`. Its terminal accounting is:
+
+```text
+5068873|resilient-e97-true-2n|FAILED|1:0|00:27:50|2|batch|debug|2026-07-24T19:44:12|2026-07-24T20:12:02|frontier[02299,02304]
+```
+
+The retained `scontrol show job -dd 5068873` record also explicitly reports
+`NumNodes=2`, `Partition=batch`, `QOS=debug`, and the changed source snapshot
+and G2 gate paths in its immutable submit line.
+
+Generation zero again reached an atomic handoff. The pool-control freeze
+preserves `accepted_tokens=5245440` for exactly the two READY node
+contributions. Both native node result identities preserve the separate
+lag-zero numerical denominator:
+
+```json
+{
+  "exact_tokens": 5245440,
+  "weight": 5245440,
+  "aggregation_weight": 36718080,
+  "global_weight": 36718080,
+  "result_root": "04dfbf27ebfe52371e56142e55ddbbae93588440c2906744720d4cf6d6bbab3d"
+}
+```
+
+The immutable generation-one handoff additionally binds that result root,
+`accepted_tokens=5245440`, source commit `92e398c2...`, exact provider `cxi`,
+and native bundle `9884a02d...`.
+
+The ScheduleFree lazy-state failure did not recur. The first independent
+post-commit failure was failure to complete every node-1 generation-zero
+apply marker before its absolute deadline. Trainers 4–7 reported missing
+`native-result-applied-00000000-{03,04,05,06}.json`; peer trainers then
+reported checkpoint-leader/apply deadlines. Consequently the next manager
+attempt waited for generation-one native submissions that could not complete:
+
+```text
+TimeoutError: native metadata deadline expired for
+.../node-0/control/native-submit-00000001-01.json
+
+TimeoutError: native metadata deadline expired for
+.../node-1/control/native-submit-00000001-04.json
+```
+
+Supervisor restarts then encountered stale/invalid generation metadata; those
+identity errors and local-reduction deadlines are downstream cascades, not
+evidence of a successful clean admission.
+
+The serialized controller remains fail-closed with
+`active.phase=clean-overlap`, `active.job_id=5068873`, `next_phase=0`, and an
+empty history. In conformance with R04–R08/R14–R16,
+NDP05–NDP10/NDP15–NDP17, ADR-002, and
+V2A03–V2A07/V2A13–V2A18, execution stopped after this clean failure. No later
+phase, duplicate unchanged payload, 4+ node submission, or scale
+authorization was made.
