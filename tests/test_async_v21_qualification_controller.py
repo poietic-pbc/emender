@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -35,6 +36,23 @@ def _write(path: Path, value: dict) -> Path:
     value["manifest_digest"] = canonical_digest(value)
     path.write_text(json.dumps(value, sort_keys=True))
     return path
+
+
+def test_native_g2_scheduler_logs_do_not_dirty_authoritative_source():
+    repo = Path(__file__).resolve().parents[1]
+    for suffix in ("out", "err"):
+        completed = subprocess.run(
+            [
+                "git",
+                "check-ignore",
+                "--quiet",
+                f"logs/frontier/native-dataplane/"
+                f"native-ndp-g2-clean-123456.{suffix}",
+            ],
+            cwd=repo,
+            check=False,
+        )
+        assert completed.returncode == 0
 
 
 @pytest.mark.parametrize("gate", ("clean", "faults", "convergence"))
