@@ -17,7 +17,7 @@ from typing import Iterable, Iterator, Mapping, Sequence
 import torch
 
 from ndm.resilient_e97_roles import CpuNodeManager, LocalFence, LocalTrainerSpool
-from ndm.fenced_admission import AllocationLease, SQLiteFencedControlStore
+from ndm.manifest_peer_control import AllocationClaim, ManifestPeerAuthority
 
 
 def assert_node_local_path(path: str | Path, shared_root: str | Path) -> Path:
@@ -57,7 +57,7 @@ def atomic_json(path: Path, value: Mapping[str, object]) -> None:
 
 
 def heartbeat(run_dir: Path, identity: str, *, generation: int, step: int,
-              loss: float | None, stage: str) -> None:
+              loss: float | None, stage: str, **evidence: object) -> None:
     atomic_json(run_dir / "supervision" / f"{identity}.json", {
         "identity": identity, "heartbeat_time": time.time(), "progress_time": time.time(),
         "generation": generation, "step": step, "loss": loss, "stage": stage,
@@ -67,6 +67,7 @@ def heartbeat(run_dir: Path, identity: str, *, generation: int, step: int,
             os.environ.get("RESILIENT_E97_NODE_INCARNATION", ""),
         "cohort_restart_sequence": int(
             os.environ.get("RESILIENT_E97_COHORT_RESTART_SEQUENCE", "0")),
+        **evidence,
     })
 
 
@@ -304,16 +305,21 @@ def finalize_checkpoint(run_dir: str | Path, checkpoint: str | Path, *,
                         accepted_tokens: int = 0,
                         generation_identity: Mapping[str, object] | None = None,
                         digests: Mapping[str, object] | None = None,
-                        control_store: SQLiteFencedControlStore | None = None,
-                        allocation_lease: AllocationLease | None = None) -> Path:
+                        peer_authority: ManifestPeerAuthority | None = None,
+                        allocation_claim: AllocationClaim | None = None) -> Path:
     """Validate a designated trainer checkpoint and immutably publish its manifest."""
     root, checkpoint = Path(run_dir), Path(checkpoint)
-    if (control_store is None) != (allocation_lease is None):
-        raise ValueError("fenced checkpoint publication requires store and lease together")
-    if control_store is not None:
-        if allocation_lease.run_id != run_id or allocation_lease.fence != fence.coordinator_epoch:
-            raise ValueError("checkpoint allocation lease differs from generation fence")
-        control_store.assert_current(allocation_lease)
+    if (peer_authority is None) != (allocation_claim is None):
+        raise ValueError(
+            "fenced checkpoint publication requires authority and claim together")
+    if peer_authority is not None:
+        if (
+            allocation_claim.run_id != run_id
+            or allocation_claim.fence != fence.coordinator_epoch
+        ):
+            raise ValueError(
+                "checkpoint allocation claim differs from generation fence")
+        peer_authority.assert_current(allocation_claim)
     if not checkpoint.is_file() or checkpoint.stat().st_size <= 0:
         raise ValueError("trainer checkpoint is missing or empty")
     loaded = torch.load(checkpoint, map_location="cpu", mmap=True, weights_only=True)
@@ -327,13 +333,18 @@ def finalize_checkpoint(run_dir: str | Path, checkpoint: str | Path, *,
             or int(loaded["coordinator_epoch"]) != fence.coordinator_epoch):
         raise ValueError("checkpoint complete-state/fencing validation failed")
     del loaded
-    raw_sha = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    checkpoint_digest = hashlib.sha256()
+    with checkpoint.open("rb") as checkpoint_stream:
+        for block in iter(
+                lambda: checkpoint_stream.read(8 * 1024 * 1024), b""):
+            checkpoint_digest.update(block)
+    raw_sha = checkpoint_digest.hexdigest()
     target_name = f"generation-{generation:08d}"
-    if control_store is not None:
+    if peer_authority is not None:
         # A superseded writer may finish an already-open filesystem write. A
-        # fence-specific immutable name prevents that orphan from overwriting
-        # the current allocation's handoff before the authoritative CAS.
-        target_name += f"-fence-{allocation_lease.fence:08d}"
+        # fence-specific immutable name prevents that orphan from becoming an
+        # ancestor of the current allocation's commit receipt chain.
+        target_name += f"-fence-{allocation_claim.fence:08d}"
     target = root / "handoff" / f"{target_name}.json"
     outer_digest = hashlib.sha256(json.dumps(
         dict(outer_update_state), sort_keys=True, separators=(",", ":"),
@@ -359,30 +370,22 @@ def finalize_checkpoint(run_dir: str | Path, checkpoint: str | Path, *,
         atomic_json(target, payload)
     manifest_sha = hashlib.sha256(target.read_bytes()).hexdigest()
     latest = {
-        "generation": generation, "manifest": str(target.resolve()),
-        "manifest_sha256": manifest_sha, "fence": fence.coordinator_epoch,
+        "generation": generation,
+        "manifest": str(target.resolve()),
+        "manifest_sha256": manifest_sha,
+        "fence": fence.coordinator_epoch,
         "accepted_tokens": int(accepted_tokens),
+        "authoritative_source": "local_fixture_manifest",
     }
-    if control_store is not None:
-        name = f"generation-{generation:08d}"
-        commit = {
-            "run_id": run_id, "generation": generation,
-            "generation_identity": payload["generation_identity"],
-            "membership": payload["membership"],
-            "accepted_tokens": int(accepted_tokens),
-            "outer_state_sha256": outer_digest,
-            "checkpoint_sha256": raw_sha, "manifest_sha256": manifest_sha,
-            "digests": payload["digests"], "fence": allocation_lease.fence,
-        }
-        control_store.publish_bundle(allocation_lease, (
-            ("commit", name, commit),
-            ("checkpoint", name, {"checkpoint_sha256": raw_sha,
-                                  "manifest_sha256": manifest_sha,
-                                  "generation": generation}),
-            ("latest", "authoritative", latest),
-        ))
-        control_store.assert_current(allocation_lease)
+    if peer_authority is not None:
+        # The complete checkpoint was streamed and verified immediately above;
+        # pass that digest into the immutable receipt publisher so production
+        # does not read a multi-gigabyte E97 checkpoint twice.
+        receipt = peer_authority.publish_checkpoint(
+            allocation_claim, target,
+            verified_checkpoint_sha256=raw_sha)
+        latest = receipt.pointer()
     atomic_json(root / "handoff" / "latest.json", latest)
-    if control_store is not None:
-        control_store.assert_current(allocation_lease)
+    if peer_authority is not None:
+        peer_authority.assert_current(allocation_claim)
     return target

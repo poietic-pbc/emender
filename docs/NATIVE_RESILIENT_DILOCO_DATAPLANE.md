@@ -6,7 +6,7 @@
 **Semantic authority:** This document specializes the transport, local handoff,
 native ABI, and tensor-reduction requirements of
 [Resilient DiLoCo Compute Pool](RESILIENT_DILOCO_COMPUTE_POOL.md), version 1.
-That document remains authoritative for leases, membership, generation closure,
+That document remains authoritative for allocation claims, membership, generation closure,
 commit semantics, and training correctness.
 [ADR-002](ASYNC_DECOUPLED_DILOCO_V2.md) is the normative semantic extension
 when `async-decoupled-v2.1-simple` is selected; it preserves NDP01–NDP17 but
@@ -29,12 +29,12 @@ appendices and do not change these decisions.
 
 | Concern | V1 contract |
 |---|---|
-| Control plane | Python exclusively owns leases/fences, READY membership, generation open/freeze/abort, owner policy, checkpoint policy/publication, and Slurm supervision. |
+| Control plane | The model-free native peer-control protocol owns live fence/incarnation validation, READY membership, generation open/freeze/abort/commit, node-apply state, and recovery handshakes. Python adapts Slurm, chooses checkpoint/outer policy, and writes immutable restart evidence; no shared database participates. |
 | Dense data plane | One persistent model-free C++17 service per node owns local dense handoff, exact weighted reduction, network payloads, replay, and redistribution. Production is libfabric `FI_EP_RDM` with exact provider `cxi`; Python TCP carries zero production dense bytes. |
 | Failure boundary | The elastic backend uses bounded point-to-point work over explicitly named contributions/owners. It never requires launched ranks, MPI, or an all-rank collective. Loss triggers bounded owner reassignment/replay or a clean no-commit abort. |
 | Node-local path | Trainers produce directly into XPMEM or service-allocated memfd buffers. Handoff adds no trainer-sized write; redistribution creates one shared node aggregate, not eight files/copies. Disk may retain one reduced node contribution only as an explicit bounded NVMe replay fallback. |
 | Correctness | Python freezes locally complete, checksummed, replayable node contributions. Native owners apply each fenced identity exactly once, in the specified deterministic float64 order, with exact integer weights, checksums, credits, and idempotent receipts. |
-| Checkpoint/commit | Native code returns a fenced read-only aggregate view. Python/PyTorch applies outer state, writes and reload-verifies the policy-selected immutable checkpoint, and advances authoritative `latest` under the current fence. A fabric result is not a commit. |
+| Checkpoint/commit | Native code returns a fenced read-only aggregate view. Native peers agree the exact next result/token/receipt identity; Python/PyTorch applies outer state and reload-verifies the immutable checkpoint; a digest-linked commit receipt makes it durable. `latest.json` and fabric receipts are not authority. |
 | Admission gates | G0 local -> G1 two-node CXI probe -> **G2 full-layout two-node synthetic** -> G3 real two-node -> G4 failure/rejoin -> G5 fresh-allocation restart -> G6 ordered 4/8/16/32/64/256 scale. No real model or 4+ node native job is allowed before exact-code G2 passes. |
 
 ## Decisions and requirements
@@ -47,7 +47,7 @@ from the elastic dense hot path.
 
 | ID | Normative decision |
 |---|---|
-| NDP01 | Python owns the allocation lease and fence, leased READY membership, generation open/freeze/abort, owner policy, checkpoint policy, atomic publication, and Slurm supervision. C++ owns local dense handoff, native reduction, fabric movement, redistribution, and dense-buffer lifetime. |
+| NDP01 | Native peer control owns live allocation-fence/incarnation checks, READY membership, generation open/freeze/abort/commit, owner agreement, node-apply state, and recovery handshakes. Python owns only the scheduler adapter, outer/checkpoint policy, immutable publication, and supervision. C++ owns local dense handoff, native reduction, fabric movement, redistribution, dense-buffer lifetime, and independent stale-fence rejection. No compute role may open a shared control database. |
 | NDP02 | The elastic backend uses only bounded point-to-point operations. It MUST NOT call an all-rank barrier, broadcast, reduce, all-reduce, all-gather, MPI initialization/finalization, or any operation whose completion requires every launched or READY peer. |
 | NDP03 | One persistent C++17 node service uses libfabric `FI_EP_RDM` and `FI_MSG`. Frontier production MUST resolve exactly `cxi`; test providers are never silently promotable. |
 | NDP04 | Trainer/service handoff uses XPMEM or a service-allocated `memfd`. The trainer produces directly into the exported buffer. No extra trainer-sized file or socket copy is permitted in steady state. |
@@ -61,16 +61,18 @@ from the elastic dense hot path.
 | NDP12 | Committed aggregate shards are redistributed directly from owners into one service-owned node aggregate. Trainers map that shared result; the service does not write eight aggregate files. |
 | NDP13 | Every stage has an absolute deadline and a defined abort/retry result. Fabric or owner failure is contained to routes/generation attempts and never invokes an allocation-wide abort. |
 | NDP14 | Python talks to a versioned C ABI and a local `AF_UNIX/SOCK_SEQPACKET` service. Only metadata crosses that control channel; dense bytes are referenced by native buffer handles. |
-| NDP15 | Python selects the checkpoint publisher and publication cadence. Native code hands it a fenced, read-only aggregate view and drains without a collective. |
+| NDP15 | Python selects checkpoint cadence/publisher and writes complete immutable state. Native peers agree the exact commit, return a fenced read-only aggregate view, acknowledge immutable receipt/result identity, reduce all eight trainer apply receipts to one node-applied receipt, and drain without a collective. |
 | NDP16 | Required counters, timings, identities, bounds, provider facts, and terminal reasons are emitted as structured telemetry. Missing telemetry fails an acceptance gate. |
 | NDP17 | A full-E97-layout, two-node synthetic CXI gate is a hard prerequisite for every real model or larger-node job using this backend. Scale proceeds in the fixed order specified below. |
 
 ### Explicitly non-goals
 
-This backend does not implement lease acquisition, quorum policy, generation
-closure, outer-optimizer policy, checkpoint naming/retention, Slurm allocation
-changes, simultaneous-allocation federation, stale updates, GPU-direct fabric,
-or confidentiality in v1. The v1 payload is host-resident float64. GPU-direct
+The C++ dense service does not choose the scheduler fence, quorum policy,
+outer-optimizer policy, checkpoint naming/retention, Slurm allocation changes,
+simultaneous-allocation federation, stale-update policy, GPU-direct fabric, or
+confidentiality in v1. The model-free peer-control protocol does own live
+membership, generation closure/commit, and recovery handshakes. The v1 payload
+is host-resident float64. GPU-direct
 is a future ABI capability and cannot be enabled by configuration alone.
 ADR-002 resolves the v2.1 asynchronous policy above this layer but does not
 make the v1 ABI capable of carrying it.
@@ -132,20 +134,20 @@ native service owns no training policy and cannot commit a generation.
 
 | Operation | Python control plane | C++ native data plane |
 |---|---|---|
-| Acquire/renew/release allocation lease and fence | sole owner | observes monotonically increasing fence; cannot acquire it |
-| DISCOVER/BOOT/SYNC/READY/ACTIVE/DRAIN/EXPIRE | sole owner | reports local readiness/faults only |
-| Open, close, freeze, defer, or abort generation | sole owner | executes a validated immutable plan |
+| Publish immutable scheduler-fenced allocation claim | scheduler adapter only | peer control validates claim/fence; C++ rejects stale binds |
+| DISCOVER/BOOT/SYNC/READY/ACTIVE/DRAIN/EXPIRE | invokes native peer protocol | peer control is live authority; C++ reports local readiness/faults |
+| Open, close, freeze, commit, defer, or abort generation | invokes native peer protocol and policy | peer control agrees state; C++ executes a validated immutable plan |
 | Choose accepted identities, `Q_min`, `T_min`, deadlines, and owners | sole owner | validates plan/bounds; no policy substitution |
 | Export trainer delta and local weight | invokes stable C ABI | maps, validates, and reduces native buffers |
 | Endpoint publication and route installation | exchanges opaque endpoint records | creates endpoint, validates and installs routes |
 | Dense contribution/aggregate/replay/redistribution bytes | MUST NOT carry them over TCP or serialize Python objects | sole owner |
-| Checkpoint cadence, publisher, outer state, immutable manifest, `latest` CAS | sole owner | returns fenced read-only aggregate views and digests |
+| Checkpoint cadence, publisher, outer state, immutable manifest/receipt | Python policy/writer | peer agrees commit and returns fenced aggregate/result digests |
 | Slurm signals/restarts | sole owner | bounded drain/exit on local command or signal |
 
 ```text
-durable lease/CAS <-> Python allocation holder
+immutable claim/commit/checkpoint chain <-> Python policy/publisher
                            |
-              small fenced control records
+              native in-memory peer control
                            |
   +------------------------+------------------------+
   | node A                                          | node B
@@ -198,8 +200,9 @@ Generation closure is a two-phase control/data operation:
    shard coverage and sends `FINALIZE_OWNERS`; this is point-to-point control,
    not a collective.
 4. Each node fetches result shards independently and exposes `RESULT_READY`.
-   Python performs outer apply/checkpoint/atomic publication. Only a durable
-   current-fence commit permits `COMMITTED` and next-generation admission.
+   Python performs outer apply/checkpoint/immutable publication. Native peer
+   exact-once commit agreement plus the current-fence digest-linked receipt
+   permits `COMMITTED` and next-generation admission.
 
 ## Normative reference B — provider and endpoint contract
 
@@ -685,8 +688,8 @@ released or the bounded apply deadline aborts the generation.
 | conflicting duplicate or bad checksum/nonfinite | reject/quarantine route | record evidence; exclude/abort by policy |
 | owner loss after receipt | old receipt is valid only if new plan retains that owner result; otherwise replay new owner epoch | bounded reassignment; no partial commit |
 | redistribution owner loss | preserve prepared/result buffers and report missing result | reassign/recompute within same absolute deadline or abort |
-| lease/fence superseded | atomically reject old commands/frames, cancel old routes, release volatile state | newer holder controls next attempt; durable CAS still final authority |
-| checkpoint/publication failure | keep `RESULT_READY` only to deadline, then abort/release | do not advance `latest` |
+| claim/fence superseded | atomically reject old commands/frames, cancel old routes, release volatile state | newer peer authority controls next attempt; immutable base receipt selects restart state |
+| checkpoint/publication failure | keep `RESULT_READY` only to deadline, then abort/release | do not acknowledge a commit receipt or next-generation READY |
 | SIGTERM | stop admission and enter bounded `DRAINING` | checkpoint only previously/current durably valid state per policy |
 
 Libfabric errors MUST NOT call `abort()`, `MPI_Abort`, signal peer processes, or
@@ -870,14 +873,17 @@ binding against a retained v1 service binary.
 
 ## Normative reference I — checkpoint handoff and shutdown
 
-At `RESULT_READY`, Python chooses one current-fence checkpoint publisher. The
+At `RESULT_READY`, native peers agree one current-fence result and Python
+chooses one checkpoint publisher. The
 publisher obtains a read-only aggregate fd/view plus `(run_key,fence,
 generation,attempt,layout_digest,base_digest,result_root,global_weight)`. It
 applies the global delta and required outer optimizer in Python/PyTorch, writes
-and reload-verifies the immutable checkpoint selected by policy, and asks the
-durable control store to atomically publish the complete manifest/`latest`
-under the current fence. Native code never chooses cadence, writes `latest`, or
-declares a commit from a fabric receipt.
+and reload-verifies the immutable checkpoint selected by policy, and appends a
+digest-linked commit receipt under the immutable allocation claim. Native peer
+control acknowledges exactly that receipt/result/token identity; it never
+declares a commit from a fabric receipt. A compatibility `latest.json` may be
+written after the receipt but is never read as authority. No database, lock
+file, or filesystem heartbeat participates.
 
 Nonpublisher trainers map the same node aggregate for local apply. A handle is
 released explicitly. Leaked handles expire at the apply deadline and make the

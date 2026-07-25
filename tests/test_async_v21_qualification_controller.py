@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
 from scripts.frontier.run_async_v21_qualification import (
     PAYLOAD_SCHEMA,
     SEED_SHA256,
+    TOKENIZER_SHA256,
     V21ScaleClosure,
     build_plan,
     canonical_digest,
@@ -36,6 +39,54 @@ def _write(path: Path, value: dict) -> Path:
     return path
 
 
+def test_native_g2_scheduler_logs_do_not_dirty_authoritative_source():
+    repo = Path(__file__).resolve().parents[1]
+    for suffix in ("out", "err"):
+        completed = subprocess.run(
+            [
+                "git",
+                "check-ignore",
+                "--quiet",
+                f"logs/frontier/native-dataplane/"
+                f"native-ndp-g2-clean-123456.{suffix}",
+            ],
+            cwd=repo,
+            check=False,
+        )
+        assert completed.returncode == 0
+
+
+def test_controller_direct_execution_bootstraps_repo_import_path(
+    tmp_path: Path,
+):
+    repo = Path(__file__).resolve().parents[1]
+    script = repo / "scripts/frontier/run_async_v21_qualification.py"
+    probe = """
+import runpy
+import sys
+from pathlib import Path
+
+repo = Path(sys.argv[1]).resolve()
+script = Path(sys.argv[2]).resolve()
+sys.path[:] = [
+    entry for entry in sys.path
+    if not entry or Path(entry).resolve() != repo
+]
+runpy.run_path(str(script), run_name="controller_import_probe")
+assert str(repo) in sys.path
+__import__("scripts.frontier.materialize_e97_s3_seed")
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", probe, str(repo), str(script)],
+        cwd=tmp_path,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 @pytest.mark.parametrize("gate", ("clean", "faults", "convergence"))
 def test_v21_two_node_dry_run_pins_scheduler_queue(tmp_path: Path, gate: str):
     plan = build_plan(
@@ -55,6 +106,97 @@ def test_v21_two_node_dry_run_pins_scheduler_queue(tmp_path: Path, gate: str):
     assert "--nodes=2" in plan["command"]
     assert "--partition=batch" in plan["command"]
     assert "--qos=debug" in plan["command"]
+
+
+def test_v21_clean_plan_binds_reviewed_full_acceptance_launch(tmp_path: Path):
+    repo = tmp_path / "repo"
+    run_dir = tmp_path / "run"
+    plan = build_plan(
+        gate="clean",
+        nodes=2,
+        state_path=tmp_path / "state.json",
+        evidence_root=tmp_path,
+        parameters={},
+        clean_launch={
+            "repo": str(repo),
+            "source_commit": "9" * 40,
+            "seed_config": str(repo / "configs/frontier/e97_async_256.yaml"),
+            "native_build_manifest": str(tmp_path / "native-artifacts.json"),
+            "native_build_manifest_sha256": "a" * 64,
+            "full_layout_gate": str(tmp_path / "full-layout-gate.json"),
+            "full_layout_gate_sha256": "b" * 64,
+            "run_dir": str(run_dir),
+            "acceptance_manifest": str(tmp_path / "clean-plan.json"),
+            "seed_cache": str(tmp_path / f"sha256-{SEED_SHA256}.pt"),
+            "seed_attestation": str(tmp_path / "seed-attestation.json"),
+            "seed_attestation_sha256": "6" * 64,
+            "train_args": str(
+                repo / "configs/frontier/e97_resilient_split_role_flat.json"),
+            "train_args_sha256": "c" * 64,
+            "data": str(tmp_path / "commapile.txt"),
+            "data_identity_digest": "7" * 64,
+            "tokenizer": str(tmp_path / "p50k"),
+            "tokenizer_sha256": TOKENIZER_SHA256,
+        },
+        **IDENTITIES,
+    )
+
+    assert plan["scheduler"] == {
+        "Nodes": 2,
+        "Partition": "batch",
+        "QOS": "debug",
+        "TimeLimit": "02:00:00",
+    }
+    assert plan["payload"]["parameters"] == {
+        "foreground_idle_fraction_strict_max": 0.10,
+        "freeze_to_latest_seconds_max": 420,
+        "local_owned_latency_seconds_max": 1,
+        "local_steps": 40,
+        "measured_windows_per_trainer": 10,
+        "minimum_atomic_commits": 10,
+        "progress_deadline_seconds": 2700,
+        "real_trainers": 16,
+        "steady_state_cadence_multiple_max": 1.25,
+        "trainers_per_node": 8,
+        "warmup_windows_per_trainer": 2,
+    }
+    assert plan["payload"]["training_inputs"] == {
+        "data_identity_digest": "7" * 64,
+        "full_layout_gate_sha256": "b" * 64,
+        "native_build_manifest_sha256": "a" * 64,
+        "seed_config": str(repo / "configs/frontier/e97_async_256.yaml"),
+        "seed_attestation_sha256": "6" * 64,
+        "source_commit": "9" * 40,
+        "tokenizer_sha256": TOKENIZER_SHA256,
+        "train_args": str(
+            repo / "configs/frontier/e97_resilient_split_role_flat.json"),
+        "train_args_sha256": "c" * 64,
+    }
+    assert "--time=02:00:00" in plan["command"]
+    assert "--network=job_vni" in plan["command"]
+    assert f"--chdir={repo}" in plan["command"]
+    assert f"--output={run_dir / 'slurm-%j.out'}" in plan["command"]
+    assert f"--error={run_dir / 'slurm-%j.err'}" in plan["command"]
+    exports = next(
+        item.removeprefix("--export=")
+        for item in plan["command"]
+        if item.startswith("--export=")
+    ).split(",")
+    assert "RESILIENT_E97_ACCEPTANCE_PHASE=clean-overlap" in exports
+    assert "RESILIENT_E97_GENERATIONS=12" in exports
+    assert "RESILIENT_E97_PROGRESS_DEADLINE_S=2700" in exports
+    assert "RESILIENT_E97_GENERATION_DEADLINE_S=420" in exports
+    assert "RESILIENT_E97_MAX_RESTARTS=0" in exports
+    assert "RESILIENT_E97_STARTUP_SMOKE=0" in exports
+    assert "RESILIENT_E97_REQUESTED_WALLTIME=02:00:00" in exports
+    assert "RESILIENT_E97_COMPUTE_NODE_NETWORK_FETCHES=0" in exports
+    assert "NDP_BUILD_MANIFEST=" + str(
+        tmp_path / "native-artifacts.json") in exports
+    assert "NDP_FULL_LAYOUT_GATE_JSON=" + str(
+        tmp_path / "full-layout-gate.json") in exports
+    assert "RESILIENT_E97_SEED_CACHE=" + str(
+        tmp_path / f"sha256-{SEED_SHA256}.pt") in exports
+    assert "RESILIENT_E97_TIKTOKEN_SHA256=" + TOKENIZER_SHA256 in exports
 
 
 def test_v21_scale_rejects_missing_authorization_and_wrong_predecessor(

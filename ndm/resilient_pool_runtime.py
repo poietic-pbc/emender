@@ -156,6 +156,12 @@ class PoolControlConfig:
     scale_stable_diversity_floor: int | None = None
     scale_per_ready_worker_token_floor: int | None = None
     scale_closure_digest: str = ""
+    committed_generation: int = 0
+    committed_receipt_digest: str = ""
+    committed_accepted_tokens: int = 0
+    committed_manifest_digest: str = ""
+    committed_result_root: str = ""
+    committed_apply_receipts: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         GenerationClosePolicy(self.q_min, self.t_min, self.ready_fraction)
@@ -170,6 +176,41 @@ class PoolControlConfig:
                 raise ValueError("native pool requires an attested artifact bundle digest")
         elif self.artifact_bundle_sha256:
             raise ValueError("Python TCP debug pool cannot claim a native artifact bundle")
+        if (
+            self.committed_generation < 0
+            or self.committed_accepted_tokens < 0
+            or (
+                self.committed_generation > 0
+                and any((
+                    self.committed_receipt_digest,
+                    self.committed_manifest_digest,
+                    self.committed_result_root,
+                ))
+                and any(
+                    len(value) != 64 for value in (
+                        self.committed_receipt_digest,
+                        self.committed_manifest_digest,
+                        self.committed_result_root,
+                    )
+                )
+            )
+            or (
+                self.committed_generation == 0
+                and any((
+                    self.committed_receipt_digest,
+                    self.committed_manifest_digest,
+                    self.committed_result_root,
+                ))
+            )
+            or any(
+                not node_id or len(receipt_digest) != 64
+                for node_id, receipt_digest in self.committed_apply_receipts
+            )
+            or len({
+                node_id for node_id, _ in self.committed_apply_receipts
+            }) != len(self.committed_apply_receipts)
+        ):
+            raise ValueError("initial peer commit authority is invalid")
         scale = (
             self.scale_close_offset_s,
             self.scale_stable_diversity_floor,
@@ -209,6 +250,8 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
     def __init__(self, address: tuple[str, int], config: PoolControlConfig, *,
                  evidence_root: str | Path):
         self.config = config
+        self.strict_commit_authority = (
+            config.dataplane_backend != PYTHON_TCP_DEBUG)
         self.evidence_root = Path(evidence_root)
         self.membership = PeerMembership(StageDeadlines(
             config.slo.first_heartbeat_s,
@@ -226,6 +269,16 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
         self.route_readiness: dict[
             tuple[int, int, tuple[str, str]], dict[str, tuple[str, str]]
         ] = {}
+        self.committed_generation = config.committed_generation
+        self.committed_receipt_digest = config.committed_receipt_digest
+        self.committed_accepted_tokens = config.committed_accepted_tokens
+        self.committed_result_root = config.committed_result_root
+        self.committed_manifest_digest = config.committed_manifest_digest
+        self.commit_history: dict[int, dict[str, object]] = {}
+        self.node_applies: dict[tuple[int, str], dict[str, object]] = {}
+        self.recovered_apply_receipts = dict(config.committed_apply_receipts)
+        self.pending_recoveries: dict[str, str] = {}
+        self.apply_required_generation: int | None = None
         self._lock = threading.RLock()
         super().__init__(address, _ControlHandler)
 
@@ -250,6 +303,14 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
                 return self._owner_result(request)
             if op == "result_root":
                 return self._result_root(request)
+            if op == "commit":
+                return self._commit(request)
+            if op == "commit_state":
+                return self._commit_state(request)
+            if op == "recover":
+                return self._recover(request)
+            if op == "node_apply":
+                return self._node_apply(request)
             if op == "expire":
                 return self._expire(request)
             raise ValueError("unsupported pool control operation")
@@ -275,6 +336,19 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
                     != self.config.artifact_bundle_sha256):
                 raise ValueError("READY native endpoint run/fence/artifact mismatch")
         generation = int(request["generation"])
+        if self.strict_commit_authority and generation != self.committed_generation:
+            raise ValueError(
+                "READY generation differs from native peer commit authority")
+        if self.strict_commit_authority and self.apply_required_generation == generation:
+            apply_digest = str(request.get("apply_receipt_digest", ""))
+            applied = self.node_applies.get((generation, endpoint.worker_id))
+            if (
+                applied is None
+                or applied.get("receipt_digest") != apply_digest
+                or applied.get("incarnation") != endpoint.incarnation
+            ):
+                raise ValueError(
+                    "READY requires this incarnation's atomic node-apply receipt")
         current = self.membership.records.get(endpoint.worker_id)
         if (current is not None and current.incarnation == endpoint.incarnation
                 and current.state is PeerState.READY):
@@ -298,11 +372,15 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
             self.seen_incarnations.setdefault(endpoint.worker_id, set()).add(
                 endpoint.incarnation)
         self.endpoints[(endpoint.worker_id, endpoint.incarnation)] = endpoint
+        self.pending_recoveries.pop(endpoint.worker_id, None)
         return {"status": "READY", "worker_id": endpoint.worker_id,
                 "incarnation": endpoint.incarnation, "generation": generation}
 
     def _open(self, request: Mapping[str, object]) -> dict[str, object]:
         generation, attempt = int(request["generation"]), int(request["attempt"])
+        if self.strict_commit_authority and generation != self.committed_generation:
+            raise ValueError(
+                "generation open does not extend native peer commit authority")
         key = (generation, attempt)
         prior = self.snapshots.get(key)
         if prior is not None:
@@ -428,6 +506,166 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
         if record is not None and record.incarnation == incarnation and record.state is PeerState.READY:
             self.membership.drain(worker_id, incarnation)
         return {"status": "DRAINING", "worker_id": worker_id}
+
+    def _commit(self, request: Mapping[str, object]) -> dict[str, object]:
+        """Advance volatile peer authority only after an immutable receipt."""
+        result_generation = int(request["result_generation"])
+        source_generation = result_generation - 1
+        attempt = int(request["attempt"])
+        if result_generation <= 0:
+            raise ValueError("peer commit generation must be positive")
+        record = {
+            "result_generation": result_generation,
+            "source_generation": source_generation,
+            "attempt": attempt,
+            "receipt_digest": str(request["receipt_digest"]),
+            "previous_receipt_digest": str(
+                request.get("previous_receipt_digest", "")),
+            "manifest_digest": str(request["manifest_digest"]),
+            "result_root": str(request["result_root"]),
+            "accepted_tokens": int(request["accepted_tokens"]),
+        }
+        if any(
+            len(str(record[field])) != 64
+            for field in ("receipt_digest", "manifest_digest", "result_root")
+        ):
+            raise ValueError("peer commit digest identity is invalid")
+        prior = self.commit_history.get(result_generation)
+        if prior is not None:
+            if prior != record:
+                raise ValueError("conflicting peer commit replay")
+            return {"status": "committed", **prior}
+        if record["previous_receipt_digest"] != self.committed_receipt_digest:
+            raise ValueError("peer commit does not extend current receipt")
+        if (
+            source_generation != self.committed_generation
+            or record["accepted_tokens"] < self.committed_accepted_tokens
+        ):
+            raise ValueError("peer commit generation/token clock is stale")
+        admission = self.admissions.get((source_generation, attempt))
+        if (
+            admission is None
+            or admission.close_result is None
+            or admission.close_result.status != "commit_ready"
+        ):
+            raise RuntimeError("peer commit cannot precede frozen generation")
+        roots = self.result_roots.get((source_generation, attempt), {})
+        accepted = {
+            item.worker_id for item in admission.close_result.frozen_identities
+        }
+        if set(roots) != accepted:
+            raise RuntimeError("peer commit cannot precede native root agreement")
+        agreed_roots = {str(item["result_root"]) for item in roots.values()}
+        if agreed_roots != {record["result_root"]}:
+            raise ValueError("peer commit receipt differs from native result")
+        self.committed_generation = result_generation
+        self.committed_receipt_digest = str(record["receipt_digest"])
+        self.committed_manifest_digest = str(record["manifest_digest"])
+        self.committed_result_root = str(record["result_root"])
+        self.committed_accepted_tokens = int(record["accepted_tokens"])
+        self.commit_history[result_generation] = record
+        self.apply_required_generation = result_generation
+        return {"status": "committed", **record}
+
+    def _commit_state(self, request: Mapping[str, object]) -> dict[str, object]:
+        """Expose volatile commit state for bounded point-to-point discovery."""
+        generation = int(request["result_generation"])
+        if generation <= 0:
+            raise ValueError("peer commit generation must be positive")
+        record = self.commit_history.get(generation)
+        if record is not None:
+            return {"status": "committed", **record}
+        if generation <= self.committed_generation:
+            raise ValueError("requested peer commit is absent below current state")
+        if generation != self.committed_generation + 1:
+            raise ValueError("requested peer commit is discontinuous")
+        return {
+            "status": "pending",
+            "result_generation": generation,
+            "current_generation": self.committed_generation,
+        }
+
+    def _recover(self, request: Mapping[str, object]) -> dict[str, object]:
+        """Return the bounded volatile state a peer must match before READY."""
+        worker_id = str(request.get("worker_id", ""))
+        incarnation = str(request.get("incarnation", ""))
+        if not worker_id or not incarnation:
+            raise ValueError("recovery handshake requires a peer incarnation")
+        current = self.membership.records.get(worker_id)
+        if (
+            incarnation in self.seen_incarnations.get(worker_id, set())
+            and (current is None or current.incarnation != incarnation)
+        ):
+            raise ValueError("stale incarnation recovery handshake rejected")
+        pending = self.pending_recoveries.get(worker_id)
+        if pending is not None and pending != incarnation:
+            raise ValueError("conflicting recovery incarnation rejected")
+        self.pending_recoveries[worker_id] = incarnation
+        known_generation = int(
+            request.get("known_generation", self.committed_generation))
+        known_receipt = str(
+            request.get("known_receipt_digest", self.committed_receipt_digest))
+        if (
+            known_generation != self.committed_generation
+            or known_receipt != self.committed_receipt_digest
+        ):
+            raise ValueError(
+                "peer recovery state differs from commit authority")
+        return {
+            "status": "recover",
+            "generation": self.committed_generation,
+            "receipt_digest": self.committed_receipt_digest,
+            "manifest_digest": self.committed_manifest_digest,
+            "result_root": self.committed_result_root,
+            "accepted_tokens": self.committed_accepted_tokens,
+            "apply_receipts": [
+                {"worker_id": node_id, "receipt_digest": digest}
+                for node_id, digest in sorted(
+                    self.recovered_apply_receipts.items())
+            ],
+            "requires_node_apply":
+                self.apply_required_generation == self.committed_generation,
+        }
+
+    def _node_apply(self, request: Mapping[str, object]) -> dict[str, object]:
+        """Admit one immutable all-eight-trainer receipt for current commit."""
+        generation = int(request["generation"])
+        worker_id = str(request["worker_id"])
+        incarnation = str(request["incarnation"])
+        receipt_digest = str(request["receipt_digest"])
+        commit_digest = str(request["commit_receipt_digest"])
+        trainer_count = int(request["trainer_count"])
+        current = self.membership.records.get(worker_id)
+        admitted_incarnation = (
+            current is not None and current.incarnation == incarnation)
+        recovering_incarnation = (
+            self.pending_recoveries.get(worker_id) == incarnation)
+        if (
+            generation != self.committed_generation
+            or commit_digest != self.committed_receipt_digest
+            or len(receipt_digest) != 64
+            or trainer_count != 8
+            or not (admitted_incarnation or recovering_incarnation)
+        ):
+            raise ValueError("atomic node-apply peer receipt is invalid")
+        record = {
+            "incarnation": incarnation,
+            "receipt_digest": receipt_digest,
+            "commit_receipt_digest": commit_digest,
+            "trainer_count": trainer_count,
+        }
+        key = (generation, worker_id)
+        prior = self.node_applies.get(key)
+        if prior is not None and prior != record:
+            raise ValueError("conflicting atomic node-apply peer receipt")
+        self.node_applies[key] = record
+        return {
+            "status": "node_applied",
+            "generation": generation,
+            "worker_id": worker_id,
+            "incarnation": incarnation,
+            "receipt_digest": receipt_digest,
+        }
 
     def _route_ready(self, request: Mapping[str, object]) -> dict[str, object]:
         """Release one native peer pair only after both routes are installed.
@@ -597,7 +835,8 @@ class PoolControlClient:
 
     def ready(self, endpoint: OwnerEndpoint, generation: int, *,
               run_id: str | None = None,
-              fence: int | None = None) -> dict[str, object]:
+              fence: int | None = None,
+              apply_receipt_digest: str = "") -> dict[str, object]:
         if run_id is not None:
             self.run_id = run_id
         elif self.run_id is None:
@@ -606,7 +845,70 @@ class PoolControlClient:
             self.fence = int(fence)
         if self.fence is None:
             raise ValueError("pool control client must bind the allocation fence")
-        return self._rpc("ready", **asdict(endpoint), generation=generation)
+        return self._rpc(
+            "ready", **asdict(endpoint), generation=generation,
+            apply_receipt_digest=apply_receipt_digest)
+
+    def recover(self, *, worker_id: str, incarnation: str,
+                known_generation: int,
+                known_receipt_digest: str) -> dict[str, object]:
+        return self._rpc(
+            "recover",
+            worker_id=worker_id,
+            incarnation=incarnation,
+            known_generation=known_generation,
+            known_receipt_digest=known_receipt_digest,
+        )
+
+    def commit_authority(
+            self, *, result_generation: int, attempt: int,
+            receipt_digest: str, previous_receipt_digest: str,
+            manifest_digest: str, result_root: str, accepted_tokens: int,
+            ) -> dict[str, object]:
+        return self._rpc(
+            "commit",
+            result_generation=result_generation,
+            attempt=attempt,
+            receipt_digest=receipt_digest,
+            previous_receipt_digest=previous_receipt_digest,
+            manifest_digest=manifest_digest,
+            result_root=result_root,
+            accepted_tokens=accepted_tokens,
+        )
+
+    def wait_for_commit(
+            self, *, result_generation: int, deadline: float,
+            ) -> dict[str, object]:
+        """Wait on peer memory, never a shared manifest directory."""
+        last: dict[str, object] = {}
+        while time.monotonic() < deadline:
+            last = self._rpc(
+                "commit_state", result_generation=result_generation)
+            if last.get("status") == "committed":
+                return last
+            time.sleep(min(.02, max(0.0, deadline - time.monotonic())))
+        raise TimeoutError(
+            "native peer commit deadline expired"
+            + (
+                ""
+                if not last
+                else f" at generation {last.get('current_generation', -1)}"
+            )
+        )
+
+    def node_applied(
+            self, *, generation: int, worker_id: str, incarnation: str,
+            receipt_digest: str, commit_receipt_digest: str,
+            trainer_count: int = 8) -> dict[str, object]:
+        return self._rpc(
+            "node_apply",
+            generation=generation,
+            worker_id=worker_id,
+            incarnation=incarnation,
+            receipt_digest=receipt_digest,
+            commit_receipt_digest=commit_receipt_digest,
+            trainer_count=trainer_count,
+        )
 
     def open_generation(self, generation: int, attempt: int, *,
                         deadline: float) -> dict[str, object]:

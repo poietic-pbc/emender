@@ -287,7 +287,8 @@ def test_async_v21_owner_results_use_exact_tokens_only(tmp_path):
         PoolControlConfig("async-v2", 11, q_min=2, t_min=3_934_080,
                           ready_fraction=None, base_digest="base",
                           policy_digest="async-v2-policy",
-                          layout_digest="layout", code_digest="code", slo=slo),
+                          layout_digest="layout", code_digest="code", slo=slo,
+                          committed_generation=4),
         evidence_root=tmp_path / "evidence")
     threading.Thread(target=control.serve_forever, daemon=True).start()
     clients = [
@@ -391,6 +392,73 @@ def test_async_v21_owner_results_use_exact_tokens_only(tmp_path):
         assert {item["status"] for item in validated.values()} == {"validated"}
         assert validated[0]["global_weight"] == exact_tokens
         assert admission.close_result.accepted_tokens == exact_tokens
+
+        assert clients[1]._rpc(
+            "commit_state", result_generation=5) == {
+                "status": "pending",
+                "result_generation": 5,
+                "current_generation": 4,
+            }
+        commit = clients[0].commit_authority(
+            result_generation=5,
+            attempt=2,
+            receipt_digest="61" * 32,
+            previous_receipt_digest="",
+            manifest_digest="62" * 32,
+            result_root="50" * 32,
+            accepted_tokens=exact_tokens,
+        )
+        assert commit["status"] == "committed"
+        assert clients[1].commit_authority(
+            result_generation=5,
+            attempt=2,
+            receipt_digest="61" * 32,
+            previous_receipt_digest="",
+            manifest_digest="62" * 32,
+            result_root="50" * 32,
+            accepted_tokens=exact_tokens,
+        ) == commit
+        assert clients[1].wait_for_commit(
+            result_generation=5,
+            deadline=time.monotonic() + 1,
+        ) == commit
+        recovery = clients[0].recover(
+            worker_id="n0",
+            incarnation="i0-new",
+            known_generation=5,
+            known_receipt_digest="61" * 32,
+        )
+        assert recovery == {
+            "status": "recover",
+            "generation": 5,
+            "receipt_digest": "61" * 32,
+            "manifest_digest": "62" * 32,
+            "result_root": "50" * 32,
+            "accepted_tokens": exact_tokens,
+            "apply_receipts": [],
+            "requires_node_apply": True,
+        }
+        applied = clients[0].node_applied(
+            generation=5,
+            worker_id="n0",
+            incarnation="i0-new",
+            receipt_digest="63" * 32,
+            commit_receipt_digest="61" * 32,
+        )
+        assert applied["status"] == "node_applied"
+        clients[0].ready(
+            OwnerEndpoint("n0", "i0-new", "127.0.0.1", 30002),
+            generation=5,
+            apply_receipt_digest="63" * 32,
+        )
+        with pytest.raises(
+                RuntimeError, match="stale incarnation recovery"):
+            clients[0].recover(
+                worker_id="n0",
+                incarnation="i0",
+                known_generation=5,
+                known_receipt_digest="61" * 32,
+            )
     finally:
         control.shutdown()
         control.server_close()

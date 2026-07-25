@@ -18,7 +18,7 @@ from ndm.resilient_e97_runtime import (
     apply_delta, apply_delta_with_correction_ledger, assert_node_local_path,
     finalize_checkpoint, flatten_tensors, outer_state_migration,
 )
-from ndm.fenced_admission import FenceRejected, SQLiteFencedControlStore
+from ndm.manifest_peer_control import FenceRejected
 from ndm.native_e97_runtime import GenerationMetadata, SCHEMA, state_digest
 
 
@@ -213,29 +213,26 @@ def test_restarted_trainer_resolves_newer_authoritative_handoff(tmp_path):
         "manifest_sha256": digest,
     }))
 
-    class Store:
-        def assert_current(self, lease):
-            assert lease == "lease"
-
-        def read_publication(self, run_id, namespace, key):
-            assert (run_id, namespace, key) == ("run", "latest", "authoritative")
-            return {"generation": 6, "fence": 4,
-                    "manifest_sha256": digest}
+    class Authority:
+        def current_commit(self, claim):
+            assert claim == "claim"
+            return SimpleNamespace(
+                generation=6,
+                manifest_path=committed.resolve(),
+                manifest_sha256=digest,
+            )
 
     args = SimpleNamespace(
         resume_handoff=str(configured), run_id="run",
         initial_generation=5, generations=3,
     )
     assert role._authoritative_trainer_resume_handoff(
-        tmp_path, args, (Store(), "lease")) == committed.resolve()
+        tmp_path, args, (Authority(), "claim")) == committed.resolve()
 
-    (handoff_root / "latest.json").write_text(json.dumps({
-        "generation": 6, "fence": 4, "manifest": str(committed),
-        "manifest_sha256": "0" * 64,
-    }))
+    committed.write_text('{"generation":6,"corrupt":true}\n')
     with pytest.raises(ValueError, match="not authoritative"):
         role._authoritative_trainer_resume_handoff(
-            tmp_path, args, (Store(), "lease"))
+            tmp_path, args, (Authority(), "claim"))
 
 
 def test_atomic_cohort_recovery_rejects_stale_fence_incarnation_and_generation(
@@ -274,7 +271,7 @@ def test_atomic_cohort_recovery_rejects_stale_fence_incarnation_and_generation(
                 generation=1, admitted_statuses=("reconstructed",))
 
 
-def test_async_v2_boundary_rejects_latest_that_differs_from_fenced_cas(
+def test_async_v2_boundary_rejects_latest_that_differs_from_commit_receipt(
         tmp_path):
     from scripts.frontier import resilient_e97_role as role
 
@@ -295,22 +292,38 @@ def test_async_v2_boundary_rejects_latest_that_differs_from_fenced_cas(
         "manifest_sha256": digest,
     }))
 
-    class Store:
-        def assert_current(self, lease):
-            assert lease == "lease"
+    bulk_root = tmp_path / "bulk"
+    control = bulk_root / "run" / "node-0" / "control"
+    control.mkdir(parents=True)
+    (control / "peer-commit-00000001.json").write_text(json.dumps({
+        "generation": 1,
+        "fence": 1,
+        "commit_receipt_digest": "1" * 64,
+    }))
 
-        def read_publication(self, *_args):
-            return {
+    class Authority:
+        def current_commit(self, claim):
+            assert claim == "claim"
+            return SimpleNamespace(
+                generation=1,
+                allocation_fence=1,
+                manifest_sha256="0" * 64,
+                receipt_digest="1" * 64,
+                pointer=lambda: {
                 "generation": 1,
                 "fence": 1,
-                "manifest_sha256": "0" * 64,
-            }
+                "manifest": str(manifest),
+                "manifest_sha256": digest,
+                },
+            )
 
-    with pytest.raises(ValueError, match="fenced authoritative CAS"):
+    with pytest.raises(ValueError, match="immutable commit authority"):
         role._reload_verified_async_v2_latest(
             tmp_path,
-            SimpleNamespace(run_id="run", coordinator_epoch=1),
-            (Store(), "lease"),
+            SimpleNamespace(
+                run_id="run", coordinator_epoch=1,
+                bulk_root=str(bulk_root)),
+            (Authority(), "claim"),
             generation=1,
             deadline=time.monotonic() + 1,
         )
@@ -1105,8 +1118,7 @@ def test_production_trainer_entrypoint_overlaps_blocked_native_result_and_applie
         stage_trace.append(f"latest_cas_g{generation}")
         return latest
 
-    monkeypatch.setattr(role, "_fenced_control",
-                        lambda _args: (store, lease))
+    monkeypatch.setattr(role, "_peer_authority", lambda _args: None)
     monkeypatch.setattr(
         role, "_dataplane_policy",
         lambda _args: (NATIVE_TEST, False, False))
@@ -1217,7 +1229,10 @@ def test_production_trainer_entrypoint_overlaps_blocked_native_result_and_applie
     assert translated[1]["correction"] == pytest.approx(0.0, abs=1e-5)
     assert translated[1]["after"] == pytest.approx(
         (3.0, 3.0), abs=1e-5)
-    assert store.checks >= 6
+    # The trainer lane performs no shared-store liveness polling.  Production
+    # fencing is fixed in its native peer identity; only the checkpoint
+    # publisher touches immutable restart authority.
+    assert store.checks == 0
 
     records = [
         json.loads(line)
@@ -1667,14 +1682,21 @@ def test_final_canonical_seed_can_initialize_approved_outer_policy():
 
 
 def test_fenced_atomic_global_commit_and_newer_allocation_restart(tmp_path):
-    now = [100.0]
-    store = SQLiteFencedControlStore(tmp_path / "pool.sqlite", clock=lambda: now[0])
-    old = store.acquire(run_id="run", allocation_id="job-a", incarnation="a",
-                        protocol_id="pool-v1", config_id="cfg", ttl_s=10)
-    checkpoint = tmp_path / "generation-1.pt"
+    from ndm.manifest_peer_control import ManifestPeerAuthority
+
+    authority = ManifestPeerAuthority(tmp_path)
+    old = authority.claim(
+        run_id="run", allocation_id="job-a", incarnation="a", fence=1,
+        protocol_id="pool-v1", config_id="cfg")
+    outer_one = {
+        "mode": "delta_sgd", "eta_outer": 1.0,
+        "step": 1, "accepted_tokens": 17,
+    }
+    checkpoint = tmp_path / "checkpoints/generation-1.pt"
+    checkpoint.parent.mkdir()
     torch.save({"model_state_dict": {"x": torch.tensor([3.0])},
                 "optimizer_state_dict": {"state": {}},
-                "outer_update_state": {"algorithm": "weighted-mean"},
+                "outer_update_state": outer_one,
                 "step": 40, "generation": 1, "run_id": "run", "source_id": "seed",
                 "payload_id": "layout", "coordinator_epoch": old.fence,
                 "accepted_tokens": 17}, checkpoint)
@@ -1682,60 +1704,79 @@ def test_fenced_atomic_global_commit_and_newer_allocation_restart(tmp_path):
         tmp_path, checkpoint, run_id="run", generation=1, step=40,
         async_chain=["seed"], membership=["node-a:inc-a"],
         fence=LocalFence("run", 0, 0, old.fence, "layout"), source_id="seed",
-        code_id="code", outer_update_state={"algorithm": "weighted-mean"},
+        code_id="code", outer_update_state=outer_one,
         migration={"status": "restored"}, accepted_tokens=17,
         generation_identity={"run_id": "run", "generation": 0,
                              "attempt": 0, "fence": old.fence},
-        digests={"layout": "layout", "code": "code"},
-        control_store=store, allocation_lease=old)
-    latest = store.read_publication("run", "latest", "authoritative")
-    assert latest["generation"] == 1 and latest["accepted_tokens"] == 17
+        digests={
+            "layout": "layout", "code": "code",
+            "result_root": "11" * 32,
+            "previous_result_root": "00" * 32,
+        },
+        peer_authority=authority, allocation_claim=old)
+    latest = authority.current_commit(old)
+    assert latest.generation == 1 and latest.accepted_tokens == 17
     assert manifest.name == "generation-00000001-fence-00000001.json"
     assert json.loads(manifest.read_text())["membership"] == ["node-a:inc-a"]
     assert finalize_checkpoint(
         tmp_path, checkpoint, run_id="run", generation=1, step=40,
         async_chain=["seed"], membership=["node-a:inc-a"],
         fence=LocalFence("run", 0, 0, old.fence, "layout"), source_id="seed",
-        code_id="code", outer_update_state={"algorithm": "weighted-mean"},
+        code_id="code", outer_update_state=outer_one,
         migration={"status": "restored"}, accepted_tokens=17,
         generation_identity={"run_id": "run", "generation": 0,
                              "attempt": 0, "fence": old.fence},
-        digests={"layout": "layout", "code": "code"},
-        control_store=store, allocation_lease=old) == manifest
+        digests={
+            "layout": "layout", "code": "code",
+            "result_root": "11" * 32,
+            "previous_result_root": "00" * 32,
+        },
+        peer_authority=authority, allocation_claim=old) == manifest
 
-    now[0] = old.expires_at
-    new = store.acquire(run_id="run", allocation_id="job-b", incarnation="b",
-                        protocol_id="pool-v1", config_id="cfg", ttl_s=10)
+    new = authority.claim(
+        run_id="run", allocation_id="job-b", incarnation="b", fence=2,
+        protocol_id="pool-v1", config_id="cfg")
     assert new.fence == old.fence + 1
+    assert new.base_commit_digest == latest.receipt_digest
     loaded = torch.load(json.loads(manifest.read_text())["checkpoint"], weights_only=True)
     assert loaded["accepted_tokens"] == 17
-    stale_checkpoint = tmp_path / "generation-2.pt"
+    stale_checkpoint = tmp_path / "checkpoints/generation-2-stale.pt"
     torch.save({**loaded, "generation": 2, "step": 80}, stale_checkpoint)
     with pytest.raises(FenceRejected):
         finalize_checkpoint(
             tmp_path, stale_checkpoint, run_id="run", generation=2, step=80,
             async_chain=[], membership=[], fence=LocalFence("run", 1, 0, old.fence, "layout"),
             source_id="seed", code_id="code",
-            outer_update_state={"algorithm": "weighted-mean"}, migration={},
-            accepted_tokens=17, control_store=store, allocation_lease=old)
+            outer_update_state=outer_one, migration={},
+            accepted_tokens=17,
+            peer_authority=authority, allocation_claim=old)
     assert not (tmp_path / "handoff/generation-00000002.json").exists()
 
-    fresh_checkpoint = tmp_path / "generation-2-fresh.pt"
+    outer_two = {
+        "mode": "delta_sgd", "eta_outer": 1.0,
+        "step": 2, "accepted_tokens": 25,
+    }
+    fresh_checkpoint = tmp_path / "checkpoints/generation-2-fresh.pt"
     torch.save({**loaded, "generation": 2, "step": 80,
-                "coordinator_epoch": new.fence, "accepted_tokens": 25},
+                "coordinator_epoch": new.fence, "accepted_tokens": 25,
+                "outer_update_state": outer_two},
                fresh_checkpoint)
     continued = finalize_checkpoint(
         tmp_path, fresh_checkpoint, run_id="run", generation=2, step=80,
         async_chain=[str(manifest)], membership=["node-a:inc-b"],
         fence=LocalFence("run", 1, 0, new.fence, "layout"), source_id="seed",
-        code_id="code", outer_update_state={"algorithm": "weighted-mean"},
+        code_id="code", outer_update_state=outer_two,
         migration={"status": "restored"}, accepted_tokens=25,
         generation_identity={"run_id": "run", "generation": 1,
                              "attempt": 0, "fence": new.fence},
-        control_store=store, allocation_lease=new)
+        digests={
+            "result_root": "22" * 32,
+            "previous_result_root": "11" * 32,
+        },
+        peer_authority=authority, allocation_claim=new)
     assert continued.name == "generation-00000002-fence-00000002.json"
-    assert store.read_publication("run", "latest", "authoritative") == {
-        "accepted_tokens": 25, "fence": new.fence, "generation": 2,
-        "manifest": str(continued.resolve()),
-        "manifest_sha256": hashlib.sha256(continued.read_bytes()).hexdigest(),
-    }
+    recovered = authority.current_commit(new, verify_checkpoint=True)
+    assert recovered.generation == 2
+    assert recovered.accepted_tokens == 25
+    assert recovered.previous_receipt_digest == latest.receipt_digest
+    assert recovered.manifest_path == continued.resolve()

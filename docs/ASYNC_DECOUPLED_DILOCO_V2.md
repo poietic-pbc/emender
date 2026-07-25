@@ -7,8 +7,8 @@ production use, or a 4+ node run.
 
 **Authority:** This ADR specializes
 [Resilient DiLoCo Compute Pool](RESILIENT_DILOCO_COMPUTE_POOL.md). That
-authority still owns leases, READY membership, fencing, atomic publication,
-and recovery. [Native resilient DiLoCo data plane v1](NATIVE_RESILIENT_DILOCO_DATAPLANE.md)
+authority still owns scheduler-fenced claims, READY membership, fencing,
+atomic publication, and recovery. [Native resilient DiLoCo data plane v1](NATIVE_RESILIENT_DILOCO_DATAPLANE.md)
 still owns the compiled point-to-point transport invariants. The only
 normative definitions and R/NDP crosswalk for the stable v2.1 requirement
 namespace are the V21S01–V21S17 rows in the
@@ -163,9 +163,11 @@ commit, or checkpoint before continuing within the lag and capacity bounds.
 They never mutate an owned descriptor.
 
 Every committed result enters one capacity-one, verified-latest mailbox per
-node. Immutable state and manifest MUST be reload-verified and the
-current-fence authoritative `latest` CAS MUST succeed before mailbox
-publication. A newer result atomically replaces an unread older result; equal
+node. Immutable state and manifest MUST be reload-verified, native peers MUST
+agree the exact next result/token identity, and a current-claim digest-linked
+commit receipt MUST exist before mailbox publication. `latest.json` is
+compatibility telemetry, never authority. A newer result atomically replaces
+an unread older result; equal
 identical bytes are idempotent; older, conflicting, corrupt, nonfinite, or
 wrong-fence results are rejected. One bounded replacement staging view may be
 used while a reader holds the visible view; otherwise publication
@@ -242,9 +244,11 @@ pauses; it cannot invent one-node authority.
 The production dense path remains one persistent model-free C++17 service per
 node, service-allocated `memfd` or XPMEM handoff, deterministic native
 binary64 accumulation, and bounded libfabric `FI_EP_RDM` point-to-point
-traffic with exact Frontier provider `cxi`. Python owns policy, lease/fence,
-READY membership, group closure, accepted identities, outer apply, checkpoint
-publication, and Slurm supervision. The elastic path MUST NOT initialize MPI,
+traffic with exact Frontier provider `cxi`. The native peer-control protocol
+owns live fence/incarnation validation, READY membership, group closure,
+accepted identities, exact-once commit state, node apply, and recovery
+handshakes. Python owns scheduler adaptation, outer/checkpoint policy and
+immutable publication, and Slurm supervision. The elastic path MUST NOT initialize MPI,
 wait on all launched/READY ranks, use a failure-sensitive collective, send
 dense bytes through Python or Lustre, or introduce a central full-model
 broker.
@@ -253,11 +257,15 @@ Each successful transition publishes one immutable fenced bundle containing
 `S_(g+1)`, `O_(g+1)`, prior state digest, frozen identities, exact tokens, all
 lag clocks known at commit, drops/rejections, membership, node-apply evidence,
 result roots, and policy/layout/code digests. The bundle is reload-verified
-before the current holder advances authoritative `latest`. A native result,
+before a digest-linked receipt extends the current claim's exact commit
+lineage and native peers acknowledge it. A native result,
 mailbox insertion, trainer marker, or checkpoint file alone is not a commit.
-Fresh-allocation recovery acquires a newer fence, restores the latest complete
-model, outer step, and accepted-token clock, rejects all old-fence volatile
-state, and starts all trainers with fresh local inner state.
+Fresh-allocation recovery publishes a newer scheduler-fenced claim anchored to
+the exact prior receipt, restores the complete model, outer step,
+accepted-token clock, result root, fence/incarnation, and apply evidence,
+rejects all old-fence volatile state, rejoins through the native peer recovery
+handshake, and starts trainers with fresh local inner state. No database or
+mutable latest pointer bootstraps recovery.
 
 Cold start is fixed to the retained final E97 authority:
 

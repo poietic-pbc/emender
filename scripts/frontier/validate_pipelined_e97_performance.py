@@ -48,6 +48,7 @@ REQUIRED_STAGE_CLASSES = frozenset({
     "native_trainer_apply",
     "checkpoint_publication",
     "control_handoff_integrity",
+    "fenced_atomic_commit",
 })
 
 
@@ -372,6 +373,14 @@ def _correctness(records: list[dict[str, Any]], *, fence: int) -> dict[str, Any]
 def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
     policy, fence = _policy(records)
     backgrounds = _background(records, fence=fence)
+    atomic_commit_versions = {
+        int(value["commit_global_version"])
+        for value in backgrounds
+        if value["stage"] == "fenced_atomic_commit"
+    }
+    if len(atomic_commit_versions) < 10:
+        raise ValueError(
+            "clean promotion requires at least ten distinct atomic commits")
 
     trainer: dict[str, dict[int, dict[str, list[dict[str, Any]]]]] = {}
     for value in records:
@@ -525,6 +534,7 @@ def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
         "status": "passed",
         "policy": policy,
         "allocation_fence": fence,
+        "atomic_commits": len(atomic_commit_versions),
         "measured_trainers": len(trainer),
         "warmup_windows_per_trainer": WARMUP_WINDOWS,
         "measured_windows_per_trainer": MEASURED_WINDOWS,
