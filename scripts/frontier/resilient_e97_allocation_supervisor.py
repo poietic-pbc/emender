@@ -508,18 +508,16 @@ class AllocationSupervisor:
             return "progress_deadline"
         admitted_at = float(os.environ.get("RESILIENT_E97_ALLOCATION_ADMITTED_AT", now))
         initial_generation = int(os.environ.get("RESILIENT_E97_INITIAL_GENERATION", "0"))
-        # This is a hot diagnostic/liveness loop.  Native peer control already
-        # made the manager's all-eight-trainer apply receipt a prerequisite for
-        # this stage marker, so do not poll immutable manifests (and never a
-        # shared control store) here.  Receipt-chain reads are reserved for an
-        # actual cohort/fresh-allocation recovery.
+        # This is a hot diagnostic/liveness loop.  The manager publishes this
+        # evidence only after native peer control agrees with the immutable
+        # commit receipt.  Do not poll immutable manifests (and never a shared
+        # control store) here. Receipt-chain reads are reserved for an actual
+        # cohort/fresh-allocation recovery.
         peer_committed_generation = (
             int(state.get("authoritative_generation", initial_generation))
             if (
                 child.role in {"manager", "node-supervisor"}
-                and stage == "published_node_applied"
                 and len(str(state.get("commit_receipt_digest", ""))) == 64
-                and len(str(state.get("node_apply_receipt_digest", ""))) == 64
             )
             else initial_generation
         )

@@ -2318,6 +2318,13 @@ def _native_manager(args) -> int:
                         "accepted_tokens": commit_receipt.accepted_tokens,
                         "source": "native_peer_memory",
                     })
+            committed_evidence = (
+                {
+                    "authoritative_generation": generation + 1,
+                    "commit_receipt_digest": commit_receipt.receipt_digest,
+                }
+                if commit_receipt is not None else {}
+            )
             # Shared-result reads, checkpoint I/O, hashing, and reload
             # verification are background preparation.  The one service-owned
             # aggregate has a capacity-one node-local reader credit; durable
@@ -2326,7 +2333,7 @@ def _native_manager(args) -> int:
             # every trainer has retained its fenced preparation receipt.
             heartbeat(bulk, identity, generation=generation,
                       step=generation * args.local_steps, loss=None,
-                      stage="result_preparation")
+                      stage="result_preparation", **committed_evidence)
             preparation_deadline = (
                 time.monotonic() + min(args.deadline_s, 420.0))
             prepared_trainers = []
@@ -2361,7 +2368,7 @@ def _native_manager(args) -> int:
                 })
             heartbeat(bulk, identity, generation=generation,
                       step=generation * args.local_steps, loss=None,
-                      stage="peer_apply")
+                      stage="peer_apply", **committed_evidence)
             atomic_apply_deadline = (
                 apply_release_started + ASYNC_V21_ALL_EIGHT_APPLY_S)
             node_apply = AtomicEightTrainerApply(

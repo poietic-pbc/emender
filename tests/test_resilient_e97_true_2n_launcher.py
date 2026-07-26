@@ -1239,8 +1239,24 @@ def test_live_diagnostic_uses_peer_commit_and_restart_checks_immutable_checkpoin
     assert supervisor._deadline_reason(
         child, 800) == "first_atomic_generation_deadline"
 
-    # The hot supervisor diagnostic consumes the manager's native-peer
-    # commit/apply acknowledgement and performs no shared-manifest scan.
+    # The 720-second authority is specifically the first committed `latest`,
+    # not the later all-eight live-model apply.  Once the manager has verified
+    # the immutable receipt through peer control, its authenticated progress
+    # state must satisfy that deadline while bounded result preparation and
+    # atomic apply continue.
+    state.write_text(json.dumps({
+        "heartbeat_time": 800,
+        "progress_time": 800,
+        "generation": 0,
+        "authoritative_generation": 1,
+        "stage": "result_preparation",
+        "commit_receipt_digest": receipt.receipt_digest,
+    }))
+    assert supervisor._deadline_reason(child, 800) is None
+
+    # The later node-apply acknowledgement remains valid evidence too.  The
+    # hot supervisor diagnostic consumes manager-published peer evidence and
+    # performs no shared-manifest scan in either phase.
     state.write_text(json.dumps({
         "heartbeat_time": 800,
         "progress_time": 800,
@@ -1390,6 +1406,7 @@ def test_native_all_eight_apply_releases_only_after_bounded_serial_preparation()
         role.index("def _native_manager(args) -> int:"):
         role.index("def manager(args) -> int:")
     ]
+    committed_evidence = manager.index("committed_evidence =")
     preparation_stage = manager.index('stage="result_preparation"')
     ready_wait = manager.index(
         'f"native-apply-ready-{generation:08d}-{rank:02d}.json"',
@@ -1404,7 +1421,18 @@ def test_native_all_eight_apply_releases_only_after_bounded_serial_preparation()
         'control / f"native-applied-{generation:08d}-{rank:02d}.json"',
         apply_stage,
     )
-    assert preparation_stage < ready_wait < release < apply_stage < receipt_wait
+    assert (
+        committed_evidence < preparation_stage < ready_wait < release
+        < apply_stage < receipt_wait
+    )
+    assert (
+        'stage="result_preparation", **committed_evidence'
+        in manager[committed_evidence:ready_wait]
+    )
+    assert (
+        'stage="peer_apply", **committed_evidence'
+        in manager[release:receipt_wait]
+    )
 
     trainer = role[role.index("def trainer(args) -> int:"):]
     result_visible = trainer.index(
