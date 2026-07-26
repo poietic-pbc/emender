@@ -198,6 +198,20 @@ def test_native_manager_endpoint_lifetime_spans_all_configured_generations():
     assert "deadline_s=_native_manager_session_lifetime_s(args)" in manager
 
 
+def test_native_generation_lifetime_spans_all_post_result_phase_clocks():
+    """Frontier job 5083440 reached two complete node applies before expiry.
+
+    A finalized native result must remain valid across the independently
+    bounded checkpoint/candidate, safe-boundary rendezvous, and all-eight
+    apply/commit phases.  Treating only 180 seconds as the post-result lifetime
+    made the native COMMIT reject both otherwise complete node transactions.
+    """
+    from scripts.frontier import resilient_e97_role as role
+
+    args = SimpleNamespace(deadline_s=420.0)
+    assert role._native_post_result_lifetime_s(args) == 420.0 + 420.0 + 60.0
+
+
 def test_restarted_trainer_resolves_newer_authoritative_handoff(tmp_path):
     from scripts.frontier import resilient_e97_role as role
 
@@ -1470,7 +1484,7 @@ def test_final_native_result_lifetime_covers_bounded_recovery_commit_phase():
     assert "final_operation_deadline_s = remaining_s()" in owner
     assert "deadline_s=final_operation_deadline_s" in owner
     assert "generation_deadline_s=(" in owner
-    assert "final_operation_deadline_s + min(float(args.deadline_s), 180.0)" in owner
+    assert "_native_post_result_lifetime_s(args)" in owner
 
 
 def test_import_liveness_does_not_refresh_runtime_import_progress_deadline():

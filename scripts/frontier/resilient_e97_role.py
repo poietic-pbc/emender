@@ -1998,7 +1998,8 @@ def _native_sharded_owner_reduce(
         source_dtype=DType.F64, base_digest=base_digest,
         plan_digest=plan_digest, deadline_s=final_operation_deadline_s,
         generation_deadline_s=(
-            final_operation_deadline_s + min(float(args.deadline_s), 180.0)))
+            final_operation_deadline_s
+            + _native_post_result_lifetime_s(args)))
     try:
         with session.import_reduction_sources(
                 ((bridge_fd, "assembled-global", assembled_identity, 0,
@@ -2033,6 +2034,16 @@ def _native_manager_session_lifetime_s(args) -> float:
     # generation rather than expiring while a healthy manager advertises READY
     # for the next one.  Slurm's requested walltime remains the outer hard cap.
     return float(args.deadline_s) * max(1, int(args.generations))
+
+
+def _native_post_result_lifetime_s(args) -> float:
+    """Keep a finalized result valid through each distinct bounded phase."""
+    checkpoint_candidate_s = min(float(args.deadline_s), 420.0)
+    return (
+        checkpoint_candidate_s
+        + ASYNC_V21_BOUNDARY_RENDEZVOUS_S
+        + ASYNC_V21_ALL_EIGHT_APPLY_S
+    )
 
 
 def _native_manager(args) -> int:
