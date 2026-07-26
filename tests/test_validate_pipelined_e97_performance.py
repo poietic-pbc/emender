@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 
@@ -13,6 +14,30 @@ SPEC = importlib.util.spec_from_file_location("pipelined_perf", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(MODULE)
+
+
+def _causal_id(identity: str, generation: int) -> str:
+    return hashlib.sha256(
+        f"{identity}|{generation}".encode("utf-8")).hexdigest()
+
+
+def test_records_include_retained_control_json_policy(tmp_path):
+    telemetry = tmp_path / "retained-evidence" / "node-0" / "telemetry"
+    control = tmp_path / "retained-evidence" / "node-0" / "control"
+    telemetry.mkdir(parents=True)
+    control.mkdir(parents=True)
+    (telemetry / "trainer.jsonl").write_text(
+        '{"stage":"async_v21_bounds","identity":"node-0-trainer-0"}\n')
+    (control / "production-pipeline-node-0-trainer-0.json").write_text(
+        '{"stage":"async_v21_policy","policy_id":'
+        '"async-decoupled-v2.1-simple"}\n')
+
+    records = MODULE._records(tmp_path / "retained-evidence")
+
+    assert {record["stage"] for record in records} == {
+        "async_v21_bounds",
+        "async_v21_policy",
+    }
 
 
 def _records(
@@ -44,6 +69,7 @@ def _records(
         "result_staging_capacity": 1,
         "allocation_fence": 7,
     }]
+    fixture_node = trainer_start // 8
     for ordinal in range(trainer_start, trainer_start + trainer_count):
         identity = f"node-{ordinal // 8}-trainer-{ordinal % 8}"
         for window in range(12):  # two warm-up + ten measured
@@ -115,6 +141,8 @@ def _records(
         })
     if background:
         for version in range(1, 12):
+            generation = version - 1
+            manager_identity = f"node-{fixture_node}-manager"
             for offset, stage in enumerate((
                 "native_local_reduction",
                 "native_owner_redistribution",
@@ -126,10 +154,12 @@ def _records(
                 began = version * cadence + 10.0 + offset
                 ended = began + 5.0
                 values.append({
-                    "identity": "node-0-manager",
-                    "generation": version - 1,
+                    "identity": manager_identity,
+                    "generation": generation,
                     "stage": stage,
                     "elapsed_s": ended - began,
+                    "monotonic_start_s": began,
+                    "monotonic_end_s": ended,
                     "timestamp": 1000.0 + ended,
                     "within_slo": True,
                     "policy_id": "async-decoupled-v2.1-simple",
@@ -139,6 +169,183 @@ def _records(
                     "commit_lag": min(1, version),
                     "contribution_digest": f"{version + 10:064x}",
                     "exact_tokens": 3_934_080,
+                    **({
+                        "causal_phase": {
+                            "native_local_reduction": "aggregation",
+                            "native_owner_redistribution": "publish_network",
+                            "native_trainer_apply": "apply_swap",
+                            "checkpoint_publication": "checkpoint",
+                        }[stage],
+                        "causal_id": _causal_id(
+                            manager_identity, generation),
+                        "foreground_component_s": (
+                            ended - began
+                            if stage == "native_trainer_apply" else 0.0),
+                    } if stage in {
+                        "native_local_reduction",
+                        "native_owner_redistribution",
+                        "native_trainer_apply",
+                        "checkpoint_publication",
+                    } else {}),
+                    **({
+                        "foreground_interruption": "verified_result_apply",
+                        "foreground_blocking": True,
+                        "atomic_live_model_swap": True,
+                        "phase_scope": "trainer_lane",
+                        "policy_bound_s": 60.0,
+                    } if stage == "native_trainer_apply" else {}),
+                    **({
+                        "foreground_blocking": False,
+                    } if stage == "checkpoint_publication" else {}),
+                })
+            node_apply_started = version * cadence + 20.0
+            node_apply_ended = node_apply_started + 5.0
+            transaction_digest = (
+                f"{version + 100 + fixture_node * 1000:064x}")
+            safe_metrics = {
+                "candidate_preparation": {
+                    "count": 8,
+                    "maximum_s": 8.0,
+                    "p99_s": 8.0,
+                    "events_s": [
+                        float(value) for value in range(1, 9)
+                    ],
+                },
+                "boundary_rendezvous": {
+                    "count": 8,
+                    "maximum_s": 8.0,
+                    "p99_s": 8.0,
+                    "events_s": [
+                        float(value) for value in range(8, 0, -1)
+                    ],
+                    "manager_elapsed_s": 10.0,
+                    "policy_bound_s": 420.0,
+                },
+                "release_to_apply": {
+                    "count": 8,
+                    "maximum_s": 9.0,
+                    "p99_s": 9.0,
+                    "events_s": [
+                        float(value) for value in range(2, 10)
+                    ],
+                    "policy_bound_s": 60.0,
+                },
+                "total_foreground_idle": {
+                    "count": 8,
+                    "maximum_s": 10.0,
+                    "p99_s": 10.0,
+                    "events_s": [10.0] * 8,
+                },
+            }
+            values.append({
+                "identity": manager_identity,
+                "generation": generation,
+                "stage": "native_node_boundary_rendezvous",
+                "elapsed_s": 10.0,
+                "monotonic_start_s": node_apply_started - 10.0,
+                "monotonic_end_s": node_apply_started,
+                "timestamp": 1000.0 + node_apply_started,
+                "within_slo": True,
+                "transaction_digest": transaction_digest,
+                "phase_scope": "node_all_eight",
+                "foreground_interruption": "safe_boundary_rendezvous",
+                "foreground_blocking": True,
+                "trainer_count": 8,
+                "candidate_prepared_count": 8,
+                "boundary_ready_count": 8,
+                "policy_bound_s": 420.0,
+                **safe_metrics,
+            })
+            values.append({
+                "identity": manager_identity,
+                "generation": generation,
+                "stage": "native_node_apply_swap",
+                "elapsed_s": node_apply_ended - node_apply_started,
+                "monotonic_start_s": node_apply_started,
+                "monotonic_end_s": node_apply_ended,
+                "timestamp": 1000.0 + node_apply_ended,
+                "within_slo": True,
+                "causal_phase": "apply_swap",
+                "causal_id": _causal_id(manager_identity, generation),
+                "foreground_component_s":
+                    node_apply_ended - node_apply_started,
+                "foreground_interruption": "verified_result_apply",
+                "foreground_blocking": True,
+                "atomic_live_model_swap": True,
+                "phase_scope": "node_all_eight",
+                "trainer_count": 8,
+                "transaction_digest": transaction_digest,
+                "policy_bound_s": 60.0,
+                **safe_metrics,
+            })
+            trainer_identity = f"node-{fixture_node}-trainer-0"
+            for offset, stage in enumerate((
+                "async_v21_endpoint_snapshot",
+                "async_v21_snapshot_admission",
+                "native_direct_memfd",
+                "native_owner_contribution",
+                "async_v21_checkpoint_write",
+                "async_v21_checkpoint_hash",
+                "async_v21_result_readiness",
+            ), start=10):
+                began = version * cadence + offset
+                ended = began + 0.25
+                values.append({
+                    "identity": trainer_identity,
+                    "generation": generation,
+                    "stage": stage,
+                    "elapsed_s": ended - began,
+                    "monotonic_start_s": began,
+                    "monotonic_end_s": ended,
+                    "timestamp": 1000.0 + ended,
+                    "within_slo": True,
+                    "causal_phase": {
+                        "async_v21_endpoint_snapshot": "freeze_snapshot",
+                        "async_v21_snapshot_admission": "snapshot_admission",
+                        "native_direct_memfd": "publish_network",
+                        "native_owner_contribution": "publish_network",
+                        "async_v21_checkpoint_write": "checkpoint",
+                        "async_v21_checkpoint_hash": "checkpoint",
+                        "async_v21_result_readiness": "result_wait",
+                    }[stage],
+                    "causal_id": _causal_id(trainer_identity, generation),
+                    "foreground_component_s": (
+                        ended - began
+                        if stage in {
+                            "async_v21_endpoint_snapshot",
+                            "async_v21_snapshot_admission",
+                        } else 0.0),
+                    **({
+                        "foreground_interruption": "snapshot_capture",
+                        "phase_scope": "trainer_snapshot",
+                        "snapshot_coherent": True,
+                        "snapshot_slots": 2,
+                        "live_model_read_after_snapshot": False,
+                    } if stage == "async_v21_endpoint_snapshot" else {}),
+                    **({
+                        "foreground_interruption": "snapshot_admission",
+                        "phase_scope": "snapshot_owned",
+                        "owned": True,
+                        "immutable_snapshot": True,
+                        "mutable_training_resumed": True,
+                        "foreground_pause_s": 0.5,
+                        "policy_bound_s": 1.0,
+                    } if stage == "async_v21_snapshot_admission" else {}),
+                    **({
+                        "immutable_snapshot": True,
+                        "mutable_training_already_resumed": True,
+                        "foreground_blocking": False,
+                    } if stage == "native_direct_memfd" else {}),
+                    **({
+                        "foreground_blocking": False,
+                    } if stage in {
+                        "async_v21_checkpoint_write",
+                        "async_v21_checkpoint_hash",
+                    } else {}),
+                    **({
+                        "foreground_blocking": False,
+                        "mutable_training_active": True,
+                    } if stage == "async_v21_result_readiness" else {}),
                 })
             values.append({
                 "identity": "node-0-manager",
@@ -169,6 +376,148 @@ def test_semantic_validator_accepts_true_decoupling_and_bounded_lag():
     assert result["lag"]["speculative_max"] <= 2
     assert result["atomic_commits"] >= 10
     assert result["overlaps"]
+    assert set(result["causal_phase_seconds"]) == MODULE.CAUSAL_PHASES
+    assert result["safe_boundary"]["transactions"] >= 10
+    assert (
+        result["safe_boundary"]["candidate_preparation"]["maximum_seconds"]
+        == 8.0
+    )
+    assert (
+        result["safe_boundary"]["boundary_rendezvous"]["p99_seconds"]
+        == 8.0
+    )
+    assert (
+        result["safe_boundary"]["release_to_apply"]["maximum_seconds"]
+        == 9.0
+    )
+    assert (
+        result["safe_boundary"]["total_foreground_idle"]["p99_seconds"]
+        == 10.0
+    )
+
+
+def test_semantic_validator_rejects_missing_causal_phase_timing():
+    records = _records()
+    for value in records:
+        if value.get("causal_phase") == "checkpoint":
+            value.pop("causal_phase")
+            value.pop("causal_id")
+            value.pop("foreground_component_s")
+    with pytest.raises(ValueError, match="causal pipeline phases"):
+        MODULE.validate(records)
+
+
+def test_semantic_validator_rejects_mismatched_causal_identity():
+    records = _records()
+    causal = next(
+        value for value in records
+        if value.get("causal_phase") == "snapshot_admission")
+    causal["causal_id"] = "f" * 64
+    with pytest.raises(ValueError, match="mismatched causal identity"):
+        MODULE.validate(records)
+
+
+def test_semantic_validator_rejects_nonzero_foreground_result_wait():
+    records = _records()
+    result_wait = next(
+        value for value in records
+        if value.get("causal_phase") == "result_wait")
+    result_wait["foreground_component_s"] = 0.01
+    with pytest.raises(ValueError, match="result_wait"):
+        MODULE.validate(records)
+
+
+@pytest.mark.parametrize(
+    ("phase_scope", "pause", "match"),
+    [
+        ("snapshot_owned", 1.01, "snapshot capture/admission"),
+        ("node_all_eight", 60.01, "all-eight apply/swap"),
+    ],
+)
+def test_semantic_validator_rejects_every_event_pause_bound(
+    phase_scope, pause, match,
+):
+    records = _records()
+    value = next(
+        item for item in records
+        if (
+            item.get("phase_scope") == phase_scope
+            and (
+                phase_scope != "node_all_eight"
+                or item.get("stage") == "native_node_apply_swap"
+            )
+        ))
+    if phase_scope == "snapshot_owned":
+        value["foreground_pause_s"] = pause
+    else:
+        value["elapsed_s"] = pause
+        value["monotonic_end_s"] = value["monotonic_start_s"] + pause
+    with pytest.raises(ValueError, match=match):
+        MODULE.validate(records)
+
+
+def test_semantic_validator_rejects_hidden_boundary_tail_stall():
+    records = _records()
+    rendezvous = next(
+        value for value in records
+        if value.get("stage") == "native_node_boundary_rendezvous")
+    rendezvous["boundary_rendezvous"]["events_s"][-1] = 421.0
+    rendezvous["boundary_rendezvous"]["maximum_s"] = 421.0
+    rendezvous["boundary_rendezvous"]["p99_s"] = 421.0
+    transaction = rendezvous["transaction_digest"]
+    apply = next(
+        value for value in records
+        if (
+            value.get("stage") == "native_node_apply_swap"
+            and value.get("transaction_digest") == transaction
+        )
+    )
+    apply["boundary_rendezvous"] = dict(
+        rendezvous["boundary_rendezvous"])
+    with pytest.raises(ValueError, match="hard tail"):
+        MODULE.validate(records)
+
+
+def test_overlap_gate_rejects_200_second_bursty_alternation_despite_checkpoints_and_median():
+    records = _records()
+    identity = "node-0-trainer-0"
+    final_window = 11
+    for value in records:
+        if (
+            value.get("identity") == identity
+            and int(value.get("local_window", -1)) == final_window
+            and value.get("phase") in {
+                "optimizer_step_start", "optimizer_step_end",
+            }
+        ):
+            value["monotonic_s"] += 200.0
+            value["timestamp"] += 200.0
+    # Preserve real overlap for the delayed window so the failure is
+    # specifically the every-event foreground tail, not missing background.
+    begin = final_window * 101.0 + 205.0
+    end = begin + 5.0
+    records.append({
+        "identity": "node-0-manager",
+        "generation": final_window - 1,
+        "stage": "native_local_reduction",
+        "elapsed_s": end - begin,
+        "monotonic_start_s": begin,
+        "monotonic_end_s": end,
+        "timestamp": 1000.0 + end,
+        "within_slo": True,
+        "policy_id": "async-decoupled-v2.1-simple",
+        "allocation_fence": 7,
+        "base_global_version": final_window - 1,
+        "commit_global_version": final_window,
+        "commit_lag": 1,
+        "contribution_digest": f"{final_window + 10:064x}",
+        "exact_tokens": 3_934_080,
+        "causal_phase": "aggregation",
+        "causal_id": _causal_id("node-0-manager", final_window - 1),
+        "foreground_component_s": 0.0,
+    })
+    with pytest.raises(ValueError, match="every-event foreground tail"):
+        MODULE.validate(records)
 
 
 def test_semantic_validator_requires_ten_distinct_atomic_commits():

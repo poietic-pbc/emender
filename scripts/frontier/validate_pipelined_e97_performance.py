@@ -10,6 +10,7 @@ independent correctness latency.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -31,6 +32,9 @@ MEASURED_WINDOWS = 10
 MAX_IDLE_FRACTION = 0.10
 MAX_CADENCE_MULTIPLE = 1.25
 MAX_LOCAL_OWNED_S = 1.0
+MAX_BOUNDARY_RENDEZVOUS_S = 420.0
+MAX_ALL_EIGHT_APPLY_S = 60.0
+MAX_FOREGROUND_GAP_S = 60.0
 MAX_CORRECTNESS_S = 420.0
 E97_NATIVE_RESIDENT_BYTES = 64_001_671_648
 
@@ -50,6 +54,15 @@ REQUIRED_STAGE_CLASSES = frozenset({
     "control_handoff_integrity",
     "fenced_atomic_commit",
 })
+CAUSAL_PHASES = frozenset({
+    "freeze_snapshot",
+    "snapshot_admission",
+    "publish_network",
+    "aggregation",
+    "checkpoint",
+    "result_wait",
+    "apply_swap",
+})
 
 
 def _records(root: Path) -> list[dict[str, Any]]:
@@ -60,6 +73,14 @@ def _records(root: Path) -> list[dict[str, Any]]:
                 value = json.loads(line)
                 if isinstance(value, dict):
                     values.append(value)
+    # Production policy declarations are retained as small control-plane JSON
+    # documents, while the high-volume timing records above are JSONL.  Read
+    # only the policy stage from standalone JSON so unrelated control records
+    # cannot be mistaken for semantic telemetry.
+    for path in sorted(root.rglob("*.json")):
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(value, dict) and value.get("stage") == "async_v21_policy":
+            values.append(value)
     return values
 
 
@@ -102,6 +123,11 @@ def _percentile(values: Iterable[int | float], fraction: float) -> float:
         raise ValueError("cannot compute a percentile from no values")
     index = max(0, math.ceil(fraction * len(ordered)) - 1)
     return ordered[index]
+
+
+def _causal_work_id(identity: str, generation: int) -> str:
+    return hashlib.sha256(
+        f"{identity}|{int(generation)}".encode("utf-8")).hexdigest()
 
 
 def _policy(records: list[dict[str, Any]]) -> tuple[dict[str, Any], int]:
@@ -370,9 +396,385 @@ def _correctness(records: list[dict[str, Any]], *, fence: int) -> dict[str, Any]
     }
 
 
+def _causal_phase_timing(
+    records: list[dict[str, Any]],
+) -> tuple[
+    dict[str, dict[str, float | int]],
+    dict[str, dict[str, float | int | bool]],
+]:
+    """Require directly measured intervals for every pipeline phase.
+
+    These records make a synchronized foreground gap attributable without
+    inferring a cause from checkpoint counts or median cadence.  All phase
+    intervals come from the same monotonic clock used by the runtime.
+    """
+    by_phase: dict[str, list[dict[str, Any]]] = {
+        phase: [] for phase in CAUSAL_PHASES
+    }
+    for value in records:
+        phase = str(value.get("causal_phase", ""))
+        if phase not in by_phase:
+            continue
+        stage = str(value.get("stage", ""))
+        started = _finite(
+            value.get("monotonic_start_s"), f"{stage} monotonic start")
+        ended = _finite(
+            value.get("monotonic_end_s"), f"{stage} monotonic end")
+        elapsed = _finite(value.get("elapsed_s"), f"{stage} elapsed")
+        if (
+            ended < started
+            or elapsed < 0
+            or not math.isclose(
+                ended - started, elapsed, rel_tol=1e-9, abs_tol=1e-6)
+        ):
+            raise ValueError(f"{stage} causal timing interval is inconsistent")
+        identity = str(value.get("identity", ""))
+        generation = _integer(
+            value.get("generation"), f"{stage} causal generation")
+        causal_id = _digest(value.get("causal_id"), f"{stage} causal identity")
+        if (
+            not identity
+            or generation < 0
+            or causal_id != _causal_work_id(identity, generation)
+        ):
+            raise ValueError(f"{stage} has a mismatched causal identity")
+        foreground = _finite(
+            value.get("foreground_component_s"),
+            f"{stage} foreground component")
+        if foreground < 0 or foreground > elapsed + 1e-6:
+            raise ValueError(
+                f"{stage} foreground component double counts its interval")
+        by_phase[phase].append(value)
+    missing = sorted(phase for phase, values in by_phase.items() if not values)
+    if missing:
+        raise ValueError(
+            f"causal pipeline phases are not independently timed: {missing}")
+
+    for value in by_phase["freeze_snapshot"]:
+        if (
+            value.get("foreground_interruption") != "snapshot_capture"
+            or value.get("phase_scope") != "trainer_snapshot"
+            or value.get("snapshot_coherent") is not True
+            or _integer(value.get("snapshot_slots"), "snapshot slots") != 2
+            or value.get("live_model_read_after_snapshot") is not False
+        ):
+            raise ValueError("snapshot capture is not coherent and bounded")
+    snapshot_pauses: list[float] = []
+    for value in by_phase["snapshot_admission"]:
+        if (
+            value.get("foreground_interruption") != "snapshot_admission"
+            or value.get("phase_scope") != "snapshot_owned"
+            or value.get("owned") is not True
+            or value.get("immutable_snapshot") is not True
+            or value.get("mutable_training_resumed") is not True
+            or _finite(value.get("policy_bound_s"), "snapshot policy bound")
+            != MAX_LOCAL_OWNED_S
+        ):
+            raise ValueError("mutable training did not resume after snapshot")
+        snapshot_pauses.append(_finite(
+            value.get("foreground_pause_s"), "snapshot foreground pause"))
+    if not snapshot_pauses:
+        raise ValueError("snapshot admission lacks every-event pause evidence")
+    if (
+        max(snapshot_pauses) > MAX_LOCAL_OWNED_S
+        or _percentile(snapshot_pauses, .99) > MAX_LOCAL_OWNED_S
+    ):
+        raise ValueError(
+            "snapshot capture/admission maximum or p99 exceeded one second")
+
+    if not any(
+        value.get("stage") == "native_direct_memfd"
+        and value.get("immutable_snapshot") is True
+        and value.get("mutable_training_already_resumed") is True
+        and value.get("foreground_blocking") is False
+        for value in by_phase["publish_network"]
+    ):
+        raise ValueError(
+            "snapshot publication lacks proof of prior foreground resume")
+    for phase in ("publish_network", "aggregation", "checkpoint"):
+        if any(
+            _finite(
+                value.get("foreground_component_s"),
+                f"{phase} foreground component") != 0.0
+            for value in by_phase[phase]
+        ):
+            raise ValueError(f"{phase} entered the foreground training lane")
+    if any(
+        _finite(
+            value.get("foreground_component_s"),
+            "result_wait foreground component") != 0.0
+        or value.get("foreground_blocking") is not False
+        for value in by_phase["result_wait"]
+    ):
+        raise ValueError("result_wait has a nonzero foreground component")
+    if not any(
+        value.get("mutable_training_active") is True
+        and value.get("foreground_blocking") is False
+        for value in by_phase["result_wait"]
+    ):
+        raise ValueError("result readiness recreated a foreground wait")
+
+    for value in by_phase["apply_swap"]:
+        if (
+            value.get("foreground_interruption") != "verified_result_apply"
+            or value.get("foreground_blocking") is not True
+            or value.get("atomic_live_model_swap") is not True
+        ):
+            raise ValueError("verified result apply is not an atomic boundary")
+
+    node_applies = [
+        value for value in by_phase["apply_swap"]
+        if value.get("phase_scope") == "node_all_eight"
+    ]
+    if not node_applies:
+        raise ValueError("missing complete all-eight apply/swap timing")
+    apply_pauses: list[float] = []
+    for value in node_applies:
+        if (
+            _integer(value.get("trainer_count"), "apply trainer count") != 8
+            or _finite(value.get("policy_bound_s"), "apply policy bound")
+            != MAX_ALL_EIGHT_APPLY_S
+        ):
+            raise ValueError("apply/swap is not one bounded all-eight transaction")
+        apply_pauses.append(_finite(
+            value.get("elapsed_s"), "all-eight apply/swap pause"))
+    if (
+        max(apply_pauses) > MAX_ALL_EIGHT_APPLY_S
+        or _percentile(apply_pauses, .99) > MAX_ALL_EIGHT_APPLY_S
+    ):
+        raise ValueError(
+            "all-eight apply/swap maximum or p99 exceeded 60 seconds")
+
+    # Foreground intervals for one causal identity are disjoint.  A record
+    # cannot make the same pause simultaneously count as two phase classes.
+    foreground_by_work: dict[str, list[tuple[float, float, str]]] = {}
+    for phase, values in by_phase.items():
+        for value in values:
+            if _finite(
+                value.get("foreground_component_s"),
+                f"{phase} foreground component") <= 0:
+                continue
+            foreground_by_work.setdefault(str(value["causal_id"]), []).append((
+                _finite(value["monotonic_start_s"], "foreground start"),
+                _finite(value["monotonic_end_s"], "foreground end"),
+                phase,
+            ))
+    for intervals in foreground_by_work.values():
+        intervals.sort()
+        for previous, current in zip(intervals, intervals[1:]):
+            if current[0] < previous[1] - 1e-6:
+                raise ValueError(
+                    "causal foreground phases overlap or double count time")
+
+    phase_summary = {
+        phase: {
+            "count": len(values),
+            "median_seconds": statistics.median(
+                _finite(value["elapsed_s"], f"{phase} elapsed")
+                for value in values),
+            "p99_seconds": _percentile(
+                (_finite(value["elapsed_s"], f"{phase} elapsed")
+                 for value in values),
+                .99,
+            ),
+            "maximum_seconds": max(
+                _finite(value["elapsed_s"], f"{phase} elapsed")
+                for value in values),
+        }
+        for phase, values in sorted(by_phase.items())
+    }
+    pause_bounds = {
+        "snapshot_admission": {
+            "count": len(snapshot_pauses),
+            "p99_seconds": _percentile(snapshot_pauses, .99),
+            "maximum_seconds": max(snapshot_pauses),
+            "policy_bound_seconds": MAX_LOCAL_OWNED_S,
+            "passed": True,
+        },
+        "all_eight_apply_swap": {
+            "count": len(apply_pauses),
+            "p99_seconds": _percentile(apply_pauses, .99),
+            "maximum_seconds": max(apply_pauses),
+            "policy_bound_seconds": MAX_ALL_EIGHT_APPLY_S,
+            "passed": True,
+        },
+        "result_wait": {
+            "count": len(by_phase["result_wait"]),
+            "foreground_seconds": 0.0,
+            "passed": True,
+        },
+    }
+    return phase_summary, pause_bounds
+
+
+def _safe_boundary_timing(
+    records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Validate every-event two-phase rendezvous tails, not just medians."""
+    boundary_records = [
+        value for value in records
+        if value.get("stage") == "native_node_boundary_rendezvous"
+    ]
+    if not boundary_records:
+        raise ValueError("missing all-eight safe-boundary rendezvous evidence")
+    apply_by_transaction: dict[str, dict[str, Any]] = {}
+    for value in records:
+        if value.get("stage") != "native_node_apply_swap":
+            continue
+        transaction = _digest(
+            value.get("transaction_digest"), "node apply transaction")
+        if transaction in apply_by_transaction:
+            raise ValueError("duplicate node apply transaction telemetry")
+        apply_by_transaction[transaction] = value
+
+    aggregate: dict[str, list[float]] = {
+        "candidate_preparation": [],
+        "boundary_rendezvous": [],
+        "release_to_apply": [],
+        "total_foreground_idle": [],
+        "manager_rendezvous": [],
+    }
+
+    def events(
+        value: Any,
+        *,
+        name: str,
+        count: int,
+        bound_s: float,
+    ) -> list[float]:
+        if not isinstance(value, dict):
+            raise ValueError(f"{name} lacks every-event timing summary")
+        raw = value.get("events_s")
+        if not isinstance(raw, list) or len(raw) != count:
+            raise ValueError(f"{name} lacks all eight timing events")
+        parsed = [_finite(item, f"{name} event") for item in raw]
+        if any(item < 0 for item in parsed):
+            raise ValueError(f"{name} contains a negative duration")
+        observed_max = max(parsed)
+        observed_p99 = _percentile(parsed, .99)
+        if (
+            _integer(value.get("count"), f"{name} count") != count
+            or not math.isclose(
+                _finite(value.get("maximum_s"), f"{name} maximum"),
+                observed_max,
+                rel_tol=1e-9,
+                abs_tol=1e-6,
+            )
+            or not math.isclose(
+                _finite(value.get("p99_s"), f"{name} p99"),
+                observed_p99,
+                rel_tol=1e-9,
+                abs_tol=1e-6,
+            )
+        ):
+            raise ValueError(f"{name} max/p99 does not match raw events")
+        if observed_max > bound_s or observed_p99 > bound_s:
+            raise ValueError(f"{name} hard tail exceeds {bound_s:g} seconds")
+        return parsed
+
+    seen: set[str] = set()
+    for value in boundary_records:
+        transaction = _digest(
+            value.get("transaction_digest"), "boundary transaction")
+        if transaction in seen:
+            raise ValueError("duplicate safe-boundary rendezvous transaction")
+        seen.add(transaction)
+        elapsed = _finite(
+            value.get("elapsed_s"), "manager boundary rendezvous elapsed")
+        if (
+            elapsed < 0
+            or elapsed > MAX_BOUNDARY_RENDEZVOUS_S
+            or value.get("within_slo") is not True
+            or _integer(value.get("trainer_count"), "boundary trainer count")
+            != 8
+            or _integer(
+                value.get("candidate_prepared_count"),
+                "candidate prepared count",
+            ) != 8
+            or _integer(
+                value.get("boundary_ready_count"), "boundary ready count")
+            != 8
+            or _finite(
+                value.get("policy_bound_s"), "boundary policy bound")
+            != MAX_BOUNDARY_RENDEZVOUS_S
+        ):
+            raise ValueError(
+                "safe-boundary rendezvous is not one bounded all-eight phase")
+        candidate = events(
+            value.get("candidate_preparation"),
+            name="candidate preparation",
+            count=8,
+            bound_s=MAX_BOUNDARY_RENDEZVOUS_S,
+        )
+        boundary = events(
+            value.get("boundary_rendezvous"),
+            name="boundary rendezvous",
+            count=8,
+            bound_s=MAX_BOUNDARY_RENDEZVOUS_S,
+        )
+        release = events(
+            value.get("release_to_apply"),
+            name="release-to-apply",
+            count=8,
+            bound_s=MAX_ALL_EIGHT_APPLY_S,
+        )
+        total = events(
+            value.get("total_foreground_idle"),
+            name="total foreground idle",
+            count=8,
+            bound_s=(
+                MAX_BOUNDARY_RENDEZVOUS_S + MAX_ALL_EIGHT_APPLY_S),
+        )
+        apply = apply_by_transaction.get(transaction)
+        if apply is None or any(
+            apply.get(name) != value.get(name)
+            for name in (
+                "candidate_preparation",
+                "boundary_rendezvous",
+                "release_to_apply",
+                "total_foreground_idle",
+            )
+        ):
+            raise ValueError(
+                "boundary rendezvous is not linked to its exact node apply")
+        aggregate["candidate_preparation"].extend(candidate)
+        aggregate["boundary_rendezvous"].extend(boundary)
+        aggregate["release_to_apply"].extend(release)
+        aggregate["total_foreground_idle"].extend(total)
+        aggregate["manager_rendezvous"].append(elapsed)
+
+    def combined(name: str, bound_s: float) -> dict[str, Any]:
+        values = aggregate[name]
+        return {
+            "count": len(values),
+            "p99_seconds": _percentile(values, .99),
+            "maximum_seconds": max(values),
+            "policy_bound_seconds": bound_s,
+            "passed": True,
+        }
+
+    return {
+        "transactions": len(seen),
+        "candidate_preparation": combined(
+            "candidate_preparation", MAX_BOUNDARY_RENDEZVOUS_S),
+        "boundary_rendezvous": combined(
+            "boundary_rendezvous", MAX_BOUNDARY_RENDEZVOUS_S),
+        "manager_rendezvous": combined(
+            "manager_rendezvous", MAX_BOUNDARY_RENDEZVOUS_S),
+        "release_to_apply": combined(
+            "release_to_apply", MAX_ALL_EIGHT_APPLY_S),
+        "total_foreground_idle": combined(
+            "total_foreground_idle",
+            MAX_BOUNDARY_RENDEZVOUS_S + MAX_ALL_EIGHT_APPLY_S,
+        ),
+    }
+
+
 def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
     policy, fence = _policy(records)
     backgrounds = _background(records, fence=fence)
+    causal_phases, foreground_pause_bounds = _causal_phase_timing(records)
+    safe_boundary = _safe_boundary_timing(records)
     atomic_commit_versions = {
         int(value["commit_global_version"])
         for value in backgrounds
@@ -499,6 +901,12 @@ def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
     cadence_s = statistics.median(cadence)
     cadence_multiple = cadence_s / raw_k40
     idle_fraction = sum(idle) / sum(cadence)
+    idle_p99 = _percentile(idle, .99)
+    idle_max = max(idle)
+    if idle_max > MAX_FOREGROUND_GAP_S or idle_p99 > MAX_FOREGROUND_GAP_S:
+        raise ValueError(
+            "training-lane every-event foreground tail exceeds the "
+            "60-second interruption bound")
     if cadence_multiple > MAX_CADENCE_MULTIPLE:
         raise ValueError(
             f"training-lane cadence {cadence_multiple:.6f}x exceeds 1.25x raw K40")
@@ -542,6 +950,8 @@ def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
         "steady_state_cadence_seconds": cadence_s,
         "steady_state_cadence_multiple": cadence_multiple,
         "foreground_control_plane_idle_fraction": idle_fraction,
+        "foreground_control_plane_idle_seconds_p99": idle_p99,
+        "foreground_control_plane_idle_seconds_max": idle_max,
         "overlaps": overlaps,
         "stage_seconds": {
             name: {
@@ -551,6 +961,9 @@ def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
             }
             for name, values in stage_seconds.items()
         },
+        "causal_phase_seconds": causal_phases,
+        "foreground_pause_bounds": foreground_pause_bounds,
+        "safe_boundary": safe_boundary,
         "lag": {
             "commit_p99": _percentile(commit_lags, .99),
             "commit_max": max(commit_lags),
@@ -566,6 +979,7 @@ def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
         "training_lane": {
             "cadence_multiple_max": MAX_CADENCE_MULTIPLE,
             "foreground_idle_fraction_strict_max": MAX_IDLE_FRACTION,
+            "foreground_gap_seconds_max": MAX_FOREGROUND_GAP_S,
             "passed": True,
         },
     }

@@ -1,0 +1,89 @@
+{
+  "schema": "emender-async-v21-clean-attempt-v1",
+  "task_id": "qualify-simple-async-v21-2n-clean",
+  "passed": false,
+  "job": {
+    "job_id": "5079966",
+    "state": "FAILED",
+    "exit_code": "1:0",
+    "nodes": 2,
+    "partition": "batch",
+    "qos": "debug",
+    "start": "2026-07-26T06:56:14",
+    "end": "2026-07-26T07:03:43",
+    "elapsed": "00:07:29",
+    "nodelist": "frontier[09305-09306]",
+    "terminal_sacct": "5079966|FAILED|1:0|2|batch|debug|2026-07-26T06:56:14|2026-07-26T07:03:43|00:07:29"
+  },
+  "payload": {
+    "digest": "bb3885709d773b4550a572e8ff9f9ff55dbe8cb4eb8f16390da4f26cece961d3",
+    "status": "retired_failed",
+    "unchanged_resubmit_forbidden": true,
+    "source_commit": "7309551b552ff327619fcf2061a5af1d44a645cb",
+    "source_digest": "d765fcfa3d5bb3139f99b7a3ddde6f5355e78e6c696a02f75bdc474c6ac4704d",
+    "policy_digest": "fa9def95daf7bce25f1b962ca5437e7a76317b94ccfb9a710fbf126a344e7d98",
+    "launcher_digest": "70b96385b5ec0795d2d1c6b6495846b20e94fe53e5256e9c53c824b65c223fb7",
+    "native_bundle_digest": "f19e10be9987cfdb551a8dd75c5c88145c3cf35b73c54d3898fe562ce4182441",
+    "native_build_manifest_sha256": "95fa5eb50b2d5ea69c0bde77c76154491aa75da367e4d9977c9a34f4ae47d392",
+    "full_layout_gate_job_id": "5079946",
+    "full_layout_gate_sha256": "17f81078f6a54e8974de2cd494be6d2f6f20225c59934da24107ef8bff169d32",
+    "acceptance_manifest_sha256": "b33556a57b98d039d8530d5892462d364072fa1e727692f3e8f6626bbc2834cf"
+  },
+  "seed": {
+    "step": 2300930,
+    "accepted_tokens": 150793748480,
+    "bytes": 7719680116,
+    "sha256": "0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2",
+    "node_path": "/tmp/emender-e97-seed-5079966/checkpoint-step-2300930.pt",
+    "nodes_verified_offline": 2,
+    "network_fetches": 0,
+    "bootstrap_attestation_sha256": "27e234891df02b64b9db77fc784c341e5a3ae6e87418b8f1af167776d1d710bb",
+    "frontier09305_attestation_sha256": "7558d546a8a46dde21751fc9c55dd24be41eddaf9a59d116937c9e254870689f",
+    "frontier09306_attestation_sha256": "cd33c8ecd7645fc9eb509315e6dcfd3b7b3d8aef284b6ebf737ba367b4b97369"
+  },
+  "failure": {
+    "generation": 0,
+    "exception": "TimeoutError: persistent async lane admission deadline expired",
+    "source": "ndm/async_diloco_real.py:1310",
+    "affected_trainers": 16,
+    "atomic_node_cohorts_exhausted": 2,
+    "restarts": 0,
+    "supervision_events": 481,
+    "checkpoints": 0,
+    "atomic_commits": 0,
+    "measured_k40_windows": 0,
+    "cause": "A full-state digest and causal-telemetry persistence ran after coherent snapshot capture but before local OWNED/lane start, consuming the remainder of the reviewed one-second admission deadline.",
+    "capture_evidence": {
+      "events": 16,
+      "endpoint_bytes_per_trainer": 2753385248,
+      "minimum_seconds": 0.4139745889697224,
+      "median_seconds": 0.4463903270661831,
+      "p99_seconds": 0.5557802499970421,
+      "maximum_seconds": 0.5557802499970421,
+      "policy_bound_seconds": 1.0
+    }
+  },
+  "artifacts": {
+    "run_root": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/7309551b552ff327619fcf2061a5af1d44a645cb/clean/clean-overlap",
+    "acceptance_manifest": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/7309551b552ff327619fcf2061a5af1d44a645cb/clean-qualification-plan.json",
+    "slurm_stdout_sha256": "c00ad529a7e054d422cab24bc7b6bedc879c1ad5b15ea29a4457c14935c6e91b",
+    "slurm_stderr_sha256": "0353c29740f9b3eef09345c0eea916210bd370f5d26f0a48a0a3e612f9c99ae4",
+    "supervision_events_sha256": "2c5bbe2d7b445403c4f8ad95c95027611ec81a5574217317ac9050ccf0add4ad",
+    "generation_zero_record_sha256": "27d13c57927cbca1639b884b3d8c3ace42eee04847c56be17fce2404ccf86ae4"
+  },
+  "commands": {
+    "submit": "\"$EMENDER_PYTHON\" scripts/frontier/run_async_v21_qualification.py --gate clean --nodes 2 --repo \"$SNAPSHOT\" --seed-config configs/frontier/e97_async_256.yaml --native-build-manifest \"$BUILD_MANIFEST\" --full-layout-gate \"$G2_GATE\" --run-root \"$RUN_ROOT\" --state \"$STATE_JSON\" --output \"$MANIFEST_JSON\" --submit",
+    "queued_running": [
+      "squeue -h -j 5079966 -o '%i|%T|%P|%q|%D|%R|%M'",
+      "scontrol show job -dd 5079966"
+    ],
+    "terminal": "sacct -n -X -j 5079966 --format=JobIDRaw,State,ExitCode,NNodes,Partition,QOS,Start,End,Elapsed -P"
+  },
+  "disposition": {
+    "clean_gate_passed": false,
+    "fault_gate_authorized": false,
+    "scale_authorized": false,
+    "smallest_fix": "Timestamp capture/admission completion, establish local OWNED and start the mutable lane before persisting causal telemetry, and reuse the already-verified native base digest instead of hashing full state in the foreground interval.",
+    "regression": "test_snapshot_admission_deadline_excludes_telemetry_io"
+  }
+}

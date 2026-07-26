@@ -1024,11 +1024,15 @@ class CoalescedWindowReport:
     losses: tuple[float, ...]
     elapsed_s: float
     reached_hard_bound: bool
+    snapshot_deferred: bool = False
     translation_elapsed_s: float = 0.0
 
     @property
     def window_count(self) -> int:
-        return self.local_window_end - self.local_window_start
+        return (
+            0 if self.snapshot_deferred
+            else self.local_window_end - self.local_window_start
+        )
 
 
 class PersistentRealWorkerSession:
@@ -1064,6 +1068,11 @@ class PersistentRealWorkerSession:
             "optimizer_build": 0,
             "data_iterator_build": 0,
         }
+        self._snapshot_slots: tuple[
+            dict[str, torch.Tensor], dict[str, torch.Tensor]
+        ] | None = None
+        self._snapshot_copy_ready: dict[tuple[int, ...], Any] = {}
+        self._next_snapshot_slot = 0
         torch.manual_seed(
             int(getattr(self.args, "seed", 42)) + int(spec.seed_offset))
         self.device = torch.device(spec.device)
@@ -1116,6 +1125,19 @@ class PersistentRealWorkerSession:
             for group in self.optimizer.param_groups
             for parameter in group["params"]
         )
+        # Allocation belongs to bootstrap, never the bounded K-boundary
+        # foreground pause.  The slots contain no valid snapshot until
+        # `snapshot()` fills one at a coherent optimizer boundary.
+        model_values = self.model.state_dict()
+        self._snapshot_slots = tuple({
+            name: torch.empty_like(
+                model_values[name],
+                device="cpu",
+                pin_memory=(self.device.type == "cuda"),
+            )
+            for name in self.base_keys
+        } for _ in range(2))
+        phase("snapshot_slots_preallocated")
 
     def run_window(
         self,
@@ -1159,15 +1181,92 @@ class PersistentRealWorkerSession:
         )
 
     def snapshot(self) -> dict[str, torch.Tensor]:
+        """Capture a coherent endpoint into one of two bounded CPU slots.
+
+        Callers invoke this only between exact K windows, when the resident
+        optimizer is not mutating the model.  Alternating preallocated slots
+        let the prior immutable endpoint remain available to the background
+        publisher/correction ledger while the live model resumes in the next
+        window; no background path rereads the concurrently mutating model.
+
+        A device session enqueues the copies into pinned CPU storage on the
+        current device stream.  Subsequent model work on that stream is
+        ordered after the immutable copy, so local ownership can transfer
+        without waiting for all device-to-host traffic.  The background
+        consumer must call :meth:`wait_snapshot_ready` before reading it.
+        """
         if self.closed:
             raise RuntimeError("persistent real-worker session is closed")
         values = self.model.state_dict()
         if set(self.base_keys) - set(values):
             raise ValueError("persistent model layout lost base tensors")
-        return {
-            name: values[name].detach().to(device="cpu").clone()
-            for name in self.base_keys
-        }
+        if self._snapshot_slots is None:
+            raise RuntimeError("persistent snapshot slots were not preallocated")
+        slot = self._snapshot_slots[self._next_snapshot_slot]
+        self._next_snapshot_slot = (self._next_snapshot_slot + 1) % len(
+            self._snapshot_slots)
+        snapshot_key = tuple(
+            int(slot[name].data_ptr()) for name in self.base_keys)
+        prior_copy = self._snapshot_copy_ready.get(snapshot_key)
+        if prior_copy is not None:
+            if not prior_copy.query():
+                raise RuntimeError(
+                    "persistent snapshot slot reused before copy completion")
+            self._snapshot_copy_ready.pop(snapshot_key, None)
+        with torch.no_grad():
+            for name in self.base_keys:
+                source = values[name].detach()
+                target = slot[name]
+                if source.shape != target.shape or source.dtype != target.dtype:
+                    raise ValueError("persistent snapshot slot layout changed")
+                target.copy_(source, non_blocking=True)
+        if self.device.type == "cuda":
+            snapshot_copy_ready = torch.cuda.Event(
+                enable_timing=False, blocking=False)
+            snapshot_copy_ready.record(torch.cuda.current_stream(self.device))
+            self._snapshot_copy_ready[snapshot_key] = snapshot_copy_ready
+        return dict(slot)
+
+    def order_after_snapshot(
+        self,
+        snapshot: Mapping[str, torch.Tensor],
+    ) -> None:
+        """Order this thread's device stream after an admitted snapshot copy."""
+        if tuple(sorted(snapshot)) != self.base_keys:
+            raise ValueError("persistent snapshot ordering layout changed")
+        snapshot_key = tuple(
+            int(snapshot[name].data_ptr()) for name in self.base_keys)
+        snapshot_copy_ready = self._snapshot_copy_ready.get(snapshot_key)
+        if snapshot_copy_ready is not None:
+            torch.cuda.current_stream(self.device).wait_event(
+                snapshot_copy_ready)
+
+    def wait_snapshot_ready(
+        self,
+        snapshot: Mapping[str, torch.Tensor],
+        *,
+        deadline: float,
+    ) -> float:
+        """Wait on the background path until an admitted snapshot is readable."""
+        if tuple(sorted(snapshot)) != self.base_keys:
+            raise ValueError("persistent snapshot readiness layout changed")
+        snapshot_key = tuple(
+            int(snapshot[name].data_ptr()) for name in self.base_keys)
+        snapshot_copy_ready = self._snapshot_copy_ready.get(snapshot_key)
+        if snapshot_copy_ready is None:
+            return time.monotonic()
+        while not snapshot_copy_ready.query():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    "persistent snapshot copy completion deadline expired")
+            time.sleep(min(0.001, remaining))
+        self._snapshot_copy_ready.pop(snapshot_key, None)
+        return time.monotonic()
+
+    @property
+    def snapshot_slot_count(self) -> int:
+        return 0 if self._snapshot_slots is None else len(self._snapshot_slots)
 
     def translate(self, corrections: Mapping[str, torch.Tensor]) -> None:
         """Translate resident model x and audited ScheduleFree z at a boundary."""
@@ -1180,10 +1279,6 @@ class PersistentRealWorkerSession:
             if (correction.shape != target.shape
                     or not torch.isfinite(correction).all()):
                 raise ValueError("persistent correction is malformed/nonfinite")
-        with torch.no_grad():
-            for name in self.base_keys:
-                model_state[name].add_(
-                    corrections[name].to(model_state[name]))
 
         parameters = [
             parameter
@@ -1192,6 +1287,9 @@ class PersistentRealWorkerSession:
         ]
         if len(parameters) != len(self.optimizer_parameter_names):
             raise ValueError("persistent optimizer parameter order changed")
+        targets: list[
+            tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        ] = []
         for name, parameter in zip(
                 self.optimizer_parameter_names, parameters):
             record = self.optimizer.state.get(parameter)
@@ -1205,9 +1303,21 @@ class PersistentRealWorkerSession:
                     if key not in {"z", "exp_avg_sq"}:
                         raise ValueError(
                             f"unknown parameter-valued optimizer buffer: {key}")
-            z.add_(corrections[name].to(z))
+            targets.append((model_state[name], z, corrections[name]))
+
+        # Validation of every x/z destination completes before the first
+        # mutation.  The training lane is quiescent at this point, so this
+        # short no-grad loop is the atomic resident boundary swap.
+        with torch.no_grad():
+            for target, z, correction in targets:
+                target.add_(correction.to(target))
+                z.add_(correction.to(z))
 
     def close(self) -> None:
+        if any(not event.query() for event in self._snapshot_copy_ready.values()):
+            raise RuntimeError(
+                "persistent real-worker closed with snapshot copy in flight")
+        self._snapshot_copy_ready.clear()
         self.closed = True
 
 
@@ -1256,6 +1366,9 @@ class PersistentAsyncTrainingLane:
         self._losses: list[float] = []
         self._started_s = 0.0
         self._start_state: dict[str, torch.Tensor] | None = None
+        self._snapshot_deferred = False
+        self._boundary_report: CoalescedWindowReport | None = None
+        self._correction_applied = False
 
     def start(
         self,
@@ -1289,11 +1402,16 @@ class PersistentAsyncTrainingLane:
 
     def _run(self) -> None:
         try:
+            order_after_snapshot = getattr(
+                self.session, "order_after_snapshot", None)
+            if order_after_snapshot is not None:
+                if self._start_state is None:
+                    raise RuntimeError(
+                        "persistent async lane lost its ordered interval start")
+                order_after_snapshot(self._start_state)
             while True:
                 with self._condition:
-                    if (self._stop_requested
-                            or self._window_end - self._window_start
-                            >= self.max_windows):
+                    if self._stop_requested:
                         self._condition.notify_all()
                         return
                     local_window = self._window_end
@@ -1318,9 +1436,21 @@ class PersistentAsyncTrainingLane:
                     if report.generation != local_window:
                         raise ValueError(
                             "persistent async lane window identity changed")
-                    self._tokens += int(report.tokens)
-                    self._losses.extend(float(value) for value in report.losses)
                     self._window_end = local_window + 1
+                    completed = self._window_end - self._window_start
+                    if completed <= self.max_windows:
+                        self._tokens += int(report.tokens)
+                        self._losses.extend(
+                            float(value) for value in report.losses)
+                    else:
+                        # The trainer continues on its live mutable state, but
+                        # no third speculative snapshot/interval is retained.
+                        # This work is disposable until a verified result is
+                        # atomically applied at a later safe boundary.
+                        self._snapshot_deferred = True
+                        self._tokens = 0
+                        self._losses = [
+                            float(value) for value in report.losses[-1:]]
                     self._running = False
                     self._condition.notify_all()
         except BaseException as error:
@@ -1337,7 +1467,18 @@ class PersistentAsyncTrainingLane:
         deadline: float,
         corrections: Mapping[str, torch.Tensor] | None = None,
     ) -> CoalescedWindowReport:
-        """Stop after the active K and optionally translate resident x/z."""
+        """Stop after the active K and optionally translate resident x/z.
+
+        Calling without ``corrections`` is the first half of the v2.1
+        safe-boundary rendezvous: the lane is quiescent, but no model or
+        optimizer point has changed.  :meth:`apply_at_boundary` performs the
+        already-prepared translation only after the manager releases the exact
+        all-eight transaction.
+        """
+        if self._boundary_report is not None:
+            if corrections is None:
+                return self._boundary_report
+            return self.apply_at_boundary(corrections)
         thread = self._thread
         if thread is None:
             raise RuntimeError("persistent async lane was not started")
@@ -1355,23 +1496,12 @@ class PersistentAsyncTrainingLane:
             raise TimeoutError("persistent async lane did not stop at boundary")
         if self._error is not None:
             raise self._error
-        if self._window_end <= self._window_start or self._tokens <= 0:
+        if (
+            self._window_end <= self._window_start
+            or (self._tokens <= 0 and not self._snapshot_deferred)
+        ):
             raise ValueError("persistent async lane produced an empty interval")
-        translation_elapsed_s = 0.0
-        if corrections is not None:
-            if self._start_state is None:
-                raise RuntimeError("persistent async lane lost its interval start")
-            translation_started = time.monotonic()
-            self.session.translate(corrections)
-            for name, correction in corrections.items():
-                start = self._start_state.get(name)
-                if start is None or start.shape != correction.shape:
-                    raise ValueError(
-                        "persistent async interval correction layout changed")
-                start.add_(correction.to(start))
-            translation_elapsed_s = max(
-                0.0, time.monotonic() - translation_started)
-        return CoalescedWindowReport(
+        self._boundary_report = CoalescedWindowReport(
             local_window_start=self._window_start,
             local_window_end=self._window_end,
             exact_tokens=self._tokens,
@@ -1379,8 +1509,52 @@ class PersistentAsyncTrainingLane:
             elapsed_s=max(0.0, time.monotonic() - self._started_s),
             reached_hard_bound=(
                 self._window_end - self._window_start >= self.max_windows),
+            snapshot_deferred=self._snapshot_deferred,
+            translation_elapsed_s=0.0,
+        )
+        if corrections is None:
+            return self._boundary_report
+        return self.apply_at_boundary(corrections)
+
+    def apply_at_boundary(
+        self,
+        corrections: Mapping[str, torch.Tensor],
+    ) -> CoalescedWindowReport:
+        """Translate a quiescent lane once after all-eight manager release."""
+        if self._boundary_report is None:
+            raise RuntimeError(
+                "persistent async lane has not reached its safe boundary")
+        if self._correction_applied:
+            raise RuntimeError(
+                "persistent async lane correction was already applied")
+        if not corrections:
+            raise ValueError("persistent async lane correction is empty")
+        translation_elapsed_s = 0.0
+        if self._start_state is None:
+            raise RuntimeError("persistent async lane lost its interval start")
+        translation_started = time.monotonic()
+        self.session.translate(corrections)
+        for name, correction in corrections.items():
+            start = self._start_state.get(name)
+            if start is None or start.shape != correction.shape:
+                raise ValueError(
+                    "persistent async interval correction layout changed")
+            start.add_(correction.to(start))
+        translation_elapsed_s = max(
+            0.0, time.monotonic() - translation_started)
+        if self._snapshot_deferred:
+            # Background lag exhausted snapshot admission capacity, not
+            # foreground progress.  Start the next admissible interval at
+            # the now-corrected live boundary and discard the over-age local
+            # displacement from contribution accounting.
+            self._start_state = self.session.snapshot()
+        self._correction_applied = True
+        self._boundary_report = replace(
+            self._boundary_report,
+            elapsed_s=max(0.0, time.monotonic() - self._started_s),
             translation_elapsed_s=translation_elapsed_s,
         )
+        return self._boundary_report
 
     @property
     def start_state(self) -> Mapping[str, torch.Tensor]:

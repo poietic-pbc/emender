@@ -49,9 +49,9 @@ must not migrate or relabel them.
 |---|---:|
 | local interval | exactly `K = 40` optimizer steps |
 | accepted commit lag | integer `0..2`; lag `3` is dropped |
-| accepted applied-anchor lag | integer `0..2`; lag `3` forces catch-up |
+| accepted applied-anchor lag | integer `0..2`; lag `3` defers snapshot admission until a verified boundary apply |
 | accepted result-version lag | integer `0..2`; lag `3` result is replaced by current latest |
-| speculative-window lag | integer `0..2`; the third speculative window is not started |
+| speculative-window lag | integer `0..2`; a third speculative snapshot is not admitted |
 | stable-worker diversity floor | `Q_min = 2` distinct leased READY node workers |
 | accepted-token floor | `T_min = 3,934,080` exact tokens |
 | active-membership fraction | disabled |
@@ -61,7 +61,9 @@ must not migrate or relabel them.
 | one K40 progress window | at most `420 s` from trainer start |
 | open group to freeze/abort | at most `420 s` |
 | freeze to reload-verified fenced `latest` | at most `420 s` |
-| lag/capacity catch-up pause | at most `420 s` |
+| foreground result wait | forbidden; background result age retains the `420 s` deadline |
+| snapshot capture/admission pause | at most `1 s` through local `OWNED` |
+| result apply/swap pause | at most `60 s` for the complete all-eight transaction |
 | allocation to first committed `latest` | at most `720 s` |
 | outer update | stateless exact-token average, `eta_outer = 1.0` |
 
@@ -106,13 +108,17 @@ speculative_window_lag      = current_window - last_committed_apply_window
 
 Base lag at seal and result-window age remain useful telemetry, but neither
 substitutes for these clocks. A contribution with `commit_lag = 3` or more is
-dropped and the worker catches up at a safe K boundary. A worker whose anchor,
-mailbox result, or speculative window would reach lag 3 pauses before another
-forward pass, fetches the newest verified committed result point-to-point,
-applies it, and resumes with lag zero. Failure to recover inside the bounded
-catch-up deadline drains the incarnation. A negative global lag or a mailbox
-result newer than authoritative latest is a future-base protocol error and is
-rejected, never normalized.
+dropped. A worker whose anchor, mailbox result, or speculative snapshot would
+reach lag 3 stops admitting snapshots from that stale base. It continues
+foreground local training on its live mutable state and checks nonblocking at
+later K boundaries for a complete verified result; it does not fetch or wait
+in the foreground. When one is ready, the worker applies it atomically at a
+safe boundary and resumes admissible snapshots at lag zero. Expiry of the
+background result deadline skips or defers that result and may drain the
+incarnation through the separately labeled recovery path, but cannot create a
+foreground catch-up wait. A negative global lag or a mailbox result newer than
+authoritative latest is a future-base protocol error and is rejected, never
+normalized.
 
 For the frozen set `F_g`, contribution `i` has exact positive integer tokens
 `t_i` and cumulative interval delta `d_i`. In NDP deterministic digest order
@@ -146,21 +152,37 @@ qualification evidence.
 ## Persistent lane, ownership, correction, and mailbox
 
 A model, ScheduleFree optimizer, iterator, and hidden state are initialized
-once per trainer incarnation and remain resident across K40 windows. A local
-interval is a cumulative displacement over a named adjacent range:
+once per trainer incarnation and remain resident across K40 windows. The
+trainer exclusively owns and mutates this live state. A local interval is a
+cumulative displacement over a named adjacent range:
 
 ```text
 d_i[q0,q1) = L_i(q1) - L_i(q0)
 exact_tokens_i = sum(actual tokens in every window in [q0,q1))
 ```
 
-Per stable node worker, the native service may own exactly one immutable sealed
-eight-lane cohort descriptor while the trainers extend exactly one mutable
-eight-lane cumulative adjacent interval. `OWNED` transfers buffer, transport,
-replay, receipt, and release responsibility to the persistent native service.
-After `OWNED`, trainers do not wait for a fabric send, receipt, reduction,
-commit, or checkpoint before continuing within the lag and capacity bounds.
-They never mutate an owned descriptor.
+At a K boundary, trainers pause only to capture one coherent, fenced immutable
+eight-lane snapshot and admit it into a preallocated double buffer,
+copy-on-write representation, or equivalent bounded mechanism. The snapshot
+must describe exactly one safe optimizer boundary. Copying directly from live
+weights while an optimizer may mutate them is forbidden, as is any background
+read of the live model or optimizer.
+
+Per stable node worker, the native service may own exactly one such immutable
+sealed snapshot while the trainers extend exactly one mutable eight-lane
+cumulative adjacent interval. `OWNED` transfers buffer, transport, replay,
+receipt, and release responsibility to the persistent native service. After
+`OWNED`, foreground training resumes immediately. Trainers do not wait for
+peer discovery, quorum, publication or hashing, fabric send/receipt, reduction,
+commit, checkpoint I/O, result readiness, or another trainer. They never
+mutate an owned snapshot.
+
+The snapshot and result mailboxes are capacity bounded. A full snapshot slot
+causes an explicit skip or defer; a newer verified result may replace an older
+unread result under the lag policy. Native background workers publish,
+aggregate, validate, and checkpoint only immutable admitted snapshots.
+Backpressure applies only within those bounded background queues and must not
+silently become a foreground wait or collective rendezvous.
 
 Every committed result enters one capacity-one, verified-latest mailbox per
 node. Immutable state and manifest MUST be reload-verified, native peers MUST
@@ -171,7 +193,7 @@ an unread older result; equal
 identical bytes are idempotent; older, conflicting, corrupt, nonfinite, or
 wrong-fence results are rejected. One bounded replacement staging view may be
 used while a reader holds the visible view; otherwise publication
-backpressures. There is no result FIFO.
+is skipped or deferred without blocking the trainer. There is no result FIFO.
 
 At a K boundary, trainer `i`, applied anchor `S_a`, and newest verified result
 `S_h` use the manifest chain to find every one of that trainer's accepted
@@ -192,21 +214,27 @@ Every parameter-valued optimizer point, including ScheduleFree `z`, receives
 the same translation. The correction is applied once, only between K windows,
 and never to an immutable owned descriptor.
 
-Applying a result is one node transaction across all eight trainers:
+Applying a result is one node transaction across all eight trainers and is the
+only steady-state foreground interruption other than snapshot
+capture/admission:
 
-1. the manager verifies the fenced result, manifest chain, mailbox version,
-   and eight per-lane correction-ledger plans;
-2. all eight live trainers reach a K boundary and acknowledge the same prepared
-   version before any node READY advertisement for that version;
+1. entirely in the background, the manager verifies the fenced result,
+   manifest chain, mailbox version, and eight per-lane correction-ledger plans;
+2. if all eight live trainers are at a safe K boundary and the complete
+   prepared version can meet the predeclared apply bound, they acknowledge it;
+   otherwise the result is deferred without waiting;
 3. every trainer applies `x/z` correction and emits a fenced recovery marker;
 4. only after all eight markers match does the manager publish one node-applied
    marker and advertise READY at the new version.
 
-Missing, conflicting, or timed-out markers prevent READY. A failure before the
-node-applied marker causes all eight lanes to discard disposable local state
-and restart together from the verified committed result with new trainer and
-node incarnations. Recovery never accepts a mixture of old- and new-anchor
-lanes as one node contribution.
+The apply/swap is atomic and has its own finite foreground pause bound. A late,
+absent, invalid, failed, conflicting, or not-yet-prepared result is skipped or
+deferred without blocking training. Missing, conflicting, or timed-out markers
+prevent READY and never authorize partial application. A failure after apply
+begins but before the node-applied marker causes all eight lanes to discard
+disposable local state and restart together from the verified committed result
+with new trainer and node incarnations. Recovery is separately labeled and
+never accepts a mixture of old- and new-anchor lanes as one node contribution.
 
 ## Finite memory, liveness, and membership
 
@@ -226,9 +254,10 @@ headroom                                   4,717,805,088 bytes
 The correction accumulator reuses owned-cohort storage. Fixed registered
 slots, credits, sender replay, two owner reassignments, receipt ledgers,
 mailbox views, and every deadline remain within NDP01–NDP17. A third dense
-cohort is forbidden even transiently. Failure to prove the complete
-non-overlapping formula fails startup; no dense spill to Lustre or on-demand
-queue growth is permitted.
+cohort is forbidden even transiently. Capacity exhaustion skips, replaces, or
+defers background work; it does not stop a foreground K window. Failure to
+prove the complete non-overlapping formula fails startup; no dense spill to
+Lustre or on-demand queue growth is permitted.
 
 Membership is the leased READY snapshot, never launched ranks. Loss or expiry
 removes the old incarnation. A returning stable worker discards unfinished
@@ -236,8 +265,8 @@ local/inner/descriptor/mailbox state, creates a new incarnation, verifies the
 run/fence/policy/code/layout and authoritative latest, and becomes eligible for
 a later transition. Old-incarnation work may satisfy only an already frozen
 exact identity. With the two-node floor, loss of either stable worker prevents
-a commit. The survivor may train only to the lag/capacity limit and then
-pauses; it cannot invent one-node authority.
+a commit. The survivor may continue local foreground training but admits no
+out-of-policy snapshot and cannot invent one-node authority.
 
 ## Native path and atomic checkpoint
 
@@ -294,21 +323,26 @@ evidence.
 
 ## Telemetry and exact two-node gates
 
-Telemetry reports true intervals and identities, not inferred overlap:
-K-window start/end/cadence, local handoff and `OWNED`, fabric send/receipt,
-reduce/freeze/outer apply, reload verification/publication, redistribution,
-all four lag clocks, exact tokens, interval ranges, resident/credit/replay
-high-water, drops, pauses, READY membership, eight-lane apply markers, and
-terminal reasons. Checkpoint correctness latency (`freeze` through
-reload-verified fenced `latest`) has a separate pass/fail result; it is not
-foreground idle and cannot be hidden from its own deadline.
+Telemetry reports true intervals and identities, not inferred overlap. Every
+snapshot/result identity separately times `freeze_snapshot`,
+`snapshot_admission`, `publish_network`, `aggregation`, `checkpoint`,
+`result_wait`, and `apply_swap`, plus K-window start/end/cadence and total
+foreground idle. It also reports all four lag clocks, exact tokens, interval
+ranges, resident/credit/replay high-water, skips/drops/deferrals, READY
+membership, eight-lane apply markers, and terminal reasons. `result_wait`
+measures background result age/availability and reports zero foreground wait.
+Snapshot/admission and apply/swap report every event, maximum, p99, and their
+separate predeclared bounds. Checkpoint correctness latency (background
+snapshot admission through reload-verified fenced `latest`) has a separate
+pass/fail result; it is not foreground idle and cannot be hidden from its own
+deadline.
 
 Every live gate is exactly two nodes with `Partition=batch` and `QOS=debug`.
 Both fields are retained separately while queued/running and in terminal
 accounting. All five gates below must pass on the same reviewed policy,
 source, native bundle, seed, and configuration:
 
-1. **Numerical:** lag 0/1/2 admission and lag-3 drop/catch-up, unequal exact
+1. **Numerical:** lag 0/1/2 admission and lag-3 drop/defer, unequal exact
    tokens, digest-order binary64 agreement, `eta_outer=1.0`, cumulative
    intervals, skipped mailbox versions, selected/nonselected correction,
    ScheduleFree `x/z`, and atomic eight-trainer apply.
@@ -316,7 +350,12 @@ source, native bundle, seed, and configuration:
    K40 windows from all 16 real trainers; local `OWNED <= 1 s`; maximum and
    p99 commit/anchor/result/speculative lag at most 2; median boundary cadence
    at most `1.25` times median raw K40 compute; foreground idle strictly below
-   `0.10`; all bounds/release invariants; and independent correctness latency.
+   `0.10`; causally matched per-phase timings and maximum/p99
+   snapshot/admission and apply/swap within their predeclared bounds; all
+   bounds/release invariants; and independent correctness latency. Checkpoint
+   count, restart success, median-only cadence, or aggregate idle cannot prove
+   overlap. Bursty alternating K windows with approximately 200-second
+   foreground pauses fail regardless of healthy medians or checkpoints.
 3. **Fault/restart:** missing/late contribution, lag-3 drop, duplicate/conflict,
    checksum/nonfinite input, held mailbox view, trainer/service/owner loss,
    replay/reassignment, partial eight-trainer apply, failed publication, new
@@ -386,10 +425,11 @@ honest.
 ## Required conformance statement
 
 Every implementation, runner, or scale task MUST cite the compute-pool
-conformance checklist, all R01–R16, all NDP01–NDP17, and all
-V21S01–V21S17. It must name the applicable failure/deadline path, exact
+conformance checklist, all R01–R16, all NDP01–NDP17, all V21S01–V21S17, and
+ISP01–ISP07. It must name the applicable failure/deadline path, exact
 minimum-progress floor, policy/schema/digests, committed checkpoint evidence,
-and exact validation commands. A scale task must additionally cite the passed
-promotion and predecessor manifests plus the reviewed scale-closure
-calculation. No task may claim conformance by satisfying only the v2.1 rows;
-the mapped R and NDP requirements remain independently normative.
+phase-timing/foreground-idle evidence, and exact validation commands. A scale
+task must additionally cite the passed promotion and predecessor manifests
+plus the reviewed scale-closure calculation. No task may claim conformance by
+satisfying only the v2.1 rows; the mapped R and NDP requirements remain
+independently normative.

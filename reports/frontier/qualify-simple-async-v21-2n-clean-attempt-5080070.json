@@ -1,0 +1,111 @@
+{
+  "schema": "emender-async-v21-clean-attempt-v1",
+  "task_id": "qualify-simple-async-v21-2n-clean",
+  "passed": false,
+  "verdict": "failed",
+  "job": {
+    "job_id": "5080070",
+    "state": "FAILED",
+    "exit_code": "1:0",
+    "nodes": 2,
+    "partition": "batch",
+    "qos": "debug",
+    "start": "2026-07-26T07:25:44",
+    "end": "2026-07-26T07:37:09",
+    "elapsed": "00:11:25",
+    "nodelist": "frontier[02244,02253]",
+    "terminal_sacct": "5080070|FAILED|1:0|2|batch|debug|2026-07-26T07:25:44|2026-07-26T07:37:09|00:11:25"
+  },
+  "payload": {
+    "digest": "29d87d9102b6a4cd523e62f7e28fdcb2459af5cfdf75c68a23df24c16e533a75",
+    "status": "retired_failed",
+    "unchanged_resubmit_forbidden": true,
+    "source_commit": "3603c85db25850a5f545b886045a76740af610b4",
+    "source_digest": "b52213703d821da68bbbfb6094fe9b29cf86cd121e4c875584410d0ee2e0dc7a",
+    "policy_digest": "fa9def95daf7bce25f1b962ca5437e7a76317b94ccfb9a710fbf126a344e7d98",
+    "launcher_digest": "70b96385b5ec0795d2d1c6b6495846b20e94fe53e5256e9c53c824b65c223fb7",
+    "native_bundle_digest": "f19e10be9987cfdb551a8dd75c5c88145c3cf35b73c54d3898fe562ce4182441",
+    "native_build_manifest_sha256": "78dd05561df181595d6c840b2e4be42a4e4a86f877bc1b62e39ed0129c636ef2",
+    "full_layout_gate_job_id": "5080048",
+    "full_layout_gate_sha256": "909084bb0bbe2022b49750249b2a660579977ecca45a49dacd22568edc53d337",
+    "acceptance_manifest_sha256": "f55bc4729a401a1987a2d2220f42310edc43f27eafd4dd6fdceb14046b799a46"
+  },
+  "seed": {
+    "step": 2300930,
+    "accepted_tokens": 150793748480,
+    "bytes": 7719680116,
+    "sha256": "0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2",
+    "node_path": "/tmp/emender-e97-seed-5080070/checkpoint-step-2300930.pt",
+    "nodes_verified_offline": 2,
+    "network_fetches": 0,
+    "bootstrap_attestation_sha256": "27e234891df02b64b9db77fc784c341e5a3ae6e87418b8f1af167776d1d710bb",
+    "frontier02244_attestation_sha256": "eeca05007000a00dcdfaed4aa03d4c90ab2bd0c81d913a78c42aa73e1c043821",
+    "frontier02253_attestation_sha256": "2071cb4a558d4abd306b24830ec29ac780901dc9bd11d31ed4faa8f8b83b1148"
+  },
+  "failure": {
+    "generation": 0,
+    "exception": "TimeoutError: checkpoint leader apply deadline expired",
+    "source": "scripts/frontier/resilient_e97_role.py:929",
+    "affected_trainers": [
+      "node-0-trainer-1",
+      "node-0-trainer-2",
+      "node-0-trainer-3",
+      "node-0-trainer-4",
+      "node-0-trainer-5",
+      "node-0-trainer-6",
+      "node-0-trainer-7"
+    ],
+    "real_trainers": 16,
+    "supervision_events": 1536,
+    "checkpoints": 1,
+    "atomic_commits": 0,
+    "restarts": 0,
+    "cause": "The node-0 peer release wait incorrectly charged the composite background result-readiness, leader materialization/apply, and immutable-checkpoint path to one 180-second result substage. Rank 0 required 153.61372950021178 seconds for result readiness and 42.85253917379305 seconds for materialization before its 2.2889361325651407-second immutable checkpoint write, so a valid release could not exist before the peer deadline.",
+    "timing_seconds": {
+      "node_0_rank_0_result_readiness": 153.61372950021178,
+      "node_0_rank_0_result_materialization": 42.85253917379305,
+      "node_0_rank_0_checkpoint_write": 2.2889361325651407,
+      "node_0_rank_0_checkpoint_hash": 2.7314202170819044,
+      "composite_through_checkpoint_write": 198.75520480657097,
+      "incorrect_peer_wait_bound": 180,
+      "enclosing_freeze_to_latest_bound": 420
+    }
+  },
+  "partial_progress": {
+    "all_trainers_alive": true,
+    "node_0_rank_0_result_root": "7031b1ee58512dbc9c9bc29bd2b9444876d03a9f9953944fd69eaf0291d67207",
+    "accepted_tokens": 5245440,
+    "global_weight": 5245440,
+    "checkpoint": "generation-00000001-fence-05080070.pt",
+    "checkpoint_bytes": 2753437091,
+    "checkpoint_sha256": "167e5ee105b5e64083bb90f8b7253b66f8c46fbbedb09d7c56040cca296838fe",
+    "node_0_rank_0_apply_receipt_present": true,
+    "node_1_rank_0_apply_receipt_present": true,
+    "minimum_required_commits_met": false,
+    "minimum_required_windows_met": false
+  },
+  "artifacts": {
+    "run_root": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/3603c85db25850a5f545b886045a76740af610b4/clean/clean-overlap",
+    "acceptance_manifest": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/3603c85db25850a5f545b886045a76740af610b4/clean-qualification-plan.json",
+    "slurm_stdout_sha256": "7b76ac29f0fd18ef4d46c55d54228e541432f23ee019485e2ef59bd16e3b8995",
+    "slurm_stderr_sha256": "c5a31510a247765363db6e9569a99ea264c76a2bc9dee15346f3e041aa0b8106",
+    "supervision_events_sha256": "a42bc72c879226a79f98d95004d76aa6ce795bd0bd01412a8d9805be0cb93c7c",
+    "runtime_identity_sha256": "5c0fa27593fa1b173a57512eaee13e8dcb8bfadfb1c1b3783fae4457e02c6805",
+    "native_launch_attestation_sha256": "ff779995260aca3bd63ddd3dd96cf06d0eb39623d5610e67990bbbd7c8732bb2"
+  },
+  "commands": {
+    "submit": "\"$EMENDER_PYTHON\" scripts/frontier/run_async_v21_qualification.py --gate clean --nodes 2 --repo \"$SNAPSHOT\" --seed-config configs/frontier/e97_async_256.yaml --native-build-manifest \"$BUILD_MANIFEST\" --full-layout-gate \"$G2_GATE\" --run-root \"$RUN_ROOT\" --state \"$STATE_JSON\" --output \"$MANIFEST_JSON\" --submit",
+    "queued_running": [
+      "squeue -h -j 5080070 -o '%i|%T|%P|%q'",
+      "scontrol show job -dd 5080070"
+    ],
+    "terminal": "sacct -n -X -j 5080070 --format=JobIDRaw,State,ExitCode,NNodes,Partition,QOS,Start,End,Elapsed -P"
+  },
+  "disposition": {
+    "clean_gate_passed": false,
+    "fault_gate_authorized": false,
+    "scale_authorized": false,
+    "smallest_fix": "Give the composite leader-release preparation wait ADR-002's existing 420-second freeze-to-verified-result bound in the trainer and supervisor while preserving the separate 180-second readiness/checkpoint inner bounds and 60-second all-eight apply bound.",
+    "regression": "test_checkpoint_leader_wait_uses_enclosing_result_preparation_deadline"
+  }
+}

@@ -34,7 +34,7 @@ appendices and do not change these decisions.
 | Failure boundary | The elastic backend uses bounded point-to-point work over explicitly named contributions/owners. It never requires launched ranks, MPI, or an all-rank collective. Loss triggers bounded owner reassignment/replay or a clean no-commit abort. |
 | Node-local path | Trainers produce directly into XPMEM or service-allocated memfd buffers. Handoff adds no trainer-sized write; redistribution creates one shared node aggregate, not eight files/copies. Disk may retain one reduced node contribution only as an explicit bounded NVMe replay fallback. |
 | Correctness | Python freezes locally complete, checksummed, replayable node contributions. Native owners apply each fenced identity exactly once, in the specified deterministic float64 order, with exact integer weights, checksums, credits, and idempotent receipts. |
-| Checkpoint/commit | Native code returns a fenced read-only aggregate view. Native peers agree the exact next result/token/receipt identity; Python/PyTorch applies outer state and reload-verifies the immutable checkpoint; a digest-linked commit receipt makes it durable. `latest.json` and fabric receipts are not authority. |
+| Checkpoint/commit | Native code returns a fenced read-only aggregate view. Native peers agree the exact next result/token/receipt identity; background policy materializes and reload-verifies the immutable checkpoint from immutable inputs, and a digest-linked receipt makes it durable. In bounded asynchronous mode, live trainers apply only the complete verified result later at a safe boundary. `latest.json` and fabric receipts are not authority. |
 | Admission gates | G0 local -> G1 two-node CXI probe -> **G2 full-layout two-node synthetic** -> G3 real two-node -> G4 failure/rejoin -> G5 fresh-allocation restart -> G6 ordered 4/8/16/32/64/256 scale. No real model or 4+ node native job is allowed before exact-code G2 passes. |
 
 ## Decisions and requirements
@@ -50,19 +50,19 @@ from the elastic dense hot path.
 | NDP01 | Native peer control owns live allocation-fence/incarnation checks, READY membership, generation open/freeze/abort/commit, owner agreement, node-apply state, and recovery handshakes. Python owns only the scheduler adapter, outer/checkpoint policy, immutable publication, and supervision. C++ owns local dense handoff, native reduction, fabric movement, redistribution, dense-buffer lifetime, and independent stale-fence rejection. No compute role may open a shared control database. |
 | NDP02 | The elastic backend uses only bounded point-to-point operations. It MUST NOT call an all-rank barrier, broadcast, reduce, all-reduce, all-gather, MPI initialization/finalization, or any operation whose completion requires every launched or READY peer. |
 | NDP03 | One persistent C++17 node service uses libfabric `FI_EP_RDM` and `FI_MSG`. Frontier production MUST resolve exactly `cxi`; test providers are never silently promotable. |
-| NDP04 | Trainer/service handoff uses XPMEM or a service-allocated `memfd`. The trainer produces directly into the exported buffer. No extra trainer-sized file or socket copy is permitted in steady state. |
+| NDP04 | Trainer/service handoff uses XPMEM or a service-allocated `memfd`. The trainer exclusively owns live mutable model/optimizer state and captures a coherent fenced immutable snapshot into a preallocated/COW/equivalent bounded exported buffer at a safe boundary. The service never reads live mutable state. No extra trainer-sized file or socket copy is permitted in steady state. |
 | NDP05 | Layout, conversion, weight bounds, accumulation order, rounding mode, and result encoding are fixed below. Native output is bitwise comparable with the v1 reference, independent of arrival order. |
 | NDP06 | Every command, frame, contribution, receipt, replay, result, and checkpoint handoff carries the fenced wire identity defined below. A stale or conflicting identity is rejected, never guessed or overwritten. |
 | NDP07 | Python exchanges opaque libfabric endpoint names as leased membership metadata. Native services install only current-fence routes; PMI, DNS fan-out, filesystem polling, and native all-gather are not endpoint exchange mechanisms. |
-| NDP08 | Fabric buffers are fixed, pre-registered pools. Frame, layout, contribution, replay, and owner-memory bounds are checked before admission. No unbounded allocation is allowed after a generation opens. |
-| NDP09 | Receiver-issued byte and slot credits bound traffic. A fabric send completion is not an application receipt and does not restore logical credit. |
+| NDP08 | Snapshot, result, and fabric buffers are fixed, capacity-bounded, pre-registered pools. Frame, layout, contribution, replay, mailbox, and owner-memory bounds are checked before admission. No unbounded allocation is allowed after a generation opens, and exhaustion skips/replaces/defers background work rather than blocking foreground training. |
+| NDP09 | Receiver-issued byte and slot credits bound traffic. A fabric send completion is not an application receipt and does not restore logical credit. Credit or mailbox backpressure remains in background work and MUST NOT become a trainer wait after immutable snapshot admission. |
 | NDP10 | SHA-256 payload checksums, CRC32C headers, once-only owner application, and idempotent receipts are mandatory. Nonfinite or corrupt data cannot enter an accumulator. |
 | NDP11 | Sender memory is the primary replay source. Replay and owner reassignment are bounded by bytes, owner epochs, and deadlines. Disk is an optional one-node-contribution, node-local fallback only. |
 | NDP12 | Committed aggregate shards are redistributed directly from owners into one service-owned node aggregate. Trainers map that shared result; the service does not write eight aggregate files. |
-| NDP13 | Every stage has an absolute deadline and a defined abort/retry result. Fabric or owner failure is contained to routes/generation attempts and never invokes an allocation-wide abort. |
+| NDP13 | Every stage has an absolute deadline and a defined abort/retry result. Fabric or owner failure is contained to routes/generation attempts and never invokes an allocation-wide abort. In bounded asynchronous mode, background deadline expiry skips/defers the result and cannot create a foreground result wait. |
 | NDP14 | Python talks to a versioned C ABI and a local `AF_UNIX/SOCK_SEQPACKET` service. Only metadata crosses that control channel; dense bytes are referenced by native buffer handles. |
-| NDP15 | Python selects checkpoint cadence/publisher and writes complete immutable state. Native peers agree the exact commit, return a fenced read-only aggregate view, acknowledge immutable receipt/result identity, reduce all eight trainer apply receipts to one node-applied receipt, and drain without a collective. |
-| NDP16 | Required counters, timings, identities, bounds, provider facts, and terminal reasons are emitted as structured telemetry. Missing telemetry fails an acceptance gate. |
+| NDP15 | Python selects checkpoint cadence/publisher and writes complete immutable state only from admitted immutable snapshots/results. Native peers agree the exact commit and return a fenced read-only aggregate view in the background. A complete verified result is applied/swapped atomically at a later safe boundary under a separate finite foreground bound; all eight trainer receipts reduce to one node-applied receipt. Checkpoint I/O is never on that foreground apply path. |
+| NDP16 | Required counters, timings, identities, bounds, provider facts, and terminal reasons are emitted as structured telemetry. Bounded asynchronous artifacts separately time freeze/snapshot, admission, publish/network, aggregation, checkpoint, result wait, apply/swap, and total foreground idle for causally identified work. Missing or median-only telemetry fails an acceptance gate. |
 | NDP17 | A full-E97-layout, two-node synthetic CXI gate is a hard prerequisite for every real model or larger-node job using this backend. Scale proceeds in the fixed order specified below. |
 
 ### Explicitly non-goals
@@ -119,18 +119,25 @@ weight. Owners apply NDP05 in deterministic contribution order using
 `exact_tokens` directly and divide by the checked exact-token sum. The
 extension MUST NOT encode lagged work as a v1 `generation` with `tau = 0`,
 accept a v2.0 policy/schema/digest, retain unbounded generations, make a
-trainer wait for fabric send/receipt after bounded local `OWNED`, add a dense
-Python/Lustre path, introduce a collective, or close a scale group from
-launched-rank state or merely because two contributions arrived. Until the
-versioned extension and V21S01–V21S17 gates pass, native v1 remains fresh-only
-compatibility behavior and v2.0 remains historical evidence only.
+trainer or background worker share the live mutable model, copy weights while
+the optimizer mutates them, make a trainer wait for discovery, quorum,
+send/receipt, aggregation, hashing, checkpoint, or result readiness after
+bounded local `OWNED`, add a dense Python/Lustre path, introduce a collective,
+or close a scale group from launched-rank state or merely because two
+contributions arrived. Until the versioned extension and V21S01–V21S17 gates
+pass, native v1 remains fresh-only compatibility behavior and v2.0 remains
+historical evidence only.
 
 ## Plane boundary and process topology
 
 There is one Python allocation holder, one Python manager and one native data
 service per live node, and normally eight Python trainer processes per Frontier
 node. The manager is model-free. Trainers own model/inner optimizer state. The
-native service owns no training policy and cannot commit a generation.
+native service owns no training policy and cannot commit a generation. In
+bounded asynchronous mode, trainers exclusively own all live mutable state;
+managers and native services receive only fenced immutable snapshots and
+immutable results. No background process may map or inspect a trainer's live
+mutable model or optimizer.
 
 | Operation | Python control plane | C++ native data plane |
 |---|---|---|
@@ -200,9 +207,12 @@ Generation closure is a two-phase control/data operation:
    shard coverage and sends `FINALIZE_OWNERS`; this is point-to-point control,
    not a collective.
 4. Each node fetches result shards independently and exposes `RESULT_READY`.
-   Python performs outer apply/checkpoint/immutable publication. Native peer
-   exact-once commit agreement plus the current-fence digest-linked receipt
-   permits `COMMITTED` and next-generation admission.
+   Background Python policy materializes and reload-verifies immutable
+   publication from the immutable base/result. Native peer exact-once commit
+   agreement plus the current-fence digest-linked receipt permits `COMMITTED`.
+   A trainer consumes the complete verified result only through an atomic,
+   separately bounded apply/swap at a later safe boundary. Neither publication
+   nor result readiness gates its next foreground K window.
 
 ## Normative reference B — provider and endpoint contract
 
@@ -276,6 +286,13 @@ The service uses `xpmem_get`/`xpmem_attach`, reads it without modification, and
 detaches/releases it immediately after local reduction and checksum. The
 trainer MUST keep the allocation stable until `BUFFER_RELEASED`.
 
+For bounded asynchronous training, producing the delta is the local immutable
+snapshot operation: the trainer fences optimizer mutation at one safe K
+boundary and fills or exposes a preallocated double buffer, copy-on-write view,
+or equivalent bounded snapshot before sealing it. Exporting live parameter
+storage, copying it concurrently with an optimizer step, or letting the
+service reread it after foreground mutation resumes is nonconforming.
+
 ### Required memfd fallback
 
 If XPMEM is unavailable, the service allocates a sealed-size `memfd`, sizes it
@@ -285,6 +302,13 @@ intermediate tensor-sized Python `bytes`, pipe, Unix-socket payload, or file
 copy is allowed. After production, the trainer marks the buffer read-only to
 the protocol; the service maps the same pages and reduces them. The descriptor
 is unlinked by construction and closed after `BUFFER_RELEASED`.
+
+Snapshot admission ends when the complete fenced descriptor becomes `OWNED`.
+From that point, discovery, quorum, credit waits, publication, hashing,
+network, reduction, validation, checkpoint I/O, and result readiness execute
+only in background workers. Capacity exhaustion is an explicit
+skip/replace/defer outcome and never extends the snapshot pause into a trainer
+wait.
 
 In both paths, “directly” means one producer fill of the trainer's delta is
 unavoidable, but handoff adds **zero** full-layout writes. In particular the
@@ -877,20 +901,26 @@ At `RESULT_READY`, native peers agree one current-fence result and Python
 chooses one checkpoint publisher. The
 publisher obtains a read-only aggregate fd/view plus `(run_key,fence,
 generation,attempt,layout_digest,base_digest,result_root,global_weight)`. It
-applies the global delta and required outer optimizer in Python/PyTorch, writes
-and reload-verifies the immutable checkpoint selected by policy, and appends a
-digest-linked commit receipt under the immutable allocation claim. Native peer
+materializes the global delta and required outer state from immutable
+base/result inputs, writes and reload-verifies the immutable checkpoint
+selected by policy, and appends a digest-linked commit receipt under the
+immutable allocation claim. It does not read or mutate a live trainer model or
+optimizer. Native peer
 control acknowledges exactly that receipt/result/token identity; it never
 declares a commit from a fabric receipt. A compatibility `latest.json` may be
 written after the receipt but is never read as authority. No database, lock
 file, or filesystem heartbeat participates.
 
-Nonpublisher trainers map the same node aggregate for local apply. A handle is
-released explicitly. Leaked handles expire at the apply deadline and make the
-attempt fail closed; the service does not reuse their buffer for a later
-generation. Until the durable commit succeeds, every applied trainer state is
-speculative. If checkpoint/publication aborts, those trainers MUST discard it
-and reload `S_g`; they may not advertise READY for `g+1`.
+For strict-fresh v1, nonpublisher trainers may map the same node aggregate for
+local apply under the generation lifecycle. For bounded asynchronous v2.1,
+checkpoint/publication is background work on immutable inputs and does not
+gate the next K window. Only after the complete result is verified may all
+eight trainers atomically apply/swap it at a later safe boundary under the
+separate foreground pause bound. A late, absent, invalid, failed, or unready
+result is skipped/deferred without a foreground wait. A handle is released
+explicitly. Leaked handles expire at the background/apply deadline and make
+the result fail closed; the service does not reuse their buffer for a later
+generation. No partial result becomes READY or mutates a subset of trainers.
 
 Shutdown sequence is: Python stops new local work; sends `ABORT` for an open
 uncommitted attempt or `COMMIT` for already durable state; sends `DRAIN`; the
@@ -916,7 +946,9 @@ The two-node qualification defaults are:
 | frozen contribution transfer, including replay/reassignment | 180 s |
 | owner finalization | 30 s |
 | redistribution and aggregate root validation | 180 s |
-| checkpoint handoff/apply/publication | policy bound, at most 180 s for 2-node gate |
+| background checkpoint handoff/publication | policy bound, at most 180 s for 2-node gate |
+| foreground snapshot capture/admission | v2.1 at most 1 s through `OWNED` |
+| foreground atomic result apply/swap | v2.1 at most 60 s for all eight trainers |
 | drain | 30 s; process kill bound 45 s |
 
 Every service emits JSON Lines schema `emender-native-dataplane-telemetry-v1` to
@@ -935,14 +967,22 @@ manifest. Required fields/counters are:
 - TX/RX credits and slot high-water, accumulator/result/resident high-water,
   receipt count, duplicates/conflicts/checksum/nonfinite/stale rejects;
 - initial/replay bytes, reassignment count, disk replay bytes/path class,
-  prompt released bytes and post-generation resident bytes; and
+  prompt released bytes and post-generation resident bytes;
 - local handoff kind, mapped bytes, `handoff_full_copy_bytes`, trainer spool
-  file/bytes, Python dense socket bytes, open/released view counts.
+  file/bytes, Python dense socket bytes, open/released view counts; and
+- for bounded asynchronous work, causally identified `freeze_snapshot`,
+  `snapshot_admission`, `publish_network`, `aggregation`, `checkpoint`,
+  `result_wait`, and `apply_swap` intervals plus total foreground idle,
+  zero foreground result-wait time, and every-event maximum/p99
+  snapshot/admission and apply/swap pauses.
 
 Counter invariants are checked, not merely printed. Successful steady-state
 gates require `trainer_spool_bytes=0`, `python_dense_socket_bytes=0`,
 `handoff_full_copy_bytes=0`, `disk_replay_bytes=0`, no credit/memory bound
 violation, and released logical bytes equal admitted logical bytes.
+Checkpoint/restart success, checkpoint count, median cadence, and aggregate
+idle are not overlap evidence. A bursty trace with alternating K windows and
+approximately 200-second foreground gaps fails even if those summaries pass.
 
 ## Normative gate reference — acceptance commands and metrics
 
@@ -1137,12 +1177,14 @@ cite applicable matrix IDs R01–R16 plus native IDs NDP01–NDP17. At minimum:
 - compiled reference qualification: R05, R10, R15, R16 and NDP02, NDP03,
   NDP05, NDP16, NDP17, explicitly recording its non-elastic fallback status.
 
-A v2.1 asynchronous task MUST additionally cite ADR-002 and V21S01–V21S17.
+A v2.1 asynchronous task MUST additionally cite ADR-002, V21S01–V21S17, and
+ISP01–ISP07.
 Its native artifact must prove the versioned identity/exact-token/descriptor/
-coalescing/correction/mailbox/node-apply extensions above while retaining
-every applicable NDP01–NDP17 invariant. A 4+ artifact must also prove the
-reviewed leased-READY scale closure. Passing the v1 G2/G3 gate is a prerequisite
-and reference, not evidence that v2.1 transport has passed.
+coalescing/correction/mailbox/node-apply extensions above, immutable snapshot
+coherence and foreground/background phase timing, while retaining every
+applicable NDP01–NDP17 invariant. A 4+ artifact must also prove the reviewed
+leased-READY scale closure. Passing the v1 G2/G3 gate is a prerequisite and
+reference, not evidence that v2.1 transport has passed.
 
 The acceptance record must contain exact commands, immutable artifacts, code
 and binary digests, provider facts, committed generation/checkpoint evidence,

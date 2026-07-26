@@ -229,7 +229,19 @@ def build_plan(repo: Path, commit: str, manifest: Path, gate: Path, run_root: Pa
                       "injection": injection})
         if name == "clean-overlap":
             phase["performance_gate"] = {
+                "all_eight_apply_swap_seconds_max": 60,
+                "causal_phase_classes": [
+                    "freeze_snapshot",
+                    "snapshot_admission",
+                    "publish_network",
+                    "aggregation",
+                    "checkpoint",
+                    "result_wait",
+                    "apply_swap",
+                ],
                 "foreground_idle_fraction_strict_max": 0.10,
+                "foreground_gap_seconds_max": 60,
+                "foreground_result_wait_seconds_max": 0,
                 "steady_state_cadence_multiple_max": 1.25,
                 "warmup_windows_per_trainer": 2,
                 "measured_windows_per_trainer": 10,
@@ -238,6 +250,8 @@ def build_plan(repo: Path, commit: str, manifest: Path, gate: Path, run_root: Pa
                 "anchor_lag_p99_max": 2,
                 "speculative_window_lag_p99_max": 2,
                 "freeze_to_latest_seconds_max": 420,
+                "pause_tail_statistics": ["maximum", "p99"],
+                "snapshot_admission_seconds_max": 1,
             }
         phases.append(phase)
     return {
@@ -262,7 +276,9 @@ def build_plan(repo: Path, commit: str, manifest: Path, gate: Path, run_root: Pa
                         "async_v21_authority":
                             "ASYNC_DECOUPLED_DILOCO_V2.md ADR-002 v2.1",
                         "async_v21_requirements":
-                            [f"V21S{i:02d}" for i in range(1, 18)]},
+                            [f"V21S{i:02d}" for i in range(1, 18)],
+                        "immutable_snapshot_requirements":
+                            [f"ISP{i:02d}" for i in range(1, 8)]},
     }
 
 

@@ -14,6 +14,7 @@ from ndm.async_diloco_v2 import (
     AtomicEightTrainerApply,
     Backpressure,
     OuterState,
+    SafeBoundaryRendezvous,
     ScheduleFreeLocalState,
     StaleContribution,
     build_contribution,
@@ -57,7 +58,7 @@ def _contribution(
     )
 
 
-def test_v21_lag_0_1_2_accepts_and_lag_3_drops_and_catches_up():
+def test_v21_lag_three_defers_snapshot_without_blocking_next_k_window():
     for lag in (0, 1, 2):
         record = _contribution(worker=f"node-{lag}", base=2 - lag, current=2)
         mean, tokens, admitted = reference_aggregate(
@@ -78,10 +79,14 @@ def test_v21_lag_0_1_2_accepts_and_lag_3_drops_and_catches_up():
     lane.newest_verified_version = 2
     lane.finish_window(np.asarray([1.0]), exact_tokens=5, begin_ns=1, end_ns=2)
     lane.finish_window(np.asarray([2.0]), exact_tokens=5, begin_ns=3, end_ns=4)
-    with pytest.raises(Backpressure, match="paused"):
-        lane.finish_window(
-            np.asarray([3.0]), exact_tokens=5, begin_ns=5, end_ns=6)
-    assert lane.paused_reason == "catch_up_required"
+    lane.finish_window(
+        np.asarray([3.0]), exact_tokens=5, begin_ns=5, end_ns=6)
+    assert lane.local_window == 3
+    assert lane.paused_reason is None
+    assert lane.snapshot_deferred_reason == "snapshot_admission_limit"
+    assert lane.speculative_window_lag == 0
+    with pytest.raises(Backpressure, match="snapshot admission is deferred"):
+        lane.seal()
 
 
 def test_v21_exact_tokens_are_only_weight_and_eta_one():
@@ -143,9 +148,15 @@ def test_v21_one_owned_one_mutable_and_no_third_cohort():
         "mutable_intervals": 1,
         "mutable_windows": 1,
     }
-    with pytest.raises(Backpressure):
-        lane.finish_window(
-            np.asarray([3.0]), exact_tokens=7, begin_ns=5, end_ns=6)
+    lane.finish_window(
+        np.asarray([3.0]), exact_tokens=7, begin_ns=5, end_ns=6)
+    assert lane.high_water["mutable_windows"] == 2
+    lane.finish_window(
+        np.asarray([4.0]), exact_tokens=7, begin_ns=7, end_ns=8)
+    assert lane.local_window == 4
+    assert lane.paused_reason is None
+    assert lane.snapshot_deferred_reason == "snapshot_admission_limit"
+    assert lane.mutable_window_count == 0
     with pytest.raises(Backpressure, match="owned"):
         lane.seal()
     lane.release_owned(owned.digest, outcome="not_selected")
@@ -203,6 +214,265 @@ def test_v21_node_ready_requires_all_eight_apply_markers(tmp_path: Path):
     failed = tmp_path / "failed-cohorts/node-boot-a"
     assert len(tuple(failed.glob("trainer-applied-*.json"))) == 8
     assert len(tuple(failed.glob("node-applied-*.json"))) == 1
+
+
+def test_job_5081295_candidate_preparation_cannot_release_partial_boundary_cohort():
+    """Preparation-ready is not safe-boundary-ready (job 5081295)."""
+    nodes = []
+    for node in range(2):
+        transaction = SafeBoundaryRendezvous(
+            run_id="job-5081295",
+            fence=5_081_295,
+            node_id=f"node-{node}",
+            node_incarnation=f"node-{node}-boot",
+            result_version=1,
+            result_digest="a" * 64,
+            trainer_count=8,
+            rendezvous_timeout_s=420.0,
+            apply_timeout_s=60.0,
+        )
+        for rank in range(8):
+            transaction.record_candidate_prepared(
+                rank=rank,
+                trainer_incarnation=f"node-{node}-trainer-{rank}",
+                candidate_digest=f"{node * 8 + rank + 1:064x}",
+                prepared_monotonic_s=42.176 + rank * 0.624,
+            )
+        transaction.open_boundary_rendezvous(opened_monotonic_s=50.0)
+        nodes.append(transaction)
+
+    # Mirrors the 9/16 job outcome: candidates existed everywhere while only
+    # four trainers on node 0 and five on node 1 were at a K40 boundary.
+    for node, boundary_count in zip(nodes, (4, 5), strict=True):
+        node_index = int(node.node_id[-1])
+        for rank in range(boundary_count):
+            node.record_boundary_ready(
+                rank=rank,
+                trainer_incarnation=f"{node.node_id}-trainer-{rank}",
+                candidate_digest=f"{node_index * 8 + rank + 1:064x}",
+                boundary_monotonic_s=55.0 + rank,
+                local_window=9,
+            )
+        with pytest.raises(Backpressure, match="boundary"):
+            node.release_apply(released_monotonic_s=60.0)
+        assert node.apply_deadline_monotonic_s is None
+        assert node.applied_count == 0
+
+
+def test_v21_apply_deadline_starts_at_all_eight_boundary_release():
+    transaction = SafeBoundaryRendezvous(
+        run_id="run",
+        fence=7,
+        node_id="node-0",
+        node_incarnation="node-boot",
+        result_version=3,
+        result_digest="b" * 64,
+        trainer_count=8,
+        rendezvous_timeout_s=420.0,
+        apply_timeout_s=60.0,
+    )
+    for rank in range(8):
+        transaction.record_candidate_prepared(
+            rank=rank,
+            trainer_incarnation=f"trainer-{rank}",
+            candidate_digest=f"{rank + 1:064x}",
+            prepared_monotonic_s=10.0 + rank,
+        )
+    transaction.open_boundary_rendezvous(opened_monotonic_s=30.0)
+    for rank in range(8):
+        transaction.record_boundary_ready(
+            rank=rank,
+            trainer_incarnation=f"trainer-{rank}",
+            candidate_digest=f"{rank + 1:064x}",
+            boundary_monotonic_s=40.0 + rank,
+            local_window=4,
+        )
+
+    release = transaction.release_apply(released_monotonic_s=48.0)
+
+    assert release["released_monotonic_s"] == 48.0
+    assert release["apply_deadline_monotonic_s"] == 108.0
+    assert transaction.apply_deadline_monotonic_s == 108.0
+    assert transaction.boundary_ready_count == 8
+
+
+def test_v21_boundary_timeout_aborts_before_any_apply_or_node_marker(
+    tmp_path: Path,
+):
+    transaction = SafeBoundaryRendezvous(
+        run_id="run",
+        fence=7,
+        node_id="node-0",
+        node_incarnation="node-boot-a",
+        result_version=3,
+        result_digest="c" * 64,
+        trainer_count=8,
+        rendezvous_timeout_s=420.0,
+        apply_timeout_s=60.0,
+    )
+    for rank in range(8):
+        transaction.record_candidate_prepared(
+            rank=rank,
+            trainer_incarnation=f"trainer-{rank}-boot-a",
+            candidate_digest=f"{rank + 1:064x}",
+            preparation_started_monotonic_s=1.0,
+            prepared_monotonic_s=2.0 + rank,
+        )
+    transaction.open_boundary_rendezvous(opened_monotonic_s=20.0)
+    for rank in range(7):
+        transaction.record_boundary_ready(
+            rank=rank,
+            trainer_incarnation=f"trainer-{rank}-boot-a",
+            candidate_digest=f"{rank + 1:064x}",
+            boundary_monotonic_s=30.0 + rank,
+            local_window=4,
+        )
+    with pytest.raises(TimeoutError, match="bounded"):
+        transaction.record_boundary_ready(
+            rank=7,
+            trainer_incarnation="trainer-7-boot-a",
+            candidate_digest=f"{8:064x}",
+            boundary_monotonic_s=441.0,
+            local_window=5,
+        )
+    abort = transaction.abort_before_release(
+        aborted_monotonic_s=441.0,
+        reason="trainer 7 missed its K boundary",
+    )
+
+    apply = AtomicEightTrainerApply(
+        root=tmp_path,
+        run_id="run",
+        fence=7,
+        node_id="node-0",
+        node_incarnation="node-boot-a",
+        result_version=3,
+        result_digest="c" * 64,
+        trainer_count=8,
+        transaction_digest=transaction.transaction_digest,
+    )
+    assert abort["applied_count"] == 0
+    assert transaction.applied_count == 0
+    abort_metrics = transaction.telemetry()
+    assert abort_metrics["boundary_rendezvous"]["count"] == 7
+    assert abort_metrics["boundary_rendezvous"]["maximum_s"] == 411.0
+    assert abort_metrics["boundary_rendezvous"]["p99_s"] == 411.0
+    assert abort_metrics["total_foreground_idle"]["count"] == 7
+    assert abort_metrics["release_to_apply"]["count"] == 0
+    assert not apply.ready
+    assert not apply.node_marker_path.exists()
+    with pytest.raises(ValueError, match="precedes"):
+        transaction.record_applied(
+            rank=0,
+            trainer_incarnation="trainer-0-boot-a",
+            apply_started_monotonic_s=442.0,
+            apply_finished_monotonic_s=443.0,
+        )
+    with pytest.raises(ValueError, match="aborted"):
+        transaction.release_apply(released_monotonic_s=442.0)
+
+    # A supervisor retry gets a fresh node incarnation and transaction
+    # identity.  The aborted incarnation cannot be replayed into it.
+    retry = SafeBoundaryRendezvous(
+        run_id="run",
+        fence=7,
+        node_id="node-0",
+        node_incarnation="node-boot-b",
+        result_version=3,
+        result_digest="c" * 64,
+        trainer_count=8,
+        rendezvous_timeout_s=420.0,
+        apply_timeout_s=60.0,
+    )
+    assert retry.transaction_digest != transaction.transaction_digest
+
+
+def test_v21_success_is_exactly_eight_applies_and_one_transaction_marker(
+    tmp_path: Path,
+):
+    transaction = SafeBoundaryRendezvous(
+        run_id="run",
+        fence=7,
+        node_id="node-0",
+        node_incarnation="node-boot",
+        result_version=3,
+        result_digest="d" * 64,
+        trainer_count=8,
+        rendezvous_timeout_s=420.0,
+        apply_timeout_s=60.0,
+    )
+    for rank in range(8):
+        transaction.record_candidate_prepared(
+            rank=rank,
+            trainer_incarnation=f"trainer-{rank}",
+            candidate_digest=f"{rank + 1:064x}",
+            preparation_started_monotonic_s=10.0,
+            prepared_monotonic_s=11.0 + rank,
+        )
+    transaction.open_boundary_rendezvous(opened_monotonic_s=20.0)
+    for rank in range(8):
+        transaction.record_boundary_ready(
+            rank=rank,
+            trainer_incarnation=f"trainer-{rank}",
+            candidate_digest=f"{rank + 1:064x}",
+            boundary_monotonic_s=30.0 + rank,
+            local_window=4 + rank,
+        )
+    transaction.release_apply(released_monotonic_s=38.0)
+
+    durable = AtomicEightTrainerApply(
+        root=tmp_path,
+        run_id="run",
+        fence=7,
+        node_id="node-0",
+        node_incarnation="node-boot",
+        result_version=3,
+        result_digest="d" * 64,
+        trainer_count=8,
+        transaction_digest=transaction.transaction_digest,
+    )
+    for rank in range(8):
+        transaction.record_applied(
+            rank=rank,
+            trainer_incarnation=f"trainer-{rank}",
+            apply_started_monotonic_s=39.0 + rank,
+            apply_finished_monotonic_s=40.0 + rank,
+        )
+        durable.record_trainer(
+            rank=rank,
+            trainer_incarnation=f"trainer-{rank}",
+            recovery_digest=f"{rank + 17:064x}",
+        )
+    marker = durable.commit_node()
+    telemetry = transaction.telemetry()
+
+    assert transaction.applied_count == 8
+    assert marker["apply_transaction_digest"] == (
+        transaction.transaction_digest)
+    assert len(marker["trainers"]) == 8
+    assert len(tuple(tmp_path.glob("trainer-applied-*.json"))) == 8
+    assert len(tuple(tmp_path.glob("node-applied-*.json"))) == 1
+    assert telemetry["candidate_preparation"] == {
+        "count": 8,
+        "maximum_s": 8.0,
+        "p99_s": 8.0,
+        "events_s": [float(value) for value in range(1, 9)],
+    }
+    assert telemetry["boundary_rendezvous"]["count"] == 8
+    assert telemetry["boundary_rendezvous"]["maximum_s"] == 8.0
+    assert telemetry["boundary_rendezvous"]["p99_s"] == 8.0
+    assert telemetry["release_to_apply"]["maximum_s"] == 9.0
+    assert telemetry["release_to_apply"]["p99_s"] == 9.0
+    assert telemetry["total_foreground_idle"]["maximum_s"] == 10.0
+    assert telemetry["total_foreground_idle"]["p99_s"] == 10.0
+    assert durable.commit_node() == marker
+    with pytest.raises(ValueError, match="conflicting"):
+        transaction.record_applied(
+            rank=0,
+            trainer_incarnation="trainer-0",
+            apply_started_monotonic_s=41.0,
+            apply_finished_monotonic_s=42.0,
+        )
 
 
 def test_v21_checkpoint_and_fresh_allocation_restore(tmp_path: Path):

@@ -329,12 +329,23 @@ def test_async_v2_boundary_rejects_latest_that_differs_from_commit_receipt(
         )
 
 
-def test_native_apply_lanes_receive_fresh_post_exchange_deadline():
+def test_native_result_preparation_and_foreground_apply_have_separate_deadlines():
     source = ROLE.read_text()
     trainer = source[source.index("def trainer(args)"):]
-    reset = "apply_lane_deadline = (\n                time.monotonic() + min(args.deadline_s, 180.0))"
-    assert reset in trainer
-    assert "deadline=apply_lane_deadline" in trainer
+    preparation = trainer.index('stage="result_preparation"')
+    prepared = trainer.index("native-candidate-prepared-", preparation)
+    rendezvous = trainer.index(
+        'marker_name="native-boundary-rendezvous"', prepared)
+    boundary = trainer.index("native-boundary-ready-", rendezvous)
+    release = trainer.index(
+        'marker_name="native-apply-release"', boundary)
+    foreground = trainer.index('stage="peer_apply"', release)
+
+    assert "ASYNC_V21_BOUNDARY_RENDEZVOUS_S" in trainer[prepared:foreground]
+    assert "ASYNC_V21_ALL_EIGHT_APPLY_S" in trainer[release:foreground]
+    assert (
+        preparation < prepared < rendezvous < boundary < release < foreground
+    )
 
 
 def test_owner_endpoint_snapshot_filters_control_only_lease_metadata():
@@ -733,7 +744,9 @@ def test_terminal_native_follower_reuses_fenced_authoritative_checkpoint(tmp_pat
             tmp_path, args, completed=1, deadline=time.monotonic() + 1)
 
 
-def test_native_trainer_apply_lanes_are_serialized_by_local_rank(tmp_path):
+def test_native_trainer_background_preparation_is_serialized_by_local_rank(
+        tmp_path):
+    """One reader avoids node contention before the all-eight release."""
     from scripts.frontier import resilient_e97_role as role
 
     control = tmp_path / "control"
@@ -766,34 +779,65 @@ def test_native_trainer_apply_lanes_are_serialized_by_local_rank(tmp_path):
     lane = trainer.index("_wait_for_native_apply_lane(", visible)
     apply = trainer.index("state = apply_delta(", lane)
     assert visible < lane < apply
+    assert "min(args.deadline_s, 420.0)" in trainer[visible:apply]
     assert "deadline=apply_lane_deadline" in trainer[lane:apply]
 
 
-def test_native_apply_lane_excludes_durable_recovery_checkpoint_io():
-    """A slow local checkpoint must not hold the shared-result read lane.
+def test_native_result_preparation_excludes_foreground_apply_interval():
+    """Checkpoint work finishes before the finite all-eight foreground swap.
 
-    Intermediate generations persist one trainer recovery checkpoint per GPU.
-    Charging that disk write to the next rank's native result-view lane makes
-    eight otherwise bounded applies exceed the 60 second APPLY budget.
+    Trainers prepare independently verified candidates from the one read-only
+    service result through a capacity-one reader credit. Durable checkpoint
+    and reload verification remain background work. Each trainer then reaches
+    a distinct K boundary; the manager release begins the 60-second x/z
+    translation interval only after all eight boundary receipts exist.
     """
     trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args)"):]
-    wait = trainer.index("_wait_for_native_apply_lane(")
-    apply = trainer.index("state = apply_delta(", wait)
+    visible = trainer.index("manifest, aggregate = native_context.__enter__()")
+    lane = trainer.index("_wait_for_native_apply_lane(", visible)
+    apply = trainer.index("state = apply_delta(", lane)
     lane_credit = trainer.index("native-result-applied-", apply)
     recovery_save = trainer.index("torch.save(", lane_credit)
-    durable_receipt = trainer.index("native-applied-", recovery_save)
+    prepared = trainer.index("native-candidate-prepared-", recovery_save)
+    rendezvous = trainer.index(
+        'marker_name="native-boundary-rendezvous"', prepared)
+    boundary_stop = trainer.index(
+        "async_training_lane.finish_at_boundary(", rendezvous)
+    boundary_ready = trainer.index("native-boundary-ready-", boundary_stop)
+    release = trainer.index(
+        'marker_name="native-apply-release"', boundary_ready)
+    live_swap = trainer.index("safe_apply_started = time.monotonic()", release)
+    durable_receipt = trainer.index("native-applied-", live_swap)
 
-    assert wait < apply < lane_credit < recovery_save < durable_receipt
-    timer_reset = trainer.rfind("trainer_apply_started = time.monotonic()", wait, apply)
-    assert timer_reset > wait, "the APPLY SLO must measure apply, not lane waiting"
+    assert (
+        visible < lane < apply < lane_credit < recovery_save < prepared
+        < rendezvous < boundary_stop < boundary_ready < release < live_swap
+        < durable_receipt
+    )
+
+
+def test_async_v21_publishes_the_retained_endpoint_without_a_second_model_read():
+    """The immutable post-K snapshot is the only dense descriptor source."""
+    trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args) -> int:"):]
+    snapshot = trainer.index("retained_endpoint = persistent_worker.snapshot()")
+    publish = trainer.index("marker = native_plane.publish_state_delta(", snapshot)
+    owned = trainer.index("owned_marker = marker", publish)
+    descriptor_path = trainer[
+        snapshot:trainer.index("fence = _fence(args, generation)", owned)]
+
+    assert "interval_start, retained_endpoint, tokens" in descriptor_path
+    assert "publish_model_delta(" not in descriptor_path
+    assert '"async_v21_endpoint_snapshot"' in descriptor_path
+    assert '"native_direct_memfd"' in descriptor_path
 
 
 def test_production_async_lane_keeps_result_and_checkpoint_off_next_k_path():
-    """The rendered trainer must run real K work beside native completion."""
+    """The rendered trainer resumes immediately after its coherent snapshot."""
     trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args) -> int:"):]
-    owned = trainer.index("native_plane.publish_model_delta(")
-    lane_start = trainer.index("async_training_lane.start(", owned)
-    result_wait = trainer.index("native_plane.result_shards(", lane_start)
+    snapshot = trainer.index("retained_endpoint = persistent_worker.snapshot()")
+    lane_start = trainer.index("async_training_lane.start(", snapshot)
+    publish = trainer.index("native_plane.publish_state_delta(", snapshot)
+    result_wait = trainer.index("native_plane.result_shards(", publish)
     candidate_apply = trainer.index("state = apply_delta(", result_wait)
     checkpoint = trainer.index("torch.save(", candidate_apply)
     verified_latest = trainer.index(
@@ -803,11 +847,16 @@ def test_production_async_lane_keeps_result_and_checkpoint_off_next_k_path():
     verified_apply = trainer.index(
         '"native_trainer_apply"', safe_boundary)
 
-    assert (owned < lane_start < result_wait < candidate_apply < checkpoint
+    assert (snapshot < lane_start < publish < result_wait
+            < candidate_apply < checkpoint
             < verified_latest < safe_boundary < verified_apply)
+    background_path = trainer[publish:safe_boundary]
+    assert '"async_v21_snapshot_admission"' in trainer[snapshot:publish]
+    assert '"async_v21_result_readiness"' in trainer[publish:candidate_apply]
     completion_path = trainer[result_wait:safe_boundary]
     assert "persistent_worker.run_window(" not in completion_path
     assert "persistent_worker.translate(" not in completion_path
+    assert "publish_model_delta(" not in background_path
 
     real_source = Path("ndm/async_diloco_real.py").read_text()
     lane = real_source[
@@ -1034,11 +1083,11 @@ def test_production_trainer_entrypoint_overlaps_blocked_native_result_and_applie
         def allocate_delta(self, **_kwargs):
             return object()
 
-        def publish_model_delta(
-                self, base_state, model, tokens, *,
+        def publish_state_delta(
+                self, base_state, endpoint_state, tokens, *,
                 contribution_identity, **_kwargs):
             base_value = float(base_state["weight"])
-            endpoint_value = float(model.weight.detach())
+            endpoint_value = float(endpoint_state["weight"])
             self.local_delta = endpoint_value - base_value
             payload_digest = hashlib.sha256(
                 f"payload:{self.generation}:{self.local_delta}".encode()
@@ -1118,6 +1167,30 @@ def test_production_trainer_entrypoint_overlaps_blocked_native_result_and_applie
         stage_trace.append(f"latest_cas_g{generation}")
         return latest
 
+    def fake_boundary_control(
+            _control, _args, *, generation, transaction_digest,
+            marker_name, **_kwargs):
+        now = time.monotonic()
+        stage_trace.append(f"{marker_name}_g{generation}")
+        if marker_name == "native-boundary-rendezvous":
+            return {
+                "run_id": "entrypoint-overlap",
+                "fence_epoch": 1,
+                "generation": generation,
+                "transaction_digest": transaction_digest,
+                "opened_monotonic_s": now,
+                "boundary_deadline_monotonic_s": now + 420.0,
+            }
+        assert marker_name == "native-apply-release"
+        return {
+            "run_id": "entrypoint-overlap",
+            "fence_epoch": 1,
+            "generation": generation,
+            "transaction_digest": transaction_digest,
+            "released_monotonic_s": now,
+            "apply_deadline_monotonic_s": now + 60.0,
+        }
+
     monkeypatch.setattr(role, "_peer_authority", lambda _args: None)
     monkeypatch.setattr(
         role, "_dataplane_policy",
@@ -1127,6 +1200,8 @@ def test_production_trainer_entrypoint_overlaps_blocked_native_result_and_applie
     monkeypatch.setattr(role, "assert_node_local_path", local_path)
     monkeypatch.setattr(role, "NativeTrainerDataPlane", FakeNativePlane)
     monkeypatch.setattr(role, "wait_metadata", fake_latest)
+    monkeypatch.setattr(
+        role, "_wait_for_native_boundary_control", fake_boundary_control)
     monkeypatch.setattr(role.signal, "signal", lambda *_args: None)
     monkeypatch.setattr(role, "heartbeat", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
@@ -1320,19 +1395,32 @@ def test_native_pipeline_commit_ready_advances_without_foreground_blocking():
     pipe.release(token_1)
 
 
-def test_manager_uses_exchange_commit_bound_for_all_recovery_receipts():
-    """Eight durable checkpoints are an aggregate commit phase, not one apply."""
+def test_manager_bounds_background_readiness_then_all_eight_apply_separately():
+    """Unready results are background; begun all-eight apply has a 60s bound."""
     source = ROLE.read_text()
     manager = source[source.index("def _native_manager(args)"):
                      source.index("def manager(args)")]
     receipt_loop = manager.index("for rank in range(args.local_quorum):")
-    commit = manager.index("session.commit(", receipt_loop)
-    window = manager[receipt_loop - 300:commit]
+    node_apply_stage = manager.index('"native_node_apply_swap"', receipt_loop)
+    window = manager[receipt_loop - 300:node_apply_stage + 128]
 
-    assert "recovery_deadline" in window
-    assert "min(args.deadline_s, 180.0)" in window
-    assert "deadline=recovery_deadline" in window
-    assert "apply_deadline" not in window
+    assert "preparation_deadline" in window
+    assert "min(args.deadline_s, 420.0)" in window
+    assert "_coordinate_native_safe_boundary(" in window
+    assert "apply_release_started = float(" in window
+    assert 'apply_release["released_monotonic_s"]' in window
+    assert "atomic_apply_deadline" in window
+    assert "deadline=atomic_apply_deadline" in window
+    assert "ASYNC_V21_ALL_EIGHT_APPLY_S" in window
+    assert '"native_node_apply_swap"' in window
+
+    coordinator = source[
+        source.index("def _coordinate_native_safe_boundary("):
+        source.index("def _liveness_heartbeat(")
+    ]
+    boundaries = coordinator.index("native-boundary-ready-")
+    release = coordinator.index("transaction.release_apply(", boundaries)
+    assert boundaries < release
 
 
 def test_final_native_result_lifetime_covers_bounded_recovery_commit_phase():

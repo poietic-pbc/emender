@@ -645,7 +645,120 @@ def test_persistent_real_worker_materializes_lazy_schedulefree_z(monkeypatch):
         session.optimizer.state[sparse]["z"], torch.tensor([7.0]))
 
 
-def test_persistent_lane_progresses_and_coalesces_while_result_is_delayed(
+def test_persistent_real_worker_validates_all_xz_before_atomic_translation(
+    monkeypatch,
+):
+    """A malformed z point cannot leave x partially corrected."""
+    import ndm.async_diloco_real as real
+
+    class TwoParamModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.first = torch.nn.Parameter(torch.tensor([1.0]))
+            self.second = torch.nn.Parameter(torch.tensor([2.0]))
+
+    class ScheduleFreeFixture:
+        def __init__(self, parameters):
+            first, second = tuple(parameters)
+            self.param_groups = [{
+                "params": [first, second], "lr": 0.1, "train_mode": True,
+            }]
+            self.state = {
+                first: {
+                    "z": torch.tensor([10.0]),
+                    "exp_avg_sq": torch.tensor([4.0]),
+                },
+                second: {
+                    "z": torch.tensor([20.0]),
+                    "exp_avg_sq": torch.tensor([5.0]),
+                },
+            }
+
+    monkeypatch.setattr(
+        real.train, "build_training_model", lambda _args: TwoParamModel())
+    monkeypatch.setattr(
+        real.train, "build_training_optimizer",
+        lambda model, _args: ScheduleFreeFixture(model.parameters()))
+    monkeypatch.setattr(
+        real, "_build_batch_iter", lambda *_args, **_kwargs: object())
+    session = PersistentRealWorkerSession(
+        base_state={
+            "first": torch.tensor([1.0]),
+            "second": torch.tensor([2.0]),
+        },
+        train_args=real.Namespace(
+            seed=7, bf16=False, lr=0.1, optimizer="schedulefree"),
+        spec=RealAsyncWorkerSpec("trainer", "node-0", "cpu", 1, 0),
+        synthetic_token_stream=False,
+        synthetic_vocab_size=8,
+    )
+    first, second = tuple(session.model.parameters())
+    first_z = session.optimizer.state[first]["z"]
+    session.optimizer.state[second]["z"] = torch.zeros(2)
+
+    with pytest.raises(ValueError, match="z point"):
+        session.translate({
+            "first": torch.tensor([3.0]),
+            "second": torch.tensor([5.0]),
+        })
+
+    torch.testing.assert_close(first, torch.tensor([1.0]))
+    torch.testing.assert_close(second, torch.tensor([2.0]))
+    torch.testing.assert_close(first_z, torch.tensor([10.0]))
+
+
+def test_persistent_snapshot_uses_two_preallocated_coherent_slots(monkeypatch):
+    """Adjacent immutable endpoints alternate without per-window allocation."""
+    import ndm.async_diloco_real as real
+
+    class OneParamModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.tensor([1.0]))
+
+    class ScheduleFreeFixture:
+        def __init__(self, parameters):
+            parameter = tuple(parameters)[0]
+            self.param_groups = [{"params": [parameter], "lr": 0.1}]
+            self.state = {
+                parameter: {
+                    "z": parameter.detach().clone(),
+                    "exp_avg_sq": torch.tensor([0.0]),
+                },
+            }
+
+    monkeypatch.setattr(
+        real.train, "build_training_model", lambda _args: OneParamModel())
+    monkeypatch.setattr(
+        real.train, "build_training_optimizer",
+        lambda model, _args: ScheduleFreeFixture(model.parameters()))
+    monkeypatch.setattr(
+        real, "_build_batch_iter", lambda *_args, **_kwargs: object())
+
+    session = PersistentRealWorkerSession(
+        base_state={"weight": torch.tensor([1.0])},
+        train_args=real.Namespace(seed=7, bf16=False, lr=0.1),
+        spec=RealAsyncWorkerSpec("trainer", "node-0", "cpu", 1, 0),
+        synthetic_token_stream=False,
+        synthetic_vocab_size=8,
+    )
+    first = session.snapshot()
+    with torch.no_grad():
+        session.model.weight.fill_(2.0)
+    second = session.snapshot()
+    with torch.no_grad():
+        session.model.weight.fill_(3.0)
+    third = session.snapshot()
+
+    assert first["weight"].data_ptr() == third["weight"].data_ptr()
+    assert first["weight"].data_ptr() != second["weight"].data_ptr()
+    torch.testing.assert_close(second["weight"], torch.tensor([2.0]))
+    torch.testing.assert_close(third["weight"], torch.tensor([3.0]))
+    assert session.snapshot_slot_count == 2
+    session.close()
+
+
+def test_persistent_lane_progresses_and_defers_snapshot_while_result_is_delayed(
         monkeypatch):
     import ndm.async_diloco_real as real
 
@@ -703,9 +816,9 @@ def test_persistent_lane_progresses_and_coalesces_while_result_is_delayed(
     assert not result_completed.is_set()
     allow_forward.set()
     deadline = time.monotonic() + 1
-    while session.windows_completed < 3 and time.monotonic() < deadline:
+    while session.windows_completed < 4 and time.monotonic() < deadline:
         time.sleep(.001)
-    assert session.windows_completed == 3
+    assert session.windows_completed >= 4
     assert not result_completed.is_set()
 
     result_completed.set()
@@ -713,17 +826,21 @@ def test_persistent_lane_progresses_and_coalesces_while_result_is_delayed(
         deadline=time.monotonic() + 1,
         corrections={"weight": torch.tensor([7.0])},
     )
-    assert (interval.local_window_start, interval.local_window_end) == (1, 4)
-    assert interval.window_count == 3
-    assert interval.exact_tokens == 15
+    assert interval.local_window_start == 1
+    assert interval.local_window_end == session.windows_completed + 1
+    assert interval.window_count == 0
+    assert interval.exact_tokens == 0
     assert interval.reached_hard_bound
+    assert interval.snapshot_deferred
     torch.testing.assert_close(
-        session.model.weight.detach(), torch.tensor([10.0]))
+        session.model.weight.detach(),
+        torch.tensor([float(session.windows_completed + 7)]))
     torch.testing.assert_close(
         session.optimizer.state[session.model.weight]["z"],
         torch.tensor([7.0]))
     torch.testing.assert_close(
-        lane.start_state["weight"], torch.tensor([7.0]))
+        lane.start_state["weight"],
+        torch.tensor([float(session.windows_completed + 7)]))
     assert session.bootstrap_counts == {
         "model_build": 1,
         "optimizer_build": 1,

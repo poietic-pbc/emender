@@ -1,0 +1,198 @@
+{
+  "schema": "emender-async-v21-clean-attempt-v1",
+  "task_id": "qualify-simple-async-v21-2n-clean",
+  "passed": false,
+  "verdict": "failed",
+  "job": {
+    "job_id": "5080730",
+    "state": "FAILED",
+    "exit_code": "143:0",
+    "nodes": 2,
+    "partition": "batch",
+    "qos": "debug",
+    "start": "2026-07-26T10:13:04",
+    "end": "2026-07-26T10:29:51",
+    "elapsed": "00:16:47",
+    "nodelist": "frontier[06179-06180]",
+    "restarts": 0,
+    "terminal_sacct": "5080730|FAILED|143:0|2|batch|debug|2026-07-26T10:13:04|2026-07-26T10:29:51|00:16:47"
+  },
+  "payload": {
+    "digest": "534c40b0cbace765ff06bca1b2ebab63dbafcd47ec2f450cad8be5db2a7d3331",
+    "status": "retired_failed",
+    "unchanged_resubmit_forbidden": true,
+    "source_commit": "e2832f2b796b153b1177a3fc9ab6ad0b3ed3ec38",
+    "source_digest": "c6d53885723cb2b09a5ded2297a49152c301c2969de55c916de740e96a06fc0b",
+    "policy_digest": "fa9def95daf7bce25f1b962ca5437e7a76317b94ccfb9a710fbf126a344e7d98",
+    "launcher_digest": "70b96385b5ec0795d2d1c6b6495846b20e94fe53e5256e9c53c824b65c223fb7",
+    "native_bundle_digest": "f19e10be9987cfdb551a8dd75c5c88145c3cf35b73c54d3898fe562ce4182441",
+    "native_build_manifest_sha256": "9a3d58ca13adf82f6af7c6a513da729b061652fac52af76a2fc6be1373843aaa",
+    "full_layout_gate_job_id": "5080660",
+    "full_layout_gate_sha256": "44d7829c8a3b85f59759c12ce1b6377e1be389574a06663815980db58de87f60",
+    "acceptance_manifest_sha256": "35efd7e133d3fafa1288eda5c5aae693ba0b9bfd46f137924db97a7795b1af8e",
+    "data_identity_digest": "91321b2b90bb159f3aa73881455778f10e8df588edd526b1066281fa72997962",
+    "tokenizer_sha256": "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069"
+  },
+  "native_g2": {
+    "job_id": "5080660",
+    "state": "COMPLETED",
+    "exit_code": "0:0",
+    "nodes": 2,
+    "partition": "batch",
+    "qos": "debug",
+    "terminal_sacct": "5080660|COMPLETED|0:0|2|batch|debug|2026-07-26T10:03:40|2026-07-26T10:06:35|00:02:55",
+    "median_seconds": 23.512473889,
+    "maximum_seconds": 23.840366785,
+    "speedup_over_python": 4.20889129048,
+    "route_errors": 0,
+    "cq_errors": 0,
+    "retries": 111,
+    "python_dense_socket_bytes": 0,
+    "disk_replay_bytes": 0,
+    "all_rank_barriers": 0,
+    "central_full_model_broker": false
+  },
+  "seed": {
+    "step": 2300930,
+    "accepted_tokens": 150793748480,
+    "bytes": 7719680116,
+    "sha256": "0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2",
+    "node_path": "/tmp/emender-e97-seed-5080730/checkpoint-step-2300930.pt",
+    "nodes_verified_offline": 2,
+    "network_fetches": 0,
+    "bootstrap_attestation_sha256": "27e234891df02b64b9db77fc784c341e5a3ae6e87418b8f1af167776d1d710bb",
+    "frontier06179_attestation_sha256": "0cb09243e981c31584a71b28b9f5755b87662895fb142a2455dad8f074e39706",
+    "frontier06180_attestation_sha256": "31d61bc23ebdd12654f729e8e15b491b727c1651601129441193a954fe99573d"
+  },
+  "failure": {
+    "generation": 0,
+    "reason": "concurrent_shared_aggregate_reader_contention",
+    "real_trainers": 16,
+    "healthy_trainers_at_failure": 1,
+    "checkpoints": 1,
+    "atomic_commits": 1,
+    "complete_atomic_apply_cohorts": 0,
+    "restarts": 0,
+    "timeout_count": 15,
+    "timeout": "native_result_materialize exceeded 60.0s stage SLO",
+    "native_apply_ready_ranks_per_node": [
+      1,
+      0
+    ],
+    "native_apply_release_count": 0,
+    "native_applied_count": 0,
+    "cause": "Removing the capacity-one reader credit allowed eight trainers per node to read the same 5,506,770,496-byte aggregate concurrently. Node-zero rank zero completed in 43.095 seconds, while the fifteen contending readers took 261.952 to 308.083 seconds and exceeded the unchanged 60-second per-materialization SLO. The all-eight barrier correctly failed closed before foreground apply.",
+    "observed_materialization_seconds": {
+      "node_0_ranks_0_to_7": [
+        43.095,
+        265.881,
+        266.85,
+        266.746,
+        266.342,
+        261.952,
+        267.428,
+        266.264
+      ],
+      "node_1_ranks_0_to_7": [
+        298.632,
+        301.168,
+        308.083,
+        306.712,
+        305.326,
+        300.188,
+        306.91,
+        304.189
+      ]
+    }
+  },
+  "partial_progress": {
+    "all_roles_started": true,
+    "trainers_advancing_k_at_failure": 16,
+    "completed_windows": 144,
+    "windows_per_trainer_minimum": 9,
+    "windows_per_trainer_maximum": 9,
+    "steady_k40_median_seconds": 68.138536907034,
+    "steady_k40_maximum_seconds": 71.76527546904981,
+    "k_boundary_cadence_median_seconds": 68.38901302893646,
+    "k_boundary_cadence_maximum_seconds": 71.7786946343258,
+    "cadence_multiple": 1.0036759832727875,
+    "inter_window_gap_median_seconds": 0.001856392715126276,
+    "inter_window_gap_maximum_seconds": 0.04096293402835727,
+    "foreground_idle_fraction": 0.00007584119568409718,
+    "endpoint_snapshot": {
+      "count": 16,
+      "median_seconds": 0.0090716597624,
+      "maximum_seconds": 0.0238479534164
+    },
+    "snapshot_admission": {
+      "count": 16,
+      "median_seconds": 0.002698626835,
+      "maximum_seconds": 0.035389152821
+    },
+    "native_direct_memfd": {
+      "median_seconds": 34.9636,
+      "maximum_seconds": 35.72215
+    },
+    "minimum_required_commits_met": false,
+    "minimum_required_windows_met": false,
+    "performance_reason": "Inclusive preliminary metrics only; the run reached one commit and exactly nine windows per trainer, not ten commits and twelve windows."
+  },
+  "checkpoint": {
+    "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/e2832f2b796b153b1177a3fc9ab6ad0b3ed3ec38/clean/clean-overlap/checkpoints/generation-00000001-fence-05080730.pt",
+    "generation": 1,
+    "bytes": 2753437091,
+    "sha256": "87cb9b359d80e2167d0137cab57aa25f0cd110683ea035376706c23c2a99d49b",
+    "result_root": "dab51ca5a07da841df90352817b59cc636ebc98a95db2a5a19fb18029cf35fc1",
+    "reload_verified": true,
+    "cas_verified": true
+  },
+  "artifacts": {
+    "run_root": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/e2832f2b796b153b1177a3fc9ab6ad0b3ed3ec38/clean/clean-overlap",
+    "acceptance_manifest": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/e2832f2b796b153b1177a3fc9ab6ad0b3ed3ec38/clean-qualification-plan.json",
+    "controller_state": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/5cb2e73c3528787c99c3805b10b6c6ca436679e2/controller-state.json",
+    "slurm_stdout_sha256": "c7df5a790db99abe0a4288913b38c87a2a3e5d1a6c51320db0fd0f7694f4fab6",
+    "slurm_stderr_sha256": "bcefbb4efc0d15386f6bfb6604e6b4cd06d704bf9f006a94b6fe8445c92da4a3",
+    "supervision_events_sha256": "b271c44fa8598fb438b2ae8e4a3902abe078b8b52c0e4551d744fb66804d2d3b",
+    "supervision_event_lines": 3038,
+    "runtime_identity_sha256": "5c0fa27593fa1b173a57512eaee13e8dcb8bfadfb1c1b3783fae4457e02c6805",
+    "native_launch_attestation_sha256": "f35e12b49493fa8db91b13a81aefaa8271a6990ad45c401665392491a8b18d7d"
+  },
+  "commands": {
+    "submit": "\"$EMENDER_PYTHON\" \"$SNAPSHOT/scripts/frontier/run_async_v21_qualification.py\" --gate clean --nodes 2 --repo \"$SNAPSHOT\" --seed-config \"$SNAPSHOT/configs/frontier/e97_async_256.yaml\" --native-build-manifest \"$BUILD_MANIFEST\" --full-layout-gate \"$G2_GATE\" --run-root \"$RUN_ROOT\" --state \"$STATE_JSON\" --output \"$MANIFEST_JSON\" --submit",
+    "queued_running": [
+      "squeue -h -j 5080730 -o '%i|%T|%P|%q'",
+      "scontrol show job -dd 5080730"
+    ],
+    "terminal": "sacct -n -X -j 5080730 --format=JobIDRaw,State,ExitCode,NNodes,Partition,QOS,Start,End,Elapsed -P"
+  },
+  "authority": {
+    "compute_pool_requirements": [
+      "R01", "R02", "R03", "R04", "R05", "R06", "R07", "R08",
+      "R09", "R10", "R11", "R12", "R13", "R14", "R15", "R16"
+    ],
+    "native_requirements": [
+      "NDP01", "NDP02", "NDP03", "NDP04", "NDP05", "NDP06",
+      "NDP07", "NDP08", "NDP09", "NDP10", "NDP11", "NDP12",
+      "NDP13", "NDP14", "NDP15", "NDP16", "NDP17"
+    ],
+    "async_v21_requirements": [
+      "V21S01", "V21S02", "V21S03", "V21S04", "V21S05", "V21S06",
+      "V21S07", "V21S08", "V21S09", "V21S10", "V21S11", "V21S12",
+      "V21S13", "V21S14", "V21S15", "V21S16", "V21S17"
+    ],
+    "snapshot_requirements": [
+      "ISP01", "ISP02", "ISP03", "ISP04", "ISP05", "ISP06", "ISP07"
+    ],
+    "nonpassing_requirements": [
+      "R14", "NDP13", "NDP15", "NDP16", "V21S03", "V21S11",
+      "V21S13", "V21S15", "ISP05"
+    ]
+  },
+  "disposition": {
+    "clean_gate_passed": false,
+    "fault_gate_authorized": false,
+    "scale_authorized": false,
+    "smallest_fix": "Restore a capacity-one authenticated node-local metadata credit only for shared-aggregate background materialization; retain the all-eight reload-verified ready/release barrier and the unchanged 60-second foreground atomic-apply deadline.",
+    "regression": "test_native_all_eight_apply_releases_only_after_bounded_serial_preparation"
+  }
+}

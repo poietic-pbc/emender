@@ -1239,8 +1239,24 @@ def test_live_diagnostic_uses_peer_commit_and_restart_checks_immutable_checkpoin
     assert supervisor._deadline_reason(
         child, 800) == "first_atomic_generation_deadline"
 
-    # The hot supervisor diagnostic consumes the manager's native-peer
-    # commit/apply acknowledgement and performs no shared-manifest scan.
+    # The 720-second authority is specifically the first committed `latest`,
+    # not the later all-eight live-model apply.  Once the manager has verified
+    # the immutable receipt through peer control, its authenticated progress
+    # state must satisfy that deadline while bounded result preparation and
+    # atomic apply continue.
+    state.write_text(json.dumps({
+        "heartbeat_time": 800,
+        "progress_time": 800,
+        "generation": 0,
+        "authoritative_generation": 1,
+        "stage": "result_preparation",
+        "commit_receipt_digest": receipt.receipt_digest,
+    }))
+    assert supervisor._deadline_reason(child, 800) is None
+
+    # The later node-apply acknowledgement remains valid evidence too.  The
+    # hot supervisor diagnostic consumes manager-published peer evidence and
+    # performs no shared-manifest scan in either phase.
     state.write_text(json.dumps({
         "heartbeat_time": 800,
         "progress_time": 800,
@@ -1264,6 +1280,31 @@ def test_live_diagnostic_uses_peer_commit_and_restart_checks_immutable_checkpoin
     monkeypatch.setenv("RESILIENT_E97_RUN_ID", "run")
     receipt.manifest_path.write_text('{"corrupt":true}\n')
     assert supervisor._durable_generation() is None
+
+
+def test_first_commit_deadline_is_owned_by_manager_not_individual_trainer(
+        tmp_path, monkeypatch):
+    child = Child("trainer", 0, "node000", 0, "trainer")
+    supervisor = AllocationSupervisor(
+        tmp_path, [child], heartbeat_s=60, progress_s=60, max_restarts=0)
+    child.process = type("Process", (), {"poll": lambda self: None})()
+    state = tmp_path / "supervision" / "node-0-trainer-0.json"
+    state.write_text(json.dumps({
+        "heartbeat_time": 800,
+        "progress_time": 800,
+        "generation": 0,
+        "stage": "training",
+    }))
+    monkeypatch.setenv("RESILIENT_E97_INITIAL_GENERATION", "0")
+    monkeypatch.setenv("RESILIENT_E97_ALLOCATION_ADMITTED_AT", "0")
+    monkeypatch.delenv("RESILIENT_E97_BULK_ROOT", raising=False)
+    monkeypatch.delenv("RESILIENT_E97_RUN_ID", raising=False)
+
+    # Trainer heartbeat/K40/stage budgets remain independently fail-closed.
+    # Allocation-wide durable-commit authority is manager-owned, so a healthy
+    # trainer must not be killed merely because it does not duplicate the
+    # manager's immutable receipt in its hot progress document.
+    assert supervisor._deadline_reason(child, 800) is None
 
 
 def test_durable_generation_diagnostic_never_opens_sqlite(
@@ -1350,6 +1391,125 @@ def test_local_and_owner_transport_use_separate_bounded_frontier_chunks():
     assert layout.chunk_elements * 8 == 64 << 20
 
 
+def test_native_manager_advances_progress_after_owner_transport():
+    """Separately bounded commit/apply waits must own fresh stage clocks."""
+    source = (
+        ROOT / "scripts/frontier/resilient_e97_role.py"
+    ).read_text(encoding="utf-8")
+    manager = source[
+        source.index("def _native_manager(args) -> int:"):
+        source.index("def manager(args) -> int:")
+    ]
+    owner = manager.index('stage="owner_transport"')
+    reduced = manager.index(
+        "final_operation, final_result, freeze = "
+        "_native_sharded_owner_reduce(",
+        owner,
+    )
+    checkpoint_stage = manager.index(
+        'stage="checkpoint_commit"', reduced)
+    proposal_wait = manager.index(
+        'control / f"trainer-proposal-{generation:08d}.json"',
+        reduced,
+    )
+    apply_stage = manager.index('stage="peer_apply"', proposal_wait)
+    apply_receipt_wait = manager.index(
+        'control / f"native-applied-{generation:08d}-{rank:02d}.json"',
+        proposal_wait,
+    )
+
+    assert owner < reduced < checkpoint_stage < proposal_wait
+    assert proposal_wait < apply_stage < apply_receipt_wait
+
+
+def test_native_all_eight_apply_releases_only_after_bounded_serial_preparation():
+    """One reader prepares at a time; eight K boundaries precede release."""
+    role = (
+        ROOT / "scripts/frontier/resilient_e97_role.py"
+    ).read_text(encoding="utf-8")
+    manager = role[
+        role.index("def _native_manager(args) -> int:"):
+        role.index("def manager(args) -> int:")
+    ]
+    committed_evidence = manager.index("committed_evidence =")
+    preparation_stage = manager.index('stage="result_preparation"')
+    rendezvous_call = manager.index(
+        "_coordinate_native_safe_boundary(",
+        preparation_stage,
+    )
+    apply_stage = manager.index('stage="peer_apply"', rendezvous_call)
+    receipt_wait = manager.index(
+        'control / f"native-applied-{generation:08d}-{rank:02d}.json"',
+        apply_stage,
+    )
+    assert (
+        committed_evidence < preparation_stage < rendezvous_call
+        < apply_stage < receipt_wait
+    )
+    assert (
+        'stage="result_preparation", **committed_evidence'
+        in manager[committed_evidence:rendezvous_call]
+    )
+    assert (
+        'stage="peer_apply", **committed_evidence'
+        in manager[rendezvous_call:receipt_wait]
+    )
+    coordinator = role[
+        role.index("def _coordinate_native_safe_boundary("):
+        role.index("def _liveness_heartbeat(")
+    ]
+    prepared_wait = coordinator.index("native-candidate-prepared-")
+    rendezvous_open = coordinator.index("native-boundary-rendezvous-")
+    boundary_wait = coordinator.index("native-boundary-ready-")
+    release = coordinator.index("native-apply-release-")
+    assert prepared_wait < rendezvous_open < boundary_wait < release
+    assert "transaction.release_apply(" in coordinator[boundary_wait:release]
+    assert "abort_before_release(" in coordinator
+
+    trainer = role[role.index("def trainer(args) -> int:"):]
+    result_visible = trainer.index(
+        "manifest, aggregate = native_context.__enter__()")
+    result_lane = trainer.index(
+        "_wait_for_native_apply_lane(", result_visible)
+    result_apply = trainer.index(
+        "apply_delta_with_correction_ledger(", result_lane)
+    assert result_visible < result_lane < result_apply
+    result_materialized = trainer.index(
+        'control / f"native-result-applied-{generation:08d}-{rank:02d}.json"')
+    reload_verified = trainer.index(
+        "_reload_verified_async_v2_latest(", result_materialized)
+    prepared = trainer.index(
+        "native-candidate-prepared-",
+        reload_verified,
+    )
+    rendezvous = trainer.index(
+        'marker_name="native-boundary-rendezvous"', prepared)
+    boundary_stop = trainer.index(
+        "async_training_lane.finish_at_boundary(", rendezvous)
+    boundary_ready = trainer.index("native-boundary-ready-", boundary_stop)
+    wait_release = trainer.index(
+        'marker_name="native-apply-release"', boundary_ready)
+    live_swap = trainer.index("safe_apply_started = time.monotonic()", wait_release)
+    applied = trainer.index(
+        'control / f"native-applied-{generation:08d}-{rank:02d}.json"',
+        live_swap,
+    )
+    assert (
+        result_materialized < reload_verified < prepared < rendezvous
+        < boundary_stop < boundary_ready < wait_release < live_swap < applied
+    )
+
+    supervisor = (
+        ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py"
+    ).read_text(encoding="utf-8")
+    assert '"result_preparation": RESULT_PREPARATION_HARD_S' in supervisor
+    assert (
+        '"boundary_rendezvous": BOUNDARY_RENDEZVOUS_HARD_S'
+        in supervisor
+    )
+    assert '"peer_apply": ALL_EIGHT_APPLY_HARD_S' in supervisor
+
+
 def test_trainer_exchange_window_waits_for_manager_local_reduce(tmp_path):
     from scripts.frontier import resilient_e97_role as role
 
@@ -1418,18 +1578,59 @@ def test_multinode_manager_publishes_only_final_global_aggregate_and_leader_appl
     assert "if args.node_count > 1 and node == 0 and rank != 0:" in trainer
     assert "in_place=True" in trainer[streamed_apply:proposal]
     supervisor = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
-    assert '"leader_apply_wait": EXCHANGE_COMMIT_HARD_S' in supervisor
+    assert '"leader_apply_wait": RESULT_PREPARATION_HARD_S' in supervisor
+
+
+def test_checkpoint_leader_wait_uses_enclosing_result_preparation_deadline():
+    """The peer wait includes readiness, leader apply, and checkpoint.
+
+    Each component retains its stricter inner deadline. Charging the composite
+    path to the 180-second result-readiness budget makes a valid 153-second
+    result plus a 43-second materialization fail before the release exists.
+    """
+    role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    trainer = role[role.index("def trainer(args)"):]
+    wait = trainer.index("_wait_for_leader_apply_release(")
+    result = trainer.index("native_plane.result_shards(", wait)
+    assert "leader_release_deadline = (" in trainer[:wait]
+    assert (
+        "time.monotonic() + min(args.deadline_s, 420.0)"
+        in trainer[:wait]
+    )
+    assert "deadline=leader_release_deadline" in trainer[wait:result]
+    assert (
+        "exchange_deadline = time.monotonic() + min(args.deadline_s, 180.0)"
+        in trainer[wait:result]
+    )
+
+    supervisor = (
+        ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py"
+    ).read_text()
+    assert "RESULT_PREPARATION_HARD_S = 420.0" in supervisor
+    assert '"leader_apply_wait": RESULT_PREPARATION_HARD_S' in supervisor
 
 
 def test_all_peers_get_fresh_supervised_apply_window_after_aggregate_visibility():
     role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
     trainer = role[role.index("def trainer(args)"):]
     aggregate_visible = trainer.index("manifest, aggregate = spool.stream_aggregate(")
-    fresh_progress = trainer.index('stage="peer_apply"', aggregate_visible)
+    preparation = trainer.index('stage="result_preparation"', aggregate_visible)
     apply = trainer.index("state = apply_delta(", aggregate_visible)
-    assert aggregate_visible < fresh_progress < apply
+    release = trainer.index(
+        'marker_name="native-apply-release"', apply)
+    foreground = trainer.index('stage="peer_apply"', release)
+    live_swap = trainer.index("safe_apply_started = time.monotonic()", foreground)
+    assert (
+        aggregate_visible < preparation < apply < release < foreground
+        < live_swap
+    )
     supervisor = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
-    assert '"peer_apply": EXCHANGE_COMMIT_HARD_S' in supervisor
+    assert '"result_preparation": RESULT_PREPARATION_HARD_S' in supervisor
+    assert (
+        '"boundary_rendezvous": BOUNDARY_RENDEZVOUS_HARD_S'
+        in supervisor
+    )
+    assert '"peer_apply": ALL_EIGHT_APPLY_HARD_S' in supervisor
 
 
 def test_terminal_generation_does_not_rejoin_draining_pool():
@@ -1530,24 +1731,27 @@ def test_frontier_native_trainer_has_one_async_v21_production_authority():
     assert "PersistentAsyncTrainingLane(" in trainer
     assert "async_training_lane.start(" in trainer
     assert "async_training_lane.finish_at_boundary(" in trainer
-    assert '"async_v21_native_result_lane"' in trainer
+    assert '"async_v21_result_readiness"' in trainer
     assert "NativeGenerationPipeline(" not in trainer
     assert "pipeline." not in trainer
 
 
-def test_production_k_next_starts_after_local_owned_before_prior_result_apply_checkpoint():
-    """Guard V21S02 on the rendered trainer, not the synthetic overlap probe.
+def test_production_k_next_starts_after_snapshot_before_publication_and_result():
+    """Guard the immutable-snapshot foreground edge in the rendered trainer.
 
-    The persistent lane owns the resident session and starts the capacity-one
-    mutable interval before every prior-generation result view, aggregate
-    materialization, and checkpoint write on the production native path.
+    The sole mutable lane resumes from the coherent endpoint before queue
+    admission/OWNED, result readiness, aggregate materialization, and
+    checkpoint write.  All work after that boundary consumes only the retained
+    immutable snapshot until the verified result is applied at a later K edge.
     """
     role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
     trainer = role[role.index("def trainer(args) -> int:"):]
-    publish = trainer.index("marker = native_plane.publish_model_delta(")
+    snapshot = trainer.index(
+        "retained_endpoint = persistent_worker.snapshot()")
+    next_k = trainer.index("async_training_lane.start(", snapshot)
+    publish = trainer.index("marker = native_plane.publish_state_delta(")
     owned = trainer.index("v2_owned_seconds_max = max(", publish)
-    next_k = trainer.index("async_training_lane.start(", owned)
-    result = trainer.index("native_plane.result_shards(", next_k)
+    result = trainer.index("native_plane.result_shards(", owned)
     apply = trainer.index("state = apply_delta(", result)
     checkpoint = trainer.index("torch.save(", apply)
     verified = trainer.index(
@@ -1555,13 +1759,15 @@ def test_production_k_next_starts_after_local_owned_before_prior_result_apply_ch
     boundary = trainer.index(
         "async_training_lane.finish_at_boundary(", verified)
 
-    assert owned < next_k < result < apply < checkpoint < verified < boundary
-    between = trainer[owned:result]
+    assert (snapshot < next_k < publish < owned < result < apply
+            < checkpoint < verified < boundary)
+    between = trainer[next_k:result]
     assert "fabric_receipt_waited=False" in between
-    assert "PersistentAsyncTrainingLane(" in between
+    assert "publish_state_delta(" in between
     assert "native_plane.result_shards(" not in between
     assert "state = apply_delta(" not in between
     assert "torch.save(" not in between
+    assert "publish_model_delta(" not in between
     assert "PersistentRealWorkerSession(" in trainer[:next_k]
     assert trainer.count("PersistentRealWorkerSession(") == 1
     assert "persistent_worker.bootstrap_counts" in trainer
