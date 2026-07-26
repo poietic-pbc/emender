@@ -810,30 +810,6 @@ def _terminal_native_checkpoint(run: Path, args, *, completed: int,
     return checkpoint
 
 
-def _wait_for_native_apply_lane(control: Path, args, *, generation: int,
-                                rank: int, result_root: str,
-                                deadline: float) -> dict[str, object] | None:
-    """Serialize readers of the one shared node aggregate by local rank.
-
-    The service intentionally exposes one read-only result instead of eight
-    trainer-sized copies.  Full E97 showed that letting all eight trainers
-    stream that 5.5 GiB mapping concurrently turns a roughly 2.5-second apply
-    into an apply-deadline failure.  The preceding rank's authenticated apply
-    marker is a node-local, metadata-only credit: every trainer still maps and
-    applies the canonical aggregate, but only one reader per node is active.
-    """
-    if rank <= 0:
-        return None
-    return wait_metadata(
-        control / f"native-result-applied-{generation:08d}-{rank - 1:02d}.json",
-        deadline=deadline,
-        expected={"run_id": args.run_id,
-                  "fence_epoch": _fence_epoch(args),
-                  "generation": generation,
-                  "result_root": result_root,
-                  "rank": rank - 1})
-
-
 def _liveness_heartbeat(bulk: Path, identity: str, interval_s: float = 5.0):
     """Refresh liveness without disguising stalled generation progress."""
     state = bulk / "supervision" / f"{identity}.liveness.json"
@@ -881,7 +857,8 @@ def _stage_telemetry(bulk: Path, identity: str, generation: int, stage: str,
 
 
 _MANAGER_EXCHANGE_STAGES = frozenset({
-    "freeze", "owner_transport", "redistribution", "checkpoint_commit", "published",
+    "freeze", "owner_transport", "redistribution", "checkpoint_commit",
+    "result_preparation", "published",
 })
 
 
@@ -913,14 +890,16 @@ def _wait_for_manager_exchange_window(bulk: Path, *, node: int, generation: int,
 
 def _wait_for_leader_apply_release(bulk: Path, *, generation: int,
                                    fence: LocalFence, deadline: float) -> None:
-    """Keep node-0 peers off the aggregate until its checkpoint leader applies.
+    """Keep node-0 peers off the aggregate until its leader prepares a checkpoint.
 
     Job 5028835 left only 31 seconds in the fixed commit window after the
     global aggregate became visible. Eight simultaneous full-file readers
-    prevented the designated trainer from reaching checkpoint creation. The
-    generation-scoped marker contains no tensor data and opens a fresh bounded
-    peer-apply window only after the leader has applied (and, on the terminal
-    generation, proposed) its checkpoint.
+    prevented the designated trainer from reaching checkpoint creation.  The
+    generation-scoped marker contains no tensor data and opens the bounded
+    background result-preparation cohort only after the leader has materialized
+    the result and proposed its immutable checkpoint.  The other seven readers
+    may then overlap; live model swap remains gated by the distinct all-eight
+    preapply barrier below.
     """
     marker = bulk / "control" / f"leader-apply-release-{generation:08d}.json"
     while time.monotonic() < deadline and not marker.exists():
@@ -2314,14 +2293,54 @@ def _native_manager(args) -> int:
                         "accepted_tokens": commit_receipt.accepted_tokens,
                         "source": "native_peer_memory",
                     })
-            # Result readiness is background work.  Once any trainer begins the
-            # verified swap, however, the complete all-eight node transaction
-            # has exactly the reviewed 60-second foreground budget.
+            # Shared-result reads, checkpoint I/O, hashing, and reload
+            # verification are background preparation.  Node 0 gives its
+            # checkpoint leader priority, then the remaining readers overlap;
+            # node 1 readers overlap immediately.  This preserves one
+            # service-owned aggregate without the rank-serialized 130--150 s
+            # generation span observed in job 5078907.  Do not begin the
+            # 60-second all-eight foreground transaction until every trainer
+            # has retained its fenced preparation receipt.
+            heartbeat(bulk, identity, generation=generation,
+                      step=generation * args.local_steps, loss=None,
+                      stage="result_preparation")
+            preparation_deadline = (
+                time.monotonic() + min(args.deadline_s, 420.0))
+            prepared_trainers = []
+            for rank in range(args.local_quorum):
+                prepared = wait_metadata(
+                    control
+                    / f"native-apply-ready-{generation:08d}-{rank:02d}.json",
+                    deadline=preparation_deadline,
+                    expected={"run_id": args.run_id,
+                              "fence_epoch": _fence_epoch(args),
+                              "generation": generation,
+                              "result_root": final_result.result_root.hex(),
+                              "rank": rank,
+                              "node_incarnation": incarnation})
+                prepared_trainers.append({
+                    "rank": rank,
+                    "trainer_incarnation":
+                        str(prepared["trainer_incarnation"]),
+                    "recovery_digest": str(prepared["recovery_digest"]),
+                })
+            apply_release_started = time.monotonic()
+            atomic_metadata(
+                control / f"native-apply-release-{generation:08d}.json", {
+                    "schema": "emender-native-e97-apply-release-v2.1",
+                    "run_id": args.run_id,
+                    "fence_epoch": _fence_epoch(args),
+                    "generation": generation,
+                    "result_root": final_result.result_root.hex(),
+                    "node_incarnation": incarnation,
+                    "release_monotonic_s": apply_release_started,
+                    "prepared_trainers": prepared_trainers,
+                })
             heartbeat(bulk, identity, generation=generation,
                       step=generation * args.local_steps, loss=None,
                       stage="peer_apply")
-            recovery_deadline = time.monotonic() + min(args.deadline_s, 180.0)
-            atomic_apply_deadline: float | None = None
+            atomic_apply_deadline = (
+                apply_release_started + ASYNC_V21_ALL_EIGHT_APPLY_S)
             node_apply = AtomicEightTrainerApply(
                 root=control,
                 run_id=args.run_id,
@@ -2337,10 +2356,7 @@ def _native_manager(args) -> int:
             for rank in range(args.local_quorum):
                 applied = wait_metadata(
                     control / f"native-applied-{generation:08d}-{rank:02d}.json",
-                    deadline=(
-                        recovery_deadline if atomic_apply_deadline is None
-                        else min(recovery_deadline, atomic_apply_deadline)
-                    ),
+                    deadline=atomic_apply_deadline,
                     expected={"run_id": args.run_id,
                               "fence_epoch": _fence_epoch(args),
                               "generation": generation,
@@ -2352,20 +2368,13 @@ def _native_manager(args) -> int:
                 if (
                     not math.isfinite(apply_started)
                     or not math.isfinite(apply_finished)
+                    or apply_started < apply_release_started
                     or apply_finished < apply_started
                 ):
                     raise ValueError(
                         "trainer apply receipt has an invalid monotonic interval")
                 trainer_apply_intervals.append(
                     (apply_started, apply_finished))
-                candidate_deadline = (
-                    min(start for start, _finish in trainer_apply_intervals)
-                    + ASYNC_V21_ALL_EIGHT_APPLY_S
-                )
-                atomic_apply_deadline = (
-                    candidate_deadline if atomic_apply_deadline is None
-                    else min(atomic_apply_deadline, candidate_deadline)
-                )
                 if time.monotonic() > atomic_apply_deadline:
                     raise TimeoutError(
                         "all-eight verified result apply exceeded 60 seconds")
@@ -2407,19 +2416,19 @@ def _native_manager(args) -> int:
             session.commit(
                 publication_manifest=publication, authoritative_latest=latest,
                 deadline_s=pool_config.slo.apply_s)
-            all_eight_apply_started = min(
-                start for start, _finish in trainer_apply_intervals)
             if (
                 len(trainer_apply_intervals) != 8
                 or max(finish for _start, finish in trainer_apply_intervals)
-                - all_eight_apply_started
+                - apply_release_started
                 > ASYNC_V21_ALL_EIGHT_APPLY_S
             ):
                 raise TimeoutError(
                     "complete all-eight verified result apply exceeded 60 seconds")
             _stage_telemetry(
                 bulk, identity, generation, "native_node_apply_swap",
-                all_eight_apply_started, ASYNC_V21_ALL_EIGHT_APPLY_S,
+                apply_release_started, ASYNC_V21_ALL_EIGHT_APPLY_S,
+                ended=max(
+                    finish for _start, finish in trainer_apply_intervals),
                 policy_id=args._async_v21_policy.policy_id,
                 allocation_fence=_fence_epoch(args),
                 base_global_version=generation,
@@ -3502,20 +3511,12 @@ def trainer(args) -> int:
                 expected_source_id=args.source_id)
         # Waiting for distributed ownership (and, on node 0 peers, the leader
         # checkpoint marker) has its own bounded window.  Once the complete
-        # node-local aggregate is visible, begin a fresh supervised apply
-        # window for every trainer; liveness alone must not disguise progress.
+        # node-local aggregate is visible, every eligible trainer prepares its
+        # candidate concurrently in the background.  The separate all-eight
+        # release below starts the finite foreground apply window only after
+        # every candidate has been reload-verified.
         heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
-                  stage="peer_apply")
-        if native:
-            apply_lane_deadline = (
-                time.monotonic() + min(args.deadline_s, 180.0))
-            _wait_for_native_apply_lane(
-                control, args, generation=generation, rank=rank,
-                result_root=str(manifest["result_root"]),
-                deadline=apply_lane_deadline)
-        # Waiting for the preceding local reader is bounded by the complete
-        # exchange window, but is not itself APPLY work.  Start the per-reader
-        # APPLY SLO only after this trainer owns the shared-result read lane.
+                  stage="result_preparation")
         trainer_apply_started = time.monotonic()
         if not native:
             spool.release_trainer(fence, rank)
@@ -3598,9 +3599,10 @@ def trainer(args) -> int:
                     if accepted_own_interval else None),
                 exact_tokens=int(manifest["exact_tokens"]),
                 contribution_digest=str(manifest["result_root"]))
-            # Release the one-reader native view immediately.  The result
-            # completion path continues with durable verification while the
-            # persistent model-owning lane is still executing K windows.
+            # Release this independently checked read-only native view
+            # immediately.  The result completion path continues with durable
+            # verification while the persistent model-owning lane is still
+            # executing K windows.
             atomic_metadata(
                 control / f"native-result-applied-{generation:08d}-{rank:02d}.json", {
                     "schema": "emender-native-e97-result-applied-lane-v1",
@@ -3784,12 +3786,39 @@ def trainer(args) -> int:
                         time.monotonic()
                         + min(args.deadline_s, 180.0)),
                 ))
+            if not args.control and pending_corrections is None:
+                raise RuntimeError(
+                    "verified async v2 result lacks correction ledger")
+            atomic_metadata(
+                control
+                / f"native-apply-ready-{generation:08d}-{rank:02d}.json", {
+                    "schema": "emender-native-e97-apply-ready-v2.1",
+                    "run_id": args.run_id,
+                    "fence_epoch": _fence_epoch(args),
+                    "generation": generation,
+                    "result_root": manifest["result_root"],
+                    "rank": rank,
+                    "node_incarnation":
+                        native_plane.metadata.worker_incarnation,
+                    "trainer_incarnation": trainer_incarnation,
+                    "recovery_digest": recovery_checkpoint_sha256,
+                    "reload_verified": True,
+                    "latest_cas_verified": True,
+                })
+            wait_metadata(
+                control / f"native-apply-release-{generation:08d}.json",
+                deadline=time.monotonic() + min(args.deadline_s, 420.0),
+                expected={"run_id": args.run_id,
+                          "fence_epoch": _fence_epoch(args),
+                          "generation": generation,
+                          "result_root": manifest["result_root"],
+                          "node_incarnation":
+                              native_plane.metadata.worker_incarnation})
+            heartbeat(bulk, identity, generation=generation, step=step,
+                      loss=loss, stage="peer_apply")
             safe_apply_started = time.monotonic()
             mutable_report = None
             if not args.control:
-                if pending_corrections is None:
-                    raise RuntimeError(
-                        "verified async v2 result lacks correction ledger")
                 if async_training_lane is not None:
                     mutable_report = async_training_lane.finish_at_boundary(
                         deadline=time.monotonic() + 420.0,

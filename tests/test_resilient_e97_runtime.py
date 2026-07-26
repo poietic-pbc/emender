@@ -329,12 +329,16 @@ def test_async_v2_boundary_rejects_latest_that_differs_from_commit_receipt(
         )
 
 
-def test_native_apply_lanes_receive_fresh_post_exchange_deadline():
+def test_native_result_preparation_and_foreground_apply_have_separate_deadlines():
     source = ROLE.read_text()
     trainer = source[source.index("def trainer(args)"):]
-    reset = "apply_lane_deadline = (\n                time.monotonic() + min(args.deadline_s, 180.0))"
-    assert reset in trainer
-    assert "deadline=apply_lane_deadline" in trainer
+    preparation = trainer.index('stage="result_preparation"')
+    ready = trainer.index("native-apply-ready-", preparation)
+    release = trainer.index("native-apply-release-", ready)
+    foreground = trainer.index('stage="peer_apply"', release)
+
+    assert "min(args.deadline_s, 420.0)" in trainer[ready:foreground]
+    assert preparation < ready < release < foreground
 
 
 def test_owner_endpoint_snapshot_filters_control_only_lease_metadata():
@@ -733,59 +737,37 @@ def test_terminal_native_follower_reuses_fenced_authoritative_checkpoint(tmp_pat
             tmp_path, args, completed=1, deadline=time.monotonic() + 1)
 
 
-def test_native_trainer_apply_lanes_are_serialized_by_local_rank(tmp_path):
-    from scripts.frontier import resilient_e97_role as role
-
-    control = tmp_path / "control"
-    control.mkdir()
-    args = SimpleNamespace(run_id="run-a", coordinator_epoch=4)
-    observed = {}
-
-    def wait_for_rank_one():
-        observed["marker"] = role._wait_for_native_apply_lane(
-            control, args, generation=2, rank=1,
-            result_root="ab" * 32, deadline=time.monotonic() + 2)
-
-    waiter = threading.Thread(target=wait_for_rank_one)
-    waiter.start()
-    time.sleep(.05)
-    assert waiter.is_alive(), "rank one must not contend with rank zero's result view"
-    role.atomic_metadata(control / "native-result-applied-00000002-00.json", {
-        "run_id": "run-a", "fence_epoch": 4, "generation": 2,
-        "result_root": "ab" * 32, "rank": 0,
-    })
-    waiter.join(2)
-
-    assert not waiter.is_alive()
-    assert observed["marker"]["rank"] == 0
-    assert role._wait_for_native_apply_lane(
-        control, args, generation=2, rank=0,
-        result_root="ab" * 32, deadline=time.monotonic() + .1) is None
+def test_native_trainer_result_preparation_is_not_serialized_by_local_rank():
+    """Prepared candidates overlap so ten commits can fit the 45-minute gate."""
     trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args)"):]
     visible = trainer.index("manifest, aggregate = native_context.__enter__()")
-    lane = trainer.index("_wait_for_native_apply_lane(", visible)
-    apply = trainer.index("state = apply_delta(", lane)
-    assert visible < lane < apply
-    assert "deadline=apply_lane_deadline" in trainer[lane:apply]
+    apply = trainer.index("state = apply_delta(", visible)
+    assert "_wait_for_native_apply_lane(" not in trainer[visible:apply]
+    assert "native-result-applied-" not in trainer[visible:apply]
 
 
-def test_native_apply_lane_excludes_durable_recovery_checkpoint_io():
-    """A slow local checkpoint must not hold the shared-result read lane.
+def test_native_result_preparation_excludes_foreground_apply_interval():
+    """Checkpoint work finishes before the finite all-eight foreground swap.
 
-    Intermediate generations persist one trainer recovery checkpoint per GPU.
-    Charging that disk write to the next rank's native result-view lane makes
-    eight otherwise bounded applies exceed the 60 second APPLY budget.
+    All trainers may prepare their independently verified candidate from the
+    one read-only service result concurrently.  Durable checkpoint and reload
+    verification remain background work; the manager release begins the
+    60-second x/z translation interval only after all eight are ready.
     """
     trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args)"):]
-    wait = trainer.index("_wait_for_native_apply_lane(")
-    apply = trainer.index("state = apply_delta(", wait)
+    visible = trainer.index("manifest, aggregate = native_context.__enter__()")
+    apply = trainer.index("state = apply_delta(", visible)
     lane_credit = trainer.index("native-result-applied-", apply)
     recovery_save = trainer.index("torch.save(", lane_credit)
-    durable_receipt = trainer.index("native-applied-", recovery_save)
+    ready = trainer.index("native-apply-ready-", recovery_save)
+    release = trainer.index("native-apply-release-", ready)
+    live_swap = trainer.index("safe_apply_started = time.monotonic()", release)
+    durable_receipt = trainer.index("native-applied-", live_swap)
 
-    assert wait < apply < lane_credit < recovery_save < durable_receipt
-    timer_reset = trainer.rfind("trainer_apply_started = time.monotonic()", wait, apply)
-    assert timer_reset > wait, "the APPLY SLO must measure apply, not lane waiting"
+    assert (
+        visible < apply < lane_credit < recovery_save < ready < release
+        < live_swap < durable_receipt
+    )
 
 
 def test_async_v21_publishes_the_retained_endpoint_without_a_second_model_read():
@@ -1101,6 +1083,8 @@ def test_production_trainer_entrypoint_overlaps_blocked_native_result_and_applie
 
     def fake_latest(path, *, expected, **_kwargs):
         path = Path(path)
+        if path.name.startswith("native-apply-release-"):
+            return dict(expected)
         assert path.name == "latest.json"
         generation = int(expected["generation"])
         checkpoint = next(
@@ -1350,10 +1334,11 @@ def test_manager_bounds_background_readiness_then_all_eight_apply_separately():
     node_apply_stage = manager.index('"native_node_apply_swap"', receipt_loop)
     window = manager[receipt_loop - 300:node_apply_stage + 128]
 
-    assert "recovery_deadline" in window
-    assert "min(args.deadline_s, 180.0)" in window
+    assert "preparation_deadline" in window
+    assert "min(args.deadline_s, 420.0)" in window
+    assert "apply_release_started = time.monotonic()" in window
     assert "atomic_apply_deadline" in window
-    assert "min(recovery_deadline, atomic_apply_deadline)" in window
+    assert "deadline=atomic_apply_deadline" in window
     assert "ASYNC_V21_ALL_EIGHT_APPLY_S" in window
     assert '"native_node_apply_swap"' in window
 

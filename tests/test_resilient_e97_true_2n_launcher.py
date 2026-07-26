@@ -1381,6 +1381,65 @@ def test_native_manager_advances_progress_after_owner_transport():
     assert proposal_wait < apply_stage < apply_receipt_wait
 
 
+def test_native_all_eight_apply_releases_only_after_background_preparation():
+    """Preparation overlaps, then the 60-second all-eight clock starts."""
+    role = (
+        ROOT / "scripts/frontier/resilient_e97_role.py"
+    ).read_text(encoding="utf-8")
+    manager = role[
+        role.index("def _native_manager(args) -> int:"):
+        role.index("def manager(args) -> int:")
+    ]
+    preparation_stage = manager.index('stage="result_preparation"')
+    ready_wait = manager.index(
+        'f"native-apply-ready-{generation:08d}-{rank:02d}.json"',
+        preparation_stage,
+    )
+    release = manager.index(
+        'f"native-apply-release-{generation:08d}.json"',
+        ready_wait,
+    )
+    apply_stage = manager.index('stage="peer_apply"', release)
+    receipt_wait = manager.index(
+        'control / f"native-applied-{generation:08d}-{rank:02d}.json"',
+        apply_stage,
+    )
+    assert preparation_stage < ready_wait < release < apply_stage < receipt_wait
+
+    trainer = role[role.index("def trainer(args) -> int:"):]
+    result_visible = trainer.index(
+        "manifest, aggregate = native_context.__enter__()")
+    result_apply = trainer.index(
+        "apply_delta_with_correction_ledger(", result_visible)
+    assert "_wait_for_native_apply_lane(" not in trainer[
+        result_visible:result_apply
+    ]
+    result_materialized = trainer.index(
+        'control / f"native-result-applied-{generation:08d}-{rank:02d}.json"')
+    reload_verified = trainer.index(
+        "_reload_verified_async_v2_latest(", result_materialized)
+    ready = trainer.index(
+        'f"native-apply-ready-{generation:08d}-{rank:02d}.json"',
+        reload_verified,
+    )
+    wait_release = trainer.index(
+        'f"native-apply-release-{generation:08d}.json"', ready)
+    live_swap = trainer.index("safe_apply_started = time.monotonic()", wait_release)
+    applied = trainer.index(
+        'control / f"native-applied-{generation:08d}-{rank:02d}.json"',
+        live_swap,
+    )
+    assert (
+        result_materialized < reload_verified < ready < wait_release
+        < live_swap < applied
+    )
+
+    supervisor = (
+        ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py"
+    ).read_text(encoding="utf-8")
+    assert '"result_preparation": RESULT_PREPARATION_HARD_S' in supervisor
+
+
 def test_trainer_exchange_window_waits_for_manager_local_reduce(tmp_path):
     from scripts.frontier import resilient_e97_role as role
 
@@ -1485,10 +1544,17 @@ def test_all_peers_get_fresh_supervised_apply_window_after_aggregate_visibility(
     role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
     trainer = role[role.index("def trainer(args)"):]
     aggregate_visible = trainer.index("manifest, aggregate = spool.stream_aggregate(")
-    fresh_progress = trainer.index('stage="peer_apply"', aggregate_visible)
+    preparation = trainer.index('stage="result_preparation"', aggregate_visible)
     apply = trainer.index("state = apply_delta(", aggregate_visible)
-    assert aggregate_visible < fresh_progress < apply
+    release = trainer.index("native-apply-release-", apply)
+    foreground = trainer.index('stage="peer_apply"', release)
+    live_swap = trainer.index("safe_apply_started = time.monotonic()", foreground)
+    assert (
+        aggregate_visible < preparation < apply < release < foreground
+        < live_swap
+    )
     supervisor = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
+    assert '"result_preparation": RESULT_PREPARATION_HARD_S' in supervisor
     assert '"peer_apply": EXCHANGE_COMMIT_HARD_S' in supervisor
 
 

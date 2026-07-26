@@ -488,9 +488,11 @@ class AllocationSupervisor:
             "local_reduce_wait": K40_HARD_S,
             # This wait is the enclosing background path across result
             # readiness, rank-0 materialization, and its immutable checkpoint.
-            # The constituent native/result/apply/checkpoint stages retain
-            # their stricter 180/60/180-second bounds.
+            # The constituent readiness/background-preparation/foreground
+            # apply/checkpoint stages retain their 180/420/60/180-second
+            # bounds.
             "leader_apply_wait": RESULT_PREPARATION_HARD_S,
+            "result_preparation": RESULT_PREPARATION_HARD_S,
             "peer_apply": EXCHANGE_COMMIT_HARD_S,
             "submitted": EXCHANGE_COMMIT_HARD_S,
             "owner_transport": EXCHANGE_COMMIT_HARD_S,
