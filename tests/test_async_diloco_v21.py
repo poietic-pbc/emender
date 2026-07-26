@@ -57,7 +57,7 @@ def _contribution(
     )
 
 
-def test_v21_lag_0_1_2_accepts_and_lag_3_drops_and_catches_up():
+def test_v21_lag_three_defers_snapshot_without_blocking_next_k_window():
     for lag in (0, 1, 2):
         record = _contribution(worker=f"node-{lag}", base=2 - lag, current=2)
         mean, tokens, admitted = reference_aggregate(
@@ -78,10 +78,14 @@ def test_v21_lag_0_1_2_accepts_and_lag_3_drops_and_catches_up():
     lane.newest_verified_version = 2
     lane.finish_window(np.asarray([1.0]), exact_tokens=5, begin_ns=1, end_ns=2)
     lane.finish_window(np.asarray([2.0]), exact_tokens=5, begin_ns=3, end_ns=4)
-    with pytest.raises(Backpressure, match="paused"):
-        lane.finish_window(
-            np.asarray([3.0]), exact_tokens=5, begin_ns=5, end_ns=6)
-    assert lane.paused_reason == "catch_up_required"
+    lane.finish_window(
+        np.asarray([3.0]), exact_tokens=5, begin_ns=5, end_ns=6)
+    assert lane.local_window == 3
+    assert lane.paused_reason is None
+    assert lane.snapshot_deferred_reason == "snapshot_admission_limit"
+    assert lane.speculative_window_lag == 0
+    with pytest.raises(Backpressure, match="snapshot admission is deferred"):
+        lane.seal()
 
 
 def test_v21_exact_tokens_are_only_weight_and_eta_one():
@@ -143,9 +147,15 @@ def test_v21_one_owned_one_mutable_and_no_third_cohort():
         "mutable_intervals": 1,
         "mutable_windows": 1,
     }
-    with pytest.raises(Backpressure):
-        lane.finish_window(
-            np.asarray([3.0]), exact_tokens=7, begin_ns=5, end_ns=6)
+    lane.finish_window(
+        np.asarray([3.0]), exact_tokens=7, begin_ns=5, end_ns=6)
+    assert lane.high_water["mutable_windows"] == 2
+    lane.finish_window(
+        np.asarray([4.0]), exact_tokens=7, begin_ns=7, end_ns=8)
+    assert lane.local_window == 4
+    assert lane.paused_reason is None
+    assert lane.snapshot_deferred_reason == "snapshot_admission_limit"
+    assert lane.mutable_window_count == 0
     with pytest.raises(Backpressure, match="owned"):
         lane.seal()
     lane.release_owned(owned.digest, outcome="not_selected")

@@ -804,11 +804,12 @@ def test_async_v21_publishes_the_retained_endpoint_without_a_second_model_read()
 
 
 def test_production_async_lane_keeps_result_and_checkpoint_off_next_k_path():
-    """The rendered trainer must run real K work beside native completion."""
+    """The rendered trainer resumes immediately after its coherent snapshot."""
     trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args) -> int:"):]
-    owned = trainer.index("native_plane.publish_state_delta(")
-    lane_start = trainer.index("async_training_lane.start(", owned)
-    result_wait = trainer.index("native_plane.result_shards(", lane_start)
+    snapshot = trainer.index("retained_endpoint = persistent_worker.snapshot()")
+    lane_start = trainer.index("async_training_lane.start(", snapshot)
+    publish = trainer.index("native_plane.publish_state_delta(", snapshot)
+    result_wait = trainer.index("native_plane.result_shards(", publish)
     candidate_apply = trainer.index("state = apply_delta(", result_wait)
     checkpoint = trainer.index("torch.save(", candidate_apply)
     verified_latest = trainer.index(
@@ -818,11 +819,16 @@ def test_production_async_lane_keeps_result_and_checkpoint_off_next_k_path():
     verified_apply = trainer.index(
         '"native_trainer_apply"', safe_boundary)
 
-    assert (owned < lane_start < result_wait < candidate_apply < checkpoint
+    assert (snapshot < lane_start < publish < result_wait
+            < candidate_apply < checkpoint
             < verified_latest < safe_boundary < verified_apply)
+    background_path = trainer[publish:safe_boundary]
+    assert '"async_v21_snapshot_admission"' in trainer[snapshot:publish]
+    assert '"async_v21_result_readiness"' in trainer[publish:candidate_apply]
     completion_path = trainer[result_wait:safe_boundary]
     assert "persistent_worker.run_window(" not in completion_path
     assert "persistent_worker.translate(" not in completion_path
+    assert "publish_model_delta(" not in background_path
 
     real_source = Path("ndm/async_diloco_real.py").read_text()
     lane = real_source[
@@ -1335,19 +1341,21 @@ def test_native_pipeline_commit_ready_advances_without_foreground_blocking():
     pipe.release(token_1)
 
 
-def test_manager_uses_exchange_commit_bound_for_all_recovery_receipts():
-    """Eight durable checkpoints are an aggregate commit phase, not one apply."""
+def test_manager_bounds_background_readiness_then_all_eight_apply_separately():
+    """Unready results are background; begun all-eight apply has a 60s bound."""
     source = ROLE.read_text()
     manager = source[source.index("def _native_manager(args)"):
                      source.index("def manager(args)")]
     receipt_loop = manager.index("for rank in range(args.local_quorum):")
-    commit = manager.index("session.commit(", receipt_loop)
-    window = manager[receipt_loop - 300:commit]
+    node_apply_stage = manager.index('"native_node_apply_swap"', receipt_loop)
+    window = manager[receipt_loop - 300:node_apply_stage + 128]
 
     assert "recovery_deadline" in window
     assert "min(args.deadline_s, 180.0)" in window
-    assert "deadline=recovery_deadline" in window
-    assert "apply_deadline" not in window
+    assert "atomic_apply_deadline" in window
+    assert "min(recovery_deadline, atomic_apply_deadline)" in window
+    assert "ASYNC_V21_ALL_EIGHT_APPLY_S" in window
+    assert '"native_node_apply_swap"' in window
 
 
 def test_final_native_result_lifetime_covers_bounded_recovery_commit_phase():

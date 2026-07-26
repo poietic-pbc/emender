@@ -247,27 +247,20 @@ def test_continuous_lane_progresses_g_plus_one_while_g_service_is_delayed():
     thread.join()
 
 
-def test_one_sealed_one_mutable_coalescing_and_lag_limit_pause_drop_catchup():
+def test_one_sealed_one_mutable_coalescing_and_lag_limit_defer_without_pause():
     lane = AsyncV2WorkerLane.for_test()
     lane.finish_window(np.asarray([1.0]), exact_tokens=1, begin_ns=1, end_ns=2)
     first = lane.seal()
-    for index in range(2, 3):
-        lane.finish_window(
-            np.asarray([float(index)]),
-            exact_tokens=index,
-            begin_ns=index * 2 - 1,
-            end_ns=index * 2,
-        )
+    lane.finish_window(
+        np.asarray([2.0]), exact_tokens=2, begin_ns=3, end_ns=4)
     assert lane.mutable_window_range == (1, 2)
     assert lane.mutable_window_count == 1
-    assert lane.paused_reason == "catch_up_required"
+    assert lane.paused_reason is None
     assert lane.high_water == {
         "owned_descriptors": 1,
         "mutable_intervals": 1,
         "mutable_windows": 1,
     }
-    with pytest.raises(Backpressure, match="paused"):
-        lane.finish_window(np.asarray([10.0]), exact_tokens=1, begin_ns=19, end_ns=20)
 
     lane.release_sealed(first.digest, outcome="stale_drop")
     second = lane.seal()
@@ -276,13 +269,26 @@ def test_one_sealed_one_mutable_coalescing_and_lag_limit_pause_drop_catchup():
     assert second.identity.window_count == 1
     assert second.exact_tokens == 2
 
-    # A known global version at the hard anchor bound pauses if no verified
-    # mailbox result exists; an explicit catch-up result resumes the lane.
+    # Capacity and result readiness defer snapshot admission but never stop
+    # foreground K progress.
+    lane.finish_window(
+        np.asarray([3.0]), exact_tokens=3, begin_ns=5, end_ns=6)
+    lane.finish_window(
+        np.asarray([4.0]), exact_tokens=4, begin_ns=7, end_ns=8)
+    lane.finish_window(
+        np.asarray([5.0]), exact_tokens=5, begin_ns=9, end_ns=10)
+    assert lane.local_window == 5
+    assert lane.paused_reason is None
+    assert lane.snapshot_deferred_reason == "snapshot_admission_limit"
+    assert lane.high_water["mutable_windows"] == 2
+
     assert lane.apply_latest_at_boundary(known_global_version=2) is False
-    assert lane.paused_reason == "catch_up_required"
+    assert lane.paused_reason is None
+    assert lane.snapshot_deferred_reason == "verified_result_unready"
     lane.mailbox.publish(result(version=2, state=(2.0,), base_version=1))
     assert lane.apply_latest_at_boundary(known_global_version=2)
     assert lane.paused_reason is None
+    assert lane.snapshot_deferred_reason is None
     assert lane.applied_anchor_version == 2
 
 

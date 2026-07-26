@@ -1530,24 +1530,27 @@ def test_frontier_native_trainer_has_one_async_v21_production_authority():
     assert "PersistentAsyncTrainingLane(" in trainer
     assert "async_training_lane.start(" in trainer
     assert "async_training_lane.finish_at_boundary(" in trainer
-    assert '"async_v21_native_result_lane"' in trainer
+    assert '"async_v21_result_readiness"' in trainer
     assert "NativeGenerationPipeline(" not in trainer
     assert "pipeline." not in trainer
 
 
-def test_production_k_next_starts_after_local_owned_before_prior_result_apply_checkpoint():
-    """Guard V21S02 on the rendered trainer, not the synthetic overlap probe.
+def test_production_k_next_starts_after_snapshot_before_publication_and_result():
+    """Guard the immutable-snapshot foreground edge in the rendered trainer.
 
-    The persistent lane owns the resident session and starts the capacity-one
-    mutable interval before every prior-generation result view, aggregate
-    materialization, and checkpoint write on the production native path.
+    The sole mutable lane resumes from the coherent endpoint before queue
+    admission/OWNED, result readiness, aggregate materialization, and
+    checkpoint write.  All work after that boundary consumes only the retained
+    immutable snapshot until the verified result is applied at a later K edge.
     """
     role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
     trainer = role[role.index("def trainer(args) -> int:"):]
+    snapshot = trainer.index(
+        "retained_endpoint = persistent_worker.snapshot()")
+    next_k = trainer.index("async_training_lane.start(", snapshot)
     publish = trainer.index("marker = native_plane.publish_state_delta(")
     owned = trainer.index("v2_owned_seconds_max = max(", publish)
-    next_k = trainer.index("async_training_lane.start(", owned)
-    result = trainer.index("native_plane.result_shards(", next_k)
+    result = trainer.index("native_plane.result_shards(", owned)
     apply = trainer.index("state = apply_delta(", result)
     checkpoint = trainer.index("torch.save(", apply)
     verified = trainer.index(
@@ -1555,13 +1558,15 @@ def test_production_k_next_starts_after_local_owned_before_prior_result_apply_ch
     boundary = trainer.index(
         "async_training_lane.finish_at_boundary(", verified)
 
-    assert owned < next_k < result < apply < checkpoint < verified < boundary
-    between = trainer[owned:result]
+    assert (snapshot < next_k < publish < owned < result < apply
+            < checkpoint < verified < boundary)
+    between = trainer[next_k:result]
     assert "fabric_receipt_waited=False" in between
-    assert "PersistentAsyncTrainingLane(" in between
+    assert "publish_state_delta(" in between
     assert "native_plane.result_shards(" not in between
     assert "state = apply_delta(" not in between
     assert "torch.save(" not in between
+    assert "publish_model_delta(" not in between
     assert "PersistentRealWorkerSession(" in trainer[:next_k]
     assert trainer.count("PersistentRealWorkerSession(") == 1
     assert "persistent_worker.bootstrap_counts" in trainer
