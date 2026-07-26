@@ -60,6 +60,14 @@ def _records(root: Path) -> list[dict[str, Any]]:
                 value = json.loads(line)
                 if isinstance(value, dict):
                     values.append(value)
+    # Production policy declarations are retained as small control-plane JSON
+    # documents, while the high-volume timing records above are JSONL.  Read
+    # only the policy stage from standalone JSON so unrelated control records
+    # cannot be mistaken for semantic telemetry.
+    for path in sorted(root.rglob("*.json")):
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(value, dict) and value.get("stage") == "async_v21_policy":
+            values.append(value)
     return values
 
 

@@ -1544,7 +1544,7 @@ def test_production_k_next_starts_after_local_owned_before_prior_result_apply_ch
     """
     role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
     trainer = role[role.index("def trainer(args) -> int:"):]
-    publish = trainer.index("marker = native_plane.publish_model_delta(")
+    publish = trainer.index("marker = native_plane.publish_state_delta(")
     owned = trainer.index("v2_owned_seconds_max = max(", publish)
     next_k = trainer.index("async_training_lane.start(", owned)
     result = trainer.index("native_plane.result_shards(", next_k)

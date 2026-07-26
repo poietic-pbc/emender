@@ -15,6 +15,25 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(MODULE)
 
 
+def test_records_include_retained_control_json_policy(tmp_path):
+    telemetry = tmp_path / "retained-evidence" / "node-0" / "telemetry"
+    control = tmp_path / "retained-evidence" / "node-0" / "control"
+    telemetry.mkdir(parents=True)
+    control.mkdir(parents=True)
+    (telemetry / "trainer.jsonl").write_text(
+        '{"stage":"async_v21_bounds","identity":"node-0-trainer-0"}\n')
+    (control / "production-pipeline-node-0-trainer-0.json").write_text(
+        '{"stage":"async_v21_policy","policy_id":'
+        '"async-decoupled-v2.1-simple"}\n')
+
+    records = MODULE._records(tmp_path / "retained-evidence")
+
+    assert {record["stage"] for record in records} == {
+        "async_v21_bounds",
+        "async_v21_policy",
+    }
+
+
 def _records(
     *,
     trainer_start: int = 0,

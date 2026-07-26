@@ -3056,7 +3056,17 @@ def trainer(args) -> int:
                     next_local_window = interval_window_end
                     tokens = window.tokens
                     loss = float(window.losses[-1])
+                endpoint_snapshot_started = time.monotonic()
                 retained_endpoint = persistent_worker.snapshot()
+                _stage_telemetry(
+                    bulk, identity, generation,
+                    "async_v21_endpoint_snapshot",
+                    endpoint_snapshot_started, 180.0,
+                    endpoint_bytes=sum(
+                        value.numel() * value.element_size()
+                        for value in retained_endpoint.values()),
+                    python_dense_socket_bytes=0,
+                    lustre_dense_hot_path_bytes=0)
                 delta = {}
             else:
                 interval_start = state
@@ -3087,8 +3097,9 @@ def trainer(args) -> int:
                 lag = generation - interval_anchor_version
                 heartbeat(bulk, identity, generation=generation, step=step,
                           loss=None, stage="streaming_delta")
-                marker = native_plane.publish_model_delta(
-                    interval_start, persistent_worker.model, tokens,
+                descriptor_started = time.monotonic()
+                marker = native_plane.publish_state_delta(
+                    interval_start, retained_endpoint, tokens,
                     chunk_elements=max(
                         1, args.local_spool_chunk_bytes // 4),
                     deadline_s=max(
@@ -3135,7 +3146,7 @@ def trainer(args) -> int:
                     float(marker["owned_ack_seconds"]))
                 _stage_telemetry(
                     bulk, identity, generation, "native_direct_memfd",
-                    time.monotonic(), 180.0, trainer_spool_bytes=0,
+                    descriptor_started, 180.0, trainer_spool_bytes=0,
                     python_dense_socket_bytes=0, producer_direct=True,
                     local_owned=True, fabric_receipt_waited=False,
                     base_global_version=interval_anchor_version,

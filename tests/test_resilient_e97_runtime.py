@@ -788,10 +788,25 @@ def test_native_apply_lane_excludes_durable_recovery_checkpoint_io():
     assert timer_reset > wait, "the APPLY SLO must measure apply, not lane waiting"
 
 
+def test_async_v21_publishes_the_retained_endpoint_without_a_second_model_read():
+    """The immutable post-K snapshot is the only dense descriptor source."""
+    trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args) -> int:"):]
+    snapshot = trainer.index("retained_endpoint = persistent_worker.snapshot()")
+    publish = trainer.index("marker = native_plane.publish_state_delta(", snapshot)
+    owned = trainer.index("owned_marker = marker", publish)
+    descriptor_path = trainer[
+        snapshot:trainer.index("fence = _fence(args, generation)", owned)]
+
+    assert "interval_start, retained_endpoint, tokens" in descriptor_path
+    assert "publish_model_delta(" not in descriptor_path
+    assert '"async_v21_endpoint_snapshot"' in descriptor_path
+    assert '"native_direct_memfd"' in descriptor_path
+
+
 def test_production_async_lane_keeps_result_and_checkpoint_off_next_k_path():
     """The rendered trainer must run real K work beside native completion."""
     trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args) -> int:"):]
-    owned = trainer.index("native_plane.publish_model_delta(")
+    owned = trainer.index("native_plane.publish_state_delta(")
     lane_start = trainer.index("async_training_lane.start(", owned)
     result_wait = trainer.index("native_plane.result_shards(", lane_start)
     candidate_apply = trainer.index("state = apply_delta(", result_wait)
@@ -1034,11 +1049,11 @@ def test_production_trainer_entrypoint_overlaps_blocked_native_result_and_applie
         def allocate_delta(self, **_kwargs):
             return object()
 
-        def publish_model_delta(
-                self, base_state, model, tokens, *,
+        def publish_state_delta(
+                self, base_state, endpoint_state, tokens, *,
                 contribution_identity, **_kwargs):
             base_value = float(base_state["weight"])
-            endpoint_value = float(model.weight.detach())
+            endpoint_value = float(endpoint_state["weight"])
             self.local_delta = endpoint_value - base_value
             payload_digest = hashlib.sha256(
                 f"payload:{self.generation}:{self.local_delta}".encode()
