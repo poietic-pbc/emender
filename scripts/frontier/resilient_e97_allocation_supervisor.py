@@ -44,6 +44,7 @@ GENERATION_BASELINE_S = (212.0, 215.0)
 READY_HARD_S = 180.0
 K40_HARD_S = 420.0
 EXCHANGE_COMMIT_HARD_S = 180.0
+RESULT_PREPARATION_HARD_S = 420.0
 FIRST_COMMIT_HARD_S = 720.0
 
 
@@ -485,7 +486,13 @@ class AllocationSupervisor:
             "training": K40_HARD_S,
             "streaming_delta": EXCHANGE_COMMIT_HARD_S,
             "local_reduce_wait": K40_HARD_S,
-            "leader_apply_wait": EXCHANGE_COMMIT_HARD_S,
+            # This wait is the enclosing background path across result
+            # readiness, rank-0 materialization, and its immutable checkpoint.
+            # The constituent readiness/background-preparation/foreground
+            # apply/checkpoint stages retain their 180/420/60/180-second
+            # bounds.
+            "leader_apply_wait": RESULT_PREPARATION_HARD_S,
+            "result_preparation": RESULT_PREPARATION_HARD_S,
             "peer_apply": EXCHANGE_COMMIT_HARD_S,
             "submitted": EXCHANGE_COMMIT_HARD_S,
             "owner_transport": EXCHANGE_COMMIT_HARD_S,
@@ -501,22 +508,21 @@ class AllocationSupervisor:
             return "progress_deadline"
         admitted_at = float(os.environ.get("RESILIENT_E97_ALLOCATION_ADMITTED_AT", now))
         initial_generation = int(os.environ.get("RESILIENT_E97_INITIAL_GENERATION", "0"))
-        # This is a hot diagnostic/liveness loop.  Native peer control already
-        # made the manager's all-eight-trainer apply receipt a prerequisite for
-        # this stage marker, so do not poll immutable manifests (and never a
-        # shared control store) here.  Receipt-chain reads are reserved for an
-        # actual cohort/fresh-allocation recovery.
+        # This is a hot diagnostic/liveness loop.  The manager publishes this
+        # evidence only after native peer control agrees with the immutable
+        # commit receipt.  Do not poll immutable manifests (and never a shared
+        # control store) here. Receipt-chain reads are reserved for an actual
+        # cohort/fresh-allocation recovery.
         peer_committed_generation = (
             int(state.get("authoritative_generation", initial_generation))
             if (
                 child.role in {"manager", "node-supervisor"}
-                and stage == "published_node_applied"
                 and len(str(state.get("commit_receipt_digest", ""))) == 64
-                and len(str(state.get("node_apply_receipt_digest", ""))) == 64
             )
             else initial_generation
         )
-        if (peer_committed_generation <= initial_generation
+        if (child.role in {"manager", "node-supervisor"}
+                and peer_committed_generation <= initial_generation
                 and int(state.get("generation", initial_generation)) <= initial_generation
                 and now - admitted_at > FIRST_COMMIT_HARD_S):
             return "first_atomic_generation_deadline"

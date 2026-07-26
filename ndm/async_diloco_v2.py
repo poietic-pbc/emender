@@ -869,6 +869,7 @@ class AsyncV21WorkerLane:
         self._interval_tokens = 0
         self._interval_times: list[tuple[int, int]] = []
         self._accepted: list[tuple[int, str, np.ndarray]] = []
+        self.snapshot_deferred_reason: str | None = None
         self.paused_reason: str | None = None
         self.stale_drop_count = 0
         self._high_water = {
@@ -927,7 +928,13 @@ class AsyncV21WorkerLane:
 
     @property
     def speculative_window_lag(self) -> int:
-        return self.local_window - self._last_committed_apply_window
+        # This clock counts bounded speculative snapshot state, not
+        # disposable foreground-only K windows completed while admission is
+        # deferred.
+        return min(
+            self.mutable_window_count,
+            self.policy.max_speculative_windows,
+        )
 
     def finish_window(
         self,
@@ -937,8 +944,6 @@ class AsyncV21WorkerLane:
         begin_ns: int,
         end_ns: int,
     ) -> None:
-        if self.paused_reason is not None:
-            raise Backpressure(f"training lane is paused: {self.paused_reason}")
         endpoint = np.asarray(endpoint, dtype=np.float64)
         if (
             endpoint.shape != self.local.x.shape
@@ -949,21 +954,34 @@ class AsyncV21WorkerLane:
             or (self._interval_times and begin_ns < self._interval_times[-1][1])
         ):
             raise ValueError("invalid completed K-window")
+        admission_was_full = (
+            self.snapshot_deferred_reason is not None
+            or self.mutable_window_count >= self.policy.max_speculative_windows
+        )
         self.local.x = endpoint.copy()
         self.local_window += 1
-        self._interval_tokens += exact_tokens
-        self._interval_times.append((begin_ns, end_ns))
+        if admission_was_full:
+            # The completed K work remains trainer-local and disposable.  It
+            # is not retained as a third interval/snapshot and cannot be
+            # admitted until a later verified boundary apply resets the base.
+            self.snapshot_deferred_reason = "snapshot_admission_limit"
+            self._interval_q0 = self.local_window
+            self._interval_start = self.local.x.copy()
+            self._interval_tokens = 0
+            self._interval_times = []
+        else:
+            self._interval_tokens += exact_tokens
+            self._interval_times.append((begin_ns, end_ns))
         count = self.mutable_window_count
         self._high_water["mutable_windows"] = max(
             self._high_water["mutable_windows"], count)
-        if self._sealed is not None and count >= self.policy.max_speculative_windows:
-            self.paused_reason = "mutable_interval_limit"
-        elif self.speculative_window_lag >= self.policy.max_speculative_windows:
-            self.paused_reason = "catch_up_required"
+        self.paused_reason = None
 
     def seal(self) -> ContributionEnvelope:
         if self._sealed is not None:
             raise Backpressure("one sealed descriptor is already service-owned")
+        if self.snapshot_deferred_reason is not None:
+            raise Backpressure("snapshot admission is deferred")
         if self.mutable_window_count <= 0:
             raise ValueError("cannot seal an empty cumulative interval")
         value = build_contribution(
@@ -1017,8 +1035,6 @@ class AsyncV21WorkerLane:
         self._sealed = None
         if outcome == "stale_drop":
             self.stale_drop_count += 1
-        if self.paused_reason == "mutable_interval_limit":
-            self.paused_reason = None
 
     def release_owned(self, digest: str, *, outcome: str) -> None:
         """Release the sole immutable descriptor after the native receipt."""
@@ -1055,7 +1071,8 @@ class AsyncV21WorkerLane:
         lease = self.mailbox.take()
         if lease is None:
             if anchor_lag >= self.policy.max_anchor_lag:
-                self.paused_reason = "catch_up_required"
+                self.snapshot_deferred_reason = "verified_result_unready"
+            self.paused_reason = None
             return False
         value = lease.result
         try:
@@ -1089,6 +1106,7 @@ class AsyncV21WorkerLane:
             self._accepted = retained
             self._last_committed_apply_window = self.local_window
             self.paused_reason = None
+            self.snapshot_deferred_reason = None
             if (
                 self.mutable_window_count > 0
                 and self.newest_verified_version
@@ -1103,6 +1121,14 @@ class AsyncV21WorkerLane:
                 self._interval_base_digest = self.applied_anchor_digest
                 self._interval_tokens = 0
                 self._interval_times = []
+            elif self.mutable_window_count == 0:
+                # A prior capacity defer retained no admissible local
+                # displacement.  Begin the next interval at this corrected
+                # safe boundary.
+                self._interval_q0 = self.local_window
+                self._interval_start = self.local.x.copy()
+                self._interval_base_version = self.applied_anchor_version
+                self._interval_base_digest = self.applied_anchor_digest
             return True
         finally:
             lease.release()

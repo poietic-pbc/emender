@@ -148,14 +148,31 @@ def test_v21_clean_plan_binds_reviewed_full_acceptance_launch(tmp_path: Path):
         "TimeLimit": "02:00:00",
     }
     assert plan["payload"]["parameters"] == {
+        "all_eight_apply_swap_seconds_max": 60,
+        "causal_phase_classes": [
+            "freeze_snapshot",
+            "snapshot_admission",
+            "publish_network",
+            "aggregation",
+            "checkpoint",
+            "result_wait",
+            "apply_swap",
+        ],
         "foreground_idle_fraction_strict_max": 0.10,
+        "foreground_gap_seconds_max": 60,
+        "foreground_result_wait_seconds_max": 0,
         "freeze_to_latest_seconds_max": 420,
+        "immutable_snapshot_requirements": [
+            f"ISP{i:02d}" for i in range(1, 8)
+        ],
         "local_owned_latency_seconds_max": 1,
         "local_steps": 40,
         "measured_windows_per_trainer": 10,
         "minimum_atomic_commits": 10,
+        "pause_tail_statistics": ["maximum", "p99"],
         "progress_deadline_seconds": 2700,
         "real_trainers": 16,
+        "snapshot_admission_seconds_max": 1,
         "steady_state_cadence_multiple_max": 1.25,
         "trainers_per_node": 8,
         "warmup_windows_per_trainer": 2,

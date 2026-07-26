@@ -1,0 +1,188 @@
+{
+  "schema": "emender-async-v21-clean-attempt-v1",
+  "task_id": "qualify-simple-async-v21-2n-clean",
+  "generated_at": "2026-07-26T08:32:05Z",
+  "passed": false,
+  "verdict": "failed",
+  "scale_authorized": false,
+  "replacement_submitted": false,
+  "attempt": {
+    "job_id": "5078907",
+    "source_commit": "5cb2e73c3528787c99c3805b10b6c6ca436679e2",
+    "payload_digest": "47e005065166865b66bd6945d4a55672897291f9c8a45d3c0e4b5b0e60593a09",
+    "payload_disposition": "retired-after-non-passing-attempt",
+    "run_root": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/5cb2e73c3528787c99c3805b10b6c6ca436679e2/clean/clean-overlap",
+    "scheduler": {
+      "nodes": 2,
+      "partition": "batch",
+      "qos": "debug",
+      "requested_time": "02:00:00",
+      "progress_deadline_seconds": 2700,
+      "terminal_sacct": "5078907|FAILED|1:0|2|batch|debug|2026-07-26T02:45:52|2026-07-26T04:01:11|01:15:19"
+    },
+    "commands": {
+      "submission_argv": {
+        "retained_in": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/5cb2e73c3528787c99c3805b10b6c6ca436679e2/clean-qualification-plan.json",
+        "json_pointer": "/command",
+        "sha256": "82619e343840857aa28057ed3b07ee2d61313aed5fe4f9c88d29504edaa3e072"
+      },
+      "queued_or_running": [
+        "squeue -h -j 5078907 -o '%i|%T|%P|%q'",
+        "scontrol show job -dd 5078907"
+      ],
+      "terminal": "sacct -n -X -j 5078907 --format=JobIDRaw,State,ExitCode,NNodes,Partition,QOS,Start,End,Elapsed -P"
+    }
+  },
+  "g2": {
+    "job_id": "5078760",
+    "passed": true,
+    "source_commit": "5cb2e73c3528787c99c3805b10b6c6ca436679e2",
+    "nodes": 2,
+    "partition": "batch",
+    "qos": "debug",
+    "terminal_sacct": "5078760|COMPLETED|0:0|2|batch|debug|2026-07-26T02:03:23|2026-07-26T02:06:16|00:02:53",
+    "gate": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/5cb2e73c3528787c99c3805b10b6c6ca436679e2/g2/5078760/full-layout-gate.json",
+    "gate_sha256": "93bc8854a0a161285b3cdde21f40d3b1936b6a7efcf10d37a39f43b40ecdbd6a",
+    "native_build_manifest_sha256": "77b69837a22f34cbe3071390e7926ba3b52d42c6af942b5b04184cadbc73bc6b",
+    "native_bundle_sha256": "f19e10be9987cfdb551a8dd75c5c88145c3cf35b73c54d3898fe562ce4182441",
+    "median_seconds": 23.084823993,
+    "speedup": 4.2868616455
+  },
+  "identities": {
+    "policy_id": "async-decoupled-v2.1-simple",
+    "policy_schema": "emender-async-policy-v2.1",
+    "policy_digest": "fa9def95daf7bce25f1b962ca5437e7a76317b94ccfb9a710fbf126a344e7d98",
+    "launcher_digest": "70b96385b5ec0795d2d1c6b6495846b20e94fe53e5256e9c53c824b65c223fb7",
+    "source_digest": "3c24462d7fed5678571b995172d291d1b6c36000c4104bec4ac2f82aec4357db",
+    "native_bundle_digest": "f19e10be9987cfdb551a8dd75c5c88145c3cf35b73c54d3898fe562ce4182441",
+    "data_identity_digest": "91321b2b90bb159f3aa73881455778f10e8df588edd526b1066281fa72997962",
+    "data_bytes": 1000000725401,
+    "tokenizer_sha256": "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069",
+    "train_args_sha256": "afc2a65fd8c73499e74e21cb9531c978206c3a9c898e42d18cc58bb93eb9fe9c"
+  },
+  "seed": {
+    "step": 2300930,
+    "accepted_tokens": 150793748480,
+    "bytes": 7719680116,
+    "sha256": "0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2",
+    "attestation_sha256": "27e234891df02b64b9db77fc784c341e5a3ae6e87418b8f1af167776d1d710bb",
+    "node_path": "/tmp/emender-e97-seed-5078907/checkpoint-step-2300930.pt",
+    "nodes_reverified_offline": 2,
+    "network_fetches": 0
+  },
+  "observations": {
+    "real_trainers": 16,
+    "trainers_per_node": 8,
+    "minimum_windows_per_trainer": 12,
+    "warmup_windows_per_trainer": 2,
+    "measured_windows_per_trainer": 10,
+    "atomic_commits": 12,
+    "immutable_checkpoints": 12,
+    "handoff_generation_manifests": 12,
+    "node_apply_receipts": 24,
+    "median_raw_k40_seconds": 67.4206138329464,
+    "median_steady_k_boundary_cadence_seconds": 68.23619746020995,
+    "steady_cadence_multiple": 1.01209694751941,
+    "steady_cadence_multiple_limit": 1.25,
+    "aggregate_foreground_idle_fraction": 0.5753750134096515,
+    "foreground_idle_fraction_limit_exclusive": 0.1,
+    "maximum_inter_window_idle_seconds": 212.31781229004264,
+    "interleave_pattern": "Each of the 16 trainers alternated approximately 0.001-0.003 second gaps with approximately 199-212 second gaps.",
+    "selected_measured_window_range": "13-22",
+    "scheduler_monitor_transcripts": 24,
+    "restart_count": 0,
+    "deadline_failure_before_validation": false,
+    "runtime_exception_before_validation": false,
+    "final_checkpoint": "generation-00000012-fence-05078907.pt",
+    "final_checkpoint_bytes": 2753437091
+  },
+  "failures": [
+    {
+      "stage": "retained-evidence-reader",
+      "terminal_exception": "ValueError: missing exact async-v2.1 policy declaration",
+      "cause": "The strict validator scanned only JSONL timing records even though the runtime retained the exact async_v21_policy declaration as standalone control/production-pipeline-*.json on both nodes."
+    },
+    {
+      "stage": "training-lane-performance",
+      "postmortem_exception": "ValueError: training-lane foreground idle 0.575375 is not below 0.10",
+      "cause": "After correcting the evidence reader, the retained run showed alternating long inter-window stalls on all 16 trainers. The aggregate idle fraction exceeded the strict gate by 0.4753750134096515."
+    }
+  ],
+  "immutable_evidence": {
+    "clean_qualification_plan": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/5cb2e73c3528787c99c3805b10b6c6ca436679e2/clean-qualification-plan.json",
+      "sha256": "82619e343840857aa28057ed3b07ee2d61313aed5fe4f9c88d29504edaa3e072"
+    },
+    "controller_state": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/5cb2e73c3528787c99c3805b10b6c6ca436679e2/controller-state.json",
+      "sha256": "2a03b28468f23816b421085e301f2d430aa2bd23d5ef1a38202ba9499bd80f8e"
+    },
+    "stdout": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/5cb2e73c3528787c99c3805b10b6c6ca436679e2/clean/clean-overlap/slurm-5078907.out",
+      "sha256": "9d2748fc1ce732e341334c48254335933ce135163142bbaed420fd21a35236cb"
+    },
+    "stderr": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/5cb2e73c3528787c99c3805b10b6c6ca436679e2/clean/clean-overlap/slurm-5078907.err",
+      "sha256": "6075a599157675c6a56d67150a7944668b13dd5cef04ffbdaac5214ccd262a3c"
+    },
+    "terminal_scheduler_transcript": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/5cb2e73c3528787c99c3805b10b6c6ca436679e2/clean/clean-overlap/scheduler-evidence/monitor-20260726T040435-0400.txt",
+      "sha256": "ff9549fd2e0e94d02d35d81f9155019969ec2748478ee7d8e823d40aee7e9ef9"
+    }
+  },
+  "corrective_change": {
+    "commit": "9dee67f6605ad68e591082f9009c32471482c6db",
+    "pushed_to": "origin/main",
+    "policy_reader_fix": "Read exact standalone async_v21_policy records without admitting unrelated control JSON as telemetry.",
+    "training_lane_fix": "Publish the already-frozen immutable endpoint with publish_state_delta instead of rereading the live GPU model through publish_model_delta before OWNED; retain honest snapshot and native-direct-memfd timing.",
+    "live_requalified": false
+  },
+  "current_source_build": {
+    "source_commit": "9dee67f6605ad68e591082f9009c32471482c6db",
+    "source_tree_dirty": false,
+    "manifest": "build/native-resilient-dataplane/native-artifacts.json",
+    "manifest_sha256": "869d8592815abea58fedbd769cb1321ce0c8123851229a417ee46d797398a5d6",
+    "bundle_sha256": "f19e10be9987cfdb551a8dd75c5c88145c3cf35b73c54d3898fe562ce4182441",
+    "native_ctest": "10/10 passed",
+    "exact_source_g2_refreshed": false
+  },
+  "local_validation": {
+    "canonical_activation": "source scripts/frontier/activate_emender_frontier.sh",
+    "focused_pytest_long_worktree": "154 passed, 3 failed solely because the AF_UNIX test socket path exceeded sun_path",
+    "exact_long_path_failures_rerun_with_short_basetemp": "3 passed",
+    "logical_selected_suite": "157/157 passed across the transparent path-length rerun",
+    "native_ctest": "10/10 passed",
+    "postmortem_retained_evidence": "reader advanced to the real performance gate and correctly rejected foreground idle 0.5753750134096515"
+  },
+  "requirements": {
+    "R01-R16": {
+      "reviewed_against": "docs/RESILIENT_DILOCO_COMPUTE_POOL.md and docs/RESILIENT_DILOCO_GAP_MATRIX.md",
+      "attempt_status": "not-passed",
+      "blocking_ids": [
+        "R14",
+        "R15",
+        "R16"
+      ]
+    },
+    "NDP01-NDP17": {
+      "reviewed_against": "docs/NATIVE_RESILIENT_DILOCO_DATAPLANE.md and docs/RESILIENT_DILOCO_GAP_MATRIX.md",
+      "attempt_status": "not-passed",
+      "blocking_ids": [
+        "NDP13",
+        "NDP16",
+        "NDP17"
+      ]
+    },
+    "V21S01-V21S17": {
+      "reviewed_against": "docs/ASYNC_DECOUPLED_DILOCO_V2.md and docs/RESILIENT_DILOCO_GAP_MATRIX.md",
+      "attempt_status": "not-passed",
+      "blocking_ids": [
+        "V21S13",
+        "V21S15",
+        "V21S16",
+        "V21S17"
+      ]
+    }
+  },
+  "next_action": "No resubmission was performed. A future authorized attempt must begin from current clean origin/main, rebuild, refresh exact-source G2 and all source/bundle attestations, use a changed payload digest, and run only one two-node batch/debug clean job."
+}

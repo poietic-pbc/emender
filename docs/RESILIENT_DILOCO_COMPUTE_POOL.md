@@ -213,6 +213,49 @@ progress, aggregation/freeze, apply/redistribution, peer recovery, checkpoint
 publication, and graceful shutdown. Logs and volatile heartbeats diagnose; an
 immutable committed generation/checkpoint is authoritative restart evidence.
 
+### Immutable snapshot overlap contract
+
+For bounded asynchronous modes, the trainer exclusively owns the live mutable
+model, optimizer, iterator, and hidden state. At a K boundary it may interrupt
+foreground work only to capture and admit a coherent, fenced immutable
+snapshot into a preallocated double buffer, copy-on-write view, or equivalent
+bounded mechanism. Snapshot bytes MUST represent one safe boundary. Copying
+directly from weights while an optimizer can mutate them, or allowing a
+background worker to read the live model or optimizer, is forbidden.
+
+Admission transfers the immutable snapshot and its lifetime to the bounded
+background system. The trainer then resumes immediately on its mutable state:
+it MUST NOT wait for discovery, quorum, publication or hashing, network
+progress, aggregation, checkpoint I/O, result readiness, or another trainer.
+Native background workers may publish, aggregate, validate, and checkpoint
+only admitted immutable snapshots. Every snapshot buffer and result mailbox is
+capacity bounded; full capacity causes an explicit skip, replacement, or
+defer under policy and MUST NOT turn backpressure into a foreground collective
+wait.
+
+A complete, verified result may be atomically applied or swapped only at a
+later safe K boundary under a separately bounded foreground pause. If it is
+late, absent, invalid, failed, or cannot be prepared completely within the
+apply bound, it is skipped or deferred under the accepted lag policy. Training
+does not wait and no subset of model, optimizer points, or node trainers may
+observe a partial application. In steady state, snapshot capture/admission and
+result apply/swap are the only permitted foreground interruption categories;
+bootstrap, recovery, and terminal drain are separately labeled lifecycle
+states and cannot be reported as overlap.
+
+Telemetry MUST time, with causal snapshot/result identities, these disjoint
+phases: `freeze_snapshot`, `snapshot_admission`, `publish_network`,
+`aggregation`, `checkpoint`, `result_wait`, and `apply_swap`, plus total
+foreground idle. `result_wait` is background result age/availability; its
+foreground-wait component must be zero. Snapshot/admission and apply/swap each
+have predeclared finite pause budgets and report every event, maximum, and p99.
+For ADR-002's exact two-node profile those budgets are respectively `1 s`
+through `OWNED` and `60 s` for the complete all-eight apply/swap transaction.
+Checkpoint/restart correctness is necessary but does not prove overlap.
+Median-only cadence, checkpoint count, or foreground-idle fraction cannot hide
+tail stalls: bursty alternating K windows with approximately 200-second gaps
+fail the overlap gate even when their medians and checkpoints look healthy.
+
 Scale admission is sequential: deterministic simulation/unit/reference math;
 then a 2-node scripted gate covering delayed boot, late join, disappearance,
 new-incarnation rejoin, stale/duplicate rejection, owner failure, and
@@ -235,9 +278,15 @@ Frontier allocation uses this identical protocol.
 - Exercise the applicable failure/deadline and recovery path; state the minimum progress floor.
 - Report exact validation commands and committed-generation/checkpoint artifacts; scale tasks must pass every prior rung.
 - A bounded asynchronous task must additionally cite ADR-002 and
-  V21S01–V21S17, report commit/applied-anchor/result/speculative clocks
-  honestly, and distinguish the training-lane SLO from checkpoint correctness
-  latency. A v1 task must state `tau = 0` and cannot claim required
+  V21S01–V21S17 and ISP01–ISP07, report commit/applied-anchor/result/speculative
+  clocks honestly, and provide causally matched per-phase timing for
+  freeze/snapshot, admission, publish/network, aggregation, checkpoint, result
+  wait, apply/swap, and total foreground idle. It must prove finite
+  snapshot/admission and apply/swap pause bounds using every-event maximum and
+  p99 evidence. Checkpoint count, restart success, median-only cadence, or an
+  aggregate idle fraction cannot satisfy the overlap gate or conceal a
+  bursty approximately 200-second foreground stall. A v1 task must state
+  `tau = 0` and cannot claim required
   generation-g work overlaps a generation-(g+1) window that starts from
   committed `S_(g+1)`.
 
@@ -248,27 +297,31 @@ Local K40 windows continue from resident worker state while prior
 contributions move through the bounded background system. Contributions carry
 fenced worker/incarnation/sequence/window identity, base version/digest, exact
 tokens, policy/layout/code/payload digests, and distinct lag clocks. Each
-stable node worker exposes at most one immutable owned eight-trainer descriptor
-and one mutable cumulative adjacent interval. The holder admits at most one
+stable node worker exposes at most one immutable owned eight-trainer snapshot
+and one trainer-owned mutable cumulative adjacent interval. The snapshot is
+captured coherently at a K boundary; neither native nor Python background work
+may read a concurrently mutating live model. The holder admits at most one
 contribution per stable worker per transition and requires the exact two-node
 floors `Q_min = 2` and `T_min = 3,934,080`.
 
 Commit, applied-anchor, result-version, and speculative-window lag are separate
 integers with maximum two. Lag three drops the stale contribution/result or
-pauses before another local window for point-to-point catch-up. The aggregate
-is the deterministic binary64 exact-token mean and the stateless outer update
-is `S_(g+1) = S_g + mean(delta)` with `eta_outer = 1.0`. There is no
-staleness multiplier or second numerical-weight field.
+defers further snapshot admission until a complete verified result can be
+applied at a later boundary; it does not pause foreground training for
+point-to-point catch-up. The aggregate is the deterministic binary64
+exact-token mean and the stateless outer update is
+`S_(g+1) = S_g + mean(delta)` with `eta_outer = 1.0`. There is no staleness
+multiplier or second numerical-weight field.
 
 A verified capacity-one latest mailbox is applied only at a K boundary by
 translating ScheduleFree `x`, `z`, and the mutable interval start with
 `(new_global - old_global) - accepted_local_delta_sum`. All eight node trainers
 prepare and recover the same version before the node advertises READY. One
 owned cohort, one mutable cohort, finite native credits/replay, bounded mailbox
-staging, explicit pause/drop/catch-up rules, and fixed deadlines bound memory
-and time; a third dense cohort is forbidden. `OWNED` transfers descriptor
+staging, explicit skip/drop/defer rules, and fixed deadlines bound memory and
+time; a third dense cohort is forbidden. `OWNED` transfers immutable snapshot
 responsibility to the persistent service, so trainers do not wait for fabric
-send or receipt completion.
+send, receipt, aggregation, checkpoint, or result completion.
 
 V2.1 preserves the v1 scheduler claim/fence, READY membership, model-free compiled
 point-to-point transport, no-all-rank-wait, no-Lustre/Python-dense-hot-path,

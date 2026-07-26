@@ -1,0 +1,168 @@
+{
+  "schema": "emender-async-v21-clean-attempt-v1",
+  "task_id": "qualify-simple-async-v21-2n-clean",
+  "attempt": {
+    "job_id": "5080902",
+    "gate": "clean",
+    "payload_digest": "d5665474f3b080be376ee2a05475e5ad52015bb11b1397d8c1b23ec4ea8845d7",
+    "payload_retired": true,
+    "passed": false,
+    "status": "failed"
+  },
+  "scheduler": {
+    "state": "FAILED",
+    "exit_code": "1:0",
+    "nodes": 2,
+    "node_list": "frontier[03026,03032]",
+    "partition": "batch",
+    "qos": "debug",
+    "restarts": 0,
+    "start": "2026-07-26T10:55:49-04:00",
+    "end": "2026-07-26T11:12:22-04:00",
+    "elapsed": "00:16:33",
+    "terminal_record": "5080902|FAILED|1:0|2|batch|debug|2026-07-26T10:55:49|2026-07-26T11:12:22|00:16:33",
+    "queued_evidence": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/24ae4dd64f42213cf5dc7cf62038c4594cf3f5b8/scheduler-evidence/clean-5080902/20260726T145536Z.txt",
+      "sha256": "8de8ed18a73e950f1bdb29e7abcac36651d9c786d9dfe31f3f7ebca16b4cb716"
+    },
+    "running_evidence": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/24ae4dd64f42213cf5dc7cf62038c4594cf3f5b8/scheduler-evidence/clean-5080902/20260726T145637Z.txt",
+      "sha256": "ab26a37f361619079a4c1c933c15d28b1786e5fa0ed29d0c6c4b3e42dac536b0"
+    },
+    "terminal_evidence": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/24ae4dd64f42213cf5dc7cf62038c4594cf3f5b8/scheduler-evidence/clean-5080902/terminal-20260726T151356Z.txt",
+      "sha256": "2016c46be69bbc0f5c34c514c041b014a6d6d467e2d76ee31aa4cbadcb268297"
+    },
+    "monitor_samples": 10,
+    "monitor_interval_seconds_range": [
+      118,
+      147
+    ]
+  },
+  "source_and_payload": {
+    "source_commit": "24ae4dd64f42213cf5dc7cf62038c4594cf3f5b8",
+    "source_digest": "b7a21e02224571b6b46b81a1e0b54040d749b33b398d10f3b82561aab0c2ecfa",
+    "bundle_digest": "f19e10be9987cfdb551a8dd75c5c88145c3cf35b73c54d3898fe562ce4182441",
+    "native_build_manifest_sha256": "ed60e10b1fb1026e0b79fa81b98c421eeaacdbe572fc6d2a3afd3d15c2b802d9",
+    "full_layout_gate_sha256": "a696ffd22c4ac0af4dd76553770f5b2816ceba58dcb7022086e3e2b376f837cd",
+    "policy_digest": "fa9def95daf7bce25f1b962ca5437e7a76317b94ccfb9a710fbf126a344e7d98",
+    "launcher_digest": "70b96385b5ec0795d2d1c6b6495846b20e94fe53e5256e9c53c824b65c223fb7",
+    "data_identity_digest": "91321b2b90bb159f3aa73881455778f10e8df588edd526b1066281fa72997962",
+    "tokenizer_sha256": "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069",
+    "train_args_sha256": "afc2a65fd8c73499e74e21cb9531c978206c3a9c898e42d18cc58bb93eb9fe9c",
+    "qualification_plan": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/24ae4dd64f42213cf5dc7cf62038c4594cf3f5b8/clean-qualification-plan.json",
+      "sha256": "c32893b238efe12662ea9a24ab68717689863fe9e89d3606b32ce99ede79c675"
+    }
+  },
+  "exact_seed": {
+    "step": 2300930,
+    "tokens": 150793748480,
+    "bytes": 7719680116,
+    "sha256": "0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2",
+    "network_fetches": 0,
+    "node_stage_root": "/tmp/emender-e97-seed-5080902",
+    "node_checkpoint": "/tmp/emender-e97-seed-5080902/checkpoint-step-2300930.pt",
+    "verified_hosts": [
+      "frontier03026",
+      "frontier03032"
+    ],
+    "authority_attestation": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/24ae4dd64f42213cf5dc7cf62038c4594cf3f5b8/clean/clean-overlap/clean-overlap/seed-bootstrap-attestation.json",
+      "sha256": "27e234891df02b64b9db77fc784c341e5a3ae6e87418b8f1af167776d1d710bb"
+    }
+  },
+  "failure": {
+    "scheduler_reason": "NonZeroExitCode",
+    "application_reason": "first_atomic_generation_deadline",
+    "node_manager_events": [
+      {
+        "identity": "node-1-manager",
+        "time": 1785078738.1051574,
+        "event": "cohort_restart_exhausted"
+      },
+      {
+        "identity": "node-0-manager",
+        "time": 1785078739.1381934,
+        "event": "cohort_restart_exhausted"
+      }
+    ],
+    "process_restarts": 0,
+    "roles_started": 20,
+    "trainers_started": 16,
+    "tracebacks": 0,
+    "oom_events": 0,
+    "native_route_errors": 0,
+    "explanation": "The allocation supervisor treated the later published_node_applied marker as the only live acknowledgement of the 720-second first committed-latest deadline. Both managers had already verified immutable generation-1 commit receipt e3cee1514dfd29ba728316016a6877b6313784c6467d59990989cef357757678 and were in the bounded peer_apply phase, but their current progress documents did not retain that commit evidence. The supervisor therefore failed the cohorts before the all-eight atomic apply could complete."
+  },
+  "committed_authority": {
+    "atomic_commits": 1,
+    "generation": 1,
+    "accepted_tokens": 150798993920,
+    "receipt_digest": "e3cee1514dfd29ba728316016a6877b6313784c6467d59990989cef357757678",
+    "receipt_published_at_ns": 1785078419221517000,
+    "result_root": "67b0516f69df1e505d97f035efc1c4185ce3f7239bdefe4061a23584aedc6845",
+    "manifest_sha256": "59ba73dd04e6f9bb3911b19a5122302e368dd9906338da955d9006c7b5efbd34",
+    "checkpoint": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/24ae4dd64f42213cf5dc7cf62038c4594cf3f5b8/clean/clean-overlap/clean-overlap/checkpoints/generation-00000001-fence-05080902.pt",
+      "bytes": 2753437091,
+      "sha256": "90edf36b44b2963acc0ac3168aa72cc1ab13206307dad01618f731db18961b91"
+    },
+    "receipt": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/24ae4dd64f42213cf5dc7cf62038c4594cf3f5b8/clean/clean-overlap/clean-overlap/handoff/authority/commits/commit-generation-00000001-fence-00000000000005080902-e3cee1514dfd29ba7283.json",
+      "sha256": "82be79436e5529f00b3d78c3776c3121a14fc43b39e36f1a90c8a1b3d36e1cf0"
+    }
+  },
+  "serial_preparation_and_apply": {
+    "native_result_materialize_count": 16,
+    "native_result_materialize_seconds": {
+      "minimum": 42.05382979102433,
+      "median": 42.47357718762942,
+      "maximum": 43.078615526203066,
+      "hard_maximum": 60.0
+    },
+    "authenticated_result_applied_receipts": 16,
+    "apply_ready_receipts": 16,
+    "node_release_receipts": 2,
+    "native_applied_receipts": 0,
+    "complete_node_apply_receipts": 0,
+    "interpretation": "Capacity-one authenticated node-local reader credit completed for all sixteen trainers. Both all-eight foreground transactions opened, but the unrelated first-commit supervisor check interrupted them after only approximately 19 to 23 seconds of their independent 60-second live-apply allowance."
+  },
+  "preliminary_training_lane": {
+    "strict_gate_evaluable": false,
+    "strict_gate_blocker": "Every trainer retained 9 complete K40 windows; the gate requires 12 (2 warm-up plus 10 measured).",
+    "real_trainers": 16,
+    "complete_windows_per_trainer_minimum": 9,
+    "complete_windows_per_trainer_maximum": 9,
+    "raw_k40_samples": 144,
+    "cadence_samples": 128,
+    "raw_k40_compute_seconds": {
+      "median": 66.35035208845511,
+      "maximum": 70.73931919364259
+    },
+    "steady_state_cadence_seconds": {
+      "median": 66.21375466906466,
+      "maximum": 70.7588101029396
+    },
+    "steady_state_cadence_multiple": 0.9979412706173986,
+    "foreground_control_plane_idle_fraction": 0.00006902080492028068,
+    "foreground_control_plane_idle_seconds_p99": 0.04161735903471708,
+    "foreground_control_plane_idle_seconds_max": 0.057848180178552866,
+    "selection": "Validator-equivalent last min(10) complete windows per trainer, retained only as preliminary non-promotion evidence."
+  },
+  "evidence": {
+    "run_root": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/24ae4dd64f42213cf5dc7cf62038c4594cf3f5b8/clean/clean-overlap/clean-overlap",
+    "events_sha256": "71d0d6ed080fd12b7d4503fbb0ed84df29ad3f9f44d62b308f0f909f5cb30c12",
+    "allocation_fence_sha256": "34acd2f6fcef273b40aa990df91b8ddc5d35800e60d6448fe292c2eadbe9e137",
+    "runtime_identity_sha256": "5c0fa27593fa1b173a57512eaee13e8dcb8bfadfb1c1b3783fae4457e02c6805",
+    "native_launch_attestation_sha256": "eb764cd6da58db529a3b164348a1cfb54b93e9b8e6209ce3ca80090bd7d3067d",
+    "slurm_stdout_sha256": "82f35a833729d166d63c017b623640d01e2b686baa2da82e2a885fa83cbbdc7c",
+    "slurm_stderr_sha256": "db46d5d8a6bdf889e54f02e3939d1e365cff18ed1671311b4a6e4b3827935d50"
+  },
+  "requirement_disposition": {
+    "R01-R16": "non-passing attempt retained; no promotion claim",
+    "NDP01-NDP17": "exact-source G2 passed and live native execution retained; clean semantic gate incomplete",
+    "V21S01-V21S17": "clean gate failed before required windows/commits and checkpoint-correctness validation",
+    "ISP01-ISP07": "serial immutable preparation completed, but final atomic apply was interrupted"
+  }
+}
