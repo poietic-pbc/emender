@@ -1350,6 +1350,37 @@ def test_local_and_owner_transport_use_separate_bounded_frontier_chunks():
     assert layout.chunk_elements * 8 == 64 << 20
 
 
+def test_native_manager_advances_progress_after_owner_transport():
+    """Separately bounded commit/apply waits must own fresh stage clocks."""
+    source = (
+        ROOT / "scripts/frontier/resilient_e97_role.py"
+    ).read_text(encoding="utf-8")
+    manager = source[
+        source.index("def _native_manager(args) -> int:"):
+        source.index("def manager(args) -> int:")
+    ]
+    owner = manager.index('stage="owner_transport"')
+    reduced = manager.index(
+        "final_operation, final_result, freeze = "
+        "_native_sharded_owner_reduce(",
+        owner,
+    )
+    checkpoint_stage = manager.index(
+        'stage="checkpoint_commit"', reduced)
+    proposal_wait = manager.index(
+        'control / f"trainer-proposal-{generation:08d}.json"',
+        reduced,
+    )
+    apply_stage = manager.index('stage="peer_apply"', proposal_wait)
+    apply_receipt_wait = manager.index(
+        'control / f"native-applied-{generation:08d}-{rank:02d}.json"',
+        proposal_wait,
+    )
+
+    assert owner < reduced < checkpoint_stage < proposal_wait
+    assert proposal_wait < apply_stage < apply_receipt_wait
+
+
 def test_trainer_exchange_window_waits_for_manager_local_reduce(tmp_path):
     from scripts.frontier import resilient_e97_role as role
 

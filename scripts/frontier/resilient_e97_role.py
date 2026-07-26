@@ -2156,6 +2156,14 @@ def _native_manager(args) -> int:
                     deadline=time.monotonic() + pool_config.slo.apply_s)
                 if validated["status"] != "validated":
                     raise RuntimeError("native result root did not validate")
+                # Owner transport is complete once the native service returns
+                # and validates the exact result root.  Checkpoint publication
+                # has its own supervised progress interval; do not leave the
+                # manager falsely charged to the completed transport interval
+                # while it waits for the trainer proposal and immutable commit.
+                heartbeat(bulk, identity, generation=generation,
+                          step=generation * args.local_steps, loss=None,
+                          stage="checkpoint_commit")
             accepted_tokens = (
                 local_weight if pool_client is None
                 else int(close["accepted_tokens"]))
@@ -2309,6 +2317,9 @@ def _native_manager(args) -> int:
             # Result readiness is background work.  Once any trainer begins the
             # verified swap, however, the complete all-eight node transaction
             # has exactly the reviewed 60-second foreground budget.
+            heartbeat(bulk, identity, generation=generation,
+                      step=generation * args.local_steps, loss=None,
+                      stage="peer_apply")
             recovery_deadline = time.monotonic() + min(args.deadline_s, 180.0)
             atomic_apply_deadline: float | None = None
             node_apply = AtomicEightTrainerApply(
