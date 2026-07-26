@@ -44,6 +44,7 @@ GENERATION_BASELINE_S = (212.0, 215.0)
 READY_HARD_S = 180.0
 K40_HARD_S = 420.0
 EXCHANGE_COMMIT_HARD_S = 180.0
+RESULT_PREPARATION_HARD_S = 420.0
 FIRST_COMMIT_HARD_S = 720.0
 
 
@@ -485,7 +486,11 @@ class AllocationSupervisor:
             "training": K40_HARD_S,
             "streaming_delta": EXCHANGE_COMMIT_HARD_S,
             "local_reduce_wait": K40_HARD_S,
-            "leader_apply_wait": EXCHANGE_COMMIT_HARD_S,
+            # This wait is the enclosing background path across result
+            # readiness, rank-0 materialization, and its immutable checkpoint.
+            # The constituent native/result/apply/checkpoint stages retain
+            # their stricter 180/60/180-second bounds.
+            "leader_apply_wait": RESULT_PREPARATION_HARD_S,
             "peer_apply": EXCHANGE_COMMIT_HARD_S,
             "submitted": EXCHANGE_COMMIT_HARD_S,
             "owner_transport": EXCHANGE_COMMIT_HARD_S,

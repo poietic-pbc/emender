@@ -1418,7 +1418,36 @@ def test_multinode_manager_publishes_only_final_global_aggregate_and_leader_appl
     assert "if args.node_count > 1 and node == 0 and rank != 0:" in trainer
     assert "in_place=True" in trainer[streamed_apply:proposal]
     supervisor = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
-    assert '"leader_apply_wait": EXCHANGE_COMMIT_HARD_S' in supervisor
+    assert '"leader_apply_wait": RESULT_PREPARATION_HARD_S' in supervisor
+
+
+def test_checkpoint_leader_wait_uses_enclosing_result_preparation_deadline():
+    """The peer wait includes readiness, leader apply, and checkpoint.
+
+    Each component retains its stricter inner deadline. Charging the composite
+    path to the 180-second result-readiness budget makes a valid 153-second
+    result plus a 43-second materialization fail before the release exists.
+    """
+    role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    trainer = role[role.index("def trainer(args)"):]
+    wait = trainer.index("_wait_for_leader_apply_release(")
+    result = trainer.index("native_plane.result_shards(", wait)
+    assert "leader_release_deadline = (" in trainer[:wait]
+    assert (
+        "time.monotonic() + min(args.deadline_s, 420.0)"
+        in trainer[:wait]
+    )
+    assert "deadline=leader_release_deadline" in trainer[wait:result]
+    assert (
+        "exchange_deadline = time.monotonic() + min(args.deadline_s, 180.0)"
+        in trainer[wait:result]
+    )
+
+    supervisor = (
+        ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py"
+    ).read_text()
+    assert "RESULT_PREPARATION_HARD_S = 420.0" in supervisor
+    assert '"leader_apply_wait": RESULT_PREPARATION_HARD_S' in supervisor
 
 
 def test_all_peers_get_fresh_supervised_apply_window_after_aggregate_visibility():

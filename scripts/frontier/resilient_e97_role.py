@@ -3438,8 +3438,18 @@ def trainer(args) -> int:
         if args.node_count > 1 and node == 0 and rank != 0:
             heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
                       stage="leader_apply_wait")
+            # This composite wait includes the leader's independently bounded
+            # result-readiness, materialization/apply, and immutable checkpoint
+            # stages.  Job 5080070 proved that charging all three to the single
+            # 180-second result window can expire before a valid release exists
+            # (153.614s readiness plus 42.853s materialization).  Keep their
+            # inner bounds unchanged while enforcing ADR-002's enclosing
+            # 420-second freeze-to-verified-result deadline.
+            leader_release_deadline = (
+                time.monotonic() + min(args.deadline_s, 420.0))
             _wait_for_leader_apply_release(
-                bulk, generation=generation, fence=fence, deadline=exchange_deadline)
+                bulk, generation=generation, fence=fence,
+                deadline=leader_release_deadline)
             exchange_deadline = time.monotonic() + min(args.deadline_s, 180.0)
         if native:
             result_wait_started = time.monotonic()
