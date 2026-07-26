@@ -849,8 +849,12 @@ def _liveness_heartbeat(bulk: Path, identity: str, interval_s: float = 5.0):
 
 
 def _stage_telemetry(bulk: Path, identity: str, generation: int, stage: str,
-                     started: float, hard_s: float, **metrics: object) -> None:
-    ended = time.monotonic()
+                     started: float, hard_s: float, *,
+                     ended: float | None = None,
+                     **metrics: object) -> None:
+    ended = time.monotonic() if ended is None else float(ended)
+    if ended < started:
+        raise ValueError(f"{stage} telemetry end precedes its start")
     elapsed = ended - started
     record = {"timestamp": time.time(), "identity": identity,
               "generation": generation, "stage": stage,
@@ -3146,28 +3150,14 @@ def trainer(args) -> int:
                     loss = float(window.losses[-1])
                 endpoint_snapshot_started = time.monotonic()
                 retained_endpoint = persistent_worker.snapshot()
-                _stage_telemetry(
-                    bulk, identity, generation,
-                    "async_v21_endpoint_snapshot",
-                    endpoint_snapshot_started,
-                    ASYNC_V21_SNAPSHOT_ADMISSION_S,
-                    endpoint_bytes=sum(
-                        value.numel() * value.element_size()
-                        for value in retained_endpoint.values()),
-                    foreground_interruption="snapshot_capture",
-                    phase_scope="trainer_snapshot",
-                    snapshot_coherent=True,
-                    snapshot_slots=persistent_worker.snapshot_slot_count,
-                    live_model_read_after_snapshot=False,
-                    python_dense_socket_bytes=0,
-                    lustre_dense_hot_path_bytes=0)
+                endpoint_snapshot_completed = time.monotonic()
+                lane_admission_started = endpoint_snapshot_completed
+                lane_admission_completed = endpoint_snapshot_completed
                 # The coherent endpoint is admitted to the bounded local
                 # background owner before the next mutable K window starts.
                 # Native publication below consumes only that immutable
                 # snapshot while the foreground lane advances.
                 if generation + 1 < target_generation:
-                    lookahead_anchor_digest = state_digest(state).hex()
-
                     def make_lookahead_phase(local_window):
                         def lookahead_phase(phase, details):
                             record = {
@@ -3235,7 +3225,6 @@ def trainer(args) -> int:
                         phase_callback_factory=make_lookahead_phase,
                         window_start_callback=async_window_start,
                     )
-                    lane_admission_started = time.monotonic()
                     # This is local OWNED: the immutable slot and its lifetime
                     # have transferred to the background publisher.  The next
                     # K starts only after this point.
@@ -3246,11 +3235,40 @@ def trainer(args) -> int:
                             endpoint_snapshot_started
                             + ASYNC_V21_SNAPSHOT_ADMISSION_S),
                     )
+                    lane_admission_completed = time.monotonic()
+                    # The current anchor digest is already verified and bound
+                    # by the native generation metadata.  Rehashing the full
+                    # host state here would re-enter the bounded foreground
+                    # pause after coherent capture.
+                    lookahead_anchor_digest = str(
+                        native_plane.metadata.base_digest)
+                # Persist the already-timestamped causal records only after
+                # the next mutable lane owns state.  Telemetry serialization
+                # and filesystem latency are background work, not part of the
+                # snapshot/admission interruption they describe.
+                _stage_telemetry(
+                    bulk, identity, generation,
+                    "async_v21_endpoint_snapshot",
+                    endpoint_snapshot_started,
+                    ASYNC_V21_SNAPSHOT_ADMISSION_S,
+                    ended=endpoint_snapshot_completed,
+                    endpoint_bytes=sum(
+                        value.numel() * value.element_size()
+                        for value in retained_endpoint.values()),
+                    foreground_interruption="snapshot_capture",
+                    phase_scope="trainer_snapshot",
+                    snapshot_coherent=True,
+                    snapshot_slots=persistent_worker.snapshot_slot_count,
+                    live_model_read_after_snapshot=False,
+                    python_dense_socket_bytes=0,
+                    lustre_dense_hot_path_bytes=0)
+                if generation + 1 < target_generation:
                     _stage_telemetry(
                         bulk, identity, generation,
                         "async_v21_snapshot_admission",
                         lane_admission_started,
                         ASYNC_V21_SNAPSHOT_ADMISSION_S,
+                        ended=lane_admission_completed,
                         policy_id=v2_policy.policy_id,
                         local_window=next_local_window,
                         foreground_interruption="snapshot_admission",
@@ -3260,7 +3278,8 @@ def trainer(args) -> int:
                         immutable_snapshot=True,
                         mutable_training_resumed=True,
                         foreground_pause_s=(
-                            time.monotonic() - endpoint_snapshot_started),
+                            lane_admission_completed
+                            - endpoint_snapshot_started),
                         policy_bound_s=ASYNC_V21_SNAPSHOT_ADMISSION_S)
                 delta = {}
             else:

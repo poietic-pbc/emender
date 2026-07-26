@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from queue import Full, Queue
 import threading
 import time
@@ -105,6 +106,42 @@ def test_snapshot_capture_is_coherent_and_background_never_reads_live_state(
     torch.testing.assert_close(session.model.weight, torch.tensor([9.0]))
     assert session.snapshot_slot_count == 2
     session.close()
+
+
+def test_snapshot_admission_deadline_excludes_telemetry_io():
+    """Persist causal records only after the next mutable K lane owns state."""
+    source = (
+        Path(__file__).parents[1]
+        / "scripts/frontier/resilient_e97_role.py"
+    ).read_text(encoding="utf-8")
+    trainer = source[source.index("def trainer(args) -> int:"):]
+    snapshot = trainer.index(
+        "retained_endpoint = persistent_worker.snapshot()")
+    snapshot_completed = trainer.index(
+        "endpoint_snapshot_completed = time.monotonic()", snapshot)
+    lane_start = trainer.index("async_training_lane.start(", snapshot_completed)
+    lane_completed = trainer.index(
+        "lane_admission_completed = time.monotonic()", lane_start)
+    snapshot_telemetry = trainer.index(
+        '"async_v21_endpoint_snapshot"', lane_completed)
+    admission_telemetry = trainer.index(
+        '"async_v21_snapshot_admission"', snapshot_telemetry)
+
+    assert (
+        snapshot < snapshot_completed < lane_start < lane_completed
+        < snapshot_telemetry < admission_telemetry
+    )
+    pre_owned = trainer[snapshot_completed:lane_start]
+    assert '"async_v21_endpoint_snapshot"' not in pre_owned
+    assert "lookahead_anchor_digest = state_digest(" not in pre_owned
+    assert (
+        "ended=endpoint_snapshot_completed"
+        in trainer[snapshot_telemetry:admission_telemetry]
+    )
+    assert (
+        "ended=lane_admission_completed"
+        in trainer[admission_telemetry:admission_telemetry + 1200]
+    )
 
 
 @pytest.mark.parametrize(
