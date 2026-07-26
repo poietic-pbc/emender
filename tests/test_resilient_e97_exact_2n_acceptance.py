@@ -68,7 +68,19 @@ def test_dry_run_renders_exact_real_k40_fenced_acceptance_without_submission(tmp
     assert len(identities) == 1
     assert all(max(p["stage_deadlines"].values()) <= 420 for p in plan["phases"])
     assert plan["phases"][0]["performance_gate"] == {
+        "all_eight_apply_swap_seconds_max": 60,
+        "causal_phase_classes": [
+            "freeze_snapshot",
+            "snapshot_admission",
+            "publish_network",
+            "aggregation",
+            "checkpoint",
+            "result_wait",
+            "apply_swap",
+        ],
         "foreground_idle_fraction_strict_max": 0.10,
+        "foreground_gap_seconds_max": 60,
+        "foreground_result_wait_seconds_max": 0,
         "steady_state_cadence_multiple_max": 1.25,
         "warmup_windows_per_trainer": 2,
         "measured_windows_per_trainer": 10,
@@ -77,10 +89,14 @@ def test_dry_run_renders_exact_real_k40_fenced_acceptance_without_submission(tmp
         "anchor_lag_p99_max": 2,
         "speculative_window_lag_p99_max": 2,
         "freeze_to_latest_seconds_max": 420,
+        "pause_tail_statistics": ["maximum", "p99"],
+        "snapshot_admission_seconds_max": 1,
     }
     assert plan["policy_id"] == "async-decoupled-v2.1-simple"
     assert plan["conformance"]["async_v21_requirements"] == [
         f"V21S{i:02d}" for i in range(1, 18)]
+    assert plan["conformance"]["immutable_snapshot_requirements"] == [
+        f"ISP{i:02d}" for i in range(1, 8)]
 
 
 def test_submit_path_is_fail_closed_and_never_contains_4n_submission():
