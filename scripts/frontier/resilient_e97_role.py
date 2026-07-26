@@ -2030,10 +2030,28 @@ def _native_manager_session_lifetime_s(args) -> float:
     """Bound one endpoint identity across this finite generation sequence."""
     # ``deadline_s`` remains the per-generation/per-operation ceiling at every
     # call site below.  The transport open deadline and signed endpoint expiry
-    # are session lifetime bounds, so they must cover every requested
-    # generation rather than expiring while a healthy manager advertises READY
-    # for the next one.  Slurm's requested walltime remains the outer hard cap.
-    return float(args.deadline_s) * max(1, int(args.generations))
+    # are session lifetime bounds, so they must cover the whole allocation
+    # rather than expiring while a healthy manager advertises READY for the
+    # next generation.  Candidate publication, safe-boundary rendezvous, and
+    # atomic apply each have distinct post-result clocks, so generation count
+    # times the admission ceiling alone is not a sufficient session lifetime.
+    configured_s = float(args.deadline_s) * max(1, int(args.generations))
+    requested = os.environ.get("RESILIENT_E97_REQUESTED_WALLTIME")
+    if not requested:
+        return configured_s
+    try:
+        hours, minutes, seconds = (int(part) for part in requested.split(":"))
+    except (TypeError, ValueError):
+        raise ValueError(
+            "RESILIENT_E97_REQUESTED_WALLTIME must be HH:MM:SS") from None
+    if hours < 0 or not 0 <= minutes < 60 or not 0 <= seconds < 60:
+        raise ValueError(
+            "RESILIENT_E97_REQUESTED_WALLTIME must be HH:MM:SS")
+    # The session starts after allocation admission, so a lease this long
+    # necessarily outlives Slurm's remaining wall clock.  Slurm is still the
+    # authoritative outer hard stop.
+    requested_s = float(hours * 3600 + minutes * 60 + seconds)
+    return max(configured_s, requested_s)
 
 
 def _native_post_result_lifetime_s(args) -> float:

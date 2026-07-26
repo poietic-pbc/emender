@@ -189,13 +189,32 @@ def test_live_native_selection_is_wired_and_python_debug_remains_explicit():
     assert "role recovery native runtime digest mismatch" in source
 
 
-def test_native_manager_endpoint_lifetime_spans_all_configured_generations():
+def test_native_manager_endpoint_lifetime_spans_all_configured_generations(
+        monkeypatch):
     from scripts.frontier import resilient_e97_role as role
 
+    monkeypatch.delenv("RESILIENT_E97_REQUESTED_WALLTIME", raising=False)
     args = SimpleNamespace(deadline_s=600.0, generations=3)
     assert role._native_manager_session_lifetime_s(args) == 1800.0
     manager = ROLE.read_text()[ROLE.read_text().index("def _native_manager(args)"):]
     assert "deadline_s=_native_manager_session_lifetime_s(args)" in manager
+
+
+def test_native_manager_endpoint_lifetime_spans_requested_allocation(
+        monkeypatch):
+    """Frontier job 5083780 failed when its healthy session lease expired.
+
+    Seven transactions completed atomically, then the signed manager endpoint
+    expired at 5,040 seconds (420 seconds * 12 generations) during generation
+    eight even though the exact two-node allocation still had time remaining.
+    The native identity must remain usable for the allocation's full requested
+    walltime; Slurm remains the outer hard stop.
+    """
+    from scripts.frontier import resilient_e97_role as role
+
+    monkeypatch.setenv("RESILIENT_E97_REQUESTED_WALLTIME", "02:00:00")
+    args = SimpleNamespace(deadline_s=420.0, generations=12)
+    assert role._native_manager_session_lifetime_s(args) == 7200.0
 
 
 def test_native_generation_lifetime_spans_all_post_result_phase_clocks():
