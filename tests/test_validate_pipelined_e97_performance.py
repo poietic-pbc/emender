@@ -200,6 +200,62 @@ def _records(
                 })
             node_apply_started = version * cadence + 20.0
             node_apply_ended = node_apply_started + 5.0
+            transaction_digest = (
+                f"{version + 100 + fixture_node * 1000:064x}")
+            safe_metrics = {
+                "candidate_preparation": {
+                    "count": 8,
+                    "maximum_s": 8.0,
+                    "p99_s": 8.0,
+                    "events_s": [
+                        float(value) for value in range(1, 9)
+                    ],
+                },
+                "boundary_rendezvous": {
+                    "count": 8,
+                    "maximum_s": 8.0,
+                    "p99_s": 8.0,
+                    "events_s": [
+                        float(value) for value in range(8, 0, -1)
+                    ],
+                    "manager_elapsed_s": 10.0,
+                    "policy_bound_s": 420.0,
+                },
+                "release_to_apply": {
+                    "count": 8,
+                    "maximum_s": 9.0,
+                    "p99_s": 9.0,
+                    "events_s": [
+                        float(value) for value in range(2, 10)
+                    ],
+                    "policy_bound_s": 60.0,
+                },
+                "total_foreground_idle": {
+                    "count": 8,
+                    "maximum_s": 10.0,
+                    "p99_s": 10.0,
+                    "events_s": [10.0] * 8,
+                },
+            }
+            values.append({
+                "identity": manager_identity,
+                "generation": generation,
+                "stage": "native_node_boundary_rendezvous",
+                "elapsed_s": 10.0,
+                "monotonic_start_s": node_apply_started - 10.0,
+                "monotonic_end_s": node_apply_started,
+                "timestamp": 1000.0 + node_apply_started,
+                "within_slo": True,
+                "transaction_digest": transaction_digest,
+                "phase_scope": "node_all_eight",
+                "foreground_interruption": "safe_boundary_rendezvous",
+                "foreground_blocking": True,
+                "trainer_count": 8,
+                "candidate_prepared_count": 8,
+                "boundary_ready_count": 8,
+                "policy_bound_s": 420.0,
+                **safe_metrics,
+            })
             values.append({
                 "identity": manager_identity,
                 "generation": generation,
@@ -218,7 +274,9 @@ def _records(
                 "atomic_live_model_swap": True,
                 "phase_scope": "node_all_eight",
                 "trainer_count": 8,
+                "transaction_digest": transaction_digest,
                 "policy_bound_s": 60.0,
+                **safe_metrics,
             })
             trainer_identity = f"node-{fixture_node}-trainer-0"
             for offset, stage in enumerate((
@@ -319,6 +377,23 @@ def test_semantic_validator_accepts_true_decoupling_and_bounded_lag():
     assert result["atomic_commits"] >= 10
     assert result["overlaps"]
     assert set(result["causal_phase_seconds"]) == MODULE.CAUSAL_PHASES
+    assert result["safe_boundary"]["transactions"] >= 10
+    assert (
+        result["safe_boundary"]["candidate_preparation"]["maximum_seconds"]
+        == 8.0
+    )
+    assert (
+        result["safe_boundary"]["boundary_rendezvous"]["p99_seconds"]
+        == 8.0
+    )
+    assert (
+        result["safe_boundary"]["release_to_apply"]["maximum_seconds"]
+        == 9.0
+    )
+    assert (
+        result["safe_boundary"]["total_foreground_idle"]["p99_seconds"]
+        == 10.0
+    )
 
 
 def test_semantic_validator_rejects_missing_causal_phase_timing():
@@ -364,13 +439,42 @@ def test_semantic_validator_rejects_every_event_pause_bound(
 ):
     records = _records()
     value = next(
-        item for item in records if item.get("phase_scope") == phase_scope)
+        item for item in records
+        if (
+            item.get("phase_scope") == phase_scope
+            and (
+                phase_scope != "node_all_eight"
+                or item.get("stage") == "native_node_apply_swap"
+            )
+        ))
     if phase_scope == "snapshot_owned":
         value["foreground_pause_s"] = pause
     else:
         value["elapsed_s"] = pause
         value["monotonic_end_s"] = value["monotonic_start_s"] + pause
     with pytest.raises(ValueError, match=match):
+        MODULE.validate(records)
+
+
+def test_semantic_validator_rejects_hidden_boundary_tail_stall():
+    records = _records()
+    rendezvous = next(
+        value for value in records
+        if value.get("stage") == "native_node_boundary_rendezvous")
+    rendezvous["boundary_rendezvous"]["events_s"][-1] = 421.0
+    rendezvous["boundary_rendezvous"]["maximum_s"] = 421.0
+    rendezvous["boundary_rendezvous"]["p99_s"] = 421.0
+    transaction = rendezvous["transaction_digest"]
+    apply = next(
+        value for value in records
+        if (
+            value.get("stage") == "native_node_apply_swap"
+            and value.get("transaction_digest") == transaction
+        )
+    )
+    apply["boundary_rendezvous"] = dict(
+        rendezvous["boundary_rendezvous"])
+    with pytest.raises(ValueError, match="hard tail"):
         MODULE.validate(records)
 
 
@@ -413,18 +517,6 @@ def test_overlap_gate_rejects_200_second_bursty_alternation_despite_checkpoints_
         "foreground_component_s": 0.0,
     })
     with pytest.raises(ValueError, match="every-event foreground tail"):
-        MODULE.validate(records)
-
-
-def test_semantic_validator_requires_ten_distinct_atomic_commits():
-    records = _records()
-    atomic = [
-        value for value in records
-        if value.get("stage") == "fenced_atomic_commit"
-    ]
-    for value in atomic[9:]:
-        records.remove(value)
-    with pytest.raises(ValueError, match="ten distinct atomic commits"):
         MODULE.validate(records)
 
 

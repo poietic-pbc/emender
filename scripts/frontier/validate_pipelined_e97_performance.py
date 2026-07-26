@@ -32,6 +32,7 @@ MEASURED_WINDOWS = 10
 MAX_IDLE_FRACTION = 0.10
 MAX_CADENCE_MULTIPLE = 1.25
 MAX_LOCAL_OWNED_S = 1.0
+MAX_BOUNDARY_RENDEZVOUS_S = 420.0
 MAX_ALL_EIGHT_APPLY_S = 60.0
 MAX_FOREGROUND_GAP_S = 60.0
 MAX_CORRECTNESS_S = 420.0
@@ -606,10 +607,174 @@ def _causal_phase_timing(
     return phase_summary, pause_bounds
 
 
+def _safe_boundary_timing(
+    records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Validate every-event two-phase rendezvous tails, not just medians."""
+    boundary_records = [
+        value for value in records
+        if value.get("stage") == "native_node_boundary_rendezvous"
+    ]
+    if not boundary_records:
+        raise ValueError("missing all-eight safe-boundary rendezvous evidence")
+    apply_by_transaction: dict[str, dict[str, Any]] = {}
+    for value in records:
+        if value.get("stage") != "native_node_apply_swap":
+            continue
+        transaction = _digest(
+            value.get("transaction_digest"), "node apply transaction")
+        if transaction in apply_by_transaction:
+            raise ValueError("duplicate node apply transaction telemetry")
+        apply_by_transaction[transaction] = value
+
+    aggregate: dict[str, list[float]] = {
+        "candidate_preparation": [],
+        "boundary_rendezvous": [],
+        "release_to_apply": [],
+        "total_foreground_idle": [],
+        "manager_rendezvous": [],
+    }
+
+    def events(
+        value: Any,
+        *,
+        name: str,
+        count: int,
+        bound_s: float,
+    ) -> list[float]:
+        if not isinstance(value, dict):
+            raise ValueError(f"{name} lacks every-event timing summary")
+        raw = value.get("events_s")
+        if not isinstance(raw, list) or len(raw) != count:
+            raise ValueError(f"{name} lacks all eight timing events")
+        parsed = [_finite(item, f"{name} event") for item in raw]
+        if any(item < 0 for item in parsed):
+            raise ValueError(f"{name} contains a negative duration")
+        observed_max = max(parsed)
+        observed_p99 = _percentile(parsed, .99)
+        if (
+            _integer(value.get("count"), f"{name} count") != count
+            or not math.isclose(
+                _finite(value.get("maximum_s"), f"{name} maximum"),
+                observed_max,
+                rel_tol=1e-9,
+                abs_tol=1e-6,
+            )
+            or not math.isclose(
+                _finite(value.get("p99_s"), f"{name} p99"),
+                observed_p99,
+                rel_tol=1e-9,
+                abs_tol=1e-6,
+            )
+        ):
+            raise ValueError(f"{name} max/p99 does not match raw events")
+        if observed_max > bound_s or observed_p99 > bound_s:
+            raise ValueError(f"{name} hard tail exceeds {bound_s:g} seconds")
+        return parsed
+
+    seen: set[str] = set()
+    for value in boundary_records:
+        transaction = _digest(
+            value.get("transaction_digest"), "boundary transaction")
+        if transaction in seen:
+            raise ValueError("duplicate safe-boundary rendezvous transaction")
+        seen.add(transaction)
+        elapsed = _finite(
+            value.get("elapsed_s"), "manager boundary rendezvous elapsed")
+        if (
+            elapsed < 0
+            or elapsed > MAX_BOUNDARY_RENDEZVOUS_S
+            or value.get("within_slo") is not True
+            or _integer(value.get("trainer_count"), "boundary trainer count")
+            != 8
+            or _integer(
+                value.get("candidate_prepared_count"),
+                "candidate prepared count",
+            ) != 8
+            or _integer(
+                value.get("boundary_ready_count"), "boundary ready count")
+            != 8
+            or _finite(
+                value.get("policy_bound_s"), "boundary policy bound")
+            != MAX_BOUNDARY_RENDEZVOUS_S
+        ):
+            raise ValueError(
+                "safe-boundary rendezvous is not one bounded all-eight phase")
+        candidate = events(
+            value.get("candidate_preparation"),
+            name="candidate preparation",
+            count=8,
+            bound_s=MAX_BOUNDARY_RENDEZVOUS_S,
+        )
+        boundary = events(
+            value.get("boundary_rendezvous"),
+            name="boundary rendezvous",
+            count=8,
+            bound_s=MAX_BOUNDARY_RENDEZVOUS_S,
+        )
+        release = events(
+            value.get("release_to_apply"),
+            name="release-to-apply",
+            count=8,
+            bound_s=MAX_ALL_EIGHT_APPLY_S,
+        )
+        total = events(
+            value.get("total_foreground_idle"),
+            name="total foreground idle",
+            count=8,
+            bound_s=(
+                MAX_BOUNDARY_RENDEZVOUS_S + MAX_ALL_EIGHT_APPLY_S),
+        )
+        apply = apply_by_transaction.get(transaction)
+        if apply is None or any(
+            apply.get(name) != value.get(name)
+            for name in (
+                "candidate_preparation",
+                "boundary_rendezvous",
+                "release_to_apply",
+                "total_foreground_idle",
+            )
+        ):
+            raise ValueError(
+                "boundary rendezvous is not linked to its exact node apply")
+        aggregate["candidate_preparation"].extend(candidate)
+        aggregate["boundary_rendezvous"].extend(boundary)
+        aggregate["release_to_apply"].extend(release)
+        aggregate["total_foreground_idle"].extend(total)
+        aggregate["manager_rendezvous"].append(elapsed)
+
+    def combined(name: str, bound_s: float) -> dict[str, Any]:
+        values = aggregate[name]
+        return {
+            "count": len(values),
+            "p99_seconds": _percentile(values, .99),
+            "maximum_seconds": max(values),
+            "policy_bound_seconds": bound_s,
+            "passed": True,
+        }
+
+    return {
+        "transactions": len(seen),
+        "candidate_preparation": combined(
+            "candidate_preparation", MAX_BOUNDARY_RENDEZVOUS_S),
+        "boundary_rendezvous": combined(
+            "boundary_rendezvous", MAX_BOUNDARY_RENDEZVOUS_S),
+        "manager_rendezvous": combined(
+            "manager_rendezvous", MAX_BOUNDARY_RENDEZVOUS_S),
+        "release_to_apply": combined(
+            "release_to_apply", MAX_ALL_EIGHT_APPLY_S),
+        "total_foreground_idle": combined(
+            "total_foreground_idle",
+            MAX_BOUNDARY_RENDEZVOUS_S + MAX_ALL_EIGHT_APPLY_S,
+        ),
+    }
+
+
 def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
     policy, fence = _policy(records)
     backgrounds = _background(records, fence=fence)
     causal_phases, foreground_pause_bounds = _causal_phase_timing(records)
+    safe_boundary = _safe_boundary_timing(records)
     atomic_commit_versions = {
         int(value["commit_global_version"])
         for value in backgrounds
@@ -798,6 +963,7 @@ def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
         },
         "causal_phase_seconds": causal_phases,
         "foreground_pause_bounds": foreground_pause_bounds,
+        "safe_boundary": safe_boundary,
         "lag": {
             "commit_p99": _percentile(commit_lags, .99),
             "commit_max": max(commit_lags),

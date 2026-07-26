@@ -323,3 +323,26 @@ def test_result_apply_is_atomic_bounded_and_nonblocking(tmp_path):
     assert len(marker["trainers"]) == 8
     assert transaction.node_marker_path.exists()
     assert transaction.commit_node() == marker
+
+
+def test_training_lane_reaches_boundary_before_release_then_translates_once():
+    session = _AdvancingSession()
+    lane = _start_advancing_lane(session)
+    _wait_for_window(session)
+
+    boundary = lane.finish_at_boundary(
+        deadline=time.monotonic() + 1.0,
+        corrections=None,
+    )
+    value_at_boundary = session.value.clone()
+
+    assert boundary.local_window_end >= 1
+    assert boundary.translation_elapsed_s == 0.0
+    torch.testing.assert_close(session.value, value_at_boundary)
+
+    applied = lane.apply_at_boundary({"weight": torch.tensor([3.0])})
+
+    torch.testing.assert_close(session.value, value_at_boundary + 3.0)
+    assert applied.translation_elapsed_s >= 0.0
+    with pytest.raises(RuntimeError, match="already applied"):
+        lane.apply_at_boundary({"weight": torch.tensor([3.0])})

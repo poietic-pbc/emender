@@ -45,6 +45,8 @@ READY_HARD_S = 180.0
 K40_HARD_S = 420.0
 EXCHANGE_COMMIT_HARD_S = 180.0
 RESULT_PREPARATION_HARD_S = 420.0
+BOUNDARY_RENDEZVOUS_HARD_S = 420.0
+ALL_EIGHT_APPLY_HARD_S = 60.0
 FIRST_COMMIT_HARD_S = 720.0
 
 
@@ -142,6 +144,8 @@ def _allocation_admission(run_dir: Path) -> AllocationFenceGuard | None | bool:
         "generation_baseline_s": list(GENERATION_BASELINE_S),
         "ready_hard_s": READY_HARD_S, "k40_hard_s": K40_HARD_S,
         "exchange_commit_hard_s": EXCHANGE_COMMIT_HARD_S,
+        "boundary_rendezvous_hard_s": BOUNDARY_RENDEZVOUS_HARD_S,
+        "all_eight_apply_hard_s": ALL_EIGHT_APPLY_HARD_S,
         "first_commit_hard_s": FIRST_COMMIT_HARD_S,
     }, sort_keys=True) + "\n")
     os.replace(temporary, telemetry)
@@ -493,7 +497,8 @@ class AllocationSupervisor:
             # bounds.
             "leader_apply_wait": RESULT_PREPARATION_HARD_S,
             "result_preparation": RESULT_PREPARATION_HARD_S,
-            "peer_apply": EXCHANGE_COMMIT_HARD_S,
+            "boundary_rendezvous": BOUNDARY_RENDEZVOUS_HARD_S,
+            "peer_apply": ALL_EIGHT_APPLY_HARD_S,
             "submitted": EXCHANGE_COMMIT_HARD_S,
             "owner_transport": EXCHANGE_COMMIT_HARD_S,
             "freeze": EXCHANGE_COMMIT_HARD_S,

@@ -1279,10 +1279,6 @@ class PersistentRealWorkerSession:
             if (correction.shape != target.shape
                     or not torch.isfinite(correction).all()):
                 raise ValueError("persistent correction is malformed/nonfinite")
-        with torch.no_grad():
-            for name in self.base_keys:
-                model_state[name].add_(
-                    corrections[name].to(model_state[name]))
 
         parameters = [
             parameter
@@ -1291,6 +1287,9 @@ class PersistentRealWorkerSession:
         ]
         if len(parameters) != len(self.optimizer_parameter_names):
             raise ValueError("persistent optimizer parameter order changed")
+        targets: list[
+            tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        ] = []
         for name, parameter in zip(
                 self.optimizer_parameter_names, parameters):
             record = self.optimizer.state.get(parameter)
@@ -1304,7 +1303,15 @@ class PersistentRealWorkerSession:
                     if key not in {"z", "exp_avg_sq"}:
                         raise ValueError(
                             f"unknown parameter-valued optimizer buffer: {key}")
-            z.add_(corrections[name].to(z))
+            targets.append((model_state[name], z, corrections[name]))
+
+        # Validation of every x/z destination completes before the first
+        # mutation.  The training lane is quiescent at this point, so this
+        # short no-grad loop is the atomic resident boundary swap.
+        with torch.no_grad():
+            for target, z, correction in targets:
+                target.add_(correction.to(target))
+                z.add_(correction.to(z))
 
     def close(self) -> None:
         if any(not event.query() for event in self._snapshot_copy_ready.values()):
@@ -1360,6 +1367,8 @@ class PersistentAsyncTrainingLane:
         self._started_s = 0.0
         self._start_state: dict[str, torch.Tensor] | None = None
         self._snapshot_deferred = False
+        self._boundary_report: CoalescedWindowReport | None = None
+        self._correction_applied = False
 
     def start(
         self,
@@ -1458,7 +1467,18 @@ class PersistentAsyncTrainingLane:
         deadline: float,
         corrections: Mapping[str, torch.Tensor] | None = None,
     ) -> CoalescedWindowReport:
-        """Stop after the active K and optionally translate resident x/z."""
+        """Stop after the active K and optionally translate resident x/z.
+
+        Calling without ``corrections`` is the first half of the v2.1
+        safe-boundary rendezvous: the lane is quiescent, but no model or
+        optimizer point has changed.  :meth:`apply_at_boundary` performs the
+        already-prepared translation only after the manager releases the exact
+        all-eight transaction.
+        """
+        if self._boundary_report is not None:
+            if corrections is None:
+                return self._boundary_report
+            return self.apply_at_boundary(corrections)
         thread = self._thread
         if thread is None:
             raise RuntimeError("persistent async lane was not started")
@@ -1481,27 +1501,7 @@ class PersistentAsyncTrainingLane:
             or (self._tokens <= 0 and not self._snapshot_deferred)
         ):
             raise ValueError("persistent async lane produced an empty interval")
-        translation_elapsed_s = 0.0
-        if corrections is not None:
-            if self._start_state is None:
-                raise RuntimeError("persistent async lane lost its interval start")
-            translation_started = time.monotonic()
-            self.session.translate(corrections)
-            for name, correction in corrections.items():
-                start = self._start_state.get(name)
-                if start is None or start.shape != correction.shape:
-                    raise ValueError(
-                        "persistent async interval correction layout changed")
-                start.add_(correction.to(start))
-            translation_elapsed_s = max(
-                0.0, time.monotonic() - translation_started)
-            if self._snapshot_deferred:
-                # Background lag exhausted snapshot admission capacity, not
-                # foreground progress.  Start the next admissible interval at
-                # the now-corrected live boundary and discard the over-age
-                # local displacement from contribution accounting.
-                self._start_state = self.session.snapshot()
-        return CoalescedWindowReport(
+        self._boundary_report = CoalescedWindowReport(
             local_window_start=self._window_start,
             local_window_end=self._window_end,
             exact_tokens=self._tokens,
@@ -1510,8 +1510,51 @@ class PersistentAsyncTrainingLane:
             reached_hard_bound=(
                 self._window_end - self._window_start >= self.max_windows),
             snapshot_deferred=self._snapshot_deferred,
+            translation_elapsed_s=0.0,
+        )
+        if corrections is None:
+            return self._boundary_report
+        return self.apply_at_boundary(corrections)
+
+    def apply_at_boundary(
+        self,
+        corrections: Mapping[str, torch.Tensor],
+    ) -> CoalescedWindowReport:
+        """Translate a quiescent lane once after all-eight manager release."""
+        if self._boundary_report is None:
+            raise RuntimeError(
+                "persistent async lane has not reached its safe boundary")
+        if self._correction_applied:
+            raise RuntimeError(
+                "persistent async lane correction was already applied")
+        if not corrections:
+            raise ValueError("persistent async lane correction is empty")
+        translation_elapsed_s = 0.0
+        if self._start_state is None:
+            raise RuntimeError("persistent async lane lost its interval start")
+        translation_started = time.monotonic()
+        self.session.translate(corrections)
+        for name, correction in corrections.items():
+            start = self._start_state.get(name)
+            if start is None or start.shape != correction.shape:
+                raise ValueError(
+                    "persistent async interval correction layout changed")
+            start.add_(correction.to(start))
+        translation_elapsed_s = max(
+            0.0, time.monotonic() - translation_started)
+        if self._snapshot_deferred:
+            # Background lag exhausted snapshot admission capacity, not
+            # foreground progress.  Start the next admissible interval at
+            # the now-corrected live boundary and discard the over-age local
+            # displacement from contribution accounting.
+            self._start_state = self.session.snapshot()
+        self._correction_applied = True
+        self._boundary_report = replace(
+            self._boundary_report,
+            elapsed_s=max(0.0, time.monotonic() - self._started_s),
             translation_elapsed_s=translation_elapsed_s,
         )
+        return self._boundary_report
 
     @property
     def start_state(self) -> Mapping[str, torch.Tensor]:

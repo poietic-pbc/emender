@@ -1423,7 +1423,7 @@ def test_native_manager_advances_progress_after_owner_transport():
 
 
 def test_native_all_eight_apply_releases_only_after_bounded_serial_preparation():
-    """One reader prepares at a time; then the 60-second transaction starts."""
+    """One reader prepares at a time; eight K boundaries precede release."""
     role = (
         ROOT / "scripts/frontier/resilient_e97_role.py"
     ).read_text(encoding="utf-8")
@@ -1433,31 +1433,38 @@ def test_native_all_eight_apply_releases_only_after_bounded_serial_preparation()
     ]
     committed_evidence = manager.index("committed_evidence =")
     preparation_stage = manager.index('stage="result_preparation"')
-    ready_wait = manager.index(
-        'f"native-apply-ready-{generation:08d}-{rank:02d}.json"',
+    rendezvous_call = manager.index(
+        "_coordinate_native_safe_boundary(",
         preparation_stage,
     )
-    release = manager.index(
-        'f"native-apply-release-{generation:08d}.json"',
-        ready_wait,
-    )
-    apply_stage = manager.index('stage="peer_apply"', release)
+    apply_stage = manager.index('stage="peer_apply"', rendezvous_call)
     receipt_wait = manager.index(
         'control / f"native-applied-{generation:08d}-{rank:02d}.json"',
         apply_stage,
     )
     assert (
-        committed_evidence < preparation_stage < ready_wait < release
+        committed_evidence < preparation_stage < rendezvous_call
         < apply_stage < receipt_wait
     )
     assert (
         'stage="result_preparation", **committed_evidence'
-        in manager[committed_evidence:ready_wait]
+        in manager[committed_evidence:rendezvous_call]
     )
     assert (
         'stage="peer_apply", **committed_evidence'
-        in manager[release:receipt_wait]
+        in manager[rendezvous_call:receipt_wait]
     )
+    coordinator = role[
+        role.index("def _coordinate_native_safe_boundary("):
+        role.index("def _liveness_heartbeat(")
+    ]
+    prepared_wait = coordinator.index("native-candidate-prepared-")
+    rendezvous_open = coordinator.index("native-boundary-rendezvous-")
+    boundary_wait = coordinator.index("native-boundary-ready-")
+    release = coordinator.index("native-apply-release-")
+    assert prepared_wait < rendezvous_open < boundary_wait < release
+    assert "transaction.release_apply(" in coordinator[boundary_wait:release]
+    assert "abort_before_release(" in coordinator
 
     trainer = role[role.index("def trainer(args) -> int:"):]
     result_visible = trainer.index(
@@ -1471,26 +1478,36 @@ def test_native_all_eight_apply_releases_only_after_bounded_serial_preparation()
         'control / f"native-result-applied-{generation:08d}-{rank:02d}.json"')
     reload_verified = trainer.index(
         "_reload_verified_async_v2_latest(", result_materialized)
-    ready = trainer.index(
-        'f"native-apply-ready-{generation:08d}-{rank:02d}.json"',
+    prepared = trainer.index(
+        "native-candidate-prepared-",
         reload_verified,
     )
+    rendezvous = trainer.index(
+        'marker_name="native-boundary-rendezvous"', prepared)
+    boundary_stop = trainer.index(
+        "async_training_lane.finish_at_boundary(", rendezvous)
+    boundary_ready = trainer.index("native-boundary-ready-", boundary_stop)
     wait_release = trainer.index(
-        'f"native-apply-release-{generation:08d}.json"', ready)
+        'marker_name="native-apply-release"', boundary_ready)
     live_swap = trainer.index("safe_apply_started = time.monotonic()", wait_release)
     applied = trainer.index(
         'control / f"native-applied-{generation:08d}-{rank:02d}.json"',
         live_swap,
     )
     assert (
-        result_materialized < reload_verified < ready < wait_release
-        < live_swap < applied
+        result_materialized < reload_verified < prepared < rendezvous
+        < boundary_stop < boundary_ready < wait_release < live_swap < applied
     )
 
     supervisor = (
         ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py"
     ).read_text(encoding="utf-8")
     assert '"result_preparation": RESULT_PREPARATION_HARD_S' in supervisor
+    assert (
+        '"boundary_rendezvous": BOUNDARY_RENDEZVOUS_HARD_S'
+        in supervisor
+    )
+    assert '"peer_apply": ALL_EIGHT_APPLY_HARD_S' in supervisor
 
 
 def test_trainer_exchange_window_waits_for_manager_local_reduce(tmp_path):
@@ -1599,7 +1616,8 @@ def test_all_peers_get_fresh_supervised_apply_window_after_aggregate_visibility(
     aggregate_visible = trainer.index("manifest, aggregate = spool.stream_aggregate(")
     preparation = trainer.index('stage="result_preparation"', aggregate_visible)
     apply = trainer.index("state = apply_delta(", aggregate_visible)
-    release = trainer.index("native-apply-release-", apply)
+    release = trainer.index(
+        'marker_name="native-apply-release"', apply)
     foreground = trainer.index('stage="peer_apply"', release)
     live_swap = trainer.index("safe_apply_started = time.monotonic()", foreground)
     assert (
@@ -1608,7 +1626,11 @@ def test_all_peers_get_fresh_supervised_apply_window_after_aggregate_visibility(
     )
     supervisor = (ROOT / "scripts/frontier/resilient_e97_allocation_supervisor.py").read_text()
     assert '"result_preparation": RESULT_PREPARATION_HARD_S' in supervisor
-    assert '"peer_apply": EXCHANGE_COMMIT_HARD_S' in supervisor
+    assert (
+        '"boundary_rendezvous": BOUNDARY_RENDEZVOUS_HARD_S'
+        in supervisor
+    )
+    assert '"peer_apply": ALL_EIGHT_APPLY_HARD_S' in supervisor
 
 
 def test_terminal_generation_does_not_rejoin_draining_pool():

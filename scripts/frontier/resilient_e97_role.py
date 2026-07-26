@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+from typing import Mapping
 import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -86,7 +87,7 @@ from ndm.native_e97_runtime import (
 from ndm.native_pool_runtime import NativeManagerSession
 from ndm.async_diloco_v2 import (
     ASYNC_DECOUPLED_V21, AsyncV21DescriptorService, AsyncV21WorkerLane,
-    AtomicEightTrainerApply,
+    AtomicEightTrainerApply, SafeBoundaryRendezvous,
     OuterState, ResultEnvelope, ScheduleFreeLocalState,
 )
 from ndm.resilient_e97_reducer import TensorLayout
@@ -109,6 +110,7 @@ from ndm.resilient_pool_runtime import (
 
 ASYNC_V21_E97_NATIVE_RESIDENT_BYTES = 64_001_671_648
 ASYNC_V21_SNAPSHOT_ADMISSION_S = 1.0
+ASYNC_V21_BOUNDARY_RENDEZVOUS_S = 420.0
 ASYNC_V21_ALL_EIGHT_APPLY_S = 60.0
 
 _CAUSAL_PHASE_BY_STAGE = {
@@ -833,6 +835,199 @@ def _wait_for_native_apply_lane(control: Path, args, *, generation: int,
                   "generation": generation,
                   "result_root": result_root,
                   "rank": rank - 1})
+
+
+def _native_safe_boundary_transaction(
+        args, *, node: int, generation: int, result_root: str,
+        node_incarnation: str,
+        ) -> SafeBoundaryRendezvous:
+    """Construct the one exact candidate/boundary/apply transaction."""
+    return SafeBoundaryRendezvous(
+        run_id=args.run_id,
+        fence=_fence_epoch(args),
+        node_id=f"node-{node}",
+        node_incarnation=node_incarnation,
+        result_version=generation + 1,
+        result_digest=result_root,
+        trainer_count=8,
+        rendezvous_timeout_s=ASYNC_V21_BOUNDARY_RENDEZVOUS_S,
+        apply_timeout_s=ASYNC_V21_ALL_EIGHT_APPLY_S,
+    )
+
+
+def _wait_for_native_boundary_control(
+        control: Path, args, *, generation: int, transaction_digest: str,
+        marker_name: str, deadline: float,
+        ) -> dict[str, object]:
+    """Wait for rendezvous/release or fail immediately on its fenced abort."""
+    marker = control / f"{marker_name}-{generation:08d}.json"
+    abort = control / f"native-boundary-abort-{generation:08d}.json"
+    expected = {
+        "run_id": args.run_id,
+        "fence_epoch": _fence_epoch(args),
+        "generation": generation,
+        "transaction_digest": transaction_digest,
+    }
+    while True:
+        if abort.exists():
+            value = wait_metadata(
+                abort, deadline=deadline, expected=expected)
+            raise RuntimeError(
+                "safe-boundary rendezvous aborted before apply release: "
+                f"{value.get('reason', 'unknown')}")
+        if marker.exists():
+            return wait_metadata(
+                marker, deadline=deadline, expected=expected)
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(.02)
+    raise TimeoutError(
+        f"safe-boundary control marker did not arrive: {marker_name}")
+
+
+def _coordinate_native_safe_boundary(
+        control: Path, args, *, bulk: Path, identity: str,
+        node: int, generation: int,
+        result_root: str, node_incarnation: str,
+        preparation_deadline: float,
+        committed_evidence: Mapping[str, object],
+        ) -> tuple[SafeBoundaryRendezvous, dict[str, object]]:
+    """Gather candidate receipts, rendezvous eight boundaries, then release.
+
+    Preparation receipts never satisfy the second loop.  Any exception before
+    release publishes a fenced abort marker while the transaction still has
+    zero applied lanes; trainers observe it before translating live x/z.
+    """
+    transaction = _native_safe_boundary_transaction(
+        args,
+        node=node,
+        generation=generation,
+        result_root=result_root,
+        node_incarnation=node_incarnation,
+    )
+    try:
+        for rank in range(args.local_quorum):
+            prepared = wait_metadata(
+                control
+                / f"native-candidate-prepared-{generation:08d}-{rank:02d}.json",
+                deadline=preparation_deadline,
+                expected={
+                    "schema":
+                        "emender-native-e97-candidate-prepared-v2.1",
+                    "run_id": args.run_id,
+                    "fence_epoch": _fence_epoch(args),
+                    "generation": generation,
+                    "result_root": result_root,
+                    "rank": rank,
+                    "node_incarnation": node_incarnation,
+                    "transaction_digest": transaction.transaction_digest,
+                },
+            )
+            transaction.record_candidate_prepared(
+                rank=rank,
+                trainer_incarnation=str(
+                    prepared["trainer_incarnation"]),
+                candidate_digest=str(prepared["candidate_digest"]),
+                preparation_started_monotonic_s=float(
+                    prepared["preparation_started_monotonic_s"]),
+                prepared_monotonic_s=float(
+                    prepared["candidate_prepared_monotonic_s"]),
+            )
+
+        rendezvous_opened = time.monotonic()
+        rendezvous = transaction.open_boundary_rendezvous(
+            opened_monotonic_s=rendezvous_opened)
+        atomic_metadata(
+            control / f"native-boundary-rendezvous-{generation:08d}.json",
+            {
+                **rendezvous,
+                "schema":
+                    "emender-native-e97-boundary-rendezvous-v2.1",
+                "run_id": args.run_id,
+                "fence_epoch": _fence_epoch(args),
+                "generation": generation,
+                "result_root": result_root,
+                "node_incarnation": node_incarnation,
+                "transaction_digest": transaction.transaction_digest,
+            },
+        )
+        heartbeat(
+            bulk,
+            identity,
+            generation=generation,
+            step=generation * args.local_steps,
+            loss=None,
+            stage="boundary_rendezvous",
+            **committed_evidence,
+        )
+        assert transaction.boundary_deadline_monotonic_s is not None
+        for rank in range(args.local_quorum):
+            boundary = wait_metadata(
+                control
+                / f"native-boundary-ready-{generation:08d}-{rank:02d}.json",
+                deadline=transaction.boundary_deadline_monotonic_s,
+                expected={
+                    "schema": "emender-native-e97-boundary-ready-v2.1",
+                    "run_id": args.run_id,
+                    "fence_epoch": _fence_epoch(args),
+                    "generation": generation,
+                    "result_root": result_root,
+                    "rank": rank,
+                    "node_incarnation": node_incarnation,
+                    "transaction_digest": transaction.transaction_digest,
+                },
+            )
+            transaction.record_boundary_ready(
+                rank=rank,
+                trainer_incarnation=str(
+                    boundary["trainer_incarnation"]),
+                candidate_digest=str(boundary["candidate_digest"]),
+                boundary_monotonic_s=float(
+                    boundary["boundary_ready_monotonic_s"]),
+                local_window=int(boundary["local_window"]),
+            )
+
+        released = time.monotonic()
+        release = dict(transaction.release_apply(
+            released_monotonic_s=released))
+        atomic_metadata(
+            control / f"native-apply-release-{generation:08d}.json",
+            {
+                **release,
+                "schema": "emender-native-e97-apply-release-v2.1",
+                "run_id": args.run_id,
+                "fence_epoch": _fence_epoch(args),
+                "generation": generation,
+                "result_root": result_root,
+                "node_incarnation": node_incarnation,
+                "transaction_digest": transaction.transaction_digest,
+                "release_monotonic_s": released,
+            },
+        )
+        return transaction, release
+    except BaseException as error:
+        if not transaction.released:
+            abort = transaction.abort_before_release(
+                aborted_monotonic_s=time.monotonic(),
+                reason=f"{type(error).__name__}: {error}",
+            )
+            abort_metrics = transaction.telemetry()
+            atomic_metadata(
+                control
+                / f"native-boundary-abort-{generation:08d}.json",
+                {
+                    "run_id": args.run_id,
+                    "fence_epoch": _fence_epoch(args),
+                    "generation": generation,
+                    "result_root": result_root,
+                    "node_incarnation": node_incarnation,
+                    "transaction_digest":
+                        transaction.transaction_digest,
+                    **abort,
+                    "metrics": abort_metrics,
+                },
+            )
+        raise
 
 
 def _liveness_heartbeat(bulk: Path, identity: str, interval_s: float = 5.0):
@@ -2336,41 +2531,27 @@ def _native_manager(args) -> int:
                       stage="result_preparation", **committed_evidence)
             preparation_deadline = (
                 time.monotonic() + min(args.deadline_s, 420.0))
-            prepared_trainers = []
-            for rank in range(args.local_quorum):
-                prepared = wait_metadata(
-                    control
-                    / f"native-apply-ready-{generation:08d}-{rank:02d}.json",
-                    deadline=preparation_deadline,
-                    expected={"run_id": args.run_id,
-                              "fence_epoch": _fence_epoch(args),
-                              "generation": generation,
-                              "result_root": final_result.result_root.hex(),
-                              "rank": rank,
-                              "node_incarnation": incarnation})
-                prepared_trainers.append({
-                    "rank": rank,
-                    "trainer_incarnation":
-                        str(prepared["trainer_incarnation"]),
-                    "recovery_digest": str(prepared["recovery_digest"]),
-                })
-            apply_release_started = time.monotonic()
-            atomic_metadata(
-                control / f"native-apply-release-{generation:08d}.json", {
-                    "schema": "emender-native-e97-apply-release-v2.1",
-                    "run_id": args.run_id,
-                    "fence_epoch": _fence_epoch(args),
-                    "generation": generation,
-                    "result_root": final_result.result_root.hex(),
-                    "node_incarnation": incarnation,
-                    "release_monotonic_s": apply_release_started,
-                    "prepared_trainers": prepared_trainers,
-                })
+            boundary_transaction, apply_release = (
+                _coordinate_native_safe_boundary(
+                    control,
+                    args,
+                    bulk=bulk,
+                    identity=identity,
+                    node=node,
+                    generation=generation,
+                    result_root=final_result.result_root.hex(),
+                    node_incarnation=incarnation,
+                    preparation_deadline=preparation_deadline,
+                    committed_evidence=committed_evidence,
+                )
+            )
+            apply_release_started = float(
+                apply_release["released_monotonic_s"])
             heartbeat(bulk, identity, generation=generation,
                       step=generation * args.local_steps, loss=None,
                       stage="peer_apply", **committed_evidence)
-            atomic_apply_deadline = (
-                apply_release_started + ASYNC_V21_ALL_EIGHT_APPLY_S)
+            atomic_apply_deadline = float(
+                apply_release["apply_deadline_monotonic_s"])
             node_apply = AtomicEightTrainerApply(
                 root=control,
                 run_id=args.run_id,
@@ -2380,6 +2561,8 @@ def _native_manager(args) -> int:
                 result_version=generation + 1,
                 result_digest=final_result.result_root.hex(),
                 trainer_count=8,
+                transaction_digest=(
+                    boundary_transaction.transaction_digest),
             )
             durable_trainer_receipts = []
             trainer_apply_intervals: list[tuple[float, float]] = []
@@ -2392,7 +2575,9 @@ def _native_manager(args) -> int:
                               "generation": generation,
                               "result_root": final_result.result_root.hex(),
                               "rank": rank,
-                              "node_incarnation": incarnation})
+                              "node_incarnation": incarnation,
+                              "transaction_digest":
+                                  boundary_transaction.transaction_digest})
                 apply_started = float(applied["apply_started_monotonic_s"])
                 apply_finished = float(applied["apply_finished_monotonic_s"])
                 if (
@@ -2405,9 +2590,13 @@ def _native_manager(args) -> int:
                         "trainer apply receipt has an invalid monotonic interval")
                 trainer_apply_intervals.append(
                     (apply_started, apply_finished))
-                if time.monotonic() > atomic_apply_deadline:
-                    raise TimeoutError(
-                        "all-eight verified result apply exceeded 60 seconds")
+                boundary_transaction.record_applied(
+                    rank=rank,
+                    trainer_incarnation=str(
+                        applied["trainer_incarnation"]),
+                    apply_started_monotonic_s=apply_started,
+                    apply_finished_monotonic_s=apply_finished,
+                )
                 node_apply.record_trainer(
                     rank=rank,
                     trainer_incarnation=str(applied["trainer_incarnation"]),
@@ -2454,6 +2643,55 @@ def _native_manager(args) -> int:
             ):
                 raise TimeoutError(
                     "complete all-eight verified result apply exceeded 60 seconds")
+            safe_boundary_metrics = boundary_transaction.telemetry()
+            atomic_metadata(
+                control
+                / (
+                    f"native-rendezvous-summary-"
+                    f"{generation:08d}.json"
+                ), {
+                    "schema":
+                        "emender-native-e97-rendezvous-summary-v2.1",
+                    "run_id": args.run_id,
+                    "fence_epoch": _fence_epoch(args),
+                    "generation": generation,
+                    "result_root": final_result.result_root.hex(),
+                    "node_incarnation": incarnation,
+                    "transaction_digest":
+                        boundary_transaction.transaction_digest,
+                    "metrics": safe_boundary_metrics,
+                })
+            assert boundary_transaction.opened_monotonic_s is not None
+            _stage_telemetry(
+                bulk, identity, generation,
+                "native_node_boundary_rendezvous",
+                boundary_transaction.opened_monotonic_s,
+                ASYNC_V21_BOUNDARY_RENDEZVOUS_S,
+                ended=apply_release_started,
+                policy_id=args._async_v21_policy.policy_id,
+                allocation_fence=_fence_epoch(args),
+                base_global_version=generation,
+                commit_global_version=generation + 1,
+                contribution_digest=final_result.result_root.hex(),
+                transaction_digest=(
+                    boundary_transaction.transaction_digest),
+                phase_scope="node_all_eight",
+                foreground_interruption="safe_boundary_rendezvous",
+                foreground_blocking=True,
+                trainer_count=8,
+                candidate_prepared_count=(
+                    safe_boundary_metrics["candidate_prepared_count"]),
+                boundary_ready_count=(
+                    safe_boundary_metrics["boundary_ready_count"]),
+                candidate_preparation=(
+                    safe_boundary_metrics["candidate_preparation"]),
+                boundary_rendezvous=(
+                    safe_boundary_metrics["boundary_rendezvous"]),
+                release_to_apply=(
+                    safe_boundary_metrics["release_to_apply"]),
+                total_foreground_idle=(
+                    safe_boundary_metrics["total_foreground_idle"]),
+                policy_bound_s=ASYNC_V21_BOUNDARY_RENDEZVOUS_S)
             _stage_telemetry(
                 bulk, identity, generation, "native_node_apply_swap",
                 apply_release_started, ASYNC_V21_ALL_EIGHT_APPLY_S,
@@ -2469,6 +2707,16 @@ def _native_manager(args) -> int:
                 foreground_blocking=True,
                 atomic_live_model_swap=True,
                 trainer_count=len(trainer_apply_intervals),
+                transaction_digest=(
+                    boundary_transaction.transaction_digest),
+                candidate_preparation=(
+                    safe_boundary_metrics["candidate_preparation"]),
+                boundary_rendezvous=(
+                    safe_boundary_metrics["boundary_rendezvous"]),
+                release_to_apply=(
+                    safe_boundary_metrics["release_to_apply"]),
+                total_foreground_idle=(
+                    safe_boundary_metrics["total_foreground_idle"]),
                 policy_bound_s=ASYNC_V21_ALL_EIGHT_APPLY_S)
             if node == 0:
                 _stage_telemetry(
@@ -3815,9 +4063,10 @@ def trainer(args) -> int:
         if native:
             # A native result becomes an applied anchor only after the current
             # fenced publisher has reload-verified the immutable handoff and
-            # advanced authoritative latest.  The independent model lane may
-            # execute old-anchor windows meanwhile; it pauses only now, at the
-            # next exact K boundary, for the audited x/z translation.
+            # advanced authoritative latest.  This is candidate preparation,
+            # not permission to touch the live x/z state.  The independent
+            # model lane continues old-anchor K windows until the manager opens
+            # the separately fenced boundary rendezvous below.
             _latest, published, manifest_digest = (
                 _reload_verified_async_v2_latest(
                     run, args, fenced, generation=completed,
@@ -3828,10 +4077,22 @@ def trainer(args) -> int:
             if not args.control and pending_corrections is None:
                 raise RuntimeError(
                     "verified async v2 result lacks correction ledger")
+            boundary_transaction = _native_safe_boundary_transaction(
+                args,
+                node=node,
+                generation=generation,
+                result_root=str(manifest["result_root"]),
+                node_incarnation=native_plane.metadata.worker_incarnation,
+            )
+            candidate_prepared_monotonic_s = time.monotonic()
             atomic_metadata(
                 control
-                / f"native-apply-ready-{generation:08d}-{rank:02d}.json", {
-                    "schema": "emender-native-e97-apply-ready-v2.1",
+                / (
+                    f"native-candidate-prepared-{generation:08d}-"
+                    f"{rank:02d}.json"
+                ), {
+                    "schema":
+                        "emender-native-e97-candidate-prepared-v2.1",
                     "run_id": args.run_id,
                     "fence_epoch": _fence_epoch(args),
                     "generation": generation,
@@ -3840,32 +4101,178 @@ def trainer(args) -> int:
                     "node_incarnation":
                         native_plane.metadata.worker_incarnation,
                     "trainer_incarnation": trainer_incarnation,
+                    "transaction_digest":
+                        boundary_transaction.transaction_digest,
+                    "candidate_digest": recovery_checkpoint_sha256,
                     "recovery_digest": recovery_checkpoint_sha256,
+                    "preparation_started_monotonic_s":
+                        trainer_apply_started,
+                    "candidate_prepared_monotonic_s":
+                        candidate_prepared_monotonic_s,
                     "reload_verified": True,
                     "latest_cas_verified": True,
                 })
-            wait_metadata(
-                control / f"native-apply-release-{generation:08d}.json",
-                deadline=time.monotonic() + min(args.deadline_s, 420.0),
-                expected={"run_id": args.run_id,
-                          "fence_epoch": _fence_epoch(args),
-                          "generation": generation,
-                          "result_root": manifest["result_root"],
-                          "node_incarnation":
-                              native_plane.metadata.worker_incarnation})
+            _stage_telemetry(
+                bulk, identity, generation, "native_candidate_preparation",
+                trainer_apply_started, ASYNC_V21_BOUNDARY_RENDEZVOUS_S,
+                ended=candidate_prepared_monotonic_s,
+                lane_rank=rank,
+                transaction_digest=boundary_transaction.transaction_digest,
+                candidate_digest=recovery_checkpoint_sha256,
+                result_bytes=int(manifest["result_bytes"]),
+                reload_verified=True,
+                latest_cas_verified=True,
+                foreground_blocking=False,
+                foreground_component_s=0.0,
+                mutable_training_active=(async_training_lane is not None),
+                python_dense_socket_bytes=0,
+                lustre_dense_hot_path_bytes=0,
+                phase_scope="trainer_candidate_preparation")
+
+            # The manager opens this rendezvous only after all eight immutable
+            # candidates exist.  Reaching it does not release apply: each
+            # trainer must first finish its current K window and publish the
+            # exact transaction/fence-bound boundary receipt.
+            rendezvous = _wait_for_native_boundary_control(
+                control,
+                args,
+                generation=generation,
+                transaction_digest=boundary_transaction.transaction_digest,
+                marker_name="native-boundary-rendezvous",
+                deadline=(
+                    time.monotonic()
+                    + ASYNC_V21_BOUNDARY_RENDEZVOUS_S),
+            )
+            boundary_deadline = float(
+                rendezvous["boundary_deadline_monotonic_s"])
+            if (
+                boundary_deadline
+                != float(rendezvous["opened_monotonic_s"])
+                + ASYNC_V21_BOUNDARY_RENDEZVOUS_S
+            ):
+                raise ValueError(
+                    "safe-boundary rendezvous changed the reviewed deadline")
+            heartbeat(bulk, identity, generation=generation, step=step,
+                      loss=loss, stage="boundary_rendezvous")
+            mutable_report = None
+            boundary_report = None
+            if async_training_lane is not None:
+                boundary_report = async_training_lane.finish_at_boundary(
+                    deadline=boundary_deadline,
+                    corrections=None,
+                )
+                boundary_window = boundary_report.local_window_end
+            else:
+                # Control lanes and terminal followers are already stopped at
+                # the completed K boundary.  They still publish a distinct
+                # receipt and participate in the same all-eight fence.
+                boundary_window = (
+                    generation + 1 if args.control else interval_window_end)
+            boundary_ready_monotonic_s = time.monotonic()
+            if boundary_ready_monotonic_s > boundary_deadline:
+                raise TimeoutError(
+                    "trainer missed the bounded safe-boundary rendezvous")
+            atomic_metadata(
+                control
+                / (
+                    f"native-boundary-ready-{generation:08d}-"
+                    f"{rank:02d}.json"
+                ), {
+                    "schema": "emender-native-e97-boundary-ready-v2.1",
+                    "run_id": args.run_id,
+                    "fence_epoch": _fence_epoch(args),
+                    "generation": generation,
+                    "result_root": manifest["result_root"],
+                    "rank": rank,
+                    "node_incarnation":
+                        native_plane.metadata.worker_incarnation,
+                    "trainer_incarnation": trainer_incarnation,
+                    "transaction_digest":
+                        boundary_transaction.transaction_digest,
+                    "candidate_digest": recovery_checkpoint_sha256,
+                    "local_window": boundary_window,
+                    "boundary_ready_monotonic_s":
+                        boundary_ready_monotonic_s,
+                })
+            try:
+                release = _wait_for_native_boundary_control(
+                    control,
+                    args,
+                    generation=generation,
+                    transaction_digest=(
+                        boundary_transaction.transaction_digest),
+                    marker_name="native-apply-release",
+                    deadline=boundary_deadline,
+                )
+            except BaseException:
+                rendezvous_failed_monotonic_s = time.monotonic()
+                _stage_telemetry(
+                    bulk, identity, generation,
+                    "native_boundary_rendezvous",
+                    boundary_ready_monotonic_s,
+                    ASYNC_V21_BOUNDARY_RENDEZVOUS_S,
+                    ended=rendezvous_failed_monotonic_s,
+                    lane_rank=rank,
+                    transaction_digest=(
+                        boundary_transaction.transaction_digest),
+                    candidate_digest=recovery_checkpoint_sha256,
+                    local_window=boundary_window,
+                    foreground_interruption="safe_boundary_rendezvous",
+                    foreground_blocking=True,
+                    foreground_component_s=(
+                        rendezvous_failed_monotonic_s
+                        - boundary_ready_monotonic_s),
+                    phase_scope="trainer_lane",
+                    policy_bound_s=(
+                        ASYNC_V21_BOUNDARY_RENDEZVOUS_S),
+                    candidate_prepared_monotonic_s=(
+                        candidate_prepared_monotonic_s),
+                    boundary_ready_monotonic_s=(
+                        boundary_ready_monotonic_s),
+                    rendezvous_aborted=True)
+                raise
+            release_monotonic_s = float(release["released_monotonic_s"])
+            apply_deadline = float(
+                release["apply_deadline_monotonic_s"])
+            if (
+                release_monotonic_s < boundary_ready_monotonic_s
+                or apply_deadline
+                != release_monotonic_s + ASYNC_V21_ALL_EIGHT_APPLY_S
+                or time.monotonic() > apply_deadline
+            ):
+                raise ValueError(
+                    "all-eight release has an invalid absolute apply clock")
+            _stage_telemetry(
+                bulk, identity, generation, "native_boundary_rendezvous",
+                boundary_ready_monotonic_s,
+                ASYNC_V21_BOUNDARY_RENDEZVOUS_S,
+                ended=release_monotonic_s,
+                lane_rank=rank,
+                transaction_digest=boundary_transaction.transaction_digest,
+                candidate_digest=recovery_checkpoint_sha256,
+                local_window=boundary_window,
+                foreground_interruption="safe_boundary_rendezvous",
+                foreground_blocking=True,
+                foreground_component_s=(
+                    release_monotonic_s
+                    - boundary_ready_monotonic_s),
+                phase_scope="trainer_lane",
+                policy_bound_s=ASYNC_V21_BOUNDARY_RENDEZVOUS_S,
+                candidate_prepared_monotonic_s=(
+                    candidate_prepared_monotonic_s),
+                boundary_ready_monotonic_s=(
+                    boundary_ready_monotonic_s),
+                release_monotonic_s=release_monotonic_s)
             heartbeat(bulk, identity, generation=generation, step=step,
                       loss=loss, stage="peer_apply")
             safe_apply_started = time.monotonic()
-            mutable_report = None
             if not args.control:
                 if async_training_lane is not None:
-                    mutable_report = async_training_lane.finish_at_boundary(
-                        deadline=time.monotonic() + 420.0,
-                        corrections=pending_corrections,
-                    )
+                    mutable_report = async_training_lane.apply_at_boundary(
+                        pending_corrections)
                     persistent_worker.wait_snapshot_ready(
                         async_training_lane.start_state,
-                        deadline=time.monotonic() + 420.0,
+                        deadline=apply_deadline,
                     )
                     if mutable_report.snapshot_deferred:
                         # Capacity exhaustion defers the speculative snapshot,
@@ -3894,16 +4301,16 @@ def trainer(args) -> int:
                     v2_mutable_high_water = max(
                         v2_mutable_high_water,
                         mutable_report.window_count)
-                    safe_apply_started = (
-                        time.monotonic()
-                        - mutable_report.translation_elapsed_s)
                     async_training_lane = None
                 else:
                     # Terminal generation: there is no speculative interval,
                     # but applying the verified result still occurs at the
                     # completed K boundary and preserves audited inner state.
-                    safe_apply_started = time.monotonic()
                     persistent_worker.translate(pending_corrections)
+            apply_finished_monotonic_s = time.monotonic()
+            if apply_finished_monotonic_s > apply_deadline:
+                raise TimeoutError(
+                    "trainer atomic x/z apply exceeded the released 60s clock")
             semantic_result = {
                 "policy_id": v2_policy.policy_id,
                 "allocation_fence": _fence_epoch(args),
@@ -3916,7 +4323,8 @@ def trainer(args) -> int:
             }
             _stage_telemetry(
                 bulk, identity, generation, "native_trainer_apply",
-                safe_apply_started, PoolStageSLO.production().apply_s,
+                safe_apply_started, ASYNC_V21_ALL_EIGHT_APPLY_S,
+                ended=apply_finished_monotonic_s,
                 lane_rank=rank, result_bytes=int(manifest["result_bytes"]),
                 python_dense_socket_bytes=0,
                 foreground_interruption="verified_result_apply",
@@ -3938,6 +4346,12 @@ def trainer(args) -> int:
                     else interval_window_end if mutable_report is None
                     else mutable_report.local_window_end),
                 safe_k_boundary=True,
+                transaction_digest=(
+                    boundary_transaction.transaction_digest),
+                candidate_digest=recovery_checkpoint_sha256,
+                boundary_ready_monotonic_s=(
+                    boundary_ready_monotonic_s),
+                release_monotonic_s=release_monotonic_s,
                 result_reload_verified=True,
                 latest_cas_verified=True,
                 **semantic_result)
@@ -3981,6 +4395,12 @@ def trainer(args) -> int:
                     else mutable_report.window_count),
                 "result_digest": str(manifest["result_root"]),
                 "manifest_digest": manifest_digest,
+                "transaction_digest":
+                    boundary_transaction.transaction_digest,
+                "candidate_digest": recovery_checkpoint_sha256,
+                "boundary_ready_monotonic_s":
+                    boundary_ready_monotonic_s,
+                "release_monotonic_s": release_monotonic_s,
                 "reload_verified": True,
                 "latest_cas_verified": True,
                 "accepted_contribution_digest": str(
@@ -4024,9 +4444,16 @@ def trainer(args) -> int:
                     "node_incarnation":
                         native_plane.metadata.worker_incarnation,
                     "trainer_incarnation": trainer_incarnation,
+                    "transaction_digest":
+                        boundary_transaction.transaction_digest,
+                    "candidate_digest": recovery_checkpoint_sha256,
                     "recovery_digest": recovery_checkpoint_sha256,
+                    "boundary_ready_monotonic_s":
+                        boundary_ready_monotonic_s,
+                    "release_monotonic_s": release_monotonic_s,
                     "apply_started_monotonic_s": safe_apply_started,
-                    "apply_finished_monotonic_s": time.monotonic(),
+                    "apply_finished_monotonic_s":
+                        apply_finished_monotonic_s,
                 })
             native_plane.close()
         heartbeat(bulk, identity, generation=generation + 1, step=step, loss=loss, stage="applied")
