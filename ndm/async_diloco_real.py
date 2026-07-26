@@ -1071,6 +1071,7 @@ class PersistentRealWorkerSession:
         self._snapshot_slots: tuple[
             dict[str, torch.Tensor], dict[str, torch.Tensor]
         ] | None = None
+        self._snapshot_copy_ready: dict[tuple[int, ...], Any] = {}
         self._next_snapshot_slot = 0
         torch.manual_seed(
             int(getattr(self.args, "seed", 42)) + int(spec.seed_offset))
@@ -1129,7 +1130,11 @@ class PersistentRealWorkerSession:
         # `snapshot()` fills one at a coherent optimizer boundary.
         model_values = self.model.state_dict()
         self._snapshot_slots = tuple({
-            name: torch.empty_like(model_values[name], device="cpu")
+            name: torch.empty_like(
+                model_values[name],
+                device="cpu",
+                pin_memory=(self.device.type == "cuda"),
+            )
             for name in self.base_keys
         } for _ in range(2))
         phase("snapshot_slots_preallocated")
@@ -1183,6 +1188,12 @@ class PersistentRealWorkerSession:
         let the prior immutable endpoint remain available to the background
         publisher/correction ledger while the live model resumes in the next
         window; no background path rereads the concurrently mutating model.
+
+        A device session enqueues the copies into pinned CPU storage on the
+        current device stream.  Subsequent model work on that stream is
+        ordered after the immutable copy, so local ownership can transfer
+        without waiting for all device-to-host traffic.  The background
+        consumer must call :meth:`wait_snapshot_ready` before reading it.
         """
         if self.closed:
             raise RuntimeError("persistent real-worker session is closed")
@@ -1194,14 +1205,64 @@ class PersistentRealWorkerSession:
         slot = self._snapshot_slots[self._next_snapshot_slot]
         self._next_snapshot_slot = (self._next_snapshot_slot + 1) % len(
             self._snapshot_slots)
+        snapshot_key = tuple(
+            int(slot[name].data_ptr()) for name in self.base_keys)
+        prior_copy = self._snapshot_copy_ready.get(snapshot_key)
+        if prior_copy is not None:
+            if not prior_copy.query():
+                raise RuntimeError(
+                    "persistent snapshot slot reused before copy completion")
+            self._snapshot_copy_ready.pop(snapshot_key, None)
         with torch.no_grad():
             for name in self.base_keys:
                 source = values[name].detach()
                 target = slot[name]
                 if source.shape != target.shape or source.dtype != target.dtype:
                     raise ValueError("persistent snapshot slot layout changed")
-                target.copy_(source, non_blocking=False)
+                target.copy_(source, non_blocking=True)
+        if self.device.type == "cuda":
+            snapshot_copy_ready = torch.cuda.Event(
+                enable_timing=False, blocking=False)
+            snapshot_copy_ready.record(torch.cuda.current_stream(self.device))
+            self._snapshot_copy_ready[snapshot_key] = snapshot_copy_ready
         return dict(slot)
+
+    def order_after_snapshot(
+        self,
+        snapshot: Mapping[str, torch.Tensor],
+    ) -> None:
+        """Order this thread's device stream after an admitted snapshot copy."""
+        if tuple(sorted(snapshot)) != self.base_keys:
+            raise ValueError("persistent snapshot ordering layout changed")
+        snapshot_key = tuple(
+            int(snapshot[name].data_ptr()) for name in self.base_keys)
+        snapshot_copy_ready = self._snapshot_copy_ready.get(snapshot_key)
+        if snapshot_copy_ready is not None:
+            torch.cuda.current_stream(self.device).wait_event(
+                snapshot_copy_ready)
+
+    def wait_snapshot_ready(
+        self,
+        snapshot: Mapping[str, torch.Tensor],
+        *,
+        deadline: float,
+    ) -> float:
+        """Wait on the background path until an admitted snapshot is readable."""
+        if tuple(sorted(snapshot)) != self.base_keys:
+            raise ValueError("persistent snapshot readiness layout changed")
+        snapshot_key = tuple(
+            int(snapshot[name].data_ptr()) for name in self.base_keys)
+        snapshot_copy_ready = self._snapshot_copy_ready.get(snapshot_key)
+        if snapshot_copy_ready is None:
+            return time.monotonic()
+        while not snapshot_copy_ready.query():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    "persistent snapshot copy completion deadline expired")
+            time.sleep(min(0.001, remaining))
+        self._snapshot_copy_ready.pop(snapshot_key, None)
+        return time.monotonic()
 
     @property
     def snapshot_slot_count(self) -> int:
@@ -1246,6 +1307,10 @@ class PersistentRealWorkerSession:
             z.add_(corrections[name].to(z))
 
     def close(self) -> None:
+        if any(not event.query() for event in self._snapshot_copy_ready.values()):
+            raise RuntimeError(
+                "persistent real-worker closed with snapshot copy in flight")
+        self._snapshot_copy_ready.clear()
         self.closed = True
 
 
@@ -1328,6 +1393,13 @@ class PersistentAsyncTrainingLane:
 
     def _run(self) -> None:
         try:
+            order_after_snapshot = getattr(
+                self.session, "order_after_snapshot", None)
+            if order_after_snapshot is not None:
+                if self._start_state is None:
+                    raise RuntimeError(
+                        "persistent async lane lost its ordered interval start")
+                order_after_snapshot(self._start_state)
             while True:
                 with self._condition:
                     if self._stop_requested:

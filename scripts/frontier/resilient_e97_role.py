@@ -3242,6 +3242,13 @@ def trainer(args) -> int:
                     # pause after coherent capture.
                     lookahead_anchor_digest = str(
                         native_plane.metadata.base_digest)
+                # Device sessions transfer the immutable slot locally when
+                # the ordered pinned-memory copy is enqueued.  Completion is
+                # awaited only here, after the next mutable K lane owns state,
+                # and before the background publisher can read the snapshot.
+                snapshot_copy_completed = (
+                    persistent_worker.wait_snapshot_ready(
+                        retained_endpoint, deadline=generation_deadline))
                 # Persist the already-timestamped causal records only after
                 # the next mutable lane owns state.  Telemetry serialization
                 # and filesystem latency are background work, not part of the
@@ -3259,6 +3266,11 @@ def trainer(args) -> int:
                     phase_scope="trainer_snapshot",
                     snapshot_coherent=True,
                     snapshot_slots=persistent_worker.snapshot_slot_count,
+                    snapshot_copy_completion_deferred=(
+                        async_training_lane is not None),
+                    snapshot_copy_completion_s=(
+                        snapshot_copy_completed - endpoint_snapshot_started),
+                    source_mutation_ordered_after_copy=True,
                     live_model_read_after_snapshot=False,
                     python_dense_socket_bytes=0,
                     lustre_dense_hot_path_bytes=0)
@@ -3771,6 +3783,10 @@ def trainer(args) -> int:
                     mutable_report = async_training_lane.finish_at_boundary(
                         deadline=time.monotonic() + 420.0,
                         corrections=pending_corrections,
+                    )
+                    persistent_worker.wait_snapshot_ready(
+                        async_training_lane.start_state,
+                        deadline=time.monotonic() + 420.0,
                     )
                     if mutable_report.snapshot_deferred:
                         # Capacity exhaustion defers the speculative snapshot,

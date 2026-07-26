@@ -144,6 +144,55 @@ def test_snapshot_admission_deadline_excludes_telemetry_io():
     )
 
 
+def test_snapshot_dma_completion_is_deferred_until_after_local_owned():
+    """A coherent device snapshot may finish only after the next K owns state.
+
+    Eight simultaneous full-model device-to-host copies on one Frontier node
+    have no safe headroom inside the one-second admission bound.  The bounded
+    foreground path must therefore enqueue an ordered copy into preallocated
+    pinned slots, transfer ownership, and wait for copy completion only on the
+    background publication path.
+    """
+    repo = Path(__file__).parents[1]
+    real_source = (
+        repo / "ndm/async_diloco_real.py"
+    ).read_text(encoding="utf-8")
+    session = real_source[
+        real_source.index("class PersistentRealWorkerSession:"):
+        real_source.index("class PersistentAsyncTrainingLane:")
+    ]
+    assert "pin_memory=(self.device.type == \"cuda\")" in session
+    assert "target.copy_(source, non_blocking=True)" in session
+    assert "snapshot_copy_ready" in session
+    assert "def order_after_snapshot(" in session
+    assert "def wait_snapshot_ready(" in session
+    lane = real_source[
+        real_source.index("class PersistentAsyncTrainingLane:"):
+        real_source.index("def _run_real_worker(")
+    ]
+    order = lane.index("order_after_snapshot(self._start_state)")
+    started = lane.index("self._started.set()", order)
+    assert order < started
+
+    role_source = (
+        repo / "scripts/frontier/resilient_e97_role.py"
+    ).read_text(encoding="utf-8")
+    trainer = role_source[role_source.index("def trainer(args) -> int:"):]
+    snapshot = trainer.index(
+        "retained_endpoint = persistent_worker.snapshot()")
+    lane_owned = trainer.index(
+        "lane_admission_completed = time.monotonic()", snapshot)
+    wait_ready = trainer.index("snapshot_copy_completed = (", lane_owned)
+    assert (
+        "persistent_worker.wait_snapshot_ready("
+        in trainer[wait_ready:wait_ready + 400]
+    )
+    publish = trainer.index(
+        "native_plane.publish_state_delta(", wait_ready)
+
+    assert snapshot < lane_owned < wait_ready < publish
+
+
 @pytest.mark.parametrize(
     "blocked_phase",
     [
