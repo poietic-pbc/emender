@@ -1381,8 +1381,8 @@ def test_native_manager_advances_progress_after_owner_transport():
     assert proposal_wait < apply_stage < apply_receipt_wait
 
 
-def test_native_all_eight_apply_releases_only_after_background_preparation():
-    """Preparation overlaps, then the 60-second all-eight clock starts."""
+def test_native_all_eight_apply_releases_only_after_bounded_serial_preparation():
+    """One reader prepares at a time; then the 60-second transaction starts."""
     role = (
         ROOT / "scripts/frontier/resilient_e97_role.py"
     ).read_text(encoding="utf-8")
@@ -1409,11 +1409,11 @@ def test_native_all_eight_apply_releases_only_after_background_preparation():
     trainer = role[role.index("def trainer(args) -> int:"):]
     result_visible = trainer.index(
         "manifest, aggregate = native_context.__enter__()")
+    result_lane = trainer.index(
+        "_wait_for_native_apply_lane(", result_visible)
     result_apply = trainer.index(
-        "apply_delta_with_correction_ledger(", result_visible)
-    assert "_wait_for_native_apply_lane(" not in trainer[
-        result_visible:result_apply
-    ]
+        "apply_delta_with_correction_ledger(", result_lane)
+    assert result_visible < result_lane < result_apply
     result_materialized = trainer.index(
         'control / f"native-result-applied-{generation:08d}-{rank:02d}.json"')
     reload_verified = trainer.index(

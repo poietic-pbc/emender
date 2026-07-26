@@ -810,6 +810,31 @@ def _terminal_native_checkpoint(run: Path, args, *, completed: int,
     return checkpoint
 
 
+def _wait_for_native_apply_lane(control: Path, args, *, generation: int,
+                                rank: int, result_root: str,
+                                deadline: float) -> dict[str, object] | None:
+    """Serialize background readers of the one shared node aggregate.
+
+    The service intentionally exposes one read-only result instead of eight
+    trainer-sized copies.  Job 5080730 proved that eight concurrent full E97
+    readers contend for 262--308 seconds even though the checkpoint leader
+    alone completes in 43 seconds.  The preceding rank's authenticated
+    materialization marker is a node-local metadata credit.  This lane is
+    entirely before the all-eight ready/release barrier, so it cannot consume
+    the reviewed 60-second foreground x/z apply interval.
+    """
+    if rank <= 0:
+        return None
+    return wait_metadata(
+        control / f"native-result-applied-{generation:08d}-{rank - 1:02d}.json",
+        deadline=deadline,
+        expected={"run_id": args.run_id,
+                  "fence_epoch": _fence_epoch(args),
+                  "generation": generation,
+                  "result_root": result_root,
+                  "rank": rank - 1})
+
+
 def _liveness_heartbeat(bulk: Path, identity: str, interval_s: float = 5.0):
     """Refresh liveness without disguising stalled generation progress."""
     state = bulk / "supervision" / f"{identity}.liveness.json"
@@ -2294,13 +2319,11 @@ def _native_manager(args) -> int:
                         "source": "native_peer_memory",
                     })
             # Shared-result reads, checkpoint I/O, hashing, and reload
-            # verification are background preparation.  Node 0 gives its
-            # checkpoint leader priority, then the remaining readers overlap;
-            # node 1 readers overlap immediately.  This preserves one
-            # service-owned aggregate without the rank-serialized 130--150 s
-            # generation span observed in job 5078907.  Do not begin the
-            # 60-second all-eight foreground transaction until every trainer
-            # has retained its fenced preparation receipt.
+            # verification are background preparation.  The one service-owned
+            # aggregate has a capacity-one node-local reader credit; durable
+            # checkpoint work may overlap after each reader releases it.  Do
+            # not begin the 60-second all-eight foreground transaction until
+            # every trainer has retained its fenced preparation receipt.
             heartbeat(bulk, identity, generation=generation,
                       step=generation * args.local_steps, loss=None,
                       stage="result_preparation")
@@ -3511,12 +3534,21 @@ def trainer(args) -> int:
                 expected_source_id=args.source_id)
         # Waiting for distributed ownership (and, on node 0 peers, the leader
         # checkpoint marker) has its own bounded window.  Once the complete
-        # node-local aggregate is visible, every eligible trainer prepares its
-        # candidate concurrently in the background.  The separate all-eight
-        # release below starts the finite foreground apply window only after
-        # every candidate has been reload-verified.
+        # node-local aggregate is visible, every eligible trainer enters the
+        # bounded background preparation stage.  A capacity-one authenticated
+        # reader credit prevents the 6--7x node contention observed in job
+        # 5080730.  The separate all-eight release below starts the finite
+        # foreground apply window only after every candidate has been
+        # reload-verified.
         heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
                   stage="result_preparation")
+        if native:
+            apply_lane_deadline = (
+                time.monotonic() + min(args.deadline_s, 420.0))
+            _wait_for_native_apply_lane(
+                control, args, generation=generation, rank=rank,
+                result_root=str(manifest["result_root"]),
+                deadline=apply_lane_deadline)
         trainer_apply_started = time.monotonic()
         if not native:
             spool.release_trainer(fence, rank)
