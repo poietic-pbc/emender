@@ -190,6 +190,13 @@ else
 fi
 "${VALIDATOR[@]}"
 
-(cd "$ARTIFACT_DIR" && sha256sum -- * > SHA256SUMS)
+(
+  cd "$ARTIFACT_DIR"
+  find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' |
+    sort -z |
+    while IFS= read -r -d '' artifact; do
+      sha256sum -- "$artifact"
+    done > SHA256SUMS
+)
 printf 'native_gate_status=passed mode=%s job_id=%s artifact_dir=%s\n' \
   "$NDP_MODE" "$SLURM_JOB_ID" "$ARTIFACT_DIR"

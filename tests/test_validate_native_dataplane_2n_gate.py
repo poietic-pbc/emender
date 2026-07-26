@@ -131,6 +131,17 @@ def test_frontier_payload_is_exactly_two_node_debug_cxi_and_fault_is_gated():
     assert all(term not in payload for term in forbidden)
 
 
+def test_native_gate_checksum_manifest_tolerates_monitoring_directories():
+    payload = SBATCH.read_text(encoding="utf-8")
+    assert "sha256sum -- * > SHA256SUMS" not in payload
+    assert (
+        "find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\\0'"
+        in payload
+    )
+    assert "while IFS= read -r -d '' artifact; do" in payload
+    assert 'sha256sum -- "$artifact"' in payload
+
+
 def test_installed_gate_resolves_rocm_from_clean_loader_environment():
     if not NATIVE_MANIFEST.is_file():
         pytest.skip("canonical native bundle has not been built")
