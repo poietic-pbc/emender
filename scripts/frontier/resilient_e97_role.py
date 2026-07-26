@@ -2531,6 +2531,19 @@ def _native_manager(args) -> int:
                 }
                 if commit_receipt is not None else {}
             )
+            if node == 0:
+                _stage_telemetry(
+                    bulk, identity, generation, "fenced_atomic_commit",
+                    atomic_commit_started, min(args.deadline_s, 420.0),
+                    policy_id=args._async_v21_policy.policy_id,
+                    allocation_fence=_fence_epoch(args),
+                    base_global_version=generation,
+                    commit_global_version=generation + 1,
+                    commit_lag=1,
+                    exact_tokens=accepted_tokens,
+                    contribution_digest=final_result.result_root.hex(),
+                    accepted_tokens=int(proposal["accepted_tokens"]),
+                    membership=len(proposal["membership"]))
             # Shared-result reads, checkpoint I/O, hashing, and reload
             # verification are background preparation.  The one service-owned
             # aggregate has a capacity-one node-local reader credit; durable
@@ -2729,19 +2742,6 @@ def _native_manager(args) -> int:
                 total_foreground_idle=(
                     safe_boundary_metrics["total_foreground_idle"]),
                 policy_bound_s=ASYNC_V21_ALL_EIGHT_APPLY_S)
-            if node == 0:
-                _stage_telemetry(
-                    bulk, identity, generation, "fenced_atomic_commit",
-                    atomic_commit_started, min(args.deadline_s, 420.0),
-                    policy_id=args._async_v21_policy.policy_id,
-                    allocation_fence=_fence_epoch(args),
-                    base_global_version=generation,
-                    commit_global_version=generation + 1,
-                    commit_lag=1,
-                    exact_tokens=accepted_tokens,
-                    contribution_digest=final_result.result_root.hex(),
-                    accepted_tokens=int(proposal["accepted_tokens"]),
-                    membership=len(proposal["membership"]))
             final_result.close(); final_operation.close(); freeze.close()
             heartbeat(bulk, identity, generation=generation + 1,
                       step=(generation + 1) * args.local_steps, loss=None,

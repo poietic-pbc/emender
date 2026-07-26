@@ -212,6 +212,39 @@ def test_native_generation_lifetime_spans_all_post_result_phase_clocks():
     assert role._native_post_result_lifetime_s(args) == 420.0 + 420.0 + 60.0
 
 
+def test_fenced_atomic_commit_clock_closes_before_safe_boundary_wait():
+    """The authority-commit SLO must not include later bounded phases.
+
+    Frontier job 5083593 retained both all-eight node apply receipts inside
+    the 60-second apply allowance, then node zero raised because the
+    ``fenced_atomic_commit`` clock still included candidate preparation,
+    boundary rendezvous, and apply.  Commit telemetry must close immediately
+    after the immutable commit authority has been verified.
+    """
+    source = ROLE.read_text()
+    manager = source[source.index("def _native_manager(args)"):]
+    commit_start = manager.index("atomic_commit_started = time.monotonic()")
+    commit_verified = manager.index("committed_evidence = (", commit_start)
+    commit_complete = manager.index(
+        'bulk, identity, generation, "fenced_atomic_commit"',
+        commit_verified,
+    )
+    preparation = manager.index('stage="result_preparation"', commit_verified)
+    rendezvous = manager.index(
+        "_coordinate_native_safe_boundary(", preparation)
+    apply_stage = manager.index('stage="peer_apply"', rendezvous)
+    durable_apply = manager.index("record_node_apply(", apply_stage)
+
+    assert (
+        commit_start < commit_verified < commit_complete < preparation
+        < rendezvous < apply_stage < durable_apply
+    )
+    assert (
+        '"fenced_atomic_commit"'
+        not in manager[apply_stage:durable_apply]
+    )
+
+
 def test_restarted_trainer_resolves_newer_authoritative_handoff(tmp_path):
     from scripts.frontier import resilient_e97_role as role
 
