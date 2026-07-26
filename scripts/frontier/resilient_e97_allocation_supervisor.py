@@ -521,7 +521,8 @@ class AllocationSupervisor:
             )
             else initial_generation
         )
-        if (peer_committed_generation <= initial_generation
+        if (child.role in {"manager", "node-supervisor"}
+                and peer_committed_generation <= initial_generation
                 and int(state.get("generation", initial_generation)) <= initial_generation
                 and now - admitted_at > FIRST_COMMIT_HARD_S):
             return "first_atomic_generation_deadline"

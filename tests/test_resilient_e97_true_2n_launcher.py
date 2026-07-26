@@ -1282,6 +1282,31 @@ def test_live_diagnostic_uses_peer_commit_and_restart_checks_immutable_checkpoin
     assert supervisor._durable_generation() is None
 
 
+def test_first_commit_deadline_is_owned_by_manager_not_individual_trainer(
+        tmp_path, monkeypatch):
+    child = Child("trainer", 0, "node000", 0, "trainer")
+    supervisor = AllocationSupervisor(
+        tmp_path, [child], heartbeat_s=60, progress_s=60, max_restarts=0)
+    child.process = type("Process", (), {"poll": lambda self: None})()
+    state = tmp_path / "supervision" / "node-0-trainer-0.json"
+    state.write_text(json.dumps({
+        "heartbeat_time": 800,
+        "progress_time": 800,
+        "generation": 0,
+        "stage": "training",
+    }))
+    monkeypatch.setenv("RESILIENT_E97_INITIAL_GENERATION", "0")
+    monkeypatch.setenv("RESILIENT_E97_ALLOCATION_ADMITTED_AT", "0")
+    monkeypatch.delenv("RESILIENT_E97_BULK_ROOT", raising=False)
+    monkeypatch.delenv("RESILIENT_E97_RUN_ID", raising=False)
+
+    # Trainer heartbeat/K40/stage budgets remain independently fail-closed.
+    # Allocation-wide durable-commit authority is manager-owned, so a healthy
+    # trainer must not be killed merely because it does not duplicate the
+    # manager's immutable receipt in its hot progress document.
+    assert supervisor._deadline_reason(child, 800) is None
+
+
 def test_durable_generation_diagnostic_never_opens_sqlite(
         tmp_path, monkeypatch):
     """The job-5072235 diagnostic path uses immutable receipts only.
