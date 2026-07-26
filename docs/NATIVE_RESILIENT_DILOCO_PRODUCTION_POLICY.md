@@ -15,6 +15,9 @@ for the measured native E97 profile. It specializes, but does not weaken, that
 authority or [*Native resilient DiLoCo data plane v1*](NATIVE_RESILIENT_DILOCO_DATAPLANE.md).
 The applicable traceability requirements are **R01–R16** and **NDP01–NDP17**
 from [the gap matrix](RESILIENT_DILOCO_GAP_MATRIX.md).
+This is a strict-fresh v1 profile: its serialized generation/checkpoint
+deadlines do not authorize foreground checkpoint or result waits in bounded
+asynchronous v2.1, which must instead satisfy ISP01–ISP07.
 
 The policy is deliberately fail-closed. The retained two-node results define
 the numeric baseline, but do not authorize a production or Slurm job. The
