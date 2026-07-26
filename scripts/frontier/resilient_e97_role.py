@@ -4074,6 +4074,52 @@ def trainer(args) -> int:
                         time.monotonic()
                         + min(args.deadline_s, 180.0)),
                 ))
+            semantic_result = {
+                "policy_id": v2_policy.policy_id,
+                "allocation_fence": _fence_epoch(args),
+                "base_global_version": int(manifest["base_global_version"]),
+                "commit_global_version": int(
+                    manifest["commit_global_version"]),
+                "commit_lag": int(manifest["commit_lag"]),
+                "exact_tokens": int(manifest["exact_tokens"]),
+                "contribution_digest": str(manifest["result_root"]),
+            }
+            # Close the independently bounded background checkpoint clock as
+            # soon as publication and reload/CAS verification finish.  The
+            # later K-boundary rendezvous and released all-eight apply have
+            # their own 420s/60s clocks and must never be charged here.
+            _stage_telemetry(
+                bulk, identity, generation, "checkpoint_publication",
+                checkpoint_publication_started, 420.0,
+                checkpoint_bytes=int(published["checkpoint_bytes"]),
+                phase_class="checkpoint_publish_reload",
+                foreground_blocking=False,
+                foreground_component_s=0.0,
+                mutable_training_active=(
+                    async_training_lane is not None),
+                reload_verified=True, latest_cas_verified=True,
+                **semantic_result)
+            if node == 0 and rank == 0:
+                correctness = {
+                    "timestamp": time.time(),
+                    "identity": identity,
+                    "generation": generation,
+                    "stage": "async_v21_correctness",
+                    "policy_id": v2_policy.policy_id,
+                    "allocation_fence": _fence_epoch(args),
+                    "freeze_to_latest_s": (
+                        time.monotonic() - checkpoint_publication_started),
+                    "checkpoint_bytes": int(published["checkpoint_bytes"]),
+                    "manifest_digest": manifest_digest,
+                    "reload_verified": True,
+                    "latest_cas_verified": True,
+                }
+                with (bulk / "telemetry" /
+                      f"{identity}-pool.jsonl").open(
+                          "a", encoding="utf-8") as stream:
+                    stream.write(
+                        json.dumps(correctness, sort_keys=True) + "\n")
+                    stream.flush()
             if not args.control and pending_corrections is None:
                 raise RuntimeError(
                     "verified async v2 result lacks correction ledger")
@@ -4311,16 +4357,6 @@ def trainer(args) -> int:
             if apply_finished_monotonic_s > apply_deadline:
                 raise TimeoutError(
                     "trainer atomic x/z apply exceeded the released 60s clock")
-            semantic_result = {
-                "policy_id": v2_policy.policy_id,
-                "allocation_fence": _fence_epoch(args),
-                "base_global_version": int(manifest["base_global_version"]),
-                "commit_global_version": int(
-                    manifest["commit_global_version"]),
-                "commit_lag": int(manifest["commit_lag"]),
-                "exact_tokens": int(manifest["exact_tokens"]),
-                "contribution_digest": str(manifest["result_root"]),
-            }
             _stage_telemetry(
                 bulk, identity, generation, "native_trainer_apply",
                 safe_apply_started, ASYNC_V21_ALL_EIGHT_APPLY_S,
@@ -4354,17 +4390,6 @@ def trainer(args) -> int:
                 release_monotonic_s=release_monotonic_s,
                 result_reload_verified=True,
                 latest_cas_verified=True,
-                **semantic_result)
-            _stage_telemetry(
-                bulk, identity, generation, "checkpoint_publication",
-                checkpoint_publication_started, 420.0,
-                checkpoint_bytes=int(published["checkpoint_bytes"]),
-                phase_class="checkpoint_publish_reload",
-                foreground_blocking=False,
-                foreground_component_s=0.0,
-                mutable_training_active=(
-                    mutable_report is not None),
-                reload_verified=True, latest_cas_verified=True,
                 **semantic_result)
             control_integrity_started = time.monotonic()
             _stage_telemetry(
@@ -4413,27 +4438,6 @@ def trainer(args) -> int:
                 stream.write(
                     json.dumps(apply_receipt, sort_keys=True) + "\n")
                 stream.flush()
-            if node == 0 and rank == 0:
-                correctness = {
-                    "timestamp": time.time(),
-                    "identity": identity,
-                    "generation": generation,
-                    "stage": "async_v21_correctness",
-                    "policy_id": v2_policy.policy_id,
-                    "allocation_fence": _fence_epoch(args),
-                    "freeze_to_latest_s": (
-                        time.monotonic() - checkpoint_publication_started),
-                    "checkpoint_bytes": int(published["checkpoint_bytes"]),
-                    "manifest_digest": manifest_digest,
-                    "reload_verified": True,
-                    "latest_cas_verified": True,
-                }
-                with (bulk / "telemetry" /
-                      f"{identity}-pool.jsonl").open(
-                          "a", encoding="utf-8") as stream:
-                    stream.write(
-                        json.dumps(correctness, sort_keys=True) + "\n")
-                    stream.flush()
             atomic_metadata(
                 control / f"native-applied-{generation:08d}-{rank:02d}.json", {
                     "schema": "emender-native-e97-applied-v2.1",

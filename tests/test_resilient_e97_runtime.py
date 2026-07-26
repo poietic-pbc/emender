@@ -816,6 +816,45 @@ def test_native_result_preparation_excludes_foreground_apply_interval():
     )
 
 
+def test_checkpoint_publication_clock_closes_before_safe_boundary_wait():
+    """The background checkpoint SLO must not include boundary rendezvous.
+
+    Frontier clean job 5082866 completed immutable checkpoint publication and
+    candidate preparation, then legitimately waited for the next K40 boundary.
+    Keeping ``checkpoint_publication`` open across that independent wait made
+    rank zero raise the 420-second background SLO after live apply and before
+    its durable native-applied receipt.
+    """
+    trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args) -> int:"):]
+    checkpoint_start = trainer.index(
+        "checkpoint_publication_started = time.monotonic()")
+    reload_verified = trainer.index(
+        "_reload_verified_async_v2_latest(", checkpoint_start)
+    checkpoint_complete = trainer.index(
+        'bulk, identity, generation, "checkpoint_publication"',
+        reload_verified,
+    )
+    candidate = trainer.index(
+        "native-candidate-prepared-", reload_verified)
+    rendezvous = trainer.index(
+        'marker_name="native-boundary-rendezvous"', candidate)
+    release = trainer.index(
+        'marker_name="native-apply-release"', rendezvous)
+    live_swap = trainer.index(
+        "safe_apply_started = time.monotonic()", release)
+    durable_receipt = trainer.index(
+        "native-applied-", live_swap)
+
+    assert (
+        checkpoint_start < reload_verified < checkpoint_complete < candidate
+        < rendezvous < release < live_swap < durable_receipt
+    )
+    assert (
+        '"checkpoint_publication"'
+        not in trainer[live_swap:durable_receipt]
+    )
+
+
 def test_async_v21_publishes_the_retained_endpoint_without_a_second_model_read():
     """The immutable post-K snapshot is the only dense descriptor source."""
     trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args) -> int:"):]
