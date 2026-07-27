@@ -810,58 +810,26 @@ def test_terminal_native_follower_reuses_fenced_authoritative_checkpoint(tmp_pat
             tmp_path, args, completed=1, deadline=time.monotonic() + 1)
 
 
-def test_native_trainer_background_preparation_is_serialized_by_local_rank(
-        tmp_path):
-    """One reader avoids node contention before the all-eight release."""
-    from scripts.frontier import resilient_e97_role as role
-
-    control = tmp_path / "control"
-    control.mkdir()
-    args = SimpleNamespace(run_id="run-a", coordinator_epoch=4)
-    observed = {}
-
-    def wait_for_rank_one():
-        observed["marker"] = role._wait_for_native_apply_lane(
-            control, args, generation=2, rank=1,
-            result_root="ab" * 32, deadline=time.monotonic() + 2)
-
-    waiter = threading.Thread(target=wait_for_rank_one)
-    waiter.start()
-    time.sleep(.05)
-    assert waiter.is_alive(), "rank one must not contend with rank zero's result view"
-    role.atomic_metadata(control / "native-result-applied-00000002-00.json", {
-        "run_id": "run-a", "fence_epoch": 4, "generation": 2,
-        "result_root": "ab" * 32, "rank": 0,
-    })
-    waiter.join(2)
-
-    assert not waiter.is_alive()
-    assert observed["marker"]["rank"] == 0
-    assert role._wait_for_native_apply_lane(
-        control, args, generation=2, rank=0,
-        result_root="ab" * 32, deadline=time.monotonic() + .1) is None
+def test_native_trainer_background_preparation_is_not_serialized_by_local_rank():
+    """Disjoint CPU sets make all eight immutable result readers concurrent."""
     trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args)"):]
     visible = trainer.index("manifest, aggregate = native_context.__enter__()")
-    lane = trainer.index("_wait_for_native_apply_lane(", visible)
-    apply = trainer.index("state = apply_delta(", lane)
-    assert visible < lane < apply
-    assert "min(args.deadline_s, 420.0)" in trainer[visible:apply]
-    assert "deadline=apply_lane_deadline" in trainer[lane:apply]
+    apply = trainer.index("state = apply_delta(", visible)
+    assert "_wait_for_native_apply_lane(" not in trainer[visible:apply]
 
 
 def test_native_result_preparation_excludes_foreground_apply_interval():
     """Checkpoint work finishes before the finite all-eight foreground swap.
 
-    Trainers prepare independently verified candidates from the one read-only
-    service result through a capacity-one reader credit. Durable checkpoint
-    and reload verification remain background work. Each trainer then reaches
-    a distinct K boundary; the manager release begins the 60-second x/z
+    CPU-partitioned trainers concurrently prepare independently verified
+    candidates from the one read-only service result. Durable checkpoint and
+    reload verification remain background work. Each trainer then reaches a
+    distinct K boundary; the manager release begins the 60-second x/z
     translation interval only after all eight boundary receipts exist.
     """
     trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args)"):]
     visible = trainer.index("manifest, aggregate = native_context.__enter__()")
-    lane = trainer.index("_wait_for_native_apply_lane(", visible)
-    apply = trainer.index("state = apply_delta(", lane)
+    apply = trainer.index("state = apply_delta(", visible)
     lane_credit = trainer.index("native-result-applied-", apply)
     recovery_save = trainer.index("torch.save(", lane_credit)
     prepared = trainer.index("native-candidate-prepared-", recovery_save)
@@ -876,7 +844,7 @@ def test_native_result_preparation_excludes_foreground_apply_interval():
     durable_receipt = trainer.index("native-applied-", live_swap)
 
     assert (
-        visible < lane < apply < lane_credit < recovery_save < prepared
+        visible < apply < lane_credit < recovery_save < prepared
         < rendezvous < boundary_stop < boundary_ready < release < live_swap
         < durable_receipt
     )

@@ -178,6 +178,34 @@ class Child:
                 self.node_rank * TRAINERS_PER_NODE + self.local_rank)
 
 
+def _node_local_child_cpu_set(
+    child: Child,
+    available: tuple[int, ...] | list[int] | set[int] | None = None,
+) -> set[int]:
+    """Partition the existing 56-CPU node step across eight trainers.
+
+    Node-local children are ordinary subprocesses, so without an explicit
+    partition every trainer inherits the complete supervisor cpuset. Eight
+    concurrent PyTorch host result-materialization passes would then each
+    create a full-size thread pool and oversubscribe the same cores. Give every
+    trainer seven disjoint CPUs; managers and the native service retain the
+    complete cpuset so their compact work can progress beside the trainers.
+    """
+    cpus = tuple(sorted(
+        os.sched_getaffinity(0) if available is None else available))
+    if child.role != "trainer":
+        return set(cpus)
+    if child.local_rank is None or not 0 <= child.local_rank < TRAINERS_PER_NODE:
+        raise ValueError("trainer CPU partition requires a valid local rank")
+    required = TRAINERS_PER_NODE * 7
+    if len(cpus) < required:
+        raise RuntimeError(
+            f"node-local trainer CPU partition requires {required} CPUs; "
+            f"only {len(cpus)} are available")
+    offset = child.local_rank * 7
+    return set(cpus[offset:offset + 7])
+
+
 def _retain_node_evidence(run_dir: Path, *, bulk_root: Path, run_id: str,
                           node_rank: int) -> Path:
     """Atomically retain only small node-local control evidence after roles stop.
@@ -365,9 +393,17 @@ class AllocationSupervisor:
             triton_cache.mkdir(parents=True, exist_ok=True)
             inductor_cache.mkdir(parents=True, exist_ok=True)
             role_values.update({"TRITON_CACHE_DIR": str(triton_cache),
-                                "TORCHINDUCTOR_CACHE_DIR": str(inductor_cache)})
+                                "TORCHINDUCTOR_CACHE_DIR": str(inductor_cache),
+                                "OMP_NUM_THREADS": "7",
+                                "MKL_NUM_THREADS": "7",
+                                "OPENBLAS_NUM_THREADS": "7",
+                                "NUMEXPR_NUM_THREADS": "7"})
             role_env.extend([f"TRITON_CACHE_DIR={triton_cache}",
-                             f"TORCHINDUCTOR_CACHE_DIR={inductor_cache}"])
+                             f"TORCHINDUCTOR_CACHE_DIR={inductor_cache}",
+                             "OMP_NUM_THREADS=7",
+                             "MKL_NUM_THREADS=7",
+                             "OPENBLAS_NUM_THREADS=7",
+                             "NUMEXPR_NUM_THREADS=7"])
         else:
             # The batch allocation already owns all eight GCDs on each node.
             # Frontier GRES cannot be allocated again to overlapping steps:
@@ -378,10 +414,14 @@ class AllocationSupervisor:
             # A 64-CPU step is unsatisfiable and remains pending as
             # "Requested nodes are busy" until the allocation expires.
             resources = ["-c56"]
+        child_cpu_set: set[int] | None = None
         if self.launch_backend == "node-local-child":
             env = os.environ.copy(); env.update(role_values)
             if self.native_token_fd >= 0:
                 env["EMENDER_NDP_ADMISSION_TOKEN_FD"] = str(self.native_token_fd)
+            child_cpu_set = _node_local_child_cpu_set(child)
+            env["RESILIENT_E97_CPUSET"] = ",".join(
+                str(cpu) for cpu in sorted(child_cpu_set))
             argv = shlex.split(child.command)
             if child.role == "native-service":
                 telemetry = self.run_dir / "logs" / f"{child.identity}-transport.jsonl"
@@ -412,9 +452,17 @@ class AllocationSupervisor:
             os.lseek(self.native_token_fd, 0, os.SEEK_SET)
         child.process = subprocess.Popen(
             argv, stdout=stdout, stderr=stderr, env=env,
-            start_new_session=True, pass_fds=pass_fds)
+            start_new_session=True, pass_fds=pass_fds,
+            preexec_fn=(
+                None
+                if child_cpu_set is None
+                else lambda: os.sched_setaffinity(0, child_cpu_set)
+            ))
         child.started_at = time.time()
-        self._event("started", child, pid=child.process.pid, restart=child.restarts)
+        self._event(
+            "started", child, pid=child.process.pid, restart=child.restarts,
+            cpu_set=(
+                None if child_cpu_set is None else sorted(child_cpu_set)))
 
     def _deadline_reason(self, child: Child, now: float) -> str | None:
         assert child.process is not None

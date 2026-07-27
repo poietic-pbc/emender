@@ -813,31 +813,6 @@ def _terminal_native_checkpoint(run: Path, args, *, completed: int,
     return checkpoint
 
 
-def _wait_for_native_apply_lane(control: Path, args, *, generation: int,
-                                rank: int, result_root: str,
-                                deadline: float) -> dict[str, object] | None:
-    """Serialize background readers of the one shared node aggregate.
-
-    The service intentionally exposes one read-only result instead of eight
-    trainer-sized copies.  Job 5080730 proved that eight concurrent full E97
-    readers contend for 262--308 seconds even though the checkpoint leader
-    alone completes in 43 seconds.  The preceding rank's authenticated
-    materialization marker is a node-local metadata credit.  This lane is
-    entirely before the all-eight ready/release barrier, so it cannot consume
-    the reviewed 60-second foreground x/z apply interval.
-    """
-    if rank <= 0:
-        return None
-    return wait_metadata(
-        control / f"native-result-applied-{generation:08d}-{rank - 1:02d}.json",
-        deadline=deadline,
-        expected={"run_id": args.run_id,
-                  "fence_epoch": _fence_epoch(args),
-                  "generation": generation,
-                  "result_root": result_root,
-                  "rank": rank - 1})
-
-
 def _native_safe_boundary_transaction(
         args, *, node: int, generation: int, result_root: str,
         node_incarnation: str,
@@ -3881,20 +3856,16 @@ def trainer(args) -> int:
         # Waiting for distributed ownership (and, on node 0 peers, the leader
         # checkpoint marker) has its own bounded window.  Once the complete
         # node-local aggregate is visible, every eligible trainer enters the
-        # bounded background preparation stage.  A capacity-one authenticated
-        # reader credit prevents the 6--7x node contention observed in job
-        # 5080730.  The separate all-eight release below starts the finite
-        # foreground apply window only after every candidate has been
+        # bounded background preparation stage. The node supervisor gives
+        # every trainer a disjoint seven-CPU partition, so all eight read-only
+        # views may materialize concurrently without the 56-thread-per-rank
+        # oversubscription observed in job 5080730. There is still exactly one
+        # service-owned immutable result and one per-trainer bounded
+        # correction cohort. The separate all-eight release below starts the
+        # finite foreground apply window only after every candidate has been
         # reload-verified.
         heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
                   stage="result_preparation")
-        if native:
-            apply_lane_deadline = (
-                time.monotonic() + min(args.deadline_s, 420.0))
-            _wait_for_native_apply_lane(
-                control, args, generation=generation, rank=rank,
-                result_root=str(manifest["result_root"]),
-                deadline=apply_lane_deadline)
         trainer_apply_started = time.monotonic()
         if not native:
             spool.release_trainer(fence, rank)

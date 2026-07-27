@@ -12,6 +12,9 @@ import pytest
 
 from ndm.manifest_peer_control import ManifestPeerAuthority
 from scripts.frontier.resilient_e97_allocation_supervisor import AllocationSupervisor, Child
+from scripts.frontier.resilient_e97_allocation_supervisor import (
+    _node_local_child_cpu_set,
+)
 from scripts.frontier.check_resilient_e97_parity import compare
 
 
@@ -535,6 +538,25 @@ def test_launch_modes_preserve_identical_local_role_identity_and_environment(tmp
     assert Path(local_env["TORCHINDUCTOR_CACHE_DIR"]).is_dir()
     assert any(value.startswith("TRITON_CACHE_DIR=") for value in step_argv)
     assert any(value.startswith("TORCHINDUCTOR_CACHE_DIR=") for value in step_argv)
+
+
+def test_node_local_trainers_partition_the_existing_fifty_six_cpu_step():
+    available = tuple(range(100, 156))
+    trainer_sets = [
+        _node_local_child_cpu_set(
+            Child("trainer", 0, "node000", rank, "trainer"),
+            available,
+        )
+        for rank in range(8)
+    ]
+
+    assert all(len(cpus) == 7 for cpus in trainer_sets)
+    assert set().union(*trainer_sets) == set(available)
+    assert sum(len(cpus) for cpus in trainer_sets) == len(available)
+    assert _node_local_child_cpu_set(
+        Child("manager", 0, "node000", None, "manager"),
+        available,
+    ) == set(available)
 
 
 def test_node_local_native_service_uses_pinned_cxi_domain_without_hostname_bind(
@@ -1422,7 +1444,7 @@ def test_native_manager_advances_progress_after_owner_transport():
     assert proposal_wait < apply_stage < apply_receipt_wait
 
 
-def test_native_all_eight_apply_releases_only_after_bounded_serial_preparation():
+def test_native_all_eight_apply_releases_after_bounded_concurrent_preparation():
     """One reader prepares at a time; eight K boundaries precede release."""
     role = (
         ROOT / "scripts/frontier/resilient_e97_role.py"
@@ -1469,11 +1491,11 @@ def test_native_all_eight_apply_releases_only_after_bounded_serial_preparation()
     trainer = role[role.index("def trainer(args) -> int:"):]
     result_visible = trainer.index(
         "manifest, aggregate = native_context.__enter__()")
-    result_lane = trainer.index(
-        "_wait_for_native_apply_lane(", result_visible)
     result_apply = trainer.index(
-        "apply_delta_with_correction_ledger(", result_lane)
-    assert result_visible < result_lane < result_apply
+        "apply_delta_with_correction_ledger(", result_visible)
+    assert result_visible < result_apply
+    assert "_wait_for_native_apply_lane(" not in trainer[
+        result_visible:result_apply]
     result_materialized = trainer.index(
         'control / f"native-result-applied-{generation:08d}-{rank:02d}.json"')
     reload_verified = trainer.index(
