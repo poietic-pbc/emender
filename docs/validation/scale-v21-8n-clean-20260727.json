@@ -1,0 +1,198 @@
+{
+  "artifacts": {
+    "predecessor_final_audit": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-v21-safe-boundary-2n/46c8043791e9b14c4cb3376c1fb03ebe7fe6932f/scheduler-evidence/clean-5099195/final-validation.txt",
+      "sha256": "c7acbda4cf24dce9f257f367bec7a358c3257a59b6d8780eb0bb102c5162e1bd"
+    },
+    "predecessor_final_sha256sums": {
+      "entries_checked": 19,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-v21-safe-boundary-2n/46c8043791e9b14c4cb3376c1fb03ebe7fe6932f/FINAL-SHA256SUMS.txt",
+      "sha256": "9e75284859f42c067eadb0446046a92c7b53ebedbcdf677bd90febe413eb8c07",
+      "verified": true
+    },
+    "predecessor_report": {
+      "path": "docs/validation/qualify-v21-safe-boundary-2n-20260727.md",
+      "sha256": "a26c45c59680ddef0d329e50fe18c75c1b711e56eb8faac38c18f77e9662deaa"
+    },
+    "predecessor_verdict": {
+      "passed": true,
+      "path": "docs/validation/qualify-v21-safe-boundary-2n-20260727.json",
+      "scope": "exact-two-node-clean-only",
+      "sha256": "aaaf19a80f85d6d783267fa430966f5ae589b42be693d2fa9df098b70e32ab10"
+    },
+    "quality_pass": {
+      "issued_scale_authorization": false,
+      "path": "docs/validation/quality-pass-v21-scale-8-32-128-20260727.md",
+      "scope": "wg-task-description-review-only",
+      "sha256": "d95bd9e64b2a06ba000dc61e13cb9d1cf98f8f063e6e38c55b0eeaab833a50eb"
+    }
+  },
+  "authorities": {
+    "adr_002_sha256": "0a1c580c7ad30a28837042af8e1fef2a66c208a3ce535e76847263b8b3eb4052",
+    "compute_pool_sha256": "db5a487c9f0a6e398e669b8de320f1a73171b28fe165a230ac2c50505aa9f07b",
+    "gap_matrix_and_isp_sha256": "a4bb7b0b5e993e0d0c6f1c89e1b0122d5fcd3ac71dea5dfe7803217a3f3ce935",
+    "native_dataplane_sha256": "7fdc6c890cab5d7e8785485cc18d6140c0887610bd2d6f3cd1b566991d20b2d3"
+  },
+  "blockers": [
+    {
+      "code": "missing_exact_identity_two_node_gates",
+      "detail": "The exact corrected source has a clean/performance pass only; fault/restart, deterministic replay, and predeclared three-seed convergence have not passed on the same identity."
+    },
+    {
+      "code": "missing_scale_authorization",
+      "detail": "No immutable emender-async-v21-scale-authorization-v1 artifact exists; the quality pass explicitly issued none."
+    },
+    {
+      "code": "missing_v21s17_closure",
+      "detail": "No reviewed emender-v21s17-scale-closure-v1 artifact, evidence digests, quantiles, maxima/tail treatment, margins, arithmetic, finite close, or scale deadlines exist."
+    },
+    {
+      "code": "missing_four_node_predecessor",
+      "detail": "The exact controller and ADR-002 require 8<-4, but no immutable four-node passed manifest exists."
+    },
+    {
+      "code": "missing_durable_terminal_collector",
+      "detail": "The exact controller has no held-job/pre-release scheduler-owned collector transaction or idempotent terminal accounting/verdict reconciler."
+    },
+    {
+      "code": "execution_source_identity_boundary",
+      "detail": "Evidence-only commits change the all-tracked-files source digest and origin/main tree; no reviewed execution-source boundary reconciles exact predecessor identity with fetched authoritative main."
+    }
+  ],
+  "controller_preflight": {
+    "activated_frontier_environment": true,
+    "error": "ValueError: signed scale authorization and immediate predecessor pass are required",
+    "exit_code": 1,
+    "nodes": 8,
+    "parameters": {
+      "close_on_q_min": false,
+      "uses_launched_ranks": false,
+      "wait_for_all_ready": false
+    },
+    "python": "$EMENDER_PYTHON",
+    "submitted": false
+  },
+  "created_at": "2026-07-27T23:47:28Z",
+  "identities": {
+    "data": "91321b2b90bb159f3aa73881455778f10e8df588edd526b1066281fa72997962",
+    "launcher": "70b96385b5ec0795d2d1c6b6495846b20e94fe53e5256e9c53c824b65c223fb7",
+    "native_bundle": "f19e10be9987cfdb551a8dd75c5c88145c3cf35b73c54d3898fe562ce4182441",
+    "native_manifest": "d0f05e6ea15f38e72950680d710d70229b94eee1dfbc8b3468f33431318b82e3",
+    "policy": "fa9def95daf7bce25f1b962ca5437e7a76317b94ccfb9a710fbf126a344e7d98",
+    "policy_id": "async-decoupled-v2.1-simple",
+    "policy_schema": "emender-async-policy-v2.1",
+    "source_commit": "46c8043791e9b14c4cb3376c1fb03ebe7fe6932f",
+    "source_digest": "553bc996723bc1698a37f847c981b1b3864d260d5d2d0cc70cb314f5c46e0184",
+    "source_tree": "660f817c0419943d33d07f91573a6abc933bab7a",
+    "tokenizer": "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069",
+    "training_arguments": "afc2a65fd8c73499e74e21cb9531c978206c3a9c898e42d18cc58bb93eb9fe9c"
+  },
+  "jobs": {
+    "collector_job_ids": [],
+    "model_job_ids": [],
+    "scale_gate_job_ids": [],
+    "submitted_count": 0
+  },
+  "passed": false,
+  "predecessor_map": {
+    "4": 2,
+    "8": 4,
+    "16": 8,
+    "32": 16,
+    "64": 32,
+    "256": 64
+  },
+  "requirements": {
+    "compute_pool": {
+      "R01": "blocked_before_8n_allocation_claim",
+      "R02": "blocked_before_8n_membership",
+      "R03": "fail_closed_no_launched_rank_substitution",
+      "R04": "blocked_before_8n_contributions",
+      "R05": "blocked_before_8n_reduction",
+      "R06": "blocked_missing_reviewed_close_and_floor",
+      "R07": "blocked_before_8n_commit_chain",
+      "R08": "blocked_before_8n_owner_replay",
+      "R09": "blocked_before_64_trainer_snapshot",
+      "R10": "blocked_before_8n_hot_path",
+      "R11": "blocked_missing_fault_and_four_node_passes",
+      "R12": "blocked_before_8n_restart_bundle",
+      "R13": "blocked_before_8n_backend_execution",
+      "R14": "blocked_missing_empirical_8n_deadlines_and_telemetry",
+      "R15": "blocked_before_8n_numerical_artifact",
+      "R16": "fail_closed_predecessor_gate_passed_not_scientific_rung"
+    },
+    "immutable_snapshot_pipeline": {
+      "ISP01": "blocked_before_64_trainer_coherent_snapshot",
+      "ISP02": "blocked_before_8n_admission_overlap",
+      "ISP03": "blocked_before_8n_immutable_background_pipeline",
+      "ISP04": "blocked_before_8n_capacity_edge_evidence",
+      "ISP05": "blocked_before_8n_atomic_apply",
+      "ISP06": "blocked_before_8n_causal_phase_telemetry",
+      "ISP07": "blocked_before_8n_every_event_tail_gate"
+    },
+    "native_dataplane": {
+      "NDP01": "blocked_before_8n_native_control",
+      "NDP02": "blocked_before_8n_runtime_symbol_evidence",
+      "NDP03": "blocked_before_eight_cxi_services",
+      "NDP04": "blocked_before_64_trainer_direct_handoff",
+      "NDP05": "blocked_before_8n_result_roots",
+      "NDP06": "blocked_before_8n_fenced_frames",
+      "NDP07": "blocked_before_8n_endpoint_exchange",
+      "NDP08": "blocked_before_8n_registered_bounds",
+      "NDP09": "blocked_before_8n_credit_evidence",
+      "NDP10": "blocked_before_8n_checksums_and_receipts",
+      "NDP11": "blocked_before_8n_replay_evidence",
+      "NDP12": "blocked_before_8n_redistribution",
+      "NDP13": "blocked_missing_empirical_8n_deadlines",
+      "NDP14": "blocked_before_8n_abi_session",
+      "NDP15": "blocked_before_8n_publication_and_apply",
+      "NDP16": "blocked_before_8n_structured_telemetry",
+      "NDP17": "fail_closed_missing_promotion_and_four_node_pass"
+    },
+    "v21": {
+      "V21S01": "blocked_before_signed_8n_payload",
+      "V21S02": "blocked_before_8n_lag_events",
+      "V21S03": "blocked_before_8n_exact_token_set",
+      "V21S04": "blocked_before_64_trainer_k40",
+      "V21S05": "blocked_missing_8n_closure_identity",
+      "V21S06": "blocked_before_64_trainer_snapshot_ownership",
+      "V21S07": "blocked_before_8n_atomic_correction",
+      "V21S08": "blocked_before_8n_verified_mailbox",
+      "V21S09": "blocked_before_8n_resource_formula_observation",
+      "V21S10": "blocked_before_8n_ready_rejoin",
+      "V21S11": "blocked_before_8n_node_transactions",
+      "V21S12": "blocked_before_eight_service_scale_artifact",
+      "V21S13": "blocked_before_8n_causal_and_tail_metrics",
+      "V21S14": "blocked_before_8n_restart_and_seed_receipts",
+      "V21S15": "blocked_missing_exact_identity_fault_replay_convergence",
+      "V21S16": "fail_closed_missing_promotion_and_four_node_pass",
+      "V21S17": "fail_closed_missing_empirical_closure_no_substitution"
+    }
+  },
+  "scheduler_reconciliation": {
+    "matching_8n_evidence_roots": 0,
+    "matching_queued_or_running_jobs": 0,
+    "matching_terminal_jobs": 0,
+    "payload_digest_rendered": false,
+    "retired_payloads": [],
+    "unchanged_payload_resubmitted": false
+  },
+  "schema": "emender-async-v21-eight-node-runner-verdict-v1",
+  "seed": {
+    "accepted_tokens": 150793748480,
+    "bytes": 7719680116,
+    "eight_node_network_fetches": null,
+    "eight_node_receipts": [],
+    "sha256": "0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2",
+    "step": 2300930
+  },
+  "status": "blocked_prerequisites",
+  "wg": {
+    "created_prerequisites": [
+      "fix-v21-durable-collector-source-identity",
+      "requalify-v21-durable-collector-2n-clean"
+    ],
+    "immediate_scale_predecessor": "scale-simple-async-v21-4n",
+    "task": "scale-v21-8n-clean"
+  }
+}
