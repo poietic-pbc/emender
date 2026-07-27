@@ -3592,6 +3592,9 @@ def trainer(args) -> int:
                             + ASYNC_V21_SNAPSHOT_ADMISSION_S),
                     )
                     lane_admission_completed = time.monotonic()
+                    v2_owned_seconds_max = max(
+                        v2_owned_seconds_max,
+                        lane_admission_completed - endpoint_snapshot_started)
                     if native_plane is None:
                         native_plane = admit_native_generation()
                     # The current anchor digest is already verified and bound
@@ -3735,9 +3738,6 @@ def trainer(args) -> int:
                             interval_window_end - generation),
                     })
                 owned_marker = marker
-                v2_owned_seconds_max = max(
-                    v2_owned_seconds_max,
-                    float(marker["owned_ack_seconds"]))
                 _stage_telemetry(
                     bulk, identity, generation, "native_direct_memfd",
                     descriptor_started, 180.0, trainer_spool_bytes=0,

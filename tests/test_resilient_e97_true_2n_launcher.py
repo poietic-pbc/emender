@@ -1814,19 +1814,20 @@ def test_frontier_native_trainer_has_one_async_v21_production_authority():
 def test_production_k_next_starts_after_snapshot_before_publication_and_result():
     """Guard the immutable-snapshot foreground edge in the rendered trainer.
 
-    The sole mutable lane resumes from the coherent endpoint before queue
-    admission/OWNED, result readiness, aggregate materialization, and
-    checkpoint write.  All work after that boundary consumes only the retained
-    immutable snapshot until the verified result is applied at a later K edge.
+    The sole mutable lane resumes from the coherent endpoint as local
+    admission transfers the immutable slot to OWNED, before publication,
+    result readiness, aggregate materialization, and checkpoint write.  All
+    work after that boundary consumes only the retained immutable snapshot
+    until the verified result is applied at a later K edge.
     """
     role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
     trainer = role[role.index("def trainer(args) -> int:"):]
     snapshot = trainer.index(
         "retained_endpoint = persistent_worker.snapshot()")
     next_k = trainer.index("async_training_lane.start(", snapshot)
+    owned = trainer.index("v2_owned_seconds_max = max(", next_k)
     publish = trainer.index("marker = native_plane.publish_state_delta(")
-    owned = trainer.index("v2_owned_seconds_max = max(", publish)
-    result = trainer.index("native_plane.result_shards(", owned)
+    result = trainer.index("native_plane.result_shards(", publish)
     apply = trainer.index("state = apply_delta(", result)
     checkpoint = trainer.index("torch.save(", apply)
     verified = trainer.index(
@@ -1834,7 +1835,7 @@ def test_production_k_next_starts_after_snapshot_before_publication_and_result()
     boundary = trainer.index(
         "async_training_lane.finish_at_boundary(", verified)
 
-    assert (snapshot < next_k < publish < owned < result < apply
+    assert (snapshot < next_k < owned < publish < result < apply
             < checkpoint < verified < boundary)
     between = trainer[next_k:result]
     assert "fabric_receipt_waited=False" in between
