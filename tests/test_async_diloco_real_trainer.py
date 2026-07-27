@@ -849,6 +849,89 @@ def test_persistent_lane_progresses_and_defers_snapshot_while_result_is_delayed(
     session.close()
 
 
+def test_persistent_lane_prepares_host_rebase_before_released_live_apply(
+        monkeypatch):
+    """Dense interval rebasing must precede the atomic live x/z mutation."""
+    import ndm.async_diloco_real as real
+
+    first_forward = threading.Event()
+    allow_forward = threading.Event()
+
+    class OneParamModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.zeros(1))
+
+    class ScheduleFreeFixture:
+        def __init__(self, parameters):
+            parameter = tuple(parameters)[0]
+            self.param_groups = [{"params": [parameter], "lr": 0.1}]
+            self.state = {
+                parameter: {
+                    "z": parameter.detach().clone(),
+                    "exp_avg_sq": torch.tensor([4.0]),
+                },
+            }
+
+    monkeypatch.setattr(
+        real.train, "build_training_model", lambda _args: OneParamModel())
+    monkeypatch.setattr(
+        real.train, "build_training_optimizer",
+        lambda model, _args: ScheduleFreeFixture(model.parameters()))
+    monkeypatch.setattr(
+        real, "_build_batch_iter", lambda *_args, **_kwargs: iter(()))
+
+    def train_step(model, _optimizer, _args, **_kwargs):
+        first_forward.set()
+        assert allow_forward.wait(1)
+        with torch.no_grad():
+            model.weight.add_(1.0)
+        return {"loss": 1.0, "tokens_processed": 5, "hidden_state": None}
+
+    monkeypatch.setattr(real.train, "train_one_optimizer_step", train_step)
+    session = PersistentRealWorkerSession(
+        base_state={"weight": torch.zeros(1)},
+        train_args=real.Namespace(seed=7, bf16=False, lr=0.1),
+        spec=RealAsyncWorkerSpec("trainer", "node-0", "cpu", 1, 0),
+        synthetic_token_stream=False,
+        synthetic_vocab_size=8,
+    )
+    lane = PersistentAsyncTrainingLane(session, max_windows=2)
+    lane.start(
+        local_window_start=1,
+        start_state=session.snapshot(),
+        admission_deadline=time.monotonic() + 1,
+    )
+    assert first_forward.wait(1)
+    allow_forward.set()
+    report = lane.finish_at_boundary(deadline=time.monotonic() + 1)
+    correction = {"weight": torch.tensor([7.0])}
+
+    lane.prepare_at_boundary(
+        correction, deadline=time.monotonic() + 1)
+
+    # The retained interval basis is ready before boundary-ready publication,
+    # while the live model and ScheduleFree z still have their old values.
+    torch.testing.assert_close(lane.start_state["weight"], torch.tensor([7.0]))
+    torch.testing.assert_close(
+        session.model.weight.detach(), torch.tensor([1.0]))
+    torch.testing.assert_close(
+        session.optimizer.state[session.model.weight]["z"],
+        torch.tensor([0.0]))
+
+    applied = lane.apply_at_boundary(correction)
+    assert applied.local_window_start == report.local_window_start
+    torch.testing.assert_close(
+        session.model.weight.detach(), torch.tensor([8.0]))
+    torch.testing.assert_close(
+        session.optimizer.state[session.model.weight]["z"],
+        torch.tensor([7.0]))
+    # Released apply only changes live x/z; it must not repeat the dense host
+    # interval rebase.
+    torch.testing.assert_close(lane.start_state["weight"], torch.tensor([7.0]))
+    session.close()
+
+
 def test_real_async_trainer_checkpoint_cadence_records_recovery_and_finalization(tmp_path):
     result = run_real_async_diloco(RealAsyncDiLoCoConfig(
         run_id="real-cadence",

@@ -1528,6 +1528,26 @@ def test_deferred_snapshot_readiness_is_verified_after_ordered_resume():
     assert resumed < verified
 
 
+def test_dense_interval_rebase_precedes_boundary_ready_and_released_apply():
+    """The 60s release clock contains only the atomic resident x/z swap."""
+    trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args) -> int:"):]
+    finish = trainer.index(
+        "boundary_report = async_training_lane.finish_at_boundary(")
+    prepare = trainer.index(
+        "async_training_lane.prepare_at_boundary(", finish)
+    ready = trainer.index(
+        "boundary_ready_monotonic_s = time.monotonic()", prepare)
+    release = trainer.index(
+        'marker_name="native-apply-release"', ready)
+    apply = trainer.index(
+        "mutable_report = async_training_lane.apply_at_boundary(", release)
+    finished = trainer.index(
+        "apply_finished_monotonic_s = time.monotonic()", apply)
+
+    assert finish < prepare < ready < release < apply < finished
+    assert "wait_snapshot_ready(" not in trainer[release:finished]
+
+
 def test_native_pipeline_commit_ready_advances_without_foreground_blocking():
     """Deterministic generation-0 commit/apply then generation-1 handoff path."""
     from ndm.native_pipeline import (

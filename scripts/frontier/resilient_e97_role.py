@@ -4298,6 +4298,13 @@ def trainer(args) -> int:
                     deadline=boundary_deadline,
                     corrections=None,
                 )
+                # Rebase the retained host interval while the lane is
+                # quiescent but before publishing boundary-ready.  The
+                # released 60-second clock is reserved for atomic live x/z.
+                async_training_lane.prepare_at_boundary(
+                    pending_corrections,
+                    deadline=boundary_deadline,
+                )
                 boundary_window = boundary_report.local_window_end
             else:
                 # Control lanes and terminal followers are already stopped at
@@ -4416,10 +4423,6 @@ def trainer(args) -> int:
                         prefetched_interval = None
                         v2_defer_count += 1
                     else:
-                        persistent_worker.wait_snapshot_ready(
-                            async_training_lane.start_state,
-                            deadline=apply_deadline,
-                        )
                         prefetched_interval = {
                             "generation": generation + 1,
                             "start": dict(async_training_lane.start_state),

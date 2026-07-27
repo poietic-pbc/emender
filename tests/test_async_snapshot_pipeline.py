@@ -340,7 +340,10 @@ def test_training_lane_reaches_boundary_before_release_then_translates_once():
     assert boundary.translation_elapsed_s == 0.0
     torch.testing.assert_close(session.value, value_at_boundary)
 
-    applied = lane.apply_at_boundary({"weight": torch.tensor([3.0])})
+    correction = {"weight": torch.tensor([3.0])}
+    lane.prepare_at_boundary(
+        correction, deadline=time.monotonic() + 1)
+    applied = lane.apply_at_boundary(correction)
 
     torch.testing.assert_close(session.value, value_at_boundary + 3.0)
     assert applied.translation_elapsed_s >= 0.0
