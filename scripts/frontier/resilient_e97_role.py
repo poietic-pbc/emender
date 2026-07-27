@@ -112,6 +112,7 @@ ASYNC_V21_E97_NATIVE_RESIDENT_BYTES = 64_001_671_648
 ASYNC_V21_SNAPSHOT_ADMISSION_S = 1.0
 ASYNC_V21_BOUNDARY_RENDEZVOUS_S = 420.0
 ASYNC_V21_ALL_EIGHT_APPLY_S = 60.0
+ASYNC_V21_APPLY_RECEIPT_PUBLICATION_S = 10.0
 
 _CAUSAL_PHASE_BY_STAGE = {
     "async_v21_endpoint_snapshot": "freeze_snapshot",
@@ -2594,6 +2595,13 @@ def _native_manager(args) -> int:
                       stage="peer_apply", **committed_evidence)
             atomic_apply_deadline = float(
                 apply_release["apply_deadline_monotonic_s"])
+            # The released 60-second clock bounds the atomic model apply, not
+            # the subsequent telemetry flush and create-once receipt rename.
+            # Keep receipt discovery independently bounded, then fail closed
+            # against the immutable apply-finish timestamp below.
+            apply_receipt_deadline = (
+                atomic_apply_deadline
+                + ASYNC_V21_APPLY_RECEIPT_PUBLICATION_S)
             node_apply = AtomicEightTrainerApply(
                 root=control,
                 run_id=args.run_id,
@@ -2611,7 +2619,7 @@ def _native_manager(args) -> int:
             for rank in range(args.local_quorum):
                 applied = wait_metadata(
                     control / f"native-applied-{generation:08d}-{rank:02d}.json",
-                    deadline=atomic_apply_deadline,
+                    deadline=apply_receipt_deadline,
                     expected={"run_id": args.run_id,
                               "fence_epoch": _fence_epoch(args),
                               "generation": generation,
@@ -2627,6 +2635,7 @@ def _native_manager(args) -> int:
                     or not math.isfinite(apply_finished)
                     or apply_started < apply_release_started
                     or apply_finished < apply_started
+                    or apply_finished > atomic_apply_deadline
                 ):
                     raise ValueError(
                         "trainer apply receipt has an invalid monotonic interval")

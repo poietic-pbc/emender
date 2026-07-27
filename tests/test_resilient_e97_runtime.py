@@ -1579,7 +1579,8 @@ def test_manager_bounds_background_readiness_then_all_eight_apply_separately():
     assert "apply_release_started = float(" in window
     assert 'apply_release["released_monotonic_s"]' in window
     assert "atomic_apply_deadline" in window
-    assert "deadline=atomic_apply_deadline" in window
+    assert "apply_receipt_deadline" in window
+    assert "deadline=apply_receipt_deadline" in window
     assert "ASYNC_V21_ALL_EIGHT_APPLY_S" in window
     assert '"native_node_apply_swap"' in window
 
@@ -1590,6 +1591,40 @@ def test_manager_bounds_background_readiness_then_all_eight_apply_separately():
     boundaries = coordinator.index("native-boundary-ready-")
     release = coordinator.index("transaction.release_apply(", boundaries)
     assert boundaries < release
+
+
+def test_manager_allows_bounded_receipt_publication_after_on_time_apply():
+    """Receipt discovery must not redefine the immutable 60-second apply clock.
+
+    Frontier clean job 5089570 retained all 16 rank receipts.  Node-zero rank
+    seven finished its atomic apply 3.45 ms before the released deadline, but
+    the manager used that same deadline to discover metadata published after
+    the trainer's telemetry flush.  Receipt collection needs a separate,
+    bounded control-plane grace while ``SafeBoundaryRendezvous.record_applied``
+    continues to reject any recorded apply finish after the original clock.
+    """
+    source = ROLE.read_text()
+    manager = source[source.index("def _native_manager(args)"):
+                     source.index("def manager(args)")]
+    release = manager.index("atomic_apply_deadline = float(")
+    receipt_loop = manager.index(
+        "for rank in range(args.local_quorum):", release)
+    receipt_wait = manager.index("wait_metadata(", receipt_loop)
+    receipt_record = manager.index(
+        "boundary_transaction.record_applied(", receipt_wait)
+    window = manager[release:receipt_record]
+
+    assert "ASYNC_V21_APPLY_RECEIPT_PUBLICATION_S = 10.0" in source
+    assert "apply_receipt_deadline = (" in window
+    receipt_deadline = window[
+        window.index("apply_receipt_deadline = ("):
+        window.index("node_apply = AtomicEightTrainerApply(")
+    ]
+    assert "atomic_apply_deadline" in receipt_deadline
+    assert "ASYNC_V21_APPLY_RECEIPT_PUBLICATION_S" in receipt_deadline
+    assert "deadline=apply_receipt_deadline" in window
+    assert "deadline=atomic_apply_deadline" not in window
+    assert "apply_finished > atomic_apply_deadline" in window
 
 
 def test_final_native_result_lifetime_covers_bounded_recovery_commit_phase():
