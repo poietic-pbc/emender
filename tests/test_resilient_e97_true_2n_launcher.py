@@ -1382,6 +1382,28 @@ def test_generation_deadline_includes_local_training_and_aggregate_wait():
     assert "generation_started, pool_config.slo.training_hard_s" in role
 
 
+def test_native_manager_freeze_wait_spans_the_open_generation_deadline():
+    """Node skew must not turn the 15-second inner freeze SLO into Q/T loss."""
+    source = (
+        ROOT / "scripts/frontier/resilient_e97_role.py"
+    ).read_text(encoding="utf-8")
+    manager = source[
+        source.index("def _native_manager(args) -> int:"):
+        source.index("def manager(args) -> int:")
+    ]
+    contribute = manager[
+        manager.index("close = pool_client.contribute_and_freeze("):
+        manager.index('if close.get("status") != "commit_ready":')
+    ]
+
+    # ADR-002 bounds open-group-to-freeze at 420 seconds. The faster node
+    # therefore waits on the generation's existing absolute deadline for the
+    # slower node contribution; a fresh 15-second freeze_s clock is only an
+    # inner native operation bound and cannot replace the Q/T close window.
+    assert "deadline=native_deadline)" in contribute
+    assert "pool_config.slo.freeze_s" not in contribute
+
+
 def test_local_and_owner_transport_use_separate_bounded_frontier_chunks():
     from ndm.resilient_e97_reducer import TensorLayout
 

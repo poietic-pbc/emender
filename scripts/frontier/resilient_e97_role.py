@@ -2291,7 +2291,11 @@ def _native_manager(args) -> int:
                     incarnation=incarnation, contribution_seq=generation,
                     accepted_tokens=local_weight,
                     payload_digest=local_result.result_root.hex(),
-                    deadline=time.monotonic() + pool_config.slo.freeze_s)
+                    # ADR-002 gives the complete open-group-to-freeze phase
+                    # one absolute 420-second generation clock.  The 15-second
+                    # native freeze SLO cannot replace that Q/T close window:
+                    # harmless K40 skew can make one node contribute later.
+                    deadline=native_deadline)
                 if close.get("status") != "commit_ready":
                     raise TimeoutError(f"native global freeze failed: {close}")
                 frozen = tuple(close["frozen_identities"])
