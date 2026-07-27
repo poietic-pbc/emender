@@ -1,0 +1,211 @@
+{
+  "artifacts": {
+    "checkpoint_sha256": "scheduler-evidence/clean-5099195/checkpoint-sha256.txt",
+    "clean_controller_plan": {
+      "path": "clean-qualification-plan.json",
+      "sha256": "a113c215781e20a49611638d80a4a48d5923ddfdadbb7d9a2f0d5c01de6a45f7"
+    },
+    "clean_terminal_accounting": {
+      "path": "scheduler-evidence/clean-5099195/terminal-20260727T231230Z.txt",
+      "sha256": "797c5e8d7aa90ed3f9456677fae089d77f42e9d49bc812cbd38070cf8dc3d9c1"
+    },
+    "final_audit": {
+      "checks_passed": 544,
+      "path": "scheduler-evidence/clean-5099195/final-validation.txt",
+      "sha256": "c7acbda4cf24dce9f257f367bec7a358c3257a59b6d8780eb0bb102c5162e1bd"
+    },
+    "final_sha256sums": {
+      "path": "FINAL-SHA256SUMS.txt",
+      "sha256": "9e75284859f42c067eadb0446046a92c7b53ebedbcdf677bd90febe413eb8c07"
+    },
+    "g2_gate": {
+      "path": "g2/5099135/full-layout-gate.json",
+      "sha256": "bc67ed30791c46892aa1d787f50a99b25b9f97bdead69e95a5678ad7cacfe660"
+    },
+    "native_build_log": {
+      "path": "native-build.log",
+      "sha256": "4b57f165e1103c97958eb51e5aed0c72d0b7cc91623665fd0f3f1f2679f84dec"
+    },
+    "native_manifest": {
+      "path": "snapshot/build/native-resilient-dataplane/native-artifacts.json",
+      "sha256": "d0f05e6ea15f38e72950680d710d70229b94eee1dfbc8b3468f33431318b82e3"
+    },
+    "retained_control_sha256": {
+      "files": 1322,
+      "path": "scheduler-evidence/clean-5099195/retained-control-sha256.txt",
+      "sha256": "eeb4c507d9217fceff64b2c2ebb3b5b4a5bf45e75c8046947dc92fb2f8d031fc"
+    },
+    "semantic_verdict": {
+      "path": "clean/clean-overlap/pipelined-performance.json",
+      "sha256": "8f48b370aa83a8e38b052d7e28871c9b3cb44a919150ded15c943578997dd947",
+      "status": "passed"
+    }
+  },
+  "clean": {
+    "elapsed": "01:18:07",
+    "exit_code": "0:0",
+    "job_id": 5099195,
+    "nodes": 2,
+    "nodelist": "frontier[06411,06435]",
+    "partition": "batch",
+    "payload_digest": "46f0ad69d07dffdf277f25d321051b765befa7f034d0462f4bbdae1082b454cf",
+    "qos": "debug",
+    "restarts": 0,
+    "state": "COMPLETED"
+  },
+  "evidence_root": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-v21-safe-boundary-2n/46c8043791e9b14c4cb3376c1fb03ebe7fe6932f",
+  "forbidden_paths": {
+    "all_rank_barriers": 0,
+    "central_full_model_broker": false,
+    "disk_replay_bytes": 0,
+    "disk_replay_files": 0,
+    "lustre_dense_hot_path_bytes": 0,
+    "mpi_collectives": 0,
+    "python_dense_socket_bytes": 0,
+    "shared_sqlite": false,
+    "trainer_spool_bytes": 0
+  },
+  "g2": {
+    "elapsed": "00:03:47",
+    "exit_code": "0:0",
+    "job_id": 5099135,
+    "maximum_seconds": 23.128127191,
+    "median_seconds": 22.823459178,
+    "nodes": 2,
+    "nodelist": "frontier[00443,00467]",
+    "partition": "batch",
+    "provider": "cxi",
+    "qos": "debug",
+    "restarts": 0,
+    "speedup_over_python": 4.335953012084959,
+    "state": "COMPLETED",
+    "status": "passed"
+  },
+  "identities": {
+    "data": "91321b2b90bb159f3aa73881455778f10e8df588edd526b1066281fa72997962",
+    "launcher": "70b96385b5ec0795d2d1c6b6495846b20e94fe53e5256e9c53c824b65c223fb7",
+    "native_bundle": "f19e10be9987cfdb551a8dd75c5c88145c3cf35b73c54d3898fe562ce4182441",
+    "native_manifest": "d0f05e6ea15f38e72950680d710d70229b94eee1dfbc8b3468f33431318b82e3",
+    "policy": "fa9def95daf7bce25f1b962ca5437e7a76317b94ccfb9a710fbf126a344e7d98",
+    "policy_id": "async-decoupled-v2.1-simple",
+    "policy_schema": "emender-async-policy-v2.1",
+    "source_commit": "46c8043791e9b14c4cb3376c1fb03ebe7fe6932f",
+    "source_digest": "553bc996723bc1698a37f847c981b1b3864d260d5d2d0cc70cb314f5c46e0184",
+    "source_tree": "660f817c0419943d33d07f91573a6abc933bab7a",
+    "tokenizer": "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069",
+    "training_arguments": "afc2a65fd8c73499e74e21cb9531c978206c3a9c898e42d18cc58bb93eb9fe9c"
+  },
+  "passed": true,
+  "performance": {
+    "candidate_preparation_max_seconds": 62.85158399200009,
+    "candidate_preparation_p99_seconds": 61.70759521400032,
+    "foreground_idle_fraction": 0.02918988623982339,
+    "foreground_idle_max_seconds": 32.01301935920492,
+    "foreground_idle_p99_seconds": 31.28681264500483,
+    "foreground_result_wait_seconds": 0,
+    "manager_rendezvous_max_seconds": 94.82574647432193,
+    "native_owned_max_seconds": 0.02006837399676442,
+    "raw_k40_seconds": 83.67412939365022,
+    "release_to_apply_max_seconds": 1.8456517509184778,
+    "release_to_apply_p99_seconds": 1.8422430967912078,
+    "snapshot_admission_max_seconds": 0.02006837399676442,
+    "snapshot_admission_p99_seconds": 0.015315348748117685,
+    "steady_cadence_multiple": 1.0042076585068915,
+    "steady_cadence_seconds": 84.02620155600016,
+    "unattributed_idle_max_seconds": 1.800887143239379,
+    "unattributed_idle_p99_seconds": 1.8008480399948894
+  },
+  "requirements": {
+    "compute_pool": [
+      "R01",
+      "R02",
+      "R03",
+      "R04",
+      "R05",
+      "R06",
+      "R07",
+      "R08",
+      "R09",
+      "R10",
+      "R11",
+      "R12",
+      "R13",
+      "R14",
+      "R15",
+      "R16"
+    ],
+    "immutable_snapshot_pipeline": [
+      "ISP01",
+      "ISP02",
+      "ISP03",
+      "ISP04",
+      "ISP05",
+      "ISP06",
+      "ISP07"
+    ],
+    "native_data_plane": [
+      "NDP01",
+      "NDP02",
+      "NDP03",
+      "NDP04",
+      "NDP05",
+      "NDP06",
+      "NDP07",
+      "NDP08",
+      "NDP09",
+      "NDP10",
+      "NDP11",
+      "NDP12",
+      "NDP13",
+      "NDP14",
+      "NDP15",
+      "NDP16",
+      "NDP17"
+    ],
+    "v21_semantics": [
+      "V21S01",
+      "V21S02",
+      "V21S03",
+      "V21S04",
+      "V21S05",
+      "V21S06",
+      "V21S07",
+      "V21S08",
+      "V21S09",
+      "V21S10",
+      "V21S11",
+      "V21S12",
+      "V21S13",
+      "V21S14",
+      "V21S15",
+      "V21S16",
+      "V21S17"
+    ]
+  },
+  "schema": "emender-async-v21-two-node-qualification-verdict-v1",
+  "seed": {
+    "attestation_sha256": "27e234891df02b64b9db77fc784c341e5a3ae6e87418b8f1af167776d1d710bb",
+    "bytes": 7719680116,
+    "network_fetches": 0,
+    "node_receipts": {
+      "frontier06411": "0cd58935cbaaa9840d99b654a9e106123a002be8c7ffdcffda6474085cb4388e",
+      "frontier06435": "05353027835de55c85b7c9897b598fd2f53aa092cfc6791c444acb5dbbcc71af"
+    },
+    "sha256": "0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2",
+    "staging": "sbcast to /tmp/emender-e97-seed-5099195 and offline node-local reverification",
+    "step": 2300930,
+    "tokens": 150793748480
+  },
+  "transactions": {
+    "atomic_commits": 10,
+    "checkpoint_reload_attestations": 160,
+    "checkpoints": 10,
+    "leader_releases": 10,
+    "measured_trainers": 16,
+    "measured_windows_per_trainer": 10,
+    "node_apply_authorities": 20,
+    "rank_apply_receipts": 160,
+    "restarts": 0,
+    "warmup_windows_per_trainer": 2
+  }
+}
