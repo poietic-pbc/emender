@@ -187,4 +187,3 @@ graph releases this dependency. Then:
 
 Until then, `qualify-simple-async-v21-2n-convergence`,
 `authorize-simple-async-v21-scale`, and every scale rung remain blocked.
-
