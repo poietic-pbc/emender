@@ -3833,13 +3833,20 @@ def trainer(args) -> int:
             exchange_deadline = time.monotonic() + min(args.deadline_s, 180.0)
         if native:
             result_wait_started = time.monotonic()
+            # Owner transport keeps its 180-second inner bound above, while
+            # ADR-002 separately gives freeze-to-reload-verified latest a
+            # 420-second enclosing clock.  Start that clock at result
+            # readiness so harmless inter-node K/checkpoint skew cannot make
+            # one node abandon an already committed global transaction.
+            result_readiness_deadline = (
+                result_wait_started + min(args.deadline_s, 420.0))
             native_context = native_plane.result_shards(
-                deadline=exchange_deadline,
+                deadline=result_readiness_deadline,
                 chunk_elements=max(1, args.bulk_chunk_bytes // 4))
             manifest, aggregate = native_context.__enter__()
             _stage_telemetry(
                 bulk, identity, generation, "async_v21_result_readiness",
-                result_wait_started, min(args.deadline_s, 180.0),
+                result_wait_started, min(args.deadline_s, 420.0),
                 policy_id=v2_policy.policy_id,
                 allocation_fence=_fence_epoch(args),
                 base_global_version=int(manifest["base_global_version"]),

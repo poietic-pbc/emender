@@ -1654,6 +1654,37 @@ def test_checkpoint_leader_wait_uses_enclosing_result_preparation_deadline():
     assert '"leader_apply_wait": RESULT_PREPARATION_HARD_S' in supervisor
 
 
+def test_native_result_readiness_uses_the_freeze_to_latest_deadline():
+    """Owner exchange's 180-second clock must not bound result publication."""
+    role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    trainer = role[role.index("def trainer(args)"):]
+    exchange = trainer.index(
+        "exchange_deadline = time.monotonic() + min(args.deadline_s, 180.0)"
+    )
+    result_call = trainer.index("native_plane.result_shards(", exchange)
+    result_stage = trainer.index(
+        '"async_v21_result_readiness"', result_call)
+    result_path = trainer[exchange:result_stage]
+
+    # ADR-002 gives freeze-to-reload-verified latest its own 420-second
+    # enclosing clock. Owner transport remains independently capped at 180
+    # seconds; the two clocks are not interchangeable when one node reaches
+    # result readiness earlier than its peer.
+    assert (
+        "result_readiness_deadline = ("
+        in result_path
+    )
+    assert (
+        "result_wait_started + min(args.deadline_s, 420.0)"
+        in result_path
+    )
+    assert "deadline=result_readiness_deadline" in result_path
+    assert (
+        "result_wait_started, min(args.deadline_s, 420.0)"
+        in trainer[result_call:result_stage + 200]
+    )
+
+
 def test_all_peers_get_fresh_supervised_apply_window_after_aggregate_visibility():
     role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
     trainer = role[role.index("def trainer(args)"):]
