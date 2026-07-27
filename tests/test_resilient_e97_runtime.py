@@ -1507,6 +1507,27 @@ def test_deferred_interval_resumes_before_next_native_generation_admission():
     )
 
 
+def test_deferred_snapshot_readiness_is_verified_after_ordered_resume():
+    """A deferred host copy must not consume the released apply clock."""
+    trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args) -> int:"):]
+    apply = trainer.index(
+        "mutable_report = async_training_lane.apply_at_boundary(")
+    deferred = trainer.index(
+        "if mutable_report.snapshot_deferred:", apply)
+    next_loop = trainer.index(
+        "for generation in range(start_generation, target_generation):")
+    resumed = trainer.index(
+        "window = persistent_worker.run_window(", next_loop)
+    verified = trainer.index(
+        "persistent_worker.wait_snapshot_ready(\n"
+        "                            interval_start,",
+        resumed,
+    )
+
+    assert "wait_snapshot_ready(" not in trainer[apply:deferred]
+    assert resumed < verified
+
+
 def test_native_pipeline_commit_ready_advances_without_foreground_blocking():
     """Deterministic generation-0 commit/apply then generation-1 handoff path."""
     from ndm.native_pipeline import (

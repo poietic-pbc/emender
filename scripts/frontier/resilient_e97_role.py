@@ -3482,6 +3482,8 @@ def trainer(args) -> int:
                             "v2 coalesced interval window identity changed")
                     prefetched_interval = None
                 else:
+                    interval_start_was_deferred = (
+                        deferred_interval_start is not None)
                     interval_start = (
                         state if deferred_interval_start is None
                         else deferred_interval_start)
@@ -3498,6 +3500,16 @@ def trainer(args) -> int:
                                 "steady_state"
                                 if generation + 1 < target_generation
                                 else "terminal_drain")))
+                    if interval_start_was_deferred:
+                        # The corrected snapshot copy and this K execute on
+                        # the same ordered device stream.  Verify host
+                        # readiness after the K, before the first background
+                        # delta read, without charging that copy to the prior
+                        # all-eight apply clock.
+                        persistent_worker.wait_snapshot_ready(
+                            interval_start,
+                            deadline=generation_deadline,
+                        )
                     interval_window_end = interval_window_start + 1
                     interval_window_count = 1
                     next_local_window = interval_window_end
@@ -4386,10 +4398,6 @@ def trainer(args) -> int:
                 if async_training_lane is not None:
                     mutable_report = async_training_lane.apply_at_boundary(
                         pending_corrections)
-                    persistent_worker.wait_snapshot_ready(
-                        async_training_lane.start_state,
-                        deadline=apply_deadline,
-                    )
                     if mutable_report.snapshot_deferred:
                         # Capacity exhaustion defers the speculative snapshot,
                         # never the trainer.  The corrected live boundary is
@@ -4399,6 +4407,10 @@ def trainer(args) -> int:
                         prefetched_interval = None
                         v2_defer_count += 1
                     else:
+                        persistent_worker.wait_snapshot_ready(
+                            async_training_lane.start_state,
+                            deadline=apply_deadline,
+                        )
                         prefetched_interval = {
                             "generation": generation + 1,
                             "start": dict(async_training_lane.start_state),
