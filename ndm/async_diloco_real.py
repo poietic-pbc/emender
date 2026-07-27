@@ -1540,18 +1540,19 @@ class PersistentAsyncTrainingLane:
         corrections: Mapping[str, torch.Tensor],
         *,
         deadline: float,
-    ) -> CoalescedWindowReport:
-        """Prepare the dense host interval rebase before all-eight release.
+    ) -> CoalescedWindowReport | None:
+        """Prepare the detached host interval rebase before all-eight release.
 
-        The lane is already quiescent, so the retained interval start can be
-        rebased without touching live model or ScheduleFree z state.  This
-        keeps host snapshot preparation inside the bounded boundary-ready
-        phase and leaves only the atomic resident x/z translation after the
-        manager releases the exact transaction.
+        The retained interval start is an immutable CPU snapshot, independent
+        of the mutable model and ScheduleFree z state.  Rebase it while the
+        adjacent GPU K window is still active so the dense host pass overlaps
+        useful work.  The caller still drains to a real K boundary before
+        publishing boundary-ready, and only the atomic resident x/z
+        translation runs after the manager releases the exact transaction.
         """
-        if self._boundary_report is None:
+        if self._thread is None:
             raise RuntimeError(
-                "persistent async lane has not reached its safe boundary")
+                "persistent async lane has not started")
         if self._prepared_correction_identity is not None:
             raise RuntimeError(
                 "persistent async lane correction was already prepared")

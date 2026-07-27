@@ -1529,14 +1529,14 @@ def test_deferred_snapshot_readiness_is_verified_after_ordered_resume():
 
 
 def test_dense_interval_rebase_precedes_boundary_ready_and_released_apply():
-    """The 60s release clock contains only the atomic resident x/z swap."""
+    """Immutable rebase overlaps K40; the 60s clock holds only live x/z."""
     trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args) -> int:"):]
-    finish = trainer.index(
-        "boundary_report = async_training_lane.finish_at_boundary(")
     prepare = trainer.index(
-        "async_training_lane.prepare_at_boundary(", finish)
+        "async_training_lane.prepare_at_boundary(")
+    finish = trainer.index(
+        "boundary_report = async_training_lane.finish_at_boundary(", prepare)
     ready = trainer.index(
-        "boundary_ready_monotonic_s = time.monotonic()", prepare)
+        "boundary_ready_monotonic_s = time.monotonic()", finish)
     release = trainer.index(
         'marker_name="native-apply-release"', ready)
     apply = trainer.index(
@@ -1544,7 +1544,7 @@ def test_dense_interval_rebase_precedes_boundary_ready_and_released_apply():
     finished = trainer.index(
         "apply_finished_monotonic_s = time.monotonic()", apply)
 
-    assert finish < prepare < ready < release < apply < finished
+    assert prepare < finish < ready < release < apply < finished
     assert "wait_snapshot_ready(" not in trainer[release:finished]
 
 

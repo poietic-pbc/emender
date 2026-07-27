@@ -4294,16 +4294,19 @@ def trainer(args) -> int:
             mutable_report = None
             boundary_report = None
             if async_training_lane is not None:
-                boundary_report = async_training_lane.finish_at_boundary(
-                    deadline=boundary_deadline,
-                    corrections=None,
-                )
-                # Rebase the retained host interval while the lane is
-                # quiescent but before publishing boundary-ready.  The
-                # released 60-second clock is reserved for atomic live x/z.
+                # The interval basis is a detached immutable CPU snapshot.
+                # Rebase it while the mutable GPU lane finishes its current K
+                # window; boundary-ready is still published only after that
+                # lane drains.  This keeps dense host preparation inside the
+                # 420-second rendezvous and reserves the released 60-second
+                # clock for the atomic resident x/z translation.
                 async_training_lane.prepare_at_boundary(
                     pending_corrections,
                     deadline=boundary_deadline,
+                )
+                boundary_report = async_training_lane.finish_at_boundary(
+                    deadline=boundary_deadline,
+                    corrections=None,
                 )
                 boundary_window = boundary_report.local_window_end
             else:

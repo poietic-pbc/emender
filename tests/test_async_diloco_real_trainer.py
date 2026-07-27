@@ -903,21 +903,27 @@ def test_persistent_lane_prepares_host_rebase_before_released_live_apply(
         admission_deadline=time.monotonic() + 1,
     )
     assert first_forward.wait(1)
-    allow_forward.set()
-    report = lane.finish_at_boundary(deadline=time.monotonic() + 1)
     correction = {"weight": torch.tensor([7.0])}
 
+    # The immutable host interval can be rebased while the mutable GPU lane
+    # is still inside its K window.  Job 5092298 serialized this dense work
+    # after K drain and completed only eight of ten required transactions
+    # before the two-hour debug limit.
     lane.prepare_at_boundary(
         correction, deadline=time.monotonic() + 1)
 
-    # The retained interval basis is ready before boundary-ready publication,
-    # while the live model and ScheduleFree z still have their old values.
+    # Only the detached interval basis changes; live x/z remain untouched.
     torch.testing.assert_close(lane.start_state["weight"], torch.tensor([7.0]))
     torch.testing.assert_close(
-        session.model.weight.detach(), torch.tensor([1.0]))
+        session.model.weight.detach(), torch.tensor([0.0]))
     torch.testing.assert_close(
         session.optimizer.state[session.model.weight]["z"],
         torch.tensor([0.0]))
+
+    allow_forward.set()
+    report = lane.finish_at_boundary(deadline=time.monotonic() + 1)
+    torch.testing.assert_close(
+        session.model.weight.detach(), torch.tensor([1.0]))
 
     applied = lane.apply_at_boundary(correction)
     assert applied.local_window_start == report.local_window_start
