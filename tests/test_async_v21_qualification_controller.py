@@ -200,7 +200,13 @@ def test_v21_clean_plan_binds_reviewed_full_acceptance_launch(tmp_path: Path):
         if item.startswith("--export=")
     ).split(",")
     assert "RESILIENT_E97_ACCEPTANCE_PHASE=clean-overlap" in exports
-    assert "RESILIENT_E97_GENERATIONS=12" in exports
+    # Job 5084736 reached the tenth immutable checkpoint but Slurm delivered
+    # the launcher's five-minute TERM signal before its tenth all-rank apply.
+    # The clean controller must ask for exactly the ten accepted transactions
+    # required by the gate and retain enough of the debug allocation to let
+    # the final boundary/apply and in-job validator finish.
+    assert "RESILIENT_E97_GENERATIONS=10" in exports
+    assert "--signal=B:TERM@60" in plan["command"]
     assert "RESILIENT_E97_PROGRESS_DEADLINE_S=2700" in exports
     assert "RESILIENT_E97_GENERATION_DEADLINE_S=420" in exports
     assert "RESILIENT_E97_MAX_RESTARTS=0" in exports

@@ -52,7 +52,15 @@ SEED_SHA256 = (
 SEED_NODE_PATH = "/tmp/emender-e97-seed-$SLURM_JOB_ID"
 CLEAN_WALLTIME = "02:00:00"
 CLEAN_PHASE = "clean-overlap"
-CLEAN_GENERATIONS = 12
+# The debug QoS caps the clean gate at two hours.  Ten finalized generations
+# are the acceptance authority's minimum and already contain far more than the
+# required two warm-up plus ten measured K40 windows per trainer.  Requesting
+# twelve made the launcher enter an eleventh generation instead of terminating
+# after the gate was satisfied; job 5084736 was consequently stopped by the
+# launcher's five-minute pre-timeout signal after its tenth checkpoint but
+# before its tenth all-rank apply.
+CLEAN_GENERATIONS = 10
+CLEAN_SIGNAL = "B:TERM@60"
 CLEAN_PROGRESS_DEADLINE_S = 45 * 60
 CLEAN_GENERATION_DEADLINE_S = 420
 APPROVED_ENV = (
@@ -740,6 +748,7 @@ def build_plan(
         run_dir = Path(launch["run_dir"])
         command.extend([
             f"--time={CLEAN_WALLTIME}",
+            f"--signal={CLEAN_SIGNAL}",
             "--network=job_vni",
             f"--chdir={launch['repo']}",
             f"--output={run_dir / 'slurm-%j.out'}",
