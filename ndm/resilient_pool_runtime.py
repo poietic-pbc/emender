@@ -90,6 +90,23 @@ class PoolStageSLO:
         """The explicit downstream K40 bound, capped by fixture hard bounds."""
         return min(420.0, self.generation_hard_s)
 
+    @property
+    def ready_lease_s(self) -> float:
+        """Span every independently bounded phase before next READY.
+
+        ``generation_hard_s`` covers admission through the immutable commit.
+        Candidate preparation and the safe-boundary rendezvous each retain a
+        separate 420-second bound, followed by the 60-second atomic apply.
+        Expiring an unchanged peer between its node-apply receipt and its next
+        READY advertisement would turn harmless node skew into a false stale
+        incarnation.
+        """
+        return (
+            self.generation_hard_s
+            + 2 * self.training_hard_s
+            + self.apply_s
+        )
+
 
 @dataclass(frozen=True)
 class OwnerEndpoint:
@@ -257,7 +274,7 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
             config.slo.first_heartbeat_s,
             config.slo.first_heartbeat_s,
             config.slo.sync_s,
-            config.slo.generation_hard_s + config.slo.transport_s,
+            config.slo.ready_lease_s,
             config.slo.shutdown_s,
         ))
         self.endpoints: dict[tuple[str, str], OwnerEndpoint] = {}
