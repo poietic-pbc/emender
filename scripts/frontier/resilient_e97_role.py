@@ -3300,7 +3300,8 @@ def trainer(args) -> int:
         generation_deadline = time.monotonic() + min(args.deadline_s, 420.0)
         native_plane = None
         owned_marker: dict[str, object] | None = None
-        if native:
+
+        def admit_native_generation():
             elements = state_elements(state)
             layout = layout_identity(elements, payload_max=args.bulk_chunk_bytes)
             if rank == 0:
@@ -3313,18 +3314,28 @@ def trainer(args) -> int:
                     "base_digest": state_digest(state).hex(),
                     "runtime_digests": native_runtime,
                 })
-            native_plane = NativeTrainerDataPlane.connect(
+            admitted = NativeTrainerDataPlane.connect(
                 build_manifest=args.native_build_manifest,
                 socket_path=os.environ["EMENDER_NDP_SOCKET"], run_id=args.run_id,
                 fence_epoch=_fence_epoch(args), generation=generation, rank=rank,
                 identity=identity, incarnation=trainer_incarnation,
                 worker_incarnation=node_incarnation or None,
                 control_root=control, deadline=generation_deadline)
-            if dict(native_plane.metadata.runtime_digests) != native_runtime:
-                native_plane.close()
+            if dict(admitted.metadata.runtime_digests) != native_runtime:
+                admitted.close()
                 raise ValueError("manager/trainer native runtime digest mismatch")
-            native_plane.allocate_delta(
+            admitted.allocate_delta(
                 deadline_s=max(.001, generation_deadline - time.monotonic()))
+            return admitted
+
+        # A capacity-deferred interval already owns a corrected, coherent
+        # boundary.  Resume its K40 before joining the next native-generation
+        # admission barrier; descriptor admission then runs while the adjacent
+        # mutable lane is active instead of extending foreground idle.
+        defer_native_admission = bool(
+            native and not args.control and deferred_interval_start is not None)
+        if native and not defer_native_admission:
+            native_plane = admit_native_generation()
         if args.control:
             loss = 1.0 / (step + args.local_steps + rank + 1)
             delta = {"weight": torch.full_like(state["weight"], float(rank + 1))}
@@ -3341,23 +3352,30 @@ def trainer(args) -> int:
             phase_log = bulk / "telemetry" / f"{identity}.jsonl"
             phase_log.parent.mkdir(parents=True, exist_ok=True)
 
-            def training_phase(phase, details):
-                record = {
-                    "timestamp": time.time(), "monotonic_s": time.monotonic(),
-                    "identity": identity, "generation": generation,
-                    "local_window": generation,
-                    "policy_id": v2_policy.policy_id,
-                    "applied_anchor_version": generation,
-                    "local_model_basis": "worker_local",
-                    "phase": phase, **details,
-                }
-                with phase_log.open("a", encoding="utf-8") as stream:
-                    stream.write(json.dumps(record, sort_keys=True) + "\n")
-                    stream.flush()
-                heartbeat(
-                    bulk, identity, generation=generation,
-                    step=int(details.get("step", step)),
-                    loss=details.get("loss"), stage=phase)
+            def make_training_phase(local_window, *, overlap_scope):
+                def training_phase(phase, details):
+                    record = {
+                        "timestamp": time.time(),
+                        "monotonic_s": time.monotonic(),
+                        "identity": identity,
+                        "generation": generation,
+                        "local_window": local_window,
+                        "overlap_scope": overlap_scope,
+                        "policy_id": v2_policy.policy_id,
+                        "applied_anchor_version": generation,
+                        "local_model_basis": "worker_local",
+                        "phase": phase,
+                        **details,
+                    }
+                    with phase_log.open("a", encoding="utf-8") as stream:
+                        stream.write(json.dumps(record, sort_keys=True) + "\n")
+                        stream.flush()
+                    heartbeat(
+                        bulk, identity, generation=generation,
+                        step=int(details.get("step", step)),
+                        loss=details.get("loss"), stage=phase)
+
+                return training_phase
 
             def publish_trained_delta(base_state, model, tokens):
                 if native:
@@ -3427,7 +3445,12 @@ def trainer(args) -> int:
                         synthetic_vocab_size=256,
                         optimizer_state_dict=optimizer_state,
                         consume_optimizer_state=True,
-                        bootstrap_phase_callback=training_phase)
+                        bootstrap_phase_callback=make_training_phase(
+                            next_local_window,
+                            overlap_scope=(
+                                "steady_state"
+                                if generation + 1 < target_generation
+                                else "terminal_drain")))
                     optimizer_state = {}
                     _stage_telemetry(
                         bulk, identity, generation,
@@ -3469,7 +3492,12 @@ def trainer(args) -> int:
                     window = persistent_worker.run_window(
                         interval_window_start,
                         progress_callback=training_progress,
-                        phase_callback=training_phase)
+                        phase_callback=make_training_phase(
+                            interval_window_start,
+                            overlap_scope=(
+                                "steady_state"
+                                if generation + 1 < target_generation
+                                else "terminal_drain")))
                     interval_window_end = interval_window_start + 1
                     interval_window_count = 1
                     next_local_window = interval_window_end
@@ -3493,6 +3521,7 @@ def trainer(args) -> int:
                                 "identity": identity,
                                 "generation": generation,
                                 "local_window": local_window,
+                                "overlap_scope": "steady_state",
                                 "policy_id": v2_policy.policy_id,
                                 "applied_anchor_version": generation,
                                 "local_model_basis": "worker_local",
@@ -3563,12 +3592,19 @@ def trainer(args) -> int:
                             + ASYNC_V21_SNAPSHOT_ADMISSION_S),
                     )
                     lane_admission_completed = time.monotonic()
+                    if native_plane is None:
+                        native_plane = admit_native_generation()
                     # The current anchor digest is already verified and bound
                     # by the native generation metadata.  Rehashing the full
                     # host state here would re-enter the bounded foreground
                     # pause after coherent capture.
                     lookahead_anchor_digest = str(
                         native_plane.metadata.base_digest)
+                if native_plane is None:
+                    # Terminal drain has no next mutable K to overlap, but the
+                    # deferred interval must still publish through the exact
+                    # native generation admitted here.
+                    native_plane = admit_native_generation()
                 # Device sessions transfer the immutable slot locally when
                 # the ordered pinned-memory copy is enqueued.  Completion is
                 # awaited only here, after the next mutable K lane owns state,
@@ -3636,7 +3672,12 @@ def trainer(args) -> int:
                     consume_optimizer_state=True,
                     progress_callback=training_progress,
                     delta_consumer=publish_trained_delta,
-                    phase_callback=training_phase)
+                    phase_callback=make_training_phase(
+                        generation,
+                        overlap_scope=(
+                            "steady_state"
+                            if generation + 1 < target_generation
+                            else "terminal_drain")))
                 if report.update is None:
                     raise RuntimeError(
                         report.error or "real E97 trainer produced no update")

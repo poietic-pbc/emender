@@ -1464,6 +1464,49 @@ def test_native_trainer_generation_timer_covers_every_result_lifecycle_path():
     assert trainer[started:telemetry].count("generation_started =") == 1
 
 
+def test_native_trainer_sync_window_telemetry_uses_real_window_identity():
+    """A deferred speculative interval must not relabel K40 as a generation.
+
+    Live job 5087352 completed K40 window 72 after generation-7 apply, but the
+    synchronous phase callback recorded its 40 starts as local window 8.  The
+    semantic validator consequently saw a false 139-second foreground hole.
+    """
+    trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args) -> int:"):]
+    callback = trainer.index(
+        "def make_training_phase(local_window, *, overlap_scope):")
+    record = trainer.index('"local_window": local_window', callback)
+    scope = trainer.index('"overlap_scope": overlap_scope', record)
+    synchronous = trainer.index(
+        "phase_callback=make_training_phase(", scope)
+    interval_identity = trainer.index(
+        "interval_window_start", synchronous)
+    terminal_scope = trainer.index(
+        '"terminal_drain"', interval_identity)
+    lookahead = trainer.index("def make_lookahead_phase(local_window):", synchronous)
+
+    assert (
+        callback < record < scope < synchronous < interval_identity
+        < terminal_scope < lookahead
+    )
+    assert '"local_window": generation' not in trainer[callback:synchronous]
+
+
+def test_deferred_interval_resumes_before_next_native_generation_admission():
+    """Native admission must not extend a corrected boundary interruption."""
+    trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args) -> int:"):]
+    deferred_gate = trainer.index("defer_native_admission = bool(")
+    skipped_admission = trainer.index(
+        "if native and not defer_native_admission:", deferred_gate)
+    resumed_window = trainer.index(
+        "window = persistent_worker.run_window(", skipped_admission)
+    delayed_admission = trainer.index(
+        "if native_plane is None:", resumed_window)
+
+    assert (
+        deferred_gate < skipped_admission < resumed_window < delayed_admission
+    )
+
+
 def test_native_pipeline_commit_ready_advances_without_foreground_blocking():
     """Deterministic generation-0 commit/apply then generation-1 handoff path."""
     from ndm.native_pipeline import (

@@ -81,6 +81,7 @@ def _records(
                         "identity": identity,
                         "local_window": window,
                         "generation": window,
+                        "overlap_scope": "steady_state",
                         "phase": "optimizer_step_start",
                         "monotonic_s": began,
                         "timestamp": 1000.0 + began,
@@ -92,6 +93,7 @@ def _records(
                         "identity": identity,
                         "local_window": window,
                         "generation": window,
+                        "overlap_scope": "steady_state",
                         "phase": "optimizer_step_end",
                         "monotonic_s": began + 2.4,
                         "timestamp": 1002.4 + began,
@@ -100,6 +102,7 @@ def _records(
                 ])
             values.append({
                 "identity": identity,
+                "generation": window,
                 "stage": "safe_boundary_apply",
                 "local_window": window,
                 "allocation_fence": 7,
@@ -518,6 +521,149 @@ def test_overlap_gate_rejects_200_second_bursty_alternation_despite_checkpoints_
     })
     with pytest.raises(ValueError, match="every-event foreground tail"):
         MODULE.validate(records)
+
+
+def test_overlap_gate_accepts_separately_bounded_boundary_and_apply_pause():
+    records = _records()
+    final_window = 11
+    for value in records:
+        if (
+            int(value.get("local_window", -1)) == final_window
+            and str(value.get("identity", "")).startswith("node-0-trainer-")
+            and value.get("phase") in {
+                "optimizer_step_start", "optimizer_step_end",
+            }
+        ):
+            value["monotonic_s"] += 65.0
+            value["timestamp"] += 65.0
+    # Keep the shifted window overlapped with real versioned background work.
+    # The existing exact node boundary/apply intervals explain 15 seconds of
+    # the 66-second raw gap; the remaining unattributed tail is below 60.
+    begin = final_window * 101.0 + 65.0
+    end = begin + 5.0
+    records.append({
+        "identity": "node-0-manager",
+        "generation": final_window - 1,
+        "stage": "native_local_reduction",
+        "elapsed_s": end - begin,
+        "monotonic_start_s": begin,
+        "monotonic_end_s": end,
+        "timestamp": 1000.0 + end,
+        "within_slo": True,
+        "policy_id": "async-decoupled-v2.1-simple",
+        "allocation_fence": 7,
+        "base_global_version": final_window - 1,
+        "commit_global_version": final_window,
+        "commit_lag": 1,
+        "contribution_digest": f"{final_window + 20:064x}",
+        "exact_tokens": 3_934_080,
+        "causal_phase": "aggregation",
+        "causal_id": _causal_id("node-0-manager", final_window - 1),
+        "foreground_component_s": 0.0,
+    })
+
+    result = MODULE.validate(records)
+
+    assert result["status"] == "passed"
+    assert result["foreground_control_plane_idle_seconds_max"] > 60.0
+    assert (
+        result["unattributed_foreground_idle_seconds_max"]
+        < MODULE.MAX_FOREGROUND_GAP_S
+    )
+
+
+def test_overlap_gate_excludes_explicit_terminal_drain_window():
+    records = _records()
+    terminal = []
+    for value in records:
+        if (
+            int(value.get("local_window", -1)) == 11
+            and value.get("phase") in {
+                "optimizer_step_start", "optimizer_step_end",
+            }
+        ):
+            value["overlap_scope"] = "steady_state"
+            copied = dict(value)
+            copied["local_window"] = 12
+            copied["generation"] = 12
+            copied["monotonic_s"] += 101.0
+            copied["timestamp"] += 101.0
+            copied["overlap_scope"] = "terminal_drain"
+            terminal.append(copied)
+        elif value.get("phase") in {
+            "optimizer_step_start", "optimizer_step_end",
+        }:
+            value["overlap_scope"] = "steady_state"
+    records.extend(terminal)
+
+    result = MODULE.validate(records)
+
+    assert result["status"] == "passed"
+    assert result["measured_windows_per_trainer"] == 10
+
+
+def test_overlap_gate_accepts_exact_post_apply_rebase_window():
+    records = _records()
+    identity = "node-0-trainer-0"
+    final_window = 11
+    for value in records:
+        if (
+            value.get("identity") == identity
+            and int(value.get("local_window", -1)) == final_window
+            and value.get("phase") in {
+                "optimizer_step_start", "optimizer_step_end",
+            }
+        ):
+            value["monotonic_s"] += 65.0
+            value["timestamp"] += 65.0
+    apply_end = final_window * 101.0 + 64.0
+    records.append({
+        "identity": identity,
+        "generation": final_window,
+        "stage": "native_trainer_apply",
+        "elapsed_s": 5.0,
+        "monotonic_start_s": apply_end - 5.0,
+        "monotonic_end_s": apply_end,
+        "timestamp": 1000.0 + apply_end,
+        "within_slo": True,
+        "policy_id": "async-decoupled-v2.1-simple",
+        "allocation_fence": 7,
+        "base_global_version": final_window,
+        "commit_global_version": final_window,
+        "commit_lag": 0,
+        "contribution_digest": f"{final_window + 30:064x}",
+        "exact_tokens": 3_934_080,
+        "causal_phase": "apply_swap",
+        "causal_id": _causal_id(identity, final_window),
+        "foreground_component_s": 5.0,
+        "foreground_interruption": "verified_result_apply",
+        "foreground_blocking": True,
+        "atomic_live_model_swap": True,
+        "phase_scope": "trainer_lane",
+        "policy_bound_s": 60.0,
+        "local_window_end": final_window,
+        "transaction_digest": f"{final_window + 31:064x}",
+    })
+    receipt = next(
+        value for value in records
+        if (
+            value.get("identity") == identity
+            and value.get("stage") == "safe_boundary_apply"
+            and int(value["local_window"]) == final_window
+        ))
+    receipt["transaction_digest"] = f"{final_window + 31:064x}"
+
+    result = MODULE.validate(records)
+
+    assert result["status"] == "passed"
+    resume = next(
+        value for value in result["overlaps"]
+        if (
+            value["identity"] == identity
+            and value["local_window"] == final_window
+        ))
+    assert resume["background"] == []
+    assert resume["post_apply_rebase"]["resume_delay_seconds"] == 1.0
 
 
 def test_semantic_validator_requires_ten_distinct_atomic_commits():
