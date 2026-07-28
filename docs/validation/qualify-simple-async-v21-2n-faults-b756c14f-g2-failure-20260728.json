@@ -1,0 +1,326 @@
+{
+  "schema": "emender-async-v21-two-node-fault-qualification-v1",
+  "task": "qualify-simple-async-v21-2n-faults",
+  "created_at": "2026-07-28T19:45:12-04:00",
+  "status": "incomplete",
+  "passed": false,
+  "full_pass": false,
+  "verdict": "native-fault-g2-runner-failure",
+  "failed_phase": "native-fault-g2",
+  "terminal_condition": {
+    "met": false,
+    "reason": "native fault G2 exited 73 before dataplane launch because the runner prematurely created the job-reserved artifact directory",
+    "downstream_convergence_blocked": true,
+    "downstream_scale_blocked": true,
+    "wg_done_allowed": false
+  },
+  "failure": {
+    "category": "runner-artifact-directory-collision",
+    "source_defect_observed": false,
+    "job_id": "5109414",
+    "state": "FAILED",
+    "exit_code": "73:0",
+    "elapsed": "00:00:08",
+    "message": "refusing to overwrite retained job evidence",
+    "cause": "After sbatch returned 5109414, the runner created NDP_ARTIFACT_ROOT/5109414/scheduler-evidence. The batch guard requires NDP_ARTIFACT_ROOT/SLURM_JOB_ID not to exist and correctly exited before overwriting it.",
+    "dataplane_launched": false,
+    "fault_injections": 0,
+    "failure_injection_gate_present": false,
+    "retry_submitted": false,
+    "later_phase_submitted": false
+  },
+  "execution_identity": {
+    "source_commit": "b756c14fa3a7495e733c6498f69730c3e115f281",
+    "snapshot_clean_at_submission": true,
+    "snapshot_equal_to_pushed_origin_main_at_payload_creation": true,
+    "execution_source_digest": "95cc5018d948e844091bef0d96c5b07605385b0bcedff653760b70b200964b8b",
+    "native_build_manifest_sha256": "8cd0f836e9f798a48e72aef7c60591d6d939abe2b1b3cdb8b06d4c30502fe00c",
+    "native_bundle_sha256": "f19e10be9987cfdb551a8dd75c5c88145c3cf35b73c54d3898fe562ce4182441",
+    "clean_g2_sha256": "68fff9f44d066aee80a2fc32830e0b7a4352b72bbdc107508c4a29cb0743ae26",
+    "clean_launch_manifest_sha256": "cda81bb450aff6fe34feaf1fbddbb0037da7278c4c9d0741f715525211ca4747",
+    "policy_id": "async-decoupled-v2.1-simple",
+    "policy_digest": "fa9def95daf7bce25f1b962ca5437e7a76317b94ccfb9a710fbf126a344e7d98",
+    "launcher_digest": "278fae0985efd302542424e6feb1d584812a0cffe5c03cb282861a90b355dad1",
+    "train_args_digest": "afc2a65fd8c73499e74e21cb9531c978206c3a9c898e42d18cc58bb93eb9fe9c",
+    "data_identity_digest": "91321b2b90bb159f3aa73881455778f10e8df588edd526b1066281fa72997962",
+    "tokenizer_digest": "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069",
+    "clean_model_payload_digest": "6f02204cdddc6512d05d8cbeaaeb8d9a08952ffb9837fe825bea347d0269e0d7",
+    "fault_g2_run_id": "native-g2-fault-b756c14fa3a7-20260728T234058Z",
+    "fault_g2_payload_id": "b756c14fa3a7-e97-g2-fault-20260728T234058Z",
+    "python": "3.12.13",
+    "canonical_activation_used": true
+  },
+  "seed": {
+    "step": 2300930,
+    "tokens": 150793748480,
+    "bytes": 7719680116,
+    "sha256": "0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2",
+    "submit_authority_attestation_sha256": "27e234891df02b64b9db77fc784c341e5a3ae6e87418b8f1af167776d1d710bb",
+    "clean_job_scoped_sbcast_path": "/tmp/emender-e97-seed-5109029/checkpoint-step-2300930.pt",
+    "compute_node_network_fetches": 0,
+    "node_receipts": [
+      {
+        "hostname": "frontier01875",
+        "slurm_job_id": "5109029",
+        "receipt_sha256": "0f42de710d692a7446159affbfa5fba6de55efcfb69fe2d5c19cfe47b370bc4b",
+        "checkpoint_bytes": 7719680116,
+        "checkpoint_sha256": "0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2",
+        "network_fetches": 0
+      },
+      {
+        "hostname": "frontier04065",
+        "slurm_job_id": "5109029",
+        "receipt_sha256": "63fc88a1826a585b975fad6a66ef2739480b5bf897e70a1f6726d1fb8c17c9a5",
+        "checkpoint_bytes": 7719680116,
+        "checkpoint_sha256": "0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2",
+        "network_fetches": 0
+      }
+    ]
+  },
+  "prerequisites": {
+    "recovery_regressions": {
+      "passed": 83,
+      "failed": 0
+    },
+    "official_preflight": {
+      "passed": 142,
+      "failed": 0
+    },
+    "native_ctest": {
+      "passed": 10,
+      "failed": 0
+    },
+    "native_clean_g2": {
+      "job_id": "5108993",
+      "nodes": 2,
+      "partition": "batch",
+      "qos": "debug",
+      "status": "passed",
+      "artifact_sha256": "68fff9f44d066aee80a2fc32830e0b7a4352b72bbdc107508c4a29cb0743ae26"
+    },
+    "mandatory_clean_model": {
+      "job_id": "5109029",
+      "collector_job_id": "5109030",
+      "status": "passed",
+      "terminal_verdict_sha256": "5cbd1091083e4fb8ddcc1b507e0b3e9f40e092dbd3408f48f1247acb033bb555",
+      "semantic_verdict_sha256": "e70ff5808c345fdcc35f2ffe72ce13c07a716f1a8a87513b589bacaf0a7b7b64",
+      "atomic_commits": 10,
+      "checkpoints": 10,
+      "node_applies": 20,
+      "trainer_receipts": 160,
+      "measured_trainers": 16,
+      "measured_windows_per_trainer": 10,
+      "restarts": 0,
+      "injections": 0,
+      "lag": {
+        "commit_max": 1,
+        "anchor_max": 1,
+        "result_version_max": 0,
+        "speculative_max": 0
+      },
+      "bounds": {
+        "native_owned_seconds_max": 0.01790254097431898,
+        "result_mailbox_high_water": 1,
+        "sealed_descriptor_high_water": 1,
+        "mutable_interval_high_water": 0,
+        "result_staging_high_water": 0
+      },
+      "clean_only_not_fault_evidence": true
+    }
+  },
+  "scheduler_evidence": {
+    "one_active_job_preserved": true,
+    "queue_empty_after_failure": true,
+    "unchanged_payload_resubmitted": false,
+    "jobs": [
+      {
+        "job_id": "5109029",
+        "purpose": "mandatory-clean-model",
+        "state": "COMPLETED",
+        "exit_code": "0:0",
+        "nodes": 2,
+        "partition": "batch",
+        "qos": "debug",
+        "start": "2026-07-28T18:35:28",
+        "end": "2026-07-28T19:38:47",
+        "elapsed": "01:03:19"
+      },
+      {
+        "job_id": "5109030",
+        "purpose": "durable-clean-collector",
+        "state": "COMPLETED",
+        "exit_code": "0:0",
+        "nodes": 1,
+        "partition": "batch",
+        "qos": "normal",
+        "start": "2026-07-28T19:39:53",
+        "end": "2026-07-28T19:39:58",
+        "elapsed": "00:00:05"
+      },
+      {
+        "job_id": "5109414",
+        "purpose": "native-fault-g2",
+        "state": "FAILED",
+        "exit_code": "73:0",
+        "nodes": 2,
+        "partition": "batch",
+        "qos": "debug",
+        "node_list": "frontier[00769-00770]",
+        "start": "2026-07-28T19:41:51",
+        "end": "2026-07-28T19:41:59",
+        "elapsed": "00:00:08",
+        "account": "bif148",
+        "time_limit": "00:20:00"
+      }
+    ]
+  },
+  "phase_plan_and_outcome": [
+    {
+      "phase": "fault-baseline",
+      "injection": "none",
+      "initial_generation": 0,
+      "final_generation": 2,
+      "minimum_commits": 2,
+      "minimum_node_applies": 4,
+      "minimum_trainer_receipts": 32,
+      "terminal_success": "generation-2 checkpoint and both complete eight-trainer node applies",
+      "expected_runtime": "15-25 minutes",
+      "status": "not-submitted-fault-g2-blocked"
+    },
+    {
+      "phase": "fault-rejoin",
+      "injection": "node-1 READY delay 45 seconds at g2; node-0 trainer lane 3 after g3 apply; node-0 native service at g4 owner_transport; node-1 manager after g4 published_node_applied",
+      "initial_generation": 2,
+      "final_generation": 6,
+      "minimum_commits": 4,
+      "minimum_node_applies": 8,
+      "minimum_trainer_receipts": 64,
+      "terminal_success": "generation-6 checkpoint and both all-eight applies after serialized detection, exclusion, catch-up, and rejoin",
+      "expected_runtime": "40-60 minutes",
+      "status": "not-submitted"
+    },
+    {
+      "phase": "fresh-allocation-recovery",
+      "injection": "none; strictly newer allocation fence",
+      "initial_generation": 6,
+      "final_generation": 11,
+      "additional_k40_windows": 5,
+      "minimum_commits": 3,
+      "minimum_node_applies": 10,
+      "minimum_trainer_receipts": 80,
+      "terminal_success": "exact model/outer/token reload and final complete all-eight applies",
+      "expected_runtime": "40-50 minutes",
+      "status": "not-submitted"
+    }
+  ],
+  "requirements": {
+    "compute_pool": [
+      {"id": "R01", "status": "blocked", "evidence": "Clean exact fence passed; fault and fresh-allocation fences were not exercised."},
+      {"id": "R02", "status": "blocked", "evidence": "Clean identities passed; loss/new-incarnation rejoin was not exercised."},
+      {"id": "R03", "status": "blocked", "evidence": "Clean two-member READY closure passed; missing/late/rejoin population closure is absent."},
+      {"id": "R04", "status": "blocked", "evidence": "Clean bounded versions passed; lag-2 acceptance and lag-3 live drop/catch-up were not run."},
+      {"id": "R05", "status": "blocked", "evidence": "Exact clean eta=1/native reference passed; fault rejection/reference probes are absent."},
+      {"id": "R06", "status": "blocked", "evidence": "Clean Q_min=2 and deadlines passed; node-loss no-one-node authority was not exercised."},
+      {"id": "R07", "status": "blocked", "evidence": "Clean immutable chain through g10 passed; fault/restart and fresh reload chains are absent."},
+      {"id": "R08", "status": "blocked", "evidence": "Clean bounded transport passed; fault replay/reassignment/rejection evidence is absent."},
+      {"id": "R09", "status": "blocked", "evidence": "Clean model-free managers passed; trainer/service/manager losses were not exercised."},
+      {"id": "R10", "status": "blocked", "evidence": "Clean CXI/memfd and forbidden paths passed; fault transport did not launch."},
+      {"id": "R11", "status": "blocked", "evidence": "No injected worker/node loss, reconstruction, catch-up, or drain/rejoin evidence exists."},
+      {"id": "R12", "status": "blocked", "evidence": "Clean model/outer/token checkpointing passed; fresh allocation was not submitted."},
+      {"id": "R13", "status": "clean-only", "evidence": "Backend isolation passed for the clean two-node rung; no scale claim is made."},
+      {"id": "R14", "status": "blocked", "evidence": "Clean causal timing passed; fault detection/release timestamps are absent."},
+      {"id": "R15", "status": "blocked", "evidence": "Clean exact-token eta=1 math passed; fault/fresh state continuity is absent."},
+      {"id": "R16", "status": "safety-passed", "evidence": "Failed closed, retained evidence, and submitted no convergence or 4+ job."}
+    ],
+    "native_data_plane": [
+      {"id": "NDP01", "status": "blocked", "evidence": "Clean G2 passed; fault native peer-control campaign did not launch."},
+      {"id": "NDP02", "status": "blocked", "evidence": "Clean point-to-point CXI passed; loss/rejoin route behavior is absent."},
+      {"id": "NDP03", "status": "blocked", "evidence": "Clean persistent service passed; service loss/restart is absent."},
+      {"id": "NDP04", "status": "blocked", "evidence": "Clean memfd handoff passed; fault OWNED timeout/release is absent."},
+      {"id": "NDP05", "status": "blocked", "evidence": "Clean deterministic reference passed; rejection/fault references are absent."},
+      {"id": "NDP06", "status": "identity-only", "evidence": "ABI/wire/policy identities are exact; no fault gate was produced."},
+      {"id": "NDP07", "status": "blocked", "evidence": "Clean leased routes passed; exclusion/new-incarnation rejoin is absent."},
+      {"id": "NDP08", "status": "blocked", "evidence": "Clean capacity bounds passed; replay/reassignment fault bounds are absent."},
+      {"id": "NDP09", "status": "blocked", "evidence": "Clean credit/OWNED bounds passed; injected OWNED timeout is absent."},
+      {"id": "NDP10", "status": "blocked", "evidence": "Clean retry-safe path passed; duplicate/conflict/corruption fault matrix is absent."},
+      {"id": "NDP11", "status": "blocked", "evidence": "Clean redistribution passed; owner-loss replay/reassignment is absent."},
+      {"id": "NDP12", "status": "blocked", "evidence": "Clean all-eight apply passed; loss-time partial-apply prevention is absent."},
+      {"id": "NDP13", "status": "blocked", "evidence": "No trainer/native-service/manager loss, containment, or bounded rejoin evidence exists."},
+      {"id": "NDP14", "status": "identity-only", "evidence": "Native ABI 131073 and wire 2.1 are bound; fault G2 is absent."},
+      {"id": "NDP15", "status": "blocked", "evidence": "Clean checkpoint/apply identities passed; fault/new-fence continuity is absent."},
+      {"id": "NDP16", "status": "blocked", "evidence": "Clean semantic/tail verdict passed; fault semantic/tail verdict is absent."},
+      {"id": "NDP17", "status": "gate-blocked", "evidence": "Clean G2 ordering passed; fault G2 failed before validation, authorizing no model or larger rung."}
+    ],
+    "async_v21": [
+      {"id": "V21S01", "status": "clean-only", "evidence": "Exact identities passed clean admission; fault-model admission was not attempted."},
+      {"id": "V21S02", "status": "blocked", "fault_restart_anchor": true, "evidence": "Lag 0-2 admission, lag-3 pre-mutation drop, and peer catch-up were not exercised."},
+      {"id": "V21S03", "status": "blocked", "evidence": "Clean eta=1 accumulation passed; delayed/missing contribution behavior is absent."},
+      {"id": "V21S04", "status": "blocked", "evidence": "Clean bounded speculation passed; node-loss two-window pause/catch-up is absent."},
+      {"id": "V21S05", "status": "blocked", "fault_restart_anchor": true, "evidence": "Clean Q_min=2/deadlines passed; timestamped delayed/missing/rejoin membership and node-loss authority evidence are absent."},
+      {"id": "V21S06", "status": "blocked", "evidence": "Clean checkpoint/token chain passed; fault/fresh chain is absent."},
+      {"id": "V21S07", "status": "blocked", "fault_restart_anchor": true, "evidence": "Clean atomic x/z/interval apply passed; loss-time no-double-correction evidence is absent."},
+      {"id": "V21S08", "status": "blocked", "fault_restart_anchor": true, "evidence": "Publication/mailbox/duplicate/conflict/checksum/nonfinite/wrong-fence probes were not exercised."},
+      {"id": "V21S09", "status": "blocked", "fault_restart_anchor": true, "evidence": "Clean high-water bounds passed; fault queue/credit/replay/reassignment/deadline bounds are absent."},
+      {"id": "V21S10", "status": "blocked", "fault_restart_anchor": true, "evidence": "Clean quorum passed; exclusion/new-incarnation rejoin and no-one-node authority under loss are absent."},
+      {"id": "V21S11", "status": "blocked", "fault_restart_anchor": true, "evidence": "Clean all-eight receipt gates passed; trainer-loss and partial-apply prevention evidence is absent."},
+      {"id": "V21S12", "status": "blocked", "fault_restart_anchor": true, "evidence": "Clean CXI/memfd/forbidden paths passed; fault transport did not launch."},
+      {"id": "V21S13", "status": "blocked", "fault_restart_anchor": true, "evidence": "No timestamped injection, detection, containment, release, or recovery latency exists."},
+      {"id": "V21S14", "status": "blocked", "fault_restart_anchor": true, "evidence": "Exact seed/offline clean bootstrap passed; fresh newer-fence model/outer/token reload and five K40 windows are absent."},
+      {"id": "V21S15", "status": "blocked", "evidence": "Clean immutable identities passed; no full-pass fault verdict exists."},
+      {"id": "V21S16", "status": "safety-passed", "evidence": "One-job serialization, first-failure stop, no resubmit, and no convergence/scale launch passed."},
+      {"id": "V21S17", "status": "blocked", "evidence": "Missing/late/rejoin timing relative to READY/open/freeze/deadline was not generated."}
+    ],
+    "immutable_snapshot_protocol": [
+      {"id": "ISP01", "status": "clean-only", "evidence": "Clean immutable snapshot admission and exact identities passed."},
+      {"id": "ISP02", "status": "clean-only", "evidence": "Clean frozen interval descriptors remained immutable and bounded."},
+      {"id": "ISP03", "status": "clean-only", "evidence": "Clean ownership transfer and commit publication ordering passed."},
+      {"id": "ISP04", "status": "clean-only", "evidence": "Clean result staging/mailbox bounds passed."},
+      {"id": "ISP05", "status": "clean-only", "evidence": "Clean all-eight applies gated every next READY version."},
+      {"id": "ISP06", "status": "clean-only", "evidence": "Clean checkpoint publication and exact-token state were immutable."},
+      {"id": "ISP07", "status": "blocked", "evidence": "Clean semantic/tail validator passed; fault/restart ISP evidence is absent."}
+    ]
+  },
+  "artifacts": {
+    "qualification_root": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-faults/b756c14fa3a7495e733c6498f69730c3e115f281",
+    "failed_g2_directory": "g2/5109414",
+    "failed_g2_stderr": {
+      "path": "snapshot/logs/frontier/native-dataplane/native-ndp-g2-fault-5109414.err",
+      "sha256": "68ae288930f4ff97502ee25bf34b533e9d53ad34f787f65e55c05a55ebc20af1"
+    },
+    "queued_scontrol": {
+      "path": "g2/5109414/scheduler-evidence/scontrol-5109414-queued.txt",
+      "sha256": "02d6d9c8bfdfaa65e1322d9303651590fd36744d1d49e093660fe5a1c623b790"
+    },
+    "terminal_scontrol": {
+      "path": "g2/5109414/scheduler-evidence/scontrol-5109414-terminal.txt",
+      "sha256": "b74a013ade1594c5bd4de2b062be2d2f7703aeb5ebce8fabb8e27b64c1e4e6ca"
+    },
+    "terminal_sacct": {
+      "path": "g2/5109414/scheduler-evidence/sacct-5109414-terminal.txt",
+      "sha256": "e8600f5e9358451d78947b6a4567d98b414d17e2e02415fb7a79c6d12b202079"
+    },
+    "clean_semantic_verdict": {
+      "path": "clean/terminal-collector/6f02204cdddc6512d05d8cbeaaeb8d9a08952ffb9837fe825bea347d0269e0d7/semantic-verdict.json",
+      "sha256": "e70ff5808c345fdcc35f2ffe72ce13c07a716f1a8a87513b589bacaf0a7b7b64"
+    },
+    "clean_terminal_verdict": {
+      "path": "clean/terminal-collector/6f02204cdddc6512d05d8cbeaaeb8d9a08952ffb9837fe825bea347d0269e0d7/terminal-verdict.json",
+      "sha256": "5cbd1091083e4fb8ddcc1b507e0b3e9f40e092dbd3408f48f1247acb033bb555"
+    }
+  },
+  "validation": {
+    "machine_report_json_valid": true,
+    "requirement_counts": {
+      "R": 16,
+      "NDP": 17,
+      "V21S": 17,
+      "ISP": 7
+    },
+    "exact_two_node_batch_debug_terminal_accounting_retained": true,
+    "fault_restart_evidence_complete": false,
+    "fresh_allocation_recovery_complete": false,
+    "full_pass_machine_verdict": false,
+    "failed_phase_retained": true,
+    "no_later_jobs_submitted": true
+  }
+}
