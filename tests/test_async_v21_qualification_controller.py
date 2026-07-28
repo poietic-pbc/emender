@@ -28,6 +28,7 @@ from scripts.frontier.run_async_v21_qualification import (
     _verify_prior_clean_gate,
     build_plan,
     canonical_digest,
+    main as qualification_main,
     submit_plan,
     validate_scale_evidence,
 )
@@ -375,6 +376,60 @@ def test_prescribed_fault_cli_accepts_prior_gate_and_renders_serial_phases(
     assert [phase["initial_generation"] for phase in FAULT_PHASE_SPECS] == [
         0, 2, 6]
     assert [phase["generations"] for phase in FAULT_PHASE_SPECS] == [2, 4, 5]
+
+
+def test_fault_controller_requests_fault_specific_native_attestation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    repo = tmp_path / "snapshot"
+    (repo / "configs/frontier").mkdir(parents=True)
+    (repo / "scripts/frontier").mkdir(parents=True)
+    seed_config = repo / "configs/frontier/e97_async_256.yaml"
+    seed_config.write_text("{}\n")
+    (repo / "scripts/frontier/resilient_e97_true_2n.sbatch").write_text(
+        "#!/bin/bash\n")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.name", "Test"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-q", "-m", "fixture"],
+        check=True,
+    )
+    native_manifest = tmp_path / "native.json"
+    fault_gate = tmp_path / "g2-fault.json"
+    native_manifest.write_text("{}\n")
+    fault_gate.write_text("{}\n")
+
+    def observe_attestation_request(**kwargs):
+        assert kwargs["required_gate"] == "G2-fault-rejoin-replay"
+        raise RuntimeError("observed fault-specific attestation")
+
+    monkeypatch.setattr(
+        "scripts.frontier.run_async_v21_qualification._clean_launch_context",
+        observe_attestation_request,
+    )
+    with pytest.raises(
+        RuntimeError, match="observed fault-specific attestation",
+    ):
+        qualification_main([
+            "--gate", "faults",
+            "--nodes", "2",
+            "--repo", str(repo),
+            "--seed-config", str(seed_config),
+            "--native-build-manifest", str(native_manifest),
+            "--full-layout-gate", str(fault_gate),
+            "--run-root", str(tmp_path / "runs"),
+            "--state", str(tmp_path / "state.json"),
+            "--output", str(tmp_path / "fault-manifest.json"),
+            "--dry-run",
+        ])
 
 
 def test_fault_gate_binds_passing_clean_and_executable_injections(

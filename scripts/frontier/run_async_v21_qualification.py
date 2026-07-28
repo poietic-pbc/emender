@@ -1662,6 +1662,7 @@ def _clean_launch_context(
     run_dir: Path,
     acceptance_manifest: Path,
     submit: bool,
+    required_gate: str,
 ) -> tuple[dict[str, str], str]:
     for path, name in (
         (seed_config, "canonical seed config"),
@@ -1718,6 +1719,7 @@ def _clean_launch_context(
         # commit.  Native/G2 remain exact to each other, while evidence-only
         # Git commits are intentionally allowed to differ.
         source_root=None,
+        required_gate=required_gate,
     )
     if _file_sha256(TOKENIZER_PATH) != TOKENIZER_SHA256:
         raise ValueError("reviewed p50k tokenizer digest mismatch")
@@ -2001,6 +2003,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
             acceptance_manifest=Path(args.output).resolve(),
             submit=args.submit,
+            required_gate=(
+                "G2"
+                if args.gate == "clean"
+                else "G2-fault-rejoin-replay"
+            ),
         )
         if args.gate == "clean":
             clean_launch = launch_context
