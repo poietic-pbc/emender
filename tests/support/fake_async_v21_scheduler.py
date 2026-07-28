@@ -62,8 +62,21 @@ def _sbatch(arguments: list[str]) -> int:
     kind = "payload" if held else "collector"
     name = _option(arguments, "--job-name=")
     comment = _option(arguments, "--comment=")
+    account = _option(arguments, "--account=")
+    qos = _option(arguments, "--qos=")
 
     def add(state: dict) -> str:
+        if kind == "collector" and not account:
+            raise RuntimeError("Frontier collector requires an explicit account")
+        if kind == "collector" and account != "bif148":
+            raise RuntimeError("Frontier collector account is not authorized")
+        if qos == "debug" and any(
+            job["qos"] == "debug"
+            and job["state"] not in {"COMPLETED", "FAILED"}
+            for job in state["jobs"].values()
+        ):
+            raise RuntimeError(
+                "QOSMaxSubmitJobPerUserLimit: a debug job already exists")
         job_id = str(state["next_job_id"])
         state["next_job_id"] += 1
         record = {
@@ -73,7 +86,8 @@ def _sbatch(arguments: list[str]) -> int:
             "comment": comment,
             "state": "PENDING",
             "partition": _option(arguments, "--partition="),
-            "qos": _option(arguments, "--qos="),
+            "qos": qos,
+            "account": account,
             "released": False,
             "output": _option(arguments, "--output="),
             "error": _option(arguments, "--error="),
@@ -158,6 +172,7 @@ def _sacct(arguments: list[str]) -> int:
             "DerivedExitCode": "0:0",
             "Partition": job["partition"],
             "QOS": job["qos"],
+            "Account": job["account"],
             "NNodes": "2" if job["kind"] == "payload" else "1",
             "NodeList": "fake[01-02]" if job["kind"] == "payload" else "fake01",
             "Submit": "2026-07-27T00:00:00",
