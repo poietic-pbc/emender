@@ -182,6 +182,7 @@ def test_live_native_selection_is_wired_and_python_debug_remains_explicit():
     assert "LocalTrainerSpool(" not in native_manager
     assert "DistributedOwnerServer(" not in native_manager
     assert "NativeManagerSession.start(" in native_manager
+    assert 'required_gate=os.environ.get("NDP_REQUIRED_GATE", "G2")' in native_manager
     assert "spool = (LocalTrainerSpool" in source
     assert "if not native else None" in source
     assert "manager/trainer native runtime digest mismatch" in source

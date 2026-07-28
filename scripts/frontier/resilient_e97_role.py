@@ -2089,6 +2089,7 @@ def _native_manager(args) -> int:
         host=_pool_hosts(args)[node], build_manifest=args.native_build_manifest,
         gate_json=args.native_gate_json or None, source_root=ROOT,
         production=production, full_layout=full_layout,
+        required_gate=os.environ.get("NDP_REQUIRED_GATE", "G2"),
         deadline_s=_native_manager_session_lifetime_s(args),
         telemetry_path=bulk / "telemetry" / f"{identity}-native.jsonl",
         payload_max=args.bulk_chunk_bytes, resident_limit_bytes=args.max_spool_bytes)
