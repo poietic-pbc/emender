@@ -1129,6 +1129,7 @@ def test_fresh_allocation_manager_syncs_older_authoritative_handoff(
         "result_root": receipt.result_root,
         "apply_receipts": [
             {"worker_id": item.node_id,
+             "incarnation": item.node_incarnation,
              "receipt_digest": item.receipt_digest}
             for item in apply_receipts
         ],
@@ -1423,6 +1424,40 @@ def test_native_manager_treats_generation_catch_up_as_successful_reload_handoff(
         manager.index('if close.get("status") != "commit_ready":')
     ]
     assert "raise TimeoutError" not in catch_up
+
+
+def test_native_manager_uses_the_production_compiled_coordination_authority():
+    role = (
+        ROOT / "scripts/frontier/resilient_e97_role.py"
+    ).read_text(encoding="utf-8")
+    native = role[
+        role.index("def _native_manager(args) -> int:"):
+        role.index("def manager(args) -> int:")
+    ]
+    runtime = (
+        ROOT / "ndm/resilient_pool_runtime.py"
+    ).read_text(encoding="utf-8")
+    native_server = runtime[
+        runtime.index("class NativePoolControlServer"):
+        runtime.index("class PoolControlClient"):
+    ]
+
+    assert "session.coordination_authority(" in native
+    assert "control_server = NativePoolControlServer(" in native
+    assert "control_server = PoolControlServer(" not in native
+    assert "NativeCoordinationAuthority" in native_server
+    assert "CoordinationEventKind.COMMIT" in native_server
+    assert "CoordinationEventKind.NODE_APPLY" in native_server
+    assert "CoordinationEventKind.RECOVER_PEER" in native_server
+    assert "CoordinationEventKind.EXPIRE_PEER" in native_server
+    assert "CoordinationEventKind.OWNER_LOST" in native_server
+    assert "expired_result = self._step(" in native_server
+    # Python owns only effect-side caches.  The authoritative mutable objects
+    # from the debug/reference implementation cannot leak into this class.
+    assert "PeerMembership(" not in native_server
+    assert "GenerationAdmission.open(" not in native_server
+    assert "self.committed_generation =" not in native_server
+    assert "self.node_applies" not in native_server
 
 
 def test_local_and_owner_transport_use_separate_bounded_frontier_chunks():

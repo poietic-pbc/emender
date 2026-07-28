@@ -14,7 +14,8 @@ import torch
 
 from ndm.native_artifacts import NATIVE_TEST
 from ndm.native_dataplane import (
-    Client, Command, DType, NativeLibrary, Role, create_memfd, seal_memfd,
+    Client, Command, CoordinationEventKind, DType, NativeLibrary, Role,
+    create_memfd, seal_memfd,
 )
 from ndm.native_e97_runtime import (
     GenerationMetadata, NativeTrainerDataPlane, atomic_metadata,
@@ -22,11 +23,199 @@ from ndm.native_e97_runtime import (
 )
 from ndm.native_pool_runtime import NativeManagerSession, NativeTrainerHandoff
 from ndm.native_transport import NativeTransport, NativeTransportLibrary
-from ndm.resilient_pool_runtime import OwnerEndpoint
+from ndm.resilient_pool_runtime import (
+    NativePoolControlServer, OwnerEndpoint, PoolControlClient,
+    PoolControlConfig, PoolStageSLO,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD_MANIFEST = ROOT / "build/native-resilient-dataplane/native-artifacts.json"
+
+
+def test_production_native_coordination_job5105811_and_rejoin(tmp_path):
+    """The live RPC/service path makes the minimized late peer race nonfatal."""
+    manifest = json.loads(BUILD_MANIFEST.read_text())
+    transport_library = (
+        BUILD_MANIFEST.parent
+        / manifest["artifacts"]["transport_library"]["path"])
+    run_id, fence = "job5105811", 5105811
+    session = NativeManagerSession.start(
+        backend=NATIVE_TEST, run_id=run_id, fence_epoch=fence,
+        worker_id="node-0", incarnation="node-0-a", host="127.0.0.1",
+        build_manifest=BUILD_MANIFEST, gate_json=None, source_root=ROOT,
+        production=False, full_layout=False, deadline_s=20,
+        telemetry_path=tmp_path / "native.jsonl", payload_max=4096,
+        resident_limit_bytes=1 << 20,
+    )
+    peers: list[NativeTransport] = []
+
+    def endpoint(worker: str, incarnation: str, epoch: int) -> OwnerEndpoint:
+        transport = NativeTransport.open(
+            library=NativeTransportLibrary(transport_library),
+            provider="tcp;ofi_rxm", production=False,
+            bind_node="127.0.0.1", deadline_s=20, payload_max=4096,
+            tx_slots=1, rx_slots=1, resident_limit_bytes=1 << 20)
+        peers.append(transport)
+        expiry = time.time_ns() + 15_000_000_000
+        record = transport.bind(
+            run_key=run_id, fence_epoch=fence, worker_key=worker,
+            incarnation=incarnation, endpoint_epoch=epoch,
+            expires_unix_ns=expiry)
+        return OwnerEndpoint(
+            worker, incarnation, "127.0.0.1", 0, NATIVE_TEST,
+            record.encoded.hex(), record.provider, record.endpoint_epoch,
+            record.expires_unix_ns, manifest["bundle_sha256"])
+
+    config = PoolControlConfig(
+        run_id, fence, q_min=2, t_min=2, ready_fraction=None,
+        base_digest="11" * 32, policy_digest="22" * 32,
+        layout_digest="33" * 32, code_digest="44" * 32,
+        slo=PoolStageSLO(5, 10, 5, 5, 5, 5, 5, 5),
+        dataplane_backend=NATIVE_TEST,
+        artifact_bundle_sha256=manifest["bundle_sha256"])
+    authority = session.coordination_authority(
+        config, trace_path=tmp_path / "coordination.jsonl")
+    server = NativePoolControlServer(
+        ("127.0.0.1", 0), config, authority=authority,
+        evidence_root=tmp_path / "evidence")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    client = PoolControlClient(
+        server.server_address, timeout_s=2).bind(run_id, fence)
+    endpoints = {
+        "node-0": session.owner_endpoint,
+        "node-1": endpoint("node-1", "node-1-a", 2),
+        "node-2": endpoint("node-2", "node-2-a", 3),
+        "node-expired": endpoint(
+            "node-expired", "node-expired-a", 4),
+    }
+    try:
+        for node, advertised in endpoints.items():
+            recovered = client.recover(
+                worker_id=node, incarnation=advertised.incarnation,
+                known_generation=0, known_receipt_digest="",
+                incarnation_sequence=1)
+            assert recovered["status"] == "recover"
+            assert client.ready(
+                advertised, 0, incarnation_sequence=1)["status"] == "READY"
+
+        # Timer execution is outside the pure kernel, but elapsed leases must
+        # re-enter as typed ExpirePeer events before immutable cohort close.
+        server.endpoint_leases[(
+            "node-expired", "node-expired-a")] = 0.0
+        opened = client.open_generation(
+            0, 1, deadline=time.monotonic() + 2)
+        assert [item["worker_id"] for item in opened["peers"]] == [
+            "node-0", "node-1", "node-2"]
+        expired_member = next(
+            item for item in authority.step(
+                CoordinationEventKind.QUERY_COMMIT,
+                generation=0)["members"]
+            if item["worker_id"] == "node-expired")
+        assert expired_member["live"] is False
+        assert expired_member["ready"] is False
+        assert client.contribute(
+            0, 1, "node-0", "node-0-a", 1, 10, "31" * 32
+        )["status"] == "accepted"
+        assert client.contribute(
+            0, 1, "node-2", "node-2-a", 1, 10, "33" * 32
+        )["status"] == "accepted"
+        closed = client._rpc("close", generation=0, attempt=1)
+        assert closed["status"] == "commit_ready"
+        assert {
+            item["worker_id"] for item in closed["frozen_identities"]
+        } == {"node-0", "node-2"}
+
+        first_root = client._rpc(
+            "result_root", generation=0, attempt=1,
+            worker_id="node-0", incarnation="node-0-a",
+            result_root="41" * 32, global_weight=20, result_bytes=64)
+        assert first_root["status"] == "waiting"
+        second_root = client._rpc(
+            "result_root", generation=0, attempt=1,
+            worker_id="node-2", incarnation="node-2-a",
+            result_root="41" * 32, global_weight=20, result_bytes=64)
+        assert second_root["status"] == "validated"
+        committed = client.commit_authority(
+            result_generation=1, attempt=1,
+            receipt_digest="51" * 32, previous_receipt_digest="",
+            manifest_digest="52" * 32, result_root="41" * 32,
+            accepted_tokens=20)
+        assert committed["status"] == "committed"
+
+        node0_next = endpoint("node-0", "node-0-b", 4)
+        assert client.recover(
+            worker_id="node-0", incarnation="node-0-b",
+            known_generation=1, known_receipt_digest="51" * 32,
+            incarnation_sequence=2)["status"] == "recover"
+
+        # Exact job5105811 ordering: an uninjected node-1 arrives after close
+        # and node-0 reincarnation.  The service replies with immutable catch-up
+        # authority; it does not expire the live peer or surface an exception.
+        late = client.contribute(
+            0, 1, "node-1", "node-1-a", 7, 10, "61" * 32)
+        assert late["status"] == "catch_up"
+        assert late["disposition"] == "generation-closed"
+        assert late["authoritative_generation"] == 1
+        assert late["receipt_digest"] == "51" * 32
+        assert late["manifest_digest"] == "52" * 32
+        assert late["result_root"] == "41" * 32
+        assert late["accepted_tokens"] == 20
+        assert late["requires_reload"] is True
+        observed = authority.step(
+            CoordinationEventKind.QUERY_COMMIT, generation=1)
+        node1 = next(
+            item for item in observed["members"]
+            if item["worker_id"] == "node-1")
+        assert node1["live"] is True
+        late_trace = json.loads(
+            (tmp_path / "coordination.jsonl").read_text().splitlines()[-2])
+        assert late_trace["disposition"] == "generation-closed"
+        assert late_trace["pre_state_digest"] == late_trace["post_state_digest"]
+        assert {
+            item["kind"] for item in late_trace["effects"]
+        }.isdisjoint({"expire-peer", "kill-peer", "consume-restart-budget"})
+
+        partial = client.node_applied(
+            generation=1, worker_id="node-0", incarnation="node-0-b",
+            receipt_digest="71" * 32,
+            commit_receipt_digest="51" * 32, trainer_count=7,
+            incarnation_sequence=2)
+        assert partial["status"] == "corrupt"
+        assert client.node_applied(
+            generation=1, worker_id="node-0", incarnation="node-0-b",
+            receipt_digest="71" * 32,
+            commit_receipt_digest="51" * 32, trainer_count=8,
+            incarnation_sequence=2)["status"] == "node_applied"
+        assert client.recover(
+            worker_id="node-1", incarnation="node-1-a",
+            known_generation=1, known_receipt_digest="51" * 32,
+            incarnation_sequence=2)["status"] == "recover"
+        assert client.node_applied(
+            generation=1, worker_id="node-1", incarnation="node-1-a",
+            receipt_digest="72" * 32,
+            commit_receipt_digest="51" * 32, trainer_count=8,
+            incarnation_sequence=2)["status"] == "node_applied"
+        assert client.ready(
+            node0_next, 1, apply_receipt_digest="71" * 32,
+            incarnation_sequence=2)["status"] == "READY"
+        assert client.ready(
+            endpoints["node-1"], 1, apply_receipt_digest="72" * 32,
+            incarnation_sequence=2)["status"] == "READY"
+        next_open = client.open_generation(
+            1, 1, deadline=time.monotonic() + 2)
+        assert {
+            item["worker_id"] for item in next_open["peers"]
+        } == {"node-0", "node-1"}
+        assert thread.is_alive()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(2)
+        for transport in reversed(peers):
+            transport.close()
+        session.close("allocation_term_handoff")
 
 
 def test_wait_metadata_tolerates_stale_atomic_generation_until_publication(tmp_path):

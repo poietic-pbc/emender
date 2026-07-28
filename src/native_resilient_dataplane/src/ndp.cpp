@@ -4,6 +4,8 @@
 
 #include "emender/ndp.h"
 #include "service_core.hpp"
+
+#include "coordination_kernel.hpp"
 #include "sha256.hpp"
 
 #include <algorithm>
@@ -46,6 +48,16 @@
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
 #error "Native resilient data plane v1 requires a little-endian target"
 #endif
+
+static_assert(emender_ndp::coordination::kMaximumNodes
+                  == NDP_COORD_MAX_NODES,
+              "coordination state/ABI node bounds differ");
+static_assert(emender_ndp::coordination::kMaximumEffects
+                  == NDP_COORD_MAX_EFFECTS,
+              "coordination state/ABI effect bounds differ");
+static_assert(emender_ndp::coordination::kMaximumTraceBytes
+                  == NDP_COORD_TRACE_CAPACITY,
+              "coordination trace/ABI bounds differ");
 
 #if defined(__clang__)
 #pragma STDC FENV_ACCESS ON
@@ -431,6 +443,10 @@ public:
                     ndp_buffer_t* buffer, int* output_fd);
     int op_release(ndp_client_t handle, ndp_op_t op);
     int metrics(ndp_client_t handle, ndp_metrics_v1* output);
+    int coordination_step(ndp_client_t handle,
+                          const ndp_coord_event_v1* input,
+                          ndp_coord_result_v1* output,
+                          std::string* trace);
     ServiceSnapshot snapshot(ndp_client_t handle) const;
 
 private:
@@ -494,6 +510,7 @@ private:
     std::string spool_path_;
     std::shared_ptr<Operation> freeze_operation_;
     std::shared_ptr<Operation> result_operation_;
+    coordination::AuthorityState coordination_state_;
 };
 
 std::uint32_t Service::boot_cookie() {
@@ -1722,6 +1739,162 @@ int Service::op_release(ndp_client_t handle, ndp_op_t op_handle) {
     return NDP_OK;
 }
 
+int Service::coordination_step(
+        ndp_client_t handle, const ndp_coord_event_v1* input,
+        ndp_coord_result_v1* output, std::string* trace) {
+    if (!valid_input(input) || output == nullptr || trace == nullptr) {
+        return input && (input->abi_version >> 16)
+            != (NDP_COORD_ABI_V1 >> 16) ? NDP_EVERSION : NDP_EINVAL;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto client = current_client(handle);
+    const int current = require_current(client);
+    if (current != NDP_OK) return current;
+    if (client->role != NDP_ROLE_CONTROLLER) return NDP_ESTATE;
+
+    coordination::Event event;
+    event.kind = static_cast<coordination::EventKind>(input->kind);
+    event.flags = input->flags;
+    event.run = bytes(input->run_key);
+    event.fence = input->fence_epoch;
+    event.generation = input->generation;
+    event.attempt = input->attempt;
+    event.node = bytes(input->node_key);
+    event.incarnation = bytes(input->incarnation);
+    event.sequence = input->sequence;
+    event.exact_tokens = input->exact_tokens;
+    event.trainer_count = input->trainer_count;
+    event.minimum_nodes = input->minimum_nodes;
+    event.minimum_tokens = input->minimum_tokens;
+    event.policy_digest = bytes(input->policy_digest);
+    event.payload_digest = bytes(input->payload_digest);
+    event.result_digest = bytes(input->result_digest);
+    event.receipt_digest = bytes(input->receipt_digest);
+    event.previous_receipt_digest = bytes(input->previous_receipt_digest);
+    event.manifest_digest = bytes(input->manifest_digest);
+
+    const coordination::Transition transition =
+        coordination::step(coordination_state_, event);
+    if (transition.trace.size() >= NDP_COORD_TRACE_CAPACITY
+        || transition.effects.size() > NDP_COORD_MAX_EFFECTS
+        || transition.state.members.size() > NDP_COORD_MAX_NODES)
+        return NDP_EBOUNDS;
+
+    ndp_coord_result_v1 result{};
+    result.struct_size = sizeof(result);
+    result.abi_version = NDP_COORD_ABI_V1;
+    result.disposition =
+        static_cast<std::uint32_t>(transition.disposition);
+    result.phase =
+        static_cast<std::uint32_t>(transition.state.active.phase);
+    result.effect_count =
+        static_cast<std::uint32_t>(transition.effects.size());
+    result.run_key[0] = 0;
+    std::copy(transition.state.run.begin(), transition.state.run.end(),
+              result.run_key);
+    result.fence_epoch = transition.state.fence;
+    result.committed_generation =
+        transition.state.committed_generation;
+    result.accepted_token_clock =
+        transition.state.accepted_token_clock;
+    result.active_generation = transition.state.active.generation;
+    result.owner_epoch = transition.state.active.owner_epoch;
+    result.active_attempt = transition.state.active.attempt;
+    result.owner_reassignments =
+        transition.state.active.owner_reassignments;
+    std::copy(transition.state.policy_digest.begin(),
+              transition.state.policy_digest.end(), result.policy_digest);
+    std::copy(transition.state.commit_receipt.begin(),
+              transition.state.commit_receipt.end(), result.commit_receipt);
+    std::copy(transition.state.commit_manifest.begin(),
+              transition.state.commit_manifest.end(), result.commit_manifest);
+    std::copy(transition.state.committed_result.begin(),
+              transition.state.committed_result.end(), result.committed_result);
+    std::copy(transition.pre_state_digest.begin(),
+              transition.pre_state_digest.end(), result.pre_state_digest);
+    std::copy(transition.post_state_digest.begin(),
+              transition.post_state_digest.end(), result.post_state_digest);
+
+    for (std::size_t index = 0;
+         index != transition.effects.size(); ++index) {
+        const coordination::Effect& source = transition.effects[index];
+        ndp_coord_effect_v1& target = result.effects[index];
+        target.kind = static_cast<std::uint32_t>(source.kind);
+        target.generation = source.generation;
+        std::copy(source.node.begin(), source.node.end(), target.node_key);
+        std::copy(source.digest.begin(), source.digest.end(), target.digest);
+    }
+
+    std::size_t member_index = 0;
+    for (const auto& item : transition.state.members) {
+        ndp_coord_member_v1& target = result.members[member_index++];
+        const coordination::Member& member = item.second;
+        std::copy(item.first.begin(), item.first.end(), target.node_key);
+        std::copy(member.incarnation.begin(), member.incarnation.end(),
+                  target.current_incarnation);
+        target.control_sequence = member.control_sequence;
+        if (member.live) {
+            target.flags |= NDP_COORD_MEMBER_LIVE;
+            ++result.live_count;
+        }
+        if (member.ready) {
+            target.flags |= NDP_COORD_MEMBER_READY;
+            ++result.ready_count;
+        }
+        if (member.recovering)
+            target.flags |= NDP_COORD_MEMBER_RECOVERING;
+        const auto cohort = transition.state.active.cohort.find(item.first);
+        if (cohort != transition.state.active.cohort.end()) {
+            target.flags |= NDP_COORD_MEMBER_COHORT;
+            std::copy(cohort->second.begin(), cohort->second.end(),
+                      target.cohort_incarnation);
+            ++result.cohort_count;
+        }
+        const auto contribution =
+            transition.state.active.contributions.find(item.first);
+        if (contribution
+            != transition.state.active.contributions.end()) {
+            target.flags |= NDP_COORD_MEMBER_CONTRIBUTED;
+            target.exact_tokens = contribution->second.exact_tokens;
+            std::copy(contribution->second.payload_digest.begin(),
+                      contribution->second.payload_digest.end(),
+                      target.payload_digest);
+            std::copy(contribution->second.receipt_digest.begin(),
+                      contribution->second.receipt_digest.end(),
+                      target.contribution_receipt);
+            ++result.contribution_count;
+        }
+        const auto receipt =
+            transition.state.active.result_receipts.find(item.first);
+        if (receipt != transition.state.active.result_receipts.end()) {
+            target.flags |= NDP_COORD_MEMBER_RESULT_RECEIPT;
+            std::copy(receipt->second.result_digest.begin(),
+                      receipt->second.result_digest.end(),
+                      target.result_digest);
+            ++result.result_receipt_count;
+        }
+        const auto recovered_apply =
+            transition.state.recovered_node_applies.find(item.first);
+        if ((!coordination::is_zero(member.apply_receipt)
+             && member.applied_generation
+                == transition.state.committed_generation)
+            || recovered_apply
+                != transition.state.recovered_node_applies.end()) {
+            target.flags |= NDP_COORD_MEMBER_NODE_APPLIED;
+            const coordination::Digest& apply =
+                !coordination::is_zero(member.apply_receipt)
+                    ? member.apply_receipt
+                    : recovered_apply->second.receipt_digest;
+            std::copy(apply.begin(), apply.end(), target.apply_receipt);
+        }
+    }
+    result.member_count = static_cast<std::uint32_t>(member_index);
+    coordination_state_ = transition.state;
+    *output = result;
+    *trace = transition.trace;
+    return NDP_OK;
+}
+
 int Service::metrics(ndp_client_t handle, ndp_metrics_v1* output) {
     if (!valid_input(output)) return output &&
         (output->abi_version >> 16) != (NDP_ABI_V1 >> 16) ? NDP_EVERSION : NDP_EINVAL;
@@ -1810,6 +1983,11 @@ int LocalServiceCore::op_release(ndp_client_t a, ndp_op_t b) {
 }
 int LocalServiceCore::metrics(ndp_client_t a, ndp_metrics_v1* b) {
     NDP_CORE_FORWARD(metrics, a, b);
+}
+int LocalServiceCore::coordination_step(
+        ndp_client_t a, const ndp_coord_event_v1* b,
+        ndp_coord_result_v1* c, std::string* d) {
+    NDP_CORE_FORWARD(coordination_step, a, b, c, d);
 }
 
 #undef NDP_CORE_FORWARD

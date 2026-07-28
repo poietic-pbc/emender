@@ -102,9 +102,10 @@ from ndm.resilient_e97_runtime import (
     heartbeat, outer_state_migration,
 )
 from ndm.resilient_pool_runtime import (
-    DistributedOwnerServer, OwnerEndpoint, PoolControlClient, PoolControlConfig,
-    PoolControlServer, PoolStageSLO, chunk_manifest_digest, contribution_id,
-    fetch_owned_shards, live_owner_endpoints, submit_owned_shards,
+    DistributedOwnerServer, NativePoolControlServer, OwnerEndpoint,
+    PoolControlClient, PoolControlConfig, PoolControlServer, PoolStageSLO,
+    chunk_manifest_digest, contribution_id, fetch_owned_shards,
+    live_owner_endpoints, submit_owned_shards,
 )
 
 
@@ -612,6 +613,7 @@ def _native_manager_resume_point(
             "result_root": commit.result_root,
             "apply_receipts": [
                 {"worker_id": item.node_id,
+                 "incarnation": item.node_incarnation,
                  "receipt_digest": item.receipt_digest}
                 for item in apply_receipts
             ],
@@ -1130,7 +1132,7 @@ def _pool_config(
         committed_accepted_tokens: int = 0,
         committed_manifest_digest: str = "",
         committed_result_root: str = "",
-        committed_apply_receipts: tuple[tuple[str, str], ...] = (),
+        committed_apply_receipts: tuple[tuple[str, ...], ...] = (),
         ) -> PoolControlConfig:
     policy = _async_v21_policy(args).digest
     backend, production, full_layout = _dataplane_policy(args)
@@ -2105,20 +2107,32 @@ def _native_manager(args) -> int:
             sync_evidence.get("result_root", ""))
         if start_generation > 0 else "",
         committed_apply_receipts=tuple(
-            (str(item["worker_id"]), str(item["receipt_digest"]))
+            (
+                str(item["worker_id"]),
+                str(item["incarnation"]),
+                str(item["receipt_digest"]),
+            )
             for item in sync_evidence.get("apply_receipts", [])
         ),
     )
     control_server = control_thread = None
     pool_client = None
+    coordination_sequence = _cohort_restart_sequence() + 1
     if args.node_count > 1:
         if args.node_count not in (2, 4, 8, 16, 32, 64, 256):
             raise ValueError(
                 "async-decoupled-v2.1 qualification requires an exact "
                 "serial-ladder node count")
         if node == 0:
-            control_server = PoolControlServer(
+            coordination_authority = session.coordination_authority(
+                pool_config,
+                trace_path=(
+                    run / "retained-evidence" / "pool-control"
+                    / "native-coordination-trace-v1.jsonl"),
+            )
+            control_server = NativePoolControlServer(
                 ("0.0.0.0", args.coordinator_port), pool_config,
+                authority=coordination_authority,
                 evidence_root=run / "retained-evidence" / "pool-control")
             control_thread = threading.Thread(target=control_server.serve_forever, daemon=True)
             control_thread.start()
@@ -2132,6 +2146,7 @@ def _native_manager(args) -> int:
             known_generation=start_generation,
             known_receipt_digest=str(
                 sync_evidence.get("commit_receipt_digest", "")),
+            incarnation_sequence=coordination_sequence,
         )
         if (
             recovery_handshake.get("status") != "recover"
@@ -2157,8 +2172,15 @@ def _native_manager(args) -> int:
         if _wait_native_ready_delay(
                 control, args, node=node, generation=start_generation,
                 incarnation=incarnation, term_requested=term_requested):
+            recovered_apply_receipt = next((
+                str(item["receipt_digest"])
+                for item in recovery_handshake.get("apply_receipts", [])
+                if str(item["worker_id"]) == f"node-{node}"
+            ), "")
             pool_client.ready(session.owner_endpoint, start_generation,
-                              run_id=args.run_id, fence=_fence_epoch(args))
+                              run_id=args.run_id, fence=_fence_epoch(args),
+                              apply_receipt_digest=recovered_apply_receipt,
+                              incarnation_sequence=coordination_sequence)
     liveness_stop, liveness_thread = _liveness_heartbeat(bulk, identity)
     terminal_published = False
     try:
@@ -2288,7 +2310,8 @@ def _native_manager(args) -> int:
             if pool_client is not None:
                 close = pool_client.contribute_and_freeze(
                     generation=generation, attempt=1, worker_id=f"node-{node}",
-                    incarnation=incarnation, contribution_seq=generation,
+                    incarnation=incarnation,
+                    contribution_seq=generation + 1,
                     accepted_tokens=local_weight,
                     payload_digest=local_result.result_root.hex(),
                     # ADR-002 gives the complete open-group-to-freeze phase
@@ -2699,6 +2722,7 @@ def _native_manager(args) -> int:
                         incarnation=incarnation,
                         receipt_digest=apply_receipt_digest,
                         commit_receipt_digest=commit_receipt.receipt_digest,
+                        incarnation_sequence=coordination_sequence,
                     )
                     if applied_peer_state.get("status") != "node_applied":
                         raise RuntimeError(
@@ -2807,7 +2831,9 @@ def _native_manager(args) -> int:
                     pool_client.ready(session.owner_endpoint, next_generation,
                                       run_id=args.run_id,
                                       fence=_fence_epoch(args),
-                                      apply_receipt_digest=apply_receipt_digest)
+                                      apply_receipt_digest=apply_receipt_digest,
+                                      incarnation_sequence=
+                                          coordination_sequence)
             elif not has_next_generation:
                 terminal_published = True
     except BaseException:
@@ -2821,14 +2847,24 @@ def _native_manager(args) -> int:
         if pool_client is not None and not terminal_published:
             try:
                 pool_client.drain(session.owner_endpoint.worker_id,
-                                  session.owner_endpoint.incarnation)
+                                  session.owner_endpoint.incarnation,
+                                  generation=max(
+                                      start_generation,
+                                      target_generation - 1),
+                                  incarnation_sequence=
+                                      coordination_sequence)
             except Exception:
                 pass
-        session.close("allocation_term_handoff" if term_requested["value"] else "normal")
         if control_server is not None:
             control_server.shutdown(); control_server.server_close()
         if control_thread is not None:
             control_thread.join(2)
+        # The native control authority is a controller handle in ``session``.
+        # Stop all RPC ingress and close its trace effect before closing the
+        # persistent service client that owns the compiled state.
+        session.close(
+            "allocation_term_handoff"
+            if term_requested["value"] else "normal")
     return 0
 
 

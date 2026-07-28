@@ -41,6 +41,15 @@ struct ResultResponse {
     ndp_buffer_t buffer;
 };
 
+struct CoordinationResponse {
+    ndp_coord_result_v1 result;
+    std::uint32_t trace_bytes;
+    std::array<char, NDP_COORD_TRACE_CAPACITY> trace;
+};
+
+static_assert(sizeof(CoordinationResponse) <= rpc::kMaxPayloadBytes,
+              "coordination response exceeds one bounded RPC packet");
+
 struct Session {
     ndp_client_t handle = 0;
     std::array<std::uint8_t, 16> run{};
@@ -419,6 +428,30 @@ bool LocalRpcServer::Impl::dispatch(
             metrics.abi_version = NDP_ABI_V1;
             status = core.metrics(session.handle, &metrics);
             if (status == NDP_OK) output = rpc::object_payload(metrics);
+            return true;
+        }
+        case Opcode::CoordinationStep: {
+            ndp_coord_event_v1 input{};
+            if (!request.fds.empty()
+                || !rpc::payload_object(request, input)
+                || header.extent != sizeof(input)
+                || header.sequence != input.sequence)
+                return false;
+            CoordinationResponse response{};
+            std::string trace;
+            status = core.coordination_step(
+                session.handle, &input, &response.result, &trace);
+            if (status == NDP_OK) {
+                if (trace.size() >= response.trace.size()) {
+                    status = NDP_EBOUNDS;
+                    return true;
+                }
+                response.trace_bytes =
+                    static_cast<std::uint32_t>(trace.size());
+                std::copy(trace.begin(), trace.end(),
+                          response.trace.begin());
+                output = rpc::object_payload(response);
+            }
             return true;
         }
         case Opcode::Open:
