@@ -20,6 +20,7 @@
     "summary": "The intended node-0 trainer loss recovered, but uninjected node 1 then attempted a contribution after generation 3 closed and raised RuntimeError: generation is not open. After the intended generation-4 node-1 manager loss, replacement recovery raised ValueError: native peer recovery handshake disagrees with manifest, a following replacement also failed, and the route-local restart budget was exhausted.",
     "primary_error": "RuntimeError: generation is not open",
     "secondary_error": "ValueError: native peer recovery handshake disagrees with manifest",
+    "tertiary_error": "RuntimeError: conflicting recovery incarnation rejected",
     "primary_error_path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-faults/3eafc033a707614e1ed4e56fe6cb350400193295/fault/faults/logs/node-1-manager.err",
     "primary_error_sha256": "7b8fb2f784d5508ccefb4be6c4fac867f5ec9972277e89af963c0e74581e2d51",
     "terminal_event": "restart_exhausted",
@@ -290,6 +291,7 @@
       "cohort_reconstructed_time": "2026-07-28T17:09:53.437903400-04:00",
       "replacement_error": "ValueError: native peer recovery handshake disagrees with manifest",
       "replacement_failed_time": "2026-07-28T17:09:57.473910800-04:00",
+      "final_replacement_error": "RuntimeError: conflicting recovery incarnation rejected",
       "restart_exhausted_time": "2026-07-28T17:10:15.521769500-04:00",
       "passed": false
     },

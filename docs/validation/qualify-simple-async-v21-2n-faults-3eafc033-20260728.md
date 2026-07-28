@@ -49,9 +49,15 @@ intended generation-4 manager loss, its first replacement failed:
 ValueError: native peer recovery handshake disagrees with manifest
 ```
 
-The following replacement failed the same recovery path and the supervisor
-emitted `restart_exhausted`. This is a live qualification failure of the
-generation-closed/recovery-handshake path, not a soak timeout.
+The following replacement failed recovery with:
+
+```text
+RuntimeError: conflicting recovery incarnation rejected
+```
+
+The supervisor then emitted `restart_exhausted`. This is a live qualification
+failure of the generation-closed/recovery-incarnation path, not a soak
+timeout.
 
 ## Authorities and immutable identity
 
@@ -215,9 +221,9 @@ required semantic verdict was absent. It retired the digest with
 7. The intended node-1 manager loss fired at
    `17:09:18.228626`, after `published_node_applied`. The cohort failed at
    `17:09:35.248030` and reconstructed at `17:09:53.437903`; that replacement
-   then failed the peer recovery handshake at `17:09:57.473911`.
-   A final replacement also failed, and `restart_exhausted` was emitted at
-   `17:10:15.521770`.
+   then failed the peer recovery handshake at `17:09:57.473911`. A final
+   replacement was rejected as a conflicting recovery incarnation, and
+   `restart_exhausted` was emitted at `17:10:15.521770`.
 8. The planned node-0 native-service loss at generation-4
    `owner_transport` was never reached. The allocation drained; no all-rank
    abort primitive was needed.
