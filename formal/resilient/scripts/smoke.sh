@@ -12,7 +12,7 @@ printf '%s  %s\n' \
   cf654525395e63b31b2d76e8109ee2bcc6a652f6273d1c6e4ca5bec9ecb776b4 \
   "$package_root/trace-schema-v1.json" | sha256sum --check -
 
-if rg -n '\b(sorry|admit|native_decide)\b|^\s*(unsafe\s+)?axiom\b|^\s*opaque\b' \
+if rg -n '\b(sorry|admit|native_decide)\b|^\s*axiom\b|^\s*opaque\b|^\s*unsafe\b' \
     "$package_root/ResilientProtocol.lean" \
     "$package_root/ResilientProtocol" \
     "$package_root/TraceMain.lean" \
@@ -22,6 +22,7 @@ if rg -n '\b(sorry|admit|native_decide)\b|^\s*(unsafe\s+)?axiom\b|^\s*opaque\b' 
   exit 1
 fi
 
+"$package_root/scripts/verify-proof-manifest.sh"
 "$package_root/scripts/lake.sh" build
 "$package_root/scripts/lake.sh" test
 "$package_root/scripts/lake.sh" exe resilient-examples

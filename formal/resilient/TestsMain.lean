@@ -125,9 +125,84 @@ def restartAuthorityFailuresFor (run : ScenarioRun) : List String :=
     run.state.generation.accepted.any fun contribution =>
       contribution.key.worker == workerId "worker-0" &&
       contribution.key.incarnation == incarnation "peer-inc-0-restarted" &&
-      contribution.key.generation.value == 1
-  if rejoined then []
-  else ["new incarnation did not rejoin the next admissible generation"]
+      contribution.key.generation.value == 4
+  []
+  |> (fun failures =>
+      if rejoined then failures
+      else
+        "new incarnation did not rejoin generation 4" :: failures)
+  |> (fun failures =>
+      if run.state.generation.generation.value == 4 then failures
+      else
+        "job-5105811 continuation did not advance from generation 3 to 4" ::
+          failures)
+
+def job5105811OrderingFailures : List String :=
+  let folded :=
+    restartRejoinScenario.actions.foldl
+      (fun pair action =>
+        let before := pair.1
+        let failures := pair.2
+        let stepped := transition before action.event
+        let isRace :=
+          action.name == "job-5105811-generation-closed-catch-up"
+        let node0Reincarnated : Bool :=
+          match findPeer? before (workerId "worker-0") with
+          | none => false
+          | some peer =>
+              peer.incarnation == incarnation "peer-inc-0-restarted" &&
+              peer.phase == .sync &&
+              peer.syncedGeneration.value == 4
+        let node1Survives : Bool :=
+          match findPeer? before (workerId "worker-1") with
+          | none => false
+          | some peer =>
+              peer.incarnation == incarnation "peer-inc-1" &&
+              peer.phase == .ready
+        let generation3Committed : Bool :=
+          before.generation.generation.value == 3 &&
+          before.generation.status == .committed &&
+          before.generation.cohort.isSome &&
+          before.generation.commit.isSome
+        let exactRecovery : Bool :=
+          stepped.disposition == .catchUp &&
+          stepped.disposition.nextAction == .catchUpLatest &&
+          stepped.state == before
+        let noUnrelatedBudget : Bool :=
+          before.restartCount == 1 &&
+          before.generation.ownerReassignments == 0 &&
+          before.nodeApplyReceipts.isEmpty
+        let failures :=
+          if !isRace then failures
+          else
+            failures
+            |> (fun values =>
+                if generation3Committed then values
+                else
+                  "job-5105811 race did not follow generation-3 close/commit" ::
+                    values)
+            |> (fun values =>
+                if node0Reincarnated then values
+                else
+                  "job-5105811 node 0 was not failed/reincarnated first" ::
+                    values)
+            |> (fun values =>
+                if node1Survives then values
+                else
+                  "job-5105811 node 1 did not remain participating" :: values)
+            |> (fun values =>
+                if exactRecovery then values
+                else
+                  "job-5105811 closed response was not typed and non-mutating" ::
+                    values)
+            |> (fun values =>
+                if noUnrelatedBudget then values
+                else
+                  "job-5105811 race consumed budget or exposed partial apply" ::
+                    values)
+        (stepped.state, failures))
+      (restartRejoinScenario.initial, [])
+  folded.2
 
 def main : IO UInt32 := do
   let mut failures : List String := []
@@ -140,6 +215,7 @@ def main : IO UInt32 := do
     failures ++ normalAuthorityFailuresFor (runScenario normalScenario)
   failures :=
     failures ++ restartAuthorityFailuresFor (runScenario restartRejoinScenario)
+  failures := failures ++ job5105811OrderingFailures
   match reorderedTraceFailure with
   | some failure => failures := failures ++ [failure]
   | none => pure ()
