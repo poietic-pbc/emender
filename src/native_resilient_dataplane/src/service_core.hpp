@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <string>
 
 namespace emender_ndp {
 
@@ -46,6 +47,8 @@ public:
     int result_view(ndp_client_t, ndp_op_t, ndp_result_v1*, ndp_buffer_t*, int*);
     int op_release(ndp_client_t, ndp_op_t);
     int metrics(ndp_client_t, ndp_metrics_v1*);
+    int coordination_step(ndp_client_t, const ndp_coord_event_v1*,
+                          ndp_coord_result_v1*, std::string*);
     ServiceSnapshot snapshot(ndp_client_t) const;
 
 private:

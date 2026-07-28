@@ -15,6 +15,10 @@ extern "C" {
 
 #define NDP_ABI_V1 UINT32_C(0x00010000)
 #define NDP_ABI_V21 UINT32_C(0x00020001)
+#define NDP_COORD_ABI_V1 UINT32_C(0x00010000)
+#define NDP_COORD_MAX_NODES UINT32_C(256)
+#define NDP_COORD_MAX_EFFECTS UINT32_C(8)
+#define NDP_COORD_TRACE_CAPACITY UINT32_C(4096)
 
 typedef uint64_t ndp_client_t;
 typedef uint64_t ndp_buffer_t;
@@ -132,6 +136,84 @@ enum ndp_reason {
     NDP_REASON_SHUTDOWN = 14,
 };
 
+/*
+ * Pure production peer-coordination kernel ABI.  Every event carries its
+ * complete authority identity and returns a disposition plus explicit effects.
+ * Dense bytes, clocks, network calls, storage, and process supervision never
+ * cross this boundary.
+ */
+enum ndp_coord_event_kind {
+    NDP_COORD_RECOVER_AUTHORITY = 1,
+    NDP_COORD_RECOVER_NODE_APPLY = 2,
+    NDP_COORD_RECOVER_PEER = 3,
+    NDP_COORD_READY = 4,
+    NDP_COORD_OPEN_GENERATION = 5,
+    NDP_COORD_CONTRIBUTION = 6,
+    NDP_COORD_CLOSE_GENERATION = 7,
+    NDP_COORD_RESULT_RECEIPT = 8,
+    NDP_COORD_COMMIT = 9,
+    NDP_COORD_NODE_APPLY = 10,
+    NDP_COORD_EXPIRE_PEER = 11,
+    NDP_COORD_OWNER_LOST = 12,
+    NDP_COORD_QUERY_COMMIT = 13,
+};
+
+enum ndp_coord_event_flags {
+    NDP_COORD_FINITE_CLOSE = 1U << 0,
+    NDP_COORD_DEADLINE_EXPIRED = 1U << 1,
+};
+
+enum ndp_coord_disposition {
+    NDP_COORD_ACCEPTED = 1,
+    NDP_COORD_IDENTICAL_DUPLICATE = 2,
+    NDP_COORD_CONFLICTING_DUPLICATE = 3,
+    NDP_COORD_STALE_FENCE = 4,
+    NDP_COORD_STALE_INCARNATION = 5,
+    NDP_COORD_STALE_GENERATION = 6,
+    NDP_COORD_GENERATION_CLOSED = 7,
+    NDP_COORD_DEFERRED = 8,
+    NDP_COORD_RETRY_NEXT_GENERATION = 9,
+    NDP_COORD_INSUFFICIENT_COHORT = 10,
+    NDP_COORD_CORRUPT = 11,
+    NDP_COORD_INVALID_EVENT = 12,
+    NDP_COORD_FATAL_INVARIANT = 13,
+};
+
+enum ndp_coord_effect_kind {
+    NDP_COORD_EFFECT_BIND_FENCE = 1,
+    NDP_COORD_EFFECT_SYNC_AUTHORITY = 2,
+    NDP_COORD_EFFECT_ADVERTISE_READY = 3,
+    NDP_COORD_EFFECT_START_GENERATION = 4,
+    NDP_COORD_EFFECT_ACK_RECEIPT = 5,
+    NDP_COORD_EFFECT_FREEZE_COHORT = 6,
+    NDP_COORD_EFFECT_REASSIGN_OWNER = 7,
+    NDP_COORD_EFFECT_COMMIT_ELIGIBLE = 8,
+    NDP_COORD_EFFECT_PUBLISH_COMMIT = 9,
+    NDP_COORD_EFFECT_RECORD_NODE_APPLY = 10,
+    NDP_COORD_EFFECT_EXPIRE_PEER = 11,
+    NDP_COORD_EFFECT_RETRY_NEXT_GENERATION = 12,
+    NDP_COORD_EFFECT_EMIT_TRACE = 13,
+};
+
+enum ndp_coord_phase {
+    NDP_COORD_PHASE_NONE = 0,
+    NDP_COORD_PHASE_OPEN = 1,
+    NDP_COORD_PHASE_CLOSED = 2,
+    NDP_COORD_PHASE_ABORTED = 3,
+    NDP_COORD_PHASE_COMMITTED = 4,
+    NDP_COORD_PHASE_APPLIED = 5,
+};
+
+enum ndp_coord_member_flags {
+    NDP_COORD_MEMBER_LIVE = 1U << 0,
+    NDP_COORD_MEMBER_READY = 1U << 1,
+    NDP_COORD_MEMBER_RECOVERING = 1U << 2,
+    NDP_COORD_MEMBER_COHORT = 1U << 3,
+    NDP_COORD_MEMBER_CONTRIBUTED = 1U << 4,
+    NDP_COORD_MEMBER_RESULT_RECEIPT = 1U << 5,
+    NDP_COORD_MEMBER_NODE_APPLIED = 1U << 6,
+};
+
 struct ndp_open_v1 {
     uint32_t struct_size, abi_version, role, flags;
     uint32_t socket_path_len;
@@ -243,6 +325,48 @@ struct ndp_metrics_v1 {
     uint64_t cancelled_ops, buffer_exhaustions;
 };
 
+struct ndp_coord_event_v1 {
+    uint32_t struct_size, abi_version, kind, flags;
+    uint8_t run_key[16];
+    uint64_t fence_epoch, generation;
+    uint32_t attempt, trainer_count;
+    uint8_t node_key[16], incarnation[16];
+    uint64_t sequence, exact_tokens;
+    uint32_t minimum_nodes, reserved0;
+    uint64_t minimum_tokens;
+    uint8_t policy_digest[32], payload_digest[32], result_digest[32];
+    uint8_t receipt_digest[32], previous_receipt_digest[32];
+    uint8_t manifest_digest[32];
+};
+
+struct ndp_coord_effect_v1 {
+    uint32_t kind, reserved0;
+    uint64_t generation;
+    uint8_t node_key[16], digest[32];
+};
+
+struct ndp_coord_member_v1 {
+    uint8_t node_key[16], current_incarnation[16], cohort_incarnation[16];
+    uint64_t control_sequence, exact_tokens;
+    uint32_t flags, reserved0;
+    uint8_t payload_digest[32], result_digest[32];
+    uint8_t contribution_receipt[32], apply_receipt[32];
+};
+
+struct ndp_coord_result_v1 {
+    uint32_t struct_size, abi_version, disposition, phase;
+    uint32_t effect_count, member_count, live_count, ready_count;
+    uint32_t cohort_count, contribution_count, result_receipt_count, reserved0;
+    uint8_t run_key[16];
+    uint64_t fence_epoch, committed_generation, accepted_token_clock;
+    uint64_t active_generation, owner_epoch;
+    uint32_t active_attempt, owner_reassignments;
+    uint8_t policy_digest[32], commit_receipt[32], commit_manifest[32];
+    uint8_t committed_result[32], pre_state_digest[32], post_state_digest[32];
+    struct ndp_coord_effect_v1 effects[NDP_COORD_MAX_EFFECTS];
+    struct ndp_coord_member_v1 members[NDP_COORD_MAX_NODES];
+};
+
 NDP_API uint32_t ndp_abi_version(void);
 NDP_API uint32_t ndp_abi_version_v21(void);
 NDP_API const char *ndp_error_string(int code);
@@ -270,6 +394,12 @@ NDP_API int ndp_result_view_v1(ndp_client_t, ndp_op_t,
                                struct ndp_result_v1 *, ndp_buffer_t *, int *dup_fd);
 NDP_API int ndp_op_release_v1(ndp_client_t, ndp_op_t);
 NDP_API int ndp_client_metrics_v1(ndp_client_t, struct ndp_metrics_v1 *);
+NDP_API int ndp_coord_step_v1(ndp_client_t,
+                              const struct ndp_coord_event_v1 *,
+                              struct ndp_coord_result_v1 *,
+                              char *canonical_trace,
+                              uint32_t trace_capacity,
+                              uint32_t *trace_bytes);
 
 #ifdef __cplusplus
 }
@@ -286,6 +416,14 @@ static_assert(sizeof(struct ndp_control_v1) == 216, "ndp_control_v1 ABI size");
 static_assert(sizeof(struct ndp_event_v1) == 96, "ndp_event_v1 ABI size");
 static_assert(sizeof(struct ndp_result_v1) == 168, "ndp_result_v1 ABI size");
 static_assert(sizeof(struct ndp_metrics_v1) == 184, "ndp_metrics_v1 ABI size");
+static_assert(sizeof(struct ndp_coord_event_v1) == 312,
+              "ndp_coord_event_v1 ABI size");
+static_assert(sizeof(struct ndp_coord_effect_v1) == 64,
+              "ndp_coord_effect_v1 ABI size");
+static_assert(sizeof(struct ndp_coord_member_v1) == 200,
+              "ndp_coord_member_v1 ABI size");
+static_assert(sizeof(struct ndp_coord_result_v1) == 52016,
+              "ndp_coord_result_v1 ABI size");
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 _Static_assert(sizeof(struct ndp_open_v1) == 224, "ndp_open_v1 ABI size");
 _Static_assert(sizeof(struct ndp_layout_v1) == 56, "ndp_layout_v1 ABI size");
@@ -297,6 +435,14 @@ _Static_assert(sizeof(struct ndp_control_v1) == 216, "ndp_control_v1 ABI size");
 _Static_assert(sizeof(struct ndp_event_v1) == 96, "ndp_event_v1 ABI size");
 _Static_assert(sizeof(struct ndp_result_v1) == 168, "ndp_result_v1 ABI size");
 _Static_assert(sizeof(struct ndp_metrics_v1) == 184, "ndp_metrics_v1 ABI size");
+_Static_assert(sizeof(struct ndp_coord_event_v1) == 312,
+               "ndp_coord_event_v1 ABI size");
+_Static_assert(sizeof(struct ndp_coord_effect_v1) == 64,
+               "ndp_coord_effect_v1 ABI size");
+_Static_assert(sizeof(struct ndp_coord_member_v1) == 200,
+               "ndp_coord_member_v1 ABI size");
+_Static_assert(sizeof(struct ndp_coord_result_v1) == 52016,
+               "ndp_coord_result_v1 ABI size");
 #endif
 
 #endif

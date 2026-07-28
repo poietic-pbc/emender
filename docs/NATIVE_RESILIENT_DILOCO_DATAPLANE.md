@@ -29,11 +29,11 @@ appendices and do not change these decisions.
 
 | Concern | V1 contract |
 |---|---|
-| Control plane | The model-free native peer-control protocol owns live fence/incarnation validation, READY membership, generation open/freeze/abort/commit, node-apply state, and recovery handshakes. Python adapts Slurm, chooses checkpoint/outer policy, and writes immutable restart evidence; no shared database participates. |
+| Control plane | One pure deterministic transition kernel in the persistent model-free C++ service owns live fence/incarnation validation, READY membership, generation open/freeze/abort/commit, node-apply state, and recovery handshakes. Python submits typed events, executes explicit effects, adapts Slurm, chooses checkpoint/outer policy, and writes immutable restart evidence; no shared database participates. |
 | Dense data plane | One persistent model-free C++17 service per node owns local dense handoff, exact weighted reduction, network payloads, replay, and redistribution. Production is libfabric `FI_EP_RDM` with exact provider `cxi`; Python TCP carries zero production dense bytes. |
 | Failure boundary | The elastic backend uses bounded point-to-point work over explicitly named contributions/owners. It never requires launched ranks, MPI, or an all-rank collective. Loss triggers bounded owner reassignment/replay or a clean no-commit abort. |
 | Node-local path | Trainers produce directly into XPMEM or service-allocated memfd buffers. Handoff adds no trainer-sized write; redistribution creates one shared node aggregate, not eight files/copies. Disk may retain one reduced node contribution only as an explicit bounded NVMe replay fallback. |
-| Correctness | Python freezes locally complete, checksummed, replayable node contributions. Native owners apply each fenced identity exactly once, in the specified deterministic float64 order, with exact integer weights, checksums, credits, and idempotent receipts. |
+| Correctness | Python reports clocks and locally complete, checksummed, replayable node contributions as typed events. The native kernel freezes the immutable accepted set and authorizes commit/apply; native owners apply each fenced identity exactly once, in the specified deterministic float64 order, with exact integer weights, checksums, credits, and idempotent receipts. |
 | Checkpoint/commit | Native code returns a fenced read-only aggregate view. Native peers agree the exact next result/token/receipt identity; background policy materializes and reload-verifies the immutable checkpoint from immutable inputs, and a digest-linked receipt makes it durable. In bounded asynchronous mode, live trainers apply only the complete verified result later at a safe boundary. `latest.json` and fabric receipts are not authority. |
 | Admission gates | G0 local -> G1 two-node CXI probe -> **G2 full-layout two-node synthetic** -> G3 real two-node -> G4 failure/rejoin -> G5 fresh-allocation restart -> G6 ordered 4/8/16/32/64/256 scale. No real model or 4+ node native job is allowed before exact-code G2 passes. |
 
@@ -41,7 +41,8 @@ appendices and do not change these decisions.
 
 The production dense path is a persistent, model-free C++17 service on every
 node. It uses libfabric `FI_EP_RDM`; Frontier production selects provider `cxi`
-explicitly. Python remains the control plane. Python TCP, Python object
+explicitly. Python remains the scheduler/policy/effect adapter around the
+compiled coordination authority. Python TCP, Python object
 serialization, MPI, and any failure-sensitive all-rank collective are forbidden
 from the elastic dense hot path.
 
@@ -89,9 +90,11 @@ elastic backend.
 All NDP01–NDP17 decisions remain mandatory for
 `async-decoupled-v2.1-simple`. The native service remains persistent,
 model-free, point-to-point, credit bounded, checksummed, deterministic, and
-fenced. It still has no authority to select lag, membership, accepted sets,
-exact-token floors, outer math, checkpoint cadence, scale closure, or commit
-state.
+fenced. It has no authority to invent lag, exact-token floors, outer math,
+checkpoint cadence, or scale-close timing. Those policy values and external
+observations arrive as typed events. The service kernel is nevertheless the
+sole authority that applies READY membership, immutable accepted sets,
+generation phase, commit, node apply, and recovery transitions.
 
 The current 76-byte v1 contribution identity and v1 metadata kinds are
 insufficient. A conforming implementation MUST use
@@ -133,8 +136,9 @@ historical evidence only.
 There is one Python allocation holder, one Python manager and one native data
 service per live node, and normally eight Python trainer processes per Frontier
 node. The manager is model-free. Trainers own model/inner optimizer state. The
-native service owns no training policy and cannot commit a generation. In
-bounded asynchronous mode, trainers exclusively own all live mutable state;
+native service owns no training policy, but its pure kernel is the sole
+coordination commit authority after external durable-publication evidence
+arrives as a typed event. In bounded asynchronous mode, trainers exclusively own all live mutable state;
 managers and native services receive only fenced immutable snapshots and
 immutable results. No background process may map or inspect a trainer's live
 mutable model or optimizer.
@@ -143,8 +147,8 @@ mutable model or optimizer.
 |---|---|---|
 | Publish immutable scheduler-fenced allocation claim | scheduler adapter only | peer control validates claim/fence; C++ rejects stale binds |
 | DISCOVER/BOOT/SYNC/READY/ACTIVE/DRAIN/EXPIRE | invokes native peer protocol | peer control is live authority; C++ reports local readiness/faults |
-| Open, close, freeze, commit, defer, or abort generation | invokes native peer protocol and policy | peer control agrees state; C++ executes a validated immutable plan |
-| Choose accepted identities, `Q_min`, `T_min`, deadlines, and owners | sole owner | validates plan/bounds; no policy substitution |
+| Open, close, freeze, commit, defer, or abort generation | supplies typed policy/timer/storage events and executes effects | pure kernel is the only authority that changes generation/commit state |
+| Choose accepted identities, `Q_min`, `T_min`, deadlines, and owners | supplies configured floors, timer events, and deterministic owner inputs | snapshots READY membership, validates Q/T, freezes identities, and authorizes bounded owner epochs; no policy substitution |
 | Export trainer delta and local weight | invokes stable C ABI | maps, validates, and reduces native buffers |
 | Endpoint publication and route installation | exchanges opaque endpoint records | creates endpoint, validates and installs routes |
 | Dense contribution/aggregate/replay/redistribution bytes | MUST NOT carry them over TCP or serialize Python objects | sole owner |
@@ -199,10 +203,11 @@ Generation closure is a two-phase control/data operation:
    its metadata/root/weight are reported to Python. “Complete contribution” in
    the compute-pool authority means this locally complete, retained state; a
    metadata promise without the retained bytes is not complete.
-2. Python applies READY membership, `Q_min`, `T_min`, and the generation
-   deadline, then freezes a deterministic complete set. Owners accept dense
-   bytes only for that exact set. If any frozen payload cannot finish, the
-   attempt is reassigned or aborted with no publication.
+2. Python reports READY/expiry and finite/deadline observations with configured
+   `Q_min`/`T_min` as typed events. The pure native kernel snapshots leased
+   READY identities and freezes a deterministic complete set. Owners accept
+   dense bytes only for that exact set. If any frozen payload cannot finish,
+   the kernel authorizes bounded reassignment or abort with no publication.
 3. Each owner reports `OWNED_READY` independently. Python verifies complete
    shard coverage and sends `FINALIZE_OWNERS`; this is point-to-point control,
    not a collective.
