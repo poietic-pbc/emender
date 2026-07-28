@@ -145,6 +145,14 @@ void test_job5105811_and_next_generation_rejoin() {
     state = apply(state, close, coordination::Disposition::Accepted);
     assert(state.active.phase == coordination::GenerationPhase::Closed);
     const auto frozen_digest = coordination::state_digest(state);
+    auto late_different_sequence = contribution0;
+    late_different_sequence.sequence = 99;
+    const auto late_different =
+        coordination::step(state, late_different_sequence);
+    assert(late_different.disposition
+        == coordination::Disposition::GenerationClosed);
+    assert(late_different.pre_state_digest
+        == late_different.post_state_digest);
     state = apply(state, close,
                   coordination::Disposition::IdenticalDuplicate);
     assert(coordination::state_digest(state) == frozen_digest);
@@ -188,7 +196,7 @@ void test_job5105811_and_next_generation_rejoin() {
     const auto conflicting_commit_result =
         coordination::step(state, conflicting_commit);
     assert(conflicting_commit_result.disposition
-        == coordination::Disposition::FatalInvariant);
+        == coordination::Disposition::ConflictingDuplicate);
     assert(conflicting_commit_result.pre_state_digest
         == conflicting_commit_result.post_state_digest);
 
@@ -246,6 +254,7 @@ void test_job5105811_and_next_generation_rejoin() {
     // apply/reload, advertise READY, and form the next generation cohort.
     partial_apply.trainer_count = 8;
     state = apply(state, partial_apply, coordination::Disposition::Accepted);
+    assert(state.active.phase == coordination::GenerationPhase::Committed);
     auto ready0 = event(coordination::EventKind::Ready, state);
     ready0.generation = 1;
     ready0.node = key(1);
@@ -266,6 +275,13 @@ void test_job5105811_and_next_generation_rejoin() {
     apply1.incarnation = key(12);
     apply1.receipt_digest = digest(0x72);
     state = apply(state, apply1, coordination::Disposition::Accepted);
+    assert(state.active.phase == coordination::GenerationPhase::Committed);
+    auto apply2 = partial_apply;
+    apply2.node = key(3);
+    apply2.incarnation = key(13);
+    apply2.receipt_digest = digest(0x73);
+    state = apply(state, apply2, coordination::Disposition::Accepted);
+    assert(state.active.phase == coordination::GenerationPhase::Applied);
     auto ready1 = ready0;
     ready1.node = key(2);
     ready1.incarnation = key(12);
@@ -567,6 +583,38 @@ void test_bounded_membership() {
     assert(bounded.pre_state_digest == bounded.post_state_digest);
 }
 
+void test_open_snapshots_below_floor_and_deadline_aborts_without_commit() {
+    auto state = configured(2);
+    state = recover_ready(state, 1, 11, 1);
+
+    auto open = event(coordination::EventKind::OpenGeneration, state);
+    open.generation = 0;
+    open.attempt = 1;
+    state = apply(state, open, coordination::Disposition::Accepted);
+    assert(state.active.cohort.size() == 1);
+
+    auto contribution = event(coordination::EventKind::Contribution, state);
+    contribution.generation = 0;
+    contribution.attempt = 1;
+    contribution.node = key(1);
+    contribution.incarnation = key(11);
+    contribution.sequence = 1;
+    contribution.exact_tokens = 2;
+    contribution.payload_digest = digest(0x44);
+    state = apply(
+        state, contribution, coordination::Disposition::Accepted);
+
+    auto close = event(coordination::EventKind::CloseGeneration, state);
+    close.generation = 0;
+    close.attempt = 1;
+    close.flags = coordination::EventFlagDeadlineExpired;
+    state = apply(
+        state, close, coordination::Disposition::InsufficientCohort);
+    assert(state.active.phase == coordination::GenerationPhase::Aborted);
+    assert(state.committed_generation == 0);
+    assert(coordination::is_zero(state.commit_receipt));
+}
+
 }  // namespace
 
 int main() {
@@ -574,6 +622,7 @@ int main() {
     test_stale_fence_expiry_owner_replay_and_fail_closed_state();
     test_recovery_is_monotonic_and_ready_requires_all_eight_apply();
     test_bounded_membership();
+    test_open_snapshots_below_floor_and_deadline_aborts_without_commit();
     std::cout << "native coordination kernel tests passed\n";
     return 0;
 }

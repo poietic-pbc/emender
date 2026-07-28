@@ -158,6 +158,9 @@ scripts/lake.sh exe resilient-examples
 scripts/lake.sh exe resilient-examples \
   --trace job-5105811-generation-closed-restart-rejoin > /tmp/job-5105811.json
 scripts/lake.sh exe resilient-trace replay /tmp/job-5105811.json
+scripts/lake.sh exe resilient-conformance-corpus
+scripts/lake.sh exe resilient-conformance \
+  corpus/native-v1/native-job-5105811-generation-3-close-restart-rejoin.json
 ```
 
 The executable corpus covers normal commit/apply, duplicate and conflicting
@@ -166,3 +169,29 @@ loss, bounded replay/abort, all four runtime role-loss classes, fresh-fence
 restart, late contribution after close, the permanent job-5105811
 generation-closed catch-up, and new-incarnation admission into the next
 generation.
+
+## Production native differential boundary
+
+`Conformance.lean` derives
+`emender-native-lean-authority-view-v1` only after calling the authoritative
+`transition`. `ConformanceMain.lean` emits one oracle disposition, normalized
+post-state, structural digest, and full Lean state digest per canonical event.
+It is a view over the proof state, not a second transition system.
+
+`ConformanceExamples.lean` and `corpus/native-v1/manifest.json` retain fifteen
+production-bound traces with stable IDs, SHA-256 identities, event counts, and
+direct replay commands. The job-5105811 trace is permanent. Regenerate the
+checked corpus only from the pinned executable:
+
+```bash
+scripts/lake.sh build resilient-conformance resilient-conformance-corpus
+"$EMENDER_PYTHON" \
+  ../../scripts/conformance/generate_native_lean_corpus.py
+```
+
+The production differential runner is documented in
+[`docs/NATIVE_LEAN_COORDINATION_CONFORMANCE.md`](../../docs/NATIVE_LEAN_COORDINATION_CONFORMANCE.md).
+It starts the actual compiled persistent service and reaches
+`coordination::step` through the public C ABI and service RPC. Agreement is
+limited to pure coordination. It is not ISP timing, dense byte-path,
+floating-point, Frontier provider, or scale evidence.

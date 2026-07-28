@@ -28,3 +28,16 @@ fi
 "$package_root/scripts/lake.sh" exe resilient-examples \
   --trace job-5105811-generation-closed-restart-rejoin > "$trace_file"
 "$package_root/scripts/lake.sh" exe resilient-trace replay "$trace_file"
+"$package_root/scripts/lake.sh" exe resilient-conformance-corpus
+
+for corpus_trace in "$package_root"/corpus/native-v1/native-*.json; do
+  scenario=$(basename "$corpus_trace" .json)
+  "$package_root/scripts/lake.sh" exe resilient-conformance-corpus \
+    --trace "$scenario" >"$trace_file"
+  if ! cmp -s "$trace_file" "$corpus_trace"; then
+    echo "checked native conformance trace is stale: $scenario" >&2
+    exit 1
+  fi
+  "$package_root/scripts/lake.sh" exe resilient-conformance "$corpus_trace" \
+    >/dev/null
+done

@@ -1168,6 +1168,17 @@ role, by the downstream compiled-transport task using the existing build and
 zero missing/timed-out/stale updates, 5,506,770,496 aggregate bytes, finite
 loss, and the observed merge duration.
 
+## Pure coordination differential
+
+The cross-authority canonical schema, compiled-service adapter, permanent
+job-5105811/corner-case corpus, source/runtime call-path audit, and
+first-divergence replay contract are specified in
+[Native/Lean coordination conformance](NATIVE_LEAN_COORDINATION_CONFORMANCE.md).
+That gate calls the production `coordination::step` through the installed
+library, metadata RPC, and persistent service. It does not replace the native
+trace or extend pure agreement into a dense-path, timing, numerical, Frontier,
+or scale claim.
+
 ## Conformance and traceability checklist
 
 Every implementation, runner, qualification, or scale task using this design

@@ -1,7 +1,9 @@
 import ResilientProtocol.Types
 import ResilientProtocol.Kernel
 import ResilientProtocol.Trace
+import ResilientProtocol.Conformance
 import ResilientProtocol.Examples
+import ResilientProtocol.ConformanceExamples
 
 /-!
 Authoritative import root for the pure resilient DiLoCo coordination kernel.

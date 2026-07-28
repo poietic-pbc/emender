@@ -300,8 +300,6 @@ Transition open_generation(const AuthorityState& before, const Event& event) {
             && item.second.ready_generation == event.generation)
             generation.cohort.emplace(item.first, item.second.incarnation);
     }
-    if (generation.cohort.size() < after.minimum_nodes)
-        return unchanged(before, event, Disposition::InsufficientCohort);
     after.active = std::move(generation);
     return finish(before, std::move(after), event, Disposition::Accepted, {
         effect(EffectKind::StartGeneration, event.generation),
@@ -332,6 +330,12 @@ Transition contribution(const AuthorityState& before, const Event& event) {
             return unchanged(before, event,
                              Disposition::ConflictingDuplicate);
         }
+        if (before.active.phase != GenerationPhase::Open)
+            return unchanged(before, event, Disposition::GenerationClosed, {
+                effect(EffectKind::RetryNextGeneration,
+                       before.committed_generation, event.node,
+                       before.commit_receipt),
+            });
         return unchanged(before, event, Disposition::ConflictingDuplicate);
     }
     if (before.active.phase != GenerationPhase::Open)
@@ -397,7 +401,7 @@ Transition close_generation(const AuthorityState& before, const Event& event) {
         AuthorityState after = before;
         after.active.phase = GenerationPhase::Aborted;
         return finish(before, std::move(after), event,
-                      Disposition::RetryNextGeneration, {
+                      Disposition::InsufficientCohort, {
             effect(EffectKind::RetryNextGeneration, event.generation + 1),
         });
     }
@@ -472,7 +476,7 @@ Transition commit(const AuthorityState& before, const Event& event) {
             && event.result_digest == before.committed_result
             && event.exact_tokens == before.accepted_token_clock)
             return unchanged(before, event, Disposition::IdenticalDuplicate);
-        return unchanged(before, event, Disposition::FatalInvariant);
+        return unchanged(before, event, Disposition::ConflictingDuplicate);
     }
     if (event.generation != before.committed_generation + 1
         || !before.active.present
@@ -554,8 +558,25 @@ Transition node_apply(const AuthorityState& before, const Event& event) {
         event.incarnation, event.receipt_digest};
     if (after.active.present
         && after.active.generation + 1 == event.generation
-        && after.active.phase == GenerationPhase::Committed)
-        after.active.phase = GenerationPhase::Applied;
+        && after.active.phase == GenerationPhase::Committed) {
+        const bool all_cohort_nodes_applied =
+            std::all_of(after.active.contributions.begin(),
+                        after.active.contributions.end(),
+                        [&](const auto& contribution) {
+                            const auto receipt =
+                                after.recovered_node_applies.find(
+                                    contribution.first);
+                            return receipt
+                                    != after.recovered_node_applies.end()
+                                && receipt->second.incarnation
+                                    == after.members.at(
+                                        contribution.first).incarnation
+                                && !is_zero(
+                                    receipt->second.receipt_digest);
+                        });
+        if (all_cohort_nodes_applied)
+            after.active.phase = GenerationPhase::Applied;
+    }
     return finish(before, std::move(after), event, Disposition::Accepted, {
         effect(EffectKind::RecordNodeApply, event.generation,
                event.node, event.receipt_digest),
