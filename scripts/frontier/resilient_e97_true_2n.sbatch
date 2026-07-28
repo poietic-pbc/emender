@@ -128,14 +128,23 @@ FI_PROVIDER=${FI_PROVIDER:-cxi}
 }
 : "${NDP_BUILD_MANIFEST:?set exact installed native build manifest}"
 : "${NDP_FULL_LAYOUT_GATE_JSON:?set retained exact-code G2 full-layout gate}"
+: "${NDP_REQUIRED_GATE:?set exact native G2 gate kind}"
+case "$NDP_REQUIRED_GATE" in
+  G2|G2-fault-rejoin-replay) ;;
+  *)
+    echo "NDP_REQUIRED_GATE must be G2 or G2-fault-rejoin-replay" >&2
+    exit 64
+    ;;
+esac
 NDP_LAUNCH_ATTESTATION="$RUN_DIR/native-dataplane-launch-attestation.json"
 "$TRAIN_PYTHON_BIN" "$REPO/scripts/frontier/attest_native_dataplane.py" verify \
   --backend "$DILOCO_DATAPLANE" --production --full-layout \
   --build-manifest "$NDP_BUILD_MANIFEST" \
-  --gate-json "$NDP_FULL_LAYOUT_GATE_JSON" --source-root "$REPO" \
+  --gate-json "$NDP_FULL_LAYOUT_GATE_JSON" \
+  --required-gate "$NDP_REQUIRED_GATE" --source-root "$REPO" \
   --output "$NDP_LAUNCH_ATTESTATION"
 export DILOCO_DATAPLANE FI_PROVIDER NDP_BUILD_MANIFEST \
-  NDP_FULL_LAYOUT_GATE_JSON NDP_LAUNCH_ATTESTATION
+  NDP_FULL_LAYOUT_GATE_JSON NDP_REQUIRED_GATE NDP_LAUNCH_ATTESTATION
 readarray -t NDP_ARTIFACT_PATHS < <("$TRAIN_PYTHON_BIN" - "$NDP_BUILD_MANIFEST" <<'PY'
 import json
 from pathlib import Path

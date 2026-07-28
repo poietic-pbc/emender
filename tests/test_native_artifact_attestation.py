@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import sys
 
 import pytest
 
@@ -18,6 +19,7 @@ from ndm.native_artifacts import (
     validate_build_manifest,
     validate_g2_gate,
 )
+from scripts.frontier import attest_native_dataplane as attestation_cli
 
 
 def _canonical(value):
@@ -139,6 +141,36 @@ def test_fault_attestation_accepts_only_exact_passing_fault_gate(tmp_path):
             gate_json=gate_path,
             required_gate="G2-fault-rejoin-replay",
         )
+
+
+def test_fault_attestation_cli_forwards_required_gate_kind(monkeypatch, capsys):
+    captured: dict[str, object] = {}
+
+    def fake_attest_launch(**kwargs):
+        captured.update(kwargs)
+        return {"status": "attested"}
+
+    monkeypatch.setattr(attestation_cli, "attest_launch", fake_attest_launch)
+    monkeypatch.setattr(sys, "argv", [
+        "attest_native_dataplane.py",
+        "verify",
+        "--backend",
+        NATIVE_CXI,
+        "--production",
+        "--full-layout",
+        "--build-manifest",
+        "/immutable/native-artifacts.json",
+        "--gate-json",
+        "/immutable/failure-injection-gate.json",
+        "--required-gate",
+        "G2-fault-rejoin-replay",
+        "--source-root",
+        "/immutable/source",
+    ])
+
+    assert attestation_cli.main() == 0
+    assert captured["required_gate"] == "G2-fault-rejoin-replay"
+    assert json.loads(capsys.readouterr().out) == {"status": "attested"}
 
 
 def test_historical_component_manifest_is_valid_but_cannot_claim_g2(tmp_path):

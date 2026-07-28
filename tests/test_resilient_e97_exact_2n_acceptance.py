@@ -162,7 +162,8 @@ def test_one_job_qos_never_receives_concurrent_phase_submission(monkeypatch, tmp
     assert sbatch[-1] == os.fspath(
         (tmp_path / "clean-overlap/rendered.sbatch").resolve())
     exported = next(value for value in sbatch if value.startswith("--export=ALL,"))
-    for required in ("REPO=", "NDP_FULL_LAYOUT_GATE_JSON=", "EMENDER_CONDA_ENV=",
+    for required in ("REPO=", "NDP_FULL_LAYOUT_GATE_JSON=",
+                     "NDP_REQUIRED_GATE=G2", "EMENDER_CONDA_ENV=",
                      "RESILIENT_E97_SEED_CONFIG=", "RESILIENT_E97_SEED_STEP=2300930",
                      "RESILIENT_E97_SEED_TOKENS=150793748480",
                      "RESILIENT_E97_SEED_SIZE=7719680116",

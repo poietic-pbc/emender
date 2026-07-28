@@ -999,6 +999,8 @@ def build_plan(
             f"RUN_DIR={launch['run_dir']}",
             f"NDP_BUILD_MANIFEST={launch['native_build_manifest']}",
             f"NDP_FULL_LAYOUT_GATE_JSON={launch['full_layout_gate']}",
+            "NDP_REQUIRED_GATE="
+            + ("G2" if gate == "clean" else "G2-fault-rejoin-replay"),
             f"EMENDER_CONDA_ENV={APPROVED_ENV}",
             "DILOCO_DATAPLANE=native-cxi",
             "FI_PROVIDER=cxi",

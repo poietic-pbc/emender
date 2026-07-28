@@ -30,6 +30,11 @@ def parser() -> argparse.ArgumentParser:
     verify.add_argument("--source-root", default=str(ROOT))
     verify.add_argument("--production", action="store_true")
     verify.add_argument("--full-layout", action="store_true")
+    verify.add_argument(
+        "--required-gate",
+        choices=("G2", "G2-fault-rejoin-replay"),
+        default="G2",
+    )
     verify.add_argument("--output", default="")
     return value
 
@@ -46,7 +51,10 @@ def main() -> int:
             backend=args.backend, production=args.production,
             full_layout=args.full_layout,
             build_manifest=args.build_manifest or None,
-            gate_json=args.gate_json or None, source_root=args.source_root)
+            gate_json=args.gate_json or None,
+            source_root=args.source_root,
+            required_gate=args.required_gate,
+        )
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":"))
     if args.output:
         target = Path(args.output)

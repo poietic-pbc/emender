@@ -272,6 +272,7 @@ def test_v21_clean_plan_binds_reviewed_full_acceptance_launch(tmp_path: Path):
         tmp_path / "native-artifacts.json") in exports
     assert "NDP_FULL_LAYOUT_GATE_JSON=" + str(
         tmp_path / "full-layout-gate.json") in exports
+    assert "NDP_REQUIRED_GATE=G2" in exports
     assert "RESILIENT_E97_SEED_CACHE=" + str(
         tmp_path / f"sha256-{SEED_SHA256}.pt") in exports
     assert "RESILIENT_E97_TIKTOKEN_SHA256=" + TOKENIZER_SHA256 in exports
@@ -483,6 +484,7 @@ def test_fault_gate_binds_passing_clean_and_executable_injections(
     assert "RESILIENT_E97_INJECT_TRAINER=" in exports
     assert "RESILIENT_E97_INJECT_MANAGER=" in exports
     assert "RESILIENT_E97_INJECT_NATIVE_SERVICE=" in exports
+    assert "NDP_REQUIRED_GATE=G2-fault-rejoin-replay" in exports
     assert plan["collector"]["semantic_verdict"].endswith(
         "fault-baseline-verdict.json")
 
