@@ -8,6 +8,7 @@ import sys
 
 import pytest
 
+from ndm import native_pool_runtime
 from ndm.native_artifacts import (
     BUILD_SCHEMA,
     GATE_SCHEMA,
@@ -19,6 +20,7 @@ from ndm.native_artifacts import (
     validate_build_manifest,
     validate_g2_gate,
 )
+from ndm.native_pool_runtime import NativeManagerSession
 from scripts.frontier import attest_native_dataplane as attestation_cli
 
 
@@ -171,6 +173,40 @@ def test_fault_attestation_cli_forwards_required_gate_kind(monkeypatch, capsys):
     assert attestation_cli.main() == 0
     assert captured["required_gate"] == "G2-fault-rejoin-replay"
     assert json.loads(capsys.readouterr().out) == {"status": "attested"}
+
+
+@pytest.mark.parametrize(
+    "required_gate", ["G2", "G2-fault-rejoin-replay"])
+def test_native_manager_session_forwards_required_gate_kind(
+        monkeypatch, required_gate):
+    """The manager's second native attestation must retain the launch kind.
+
+    Frontier fault-baseline job 5105003 passed the per-role fault-G2
+    attestation, then failed before READY because ``NativeManagerSession``
+    silently repeated the check against the clean-G2 default.
+    """
+    captured = {}
+
+    def fake_attest_launch(**kwargs):
+        captured.update(kwargs)
+        return {"bundle_sha256": "unused"}
+
+    monkeypatch.setattr(native_pool_runtime, "attest_launch", fake_attest_launch)
+    monkeypatch.setattr(
+        native_pool_runtime, "_artifact_paths",
+        lambda _manifest: (_ for _ in ()).throw(RuntimeError("stop after attest")))
+
+    with pytest.raises(RuntimeError, match="stop after attest"):
+        NativeManagerSession.start(
+            backend=NATIVE_TEST, run_id="run", fence_epoch=1,
+            worker_id="node-0", incarnation="boot", host="127.0.0.1",
+            build_manifest="/immutable/native-artifacts.json",
+            gate_json="/immutable/native-gate.json", source_root=Path(__file__).parent,
+            production=False, full_layout=True, deadline_s=1,
+            required_gate=required_gate,
+        )
+
+    assert captured["required_gate"] == required_gate
 
 
 def test_historical_component_manifest_is_valid_but_cannot_claim_g2(tmp_path):
