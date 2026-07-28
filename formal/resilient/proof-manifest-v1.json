@@ -1,0 +1,221 @@
+{
+  "schema": "emender-resilient-lean-proof-manifest-v1",
+  "generated_date": "2026-07-28",
+  "toolchain": {
+    "lean": "leanprover/lean4:v4.26.0",
+    "upstream_commit": "d8204c9fd894f91bbb2cdfec5912ec8196fd8562",
+    "lake": "5.0.0-src+d8204c9",
+    "release_archive_sha256": "873c252b1c6b1392e5720ad8d5a137aabbe72c9f96a930fdb5a1dd1ddc5da454",
+    "external_packages": 0
+  },
+  "model": {
+    "authoritative_transition": "ResilientProtocol.transition",
+    "executable_trace_fold": "ResilientProtocol.executeEvents",
+    "kernel_path": "ResilientProtocol/Kernel.lean",
+    "kernel_sha256": "fd23e1100bdd692b67a38bf8b853848bd924bb5119406861b63a250056bc31ea",
+    "trace_schema": "emender-resilient-coordination-trace-v1",
+    "trace_schema_sha256": "cf654525395e63b31b2d76e8109ee2bcc6a652f6273d1c6e4ca5bec9ecb776b4"
+  },
+  "proof_policy": {
+    "runtime_boolean_is_not_a_theorem": true,
+    "forbidden_lean_tokens": [
+      "sorry",
+      "admit",
+      "native_decide",
+      "axiom",
+      "opaque",
+      "unsafe"
+    ],
+    "safety_fairness_hypotheses": false
+  },
+  "progress": {
+    "unconditional_claim": false,
+    "required_assumptions": [
+      "finite_close_and_stage_deadlines",
+      "surviving_eligible_stable_worker_quorum",
+      "surviving_exact_token_floor",
+      "bounded_permitted_failures",
+      "bounded_owner_reassignments",
+      "eventual_delivery_and_processing",
+      "fair_scheduling_of_enabled_transitions"
+    ],
+    "excluded_conditions": [
+      "total_participant_loss",
+      "permanent_quorum_loss",
+      "expired_deadline_without_token_floor",
+      "unbounded_or_over_budget_faults",
+      "unfair_scheduling"
+    ]
+  },
+  "requirements": {
+    "proved_coordination": {
+      "R": [
+        "R01",
+        "R02",
+        "R03",
+        "R04",
+        "R05",
+        "R06",
+        "R07",
+        "R08",
+        "R11",
+        "R12",
+        "R14",
+        "R15",
+        "R16"
+      ],
+      "NDP": [
+        "NDP01",
+        "NDP06",
+        "NDP10",
+        "NDP11",
+        "NDP12",
+        "NDP13",
+        "NDP15",
+        "NDP16"
+      ],
+      "V21S": [
+        "V21S01",
+        "V21S02",
+        "V21S03",
+        "V21S04",
+        "V21S05",
+        "V21S07",
+        "V21S08",
+        "V21S09",
+        "V21S10",
+        "V21S11",
+        "V21S13",
+        "V21S14",
+        "V21S17"
+      ],
+      "ISP_coordination_only": [
+        "ISP04",
+        "ISP05",
+        "ISP06",
+        "ISP07"
+      ]
+    },
+    "native_controller_evidence_only": {
+      "R": [
+        "R09",
+        "R10",
+        "R13"
+      ],
+      "NDP": [
+        "NDP02",
+        "NDP03",
+        "NDP04",
+        "NDP05",
+        "NDP07",
+        "NDP08",
+        "NDP09",
+        "NDP14",
+        "NDP17"
+      ],
+      "V21S": [
+        "V21S06",
+        "V21S12",
+        "V21S15",
+        "V21S16"
+      ],
+      "ISP": [
+        "ISP01",
+        "ISP02",
+        "ISP03"
+      ]
+    }
+  },
+  "artifacts": [
+    {
+      "path": "lean-toolchain",
+      "role": "pinned_toolchain",
+      "sha256": "e8173aad377a6d70041e5f7a5d8895ed587628f5cab243c53a18c40a1b7b6bf8"
+    },
+    {
+      "path": "lakefile.toml",
+      "role": "build_definition",
+      "sha256": "03b87fd391b1bd68861fc663652a52eae1b3a4c3b948e5a53c6c15d9d846d133"
+    },
+    {
+      "path": "lake-manifest.json",
+      "role": "empty_dependency_lock",
+      "sha256": "f7e298f35402a4ef598f1e27be9bef8d89d0cbd7a33a1d8a037b5c2945b3aeff"
+    },
+    {
+      "path": "trace-schema-v1.json",
+      "role": "trace_schema",
+      "sha256": "cf654525395e63b31b2d76e8109ee2bcc6a652f6273d1c6e4ca5bec9ecb776b4"
+    },
+    {
+      "path": "ResilientProtocol.lean",
+      "role": "authoritative_import_root",
+      "sha256": "71a5394f2850aa2b5b672fc185631f42d77e33158377c168e96ea348b26da51e"
+    },
+    {
+      "path": "ResilientProtocol/Types.lean",
+      "role": "model_types",
+      "sha256": "046754c50ada276362f9e2c17c9b69011a3931fae1d5d3132ead19b0cce17d02"
+    },
+    {
+      "path": "ResilientProtocol/Kernel.lean",
+      "role": "executable_transition",
+      "sha256": "fd23e1100bdd692b67a38bf8b853848bd924bb5119406861b63a250056bc31ea"
+    },
+    {
+      "path": "ResilientProtocol/Safety.lean",
+      "role": "safety_theorems",
+      "sha256": "65f9613a712a558c8ea66ee40a64e075d5a16c6f6a081313858f23e28da080f8"
+    },
+    {
+      "path": "ResilientProtocol/Progress.lean",
+      "role": "conditional_progress_theorems",
+      "sha256": "989ac99ccc7ba1a11fcfaa664b4ada96c234bebcb8aa69cf301e16290fdec58b"
+    },
+    {
+      "path": "ResilientProtocol/Regression.lean",
+      "role": "job_5105811_regression_theorems",
+      "sha256": "23a715d1a1769476c36554865a58e95829009fd78105f32278ac66701e6300fd"
+    },
+    {
+      "path": "ResilientProtocol/Mutations.lean",
+      "role": "invalid_variant_rejection_theorems",
+      "sha256": "699ce744d57ef388a9e5512a7b31032c4cda12a017172018d745e3ef0b13b351"
+    },
+    {
+      "path": "ResilientProtocol/Trace.lean",
+      "role": "canonical_trace_replay",
+      "sha256": "6a28ca354d0ac2ccdc40dd79e3042624c747b810c11539c1c367ce3ffb2a2ff4"
+    },
+    {
+      "path": "ResilientProtocol/Examples.lean",
+      "role": "executable_scenarios",
+      "sha256": "3fc4f8629fd48826456e900d4ade37b81f48e3f9a3ec1c41c8a681e09f4e140e"
+    },
+    {
+      "path": "TestsMain.lean",
+      "role": "executable_regression_suite",
+      "sha256": "66ffa8d33b9136a76969389a555c37a7d212ea50510bbcb566c5348a5d52ad6e"
+    },
+    {
+      "path": "PROOF_COVERAGE.md",
+      "role": "transition_requirement_crosswalk",
+      "sha256": "51179e467d7483d9d11101724241989a09ec6d1725dc47932f8d1f38aeb1c6db"
+    },
+    {
+      "path": "README.md",
+      "role": "proof_scope_and_reproduction",
+      "sha256": "9893b5395ca6610efae90ecd5e420ab5fc8eb0fb41a970454a558bebd56827e9"
+    },
+    {
+      "path": "scripts/smoke.sh",
+      "role": "offline_smoke_gate",
+      "sha256": "89ae8620b0919b656585ad57c9e0b4df5990d5a642391cc5e05bd1a1a0779ae7"
+    },
+    {
+      "path": "scripts/verify-proof-manifest.sh",
+      "role": "digest_verifier",
+      "sha256": "fb70aa8eeafff490488452095ebcc777f13aabe51050a9c0aa8a05adf924f728"
+    }
+  ]
+}

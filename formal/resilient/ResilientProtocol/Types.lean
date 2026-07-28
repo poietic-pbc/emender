@@ -36,40 +36,40 @@ structure AllocationId where value : String
   deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
 
 structure Fence where value : Nat
-  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson, Ord, Lean.FromJson, Lean.ToJson
+  deriving Repr, BEq, ReflBEq, LawfulBEq, DecidableEq, Lean.FromJson, Lean.ToJson, Ord, Lean.FromJson, Lean.ToJson
 
 structure Generation where value : Nat
-  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson, Ord, Lean.FromJson, Lean.ToJson
+  deriving Repr, BEq, ReflBEq, LawfulBEq, DecidableEq, Lean.FromJson, Lean.ToJson, Ord, Lean.FromJson, Lean.ToJson
 
 structure Attempt where value : Nat
-  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson, Ord, Lean.FromJson, Lean.ToJson
+  deriving Repr, BEq, ReflBEq, LawfulBEq, DecidableEq, Lean.FromJson, Lean.ToJson, Ord, Lean.FromJson, Lean.ToJson
 
 structure WorkerId where value : String
-  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
+  deriving Repr, BEq, ReflBEq, LawfulBEq, DecidableEq, Lean.FromJson, Lean.ToJson
 
 structure NodeId where value : String
-  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
+  deriving Repr, BEq, ReflBEq, LawfulBEq, DecidableEq, Lean.FromJson, Lean.ToJson
 
 structure TrainerId where value : String
-  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
+  deriving Repr, BEq, ReflBEq, LawfulBEq, DecidableEq, Lean.FromJson, Lean.ToJson
 
 structure Incarnation where value : String
-  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
+  deriving Repr, BEq, ReflBEq, LawfulBEq, DecidableEq, Lean.FromJson, Lean.ToJson
 
 structure ContributionSeq where value : Nat
-  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson, Ord, Lean.FromJson, Lean.ToJson
+  deriving Repr, BEq, ReflBEq, LawfulBEq, DecidableEq, Lean.FromJson, Lean.ToJson, Ord, Lean.FromJson, Lean.ToJson
 
 structure OwnerEpoch where value : Nat
-  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson, Ord, Lean.FromJson, Lean.ToJson
+  deriving Repr, BEq, ReflBEq, LawfulBEq, DecidableEq, Lean.FromJson, Lean.ToJson, Ord, Lean.FromJson, Lean.ToJson
 
 structure ReceiptId where value : String
-  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
+  deriving Repr, BEq, ReflBEq, LawfulBEq, DecidableEq, Lean.FromJson, Lean.ToJson
 
 structure ResultId where value : String
-  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
+  deriving Repr, BEq, ReflBEq, LawfulBEq, DecidableEq, Lean.FromJson, Lean.ToJson
 
 structure Digest where value : String
-  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
+  deriving Repr, BEq, ReflBEq, LawfulBEq, DecidableEq, Lean.FromJson, Lean.ToJson
 
 structure EvidenceId where value : String
   deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
@@ -154,7 +154,7 @@ inductive PeerPhase where
   | ready
   | drain
   | expire
-  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
+  deriving Repr, BEq, ReflBEq, LawfulBEq, DecidableEq, Lean.FromJson, Lean.ToJson
 
 inductive GenerationStatus where
   | open
@@ -162,7 +162,7 @@ inductive GenerationStatus where
   | aborted
   | committed
   | applied
-  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
+  deriving Repr, BEq, ReflBEq, LawfulBEq, DecidableEq, Lean.FromJson, Lean.ToJson
 
 inductive LossRole where
   | participant
@@ -207,6 +207,31 @@ def Disposition.label : Disposition → String
   | .unknownIdentity => "unknown_identity"
   | .malformedTrace => "malformed_trace"
   | .forbiddenReorder => "forbidden_reorder"
+
+/-!
+`NextAction` is the typed recovery instruction carried by a disposition.  In
+particular, a contribution racing a deterministic close is never translated
+into a process-termination instruction: it catches up or retries a later
+generation.  This is deliberately a type, not a string/Boolean convention.
+-/
+inductive NextAction where
+  | continue
+  | catchUpLatest
+  | retryNextGeneration
+  | abortGeneration
+  | quarantineSource
+  | rejectTrace
+  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
+
+def Disposition.nextAction : Disposition → NextAction
+  | .accepted | .identicalDuplicate | .conflictingDuplicate |
+      .staleFence | .staleIncarnation | .deferred |
+      .unknownIdentity => .continue
+  | .generationClosed | .catchUp => .catchUpLatest
+  | .late | .retryNextGeneration => .retryNextGeneration
+  | .insufficientCohort | .aborted => .abortGeneration
+  | .corruptNonfinite => .quarantineSource
+  | .malformedTrace | .forbiddenReorder => .rejectTrace
 
 /-! ## State records -/
 
