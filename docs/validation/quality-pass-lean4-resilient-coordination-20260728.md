@@ -3,7 +3,8 @@
 **Task:** `.quality-pass-lean4-resilient-coordination`  
 **Date:** 2026-07-28  
 **Scope:** WG task metadata and dependency edges only. No implementation file
-was changed and no Slurm job was submitted.
+was changed and no Slurm job was submitted. Revised 2026-07-28 after the user
+selected the native-first hybrid ordering.
 
 ## Verdict
 
@@ -19,9 +20,11 @@ below:
   path. Reimplementing native decisions in a test-only mock is not conformance.
 - Local CI and deterministic chaos testing compare every native event
   disposition and authoritative post-state digest with the Lean runner.
-- All five tasks are local/no-Slurm work. The formal evidence is an additional
-  fail-closed prerequisite of the already-defined 8-node systems probe; it is
-  not Frontier qualification and it authorizes no job by itself.
+- Native coordination hardening and deterministic native schedule stress are
+  the fail-closed prerequisites of the 8-node systems probe.
+- Lean modeling/proofs and native/Lean trace conformance proceed in parallel
+  with that native-first path. Their joined formal evidence gates the 32-node
+  probe, not the 8-node probe, and authorizes no job by itself.
 
 The original graph had two blocking review defects:
 
@@ -31,7 +34,8 @@ The original graph had two blocking review defects:
    `integrate-formal-coordination-scale-gate` could complete without the proof
    task.
 
-Both are corrected by the final edge list below.
+Both were corrected in the first review. The subsequent native-first revision
+supersedes that ordering with the final edge list below.
 
 ## Authority anchors and conformance checklist
 
@@ -74,6 +78,7 @@ same requirement at
 
 Abbreviations:
 
+- **H** — `harden-native-coordination-kernel`
 - **B** — `bootstrap-lean4-resilient-protocol`
 - **P** — `prove-lean4-resilient-protocol-safety`
 - **N** — `conform-native-coordinator-to-lean4`
@@ -104,7 +109,7 @@ behavior.
 | R13 | B, N, S, G | Pure model is backend-neutral; native adapter tests point-to-point runtime without collective assumptions. |
 | R14 | B, P, N, S, G | Every transition/deadline has canonical trace identity and invariant verdict; gate binds causal telemetry separately. |
 | R15 | B, P, N, S, G | Exact accepted-token accounting and deterministic result identity; native/reference tests retain numerical authority. |
-| R16 | G (S prerequisite) | Formal/local evidence is fail-closed input to the policy-controlled 8-node probe and never a scale authorization by itself. |
+| R16 | H, S, G | Native hardening/stress gate 8 nodes; the later formal/native join is fail-closed input to 32 nodes and never a scale authorization by itself. |
 
 ### NDP01-NDP17
 
@@ -147,7 +152,7 @@ behavior.
 | V21S13 | B, N, S, G | Trace schema carries causal phase identities and lag/bound facts; native/controller validators own real timing evidence. |
 | V21S14 | B, P, N, S, G | Fenced immutable result/receipt/restart chain and exact restored clocks; external seed/staging evidence remains gate-bound. |
 | V21S15 | G (S local input) | Formal build, corpus conformance and deterministic stress add local evidence but do not replace the exact two-node gates. |
-| V21S16 | G | Policy task plus all exact formal/native/chaos manifests must pass before the already-defined immediate 8-node rung. |
+| V21S16 | H, S, G | Exact native hardening/stress manifests gate 8 nodes; the joined formal/conformance manifest additionally gates 32 nodes. |
 | V21S17 | B, P, N, S, G | Finite leased-READY closure is modeled/traced and checked against policy evidence; it never closes from launched ranks or merely Q_min arrival. |
 
 ### ISP01-ISP07
@@ -220,42 +225,70 @@ predicate; the minimal Lean/native trace is directly replayable. All of this
 runs locally with opaque small payload digests—no GPU, Frontier allocation,
 external peer service, or Slurm command.
 
-## Final reviewed edges
+## Final reviewed edges (native-first hybrid)
 
 Primary workstream:
 
 ```text
 .quality-pass-lean4-resilient-coordination
-  -> bootstrap-lean4-resilient-protocol
-  -> [prove-lean4-resilient-protocol-safety,
-      conform-native-coordinator-to-lean4]
+  -> harden-native-coordination-kernel
   -> stress-native-coordinator-schedules
-  -> integrate-formal-coordination-scale-gate
   -> scale-v21-direct-8n
+
+.quality-pass-lean4-resilient-coordination
+  -> bootstrap-lean4-resilient-protocol
+  -> prove-lean4-resilient-protocol-safety
+
+[bootstrap-lean4-resilient-protocol,
+ harden-native-coordination-kernel]
+  -> conform-native-coordinator-to-lean4
+
+[prove-lean4-resilient-protocol-safety,
+ conform-native-coordinator-to-lean4,
+ scale-v21-direct-8n,
+ codify-v21-direct-scale-policy]
+  -> integrate-formal-coordination-scale-gate
+  -> scale-v21-direct-32n
+  -> scale-v21-direct-128n
 ```
 
 Explicit join edges:
 
 ```text
 stress-native-coordinator-schedules
-  after prove-lean4-resilient-protocol-safety
-  after conform-native-coordinator-to-lean4
+  after harden-native-coordination-kernel
+
+scale-v21-direct-8n
+  after stress-native-coordinator-schedules
+  after harden-native-coordination-kernel
+  after codify-v21-direct-scale-policy
+  after qualify-simple-async-v21-2n-faults
+
+conform-native-coordinator-to-lean4
+  after bootstrap-lean4-resilient-protocol
+  after harden-native-coordination-kernel
 
 integrate-formal-coordination-scale-gate
   after prove-lean4-resilient-protocol-safety
   after conform-native-coordinator-to-lean4
-  after stress-native-coordinator-schedules
+  after scale-v21-direct-8n
   after codify-v21-direct-scale-policy
 
-scale-v21-direct-8n
+scale-v21-direct-32n
   after integrate-formal-coordination-scale-gate
+  after scale-v21-direct-8n
+
+scale-v21-direct-128n
+  after scale-v21-direct-32n
 ```
 
-The pre-existing direct-scale dependencies remain intact:
-`codify-v21-direct-scale-policy` follows the exact-source two-node
-fault/restart chain, and `scale-v21-direct-8n` also directly requires that
-fault/restart task and the policy task. Assignment/evaluation bookkeeping edges
-are omitted from this human-readable list but are not removed.
+The pre-existing two-node fault/restart and policy dependencies of the 8-node
+probe remain intact. The 8-node pass is also an input to integration, so the
+formal/native join is built against the exact native kernel and schedule-stress
+lineage that actually passed at 8 nodes. The integration manifest is the new
+formal prerequisite of 32 nodes. The direct 32-to-128 edge remains intact.
+Assignment/evaluation bookkeeping edges are omitted from this human-readable
+list but are not removed.
 
 ## Gate manifest contract
 
@@ -273,6 +306,8 @@ manifest binds:
 - zero-divergence differential manifest;
 - deterministic systematic/random schedule manifest with seeds, coverage,
   replay and shrinker evidence; and
+- the collector-backed passed 8-node manifest bound to the same native kernel
+  and deterministic stress lineage; and
 - the already-required exact-source clean/fault/native/controller/scale
   evidence.
 
@@ -280,4 +315,6 @@ Lean or theorem proving is not required on compute nodes. CI builds the pinned
 proofs and replays the permanent corpus locally; the scale controller consumes
 immutable prebuilt evidence. Missing, stale, partial, evaluator-only,
 digest-mismatched, or failed evidence independently blocks the non-submitting
-8-node preflight and therefore `scale-v21-direct-8n`.
+32-node preflight and therefore `scale-v21-direct-32n`. The 8-node probe is
+gated earlier by native kernel hardening and deterministic native schedule
+stress, not by Lean completion.
