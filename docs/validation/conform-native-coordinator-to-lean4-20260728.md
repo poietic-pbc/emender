@@ -42,26 +42,28 @@ buffer-ownership, timing, Frontier, two-node, or scale qualification.
 The final source identity used to generate the retained evidence is:
 
 ```text
-650efea284e7e669ebbb8215777b05f0d7783428
+c97b5d8fe0a62884f52e28b25aa25cc03bacee9c
 ```
 
 It contains implementation commit
 `1ef567b7c972fbe620782ff4c4477a1106f43193` and the directly reproducible
-first-divergence follow-up. Before this validation record was added,
-`git ls-remote --heads origin
+first-divergence follow-up, plus the semantic merge of `origin/main` required
+by the WG completion gate. That merge preserved remote equal-generation
+peer-control rejoin and the compiled production authority, with 10/10 focused
+merge tests passing. `git ls-remote --heads origin
 wg/agent-1644/conform-native-coordinator-to-lean4` returned the exact same
-`650efea284e7e669ebbb8215777b05f0d7783428`; local/remote equality was true.
-The final evidence-only commit and its pushed equality are also recorded in
-the WG task log.
+`c97b5d8fe0a62884f52e28b25aa25cc03bacee9c`; local/remote equality was true.
+The final refreshed-evidence commit and its pushed equality are also recorded
+in the WG task log.
 
 The clean build attestation recorded:
 
 | Identity | Exact value |
 |---|---|
-| source commit | `650efea284e7e669ebbb8215777b05f0d7783428` |
+| source commit | `c97b5d8fe0a62884f52e28b25aa25cc03bacee9c` |
 | source tree dirty | `false` |
 | native bundle SHA-256 | `6e962075594cf2db36280b55e05a35fde1965e67d8beefb40a3fec776b26d908` |
-| build-manifest SHA-256 | `7eeb5f2e9c5711611ed8bc1e15bf3534dbaa3d9a567e7cf1e4180c29206fc102` |
+| build-manifest SHA-256 | `3e3fe3a3c9229f19f3323820f4215f85002c18b379bccb07e669b3b48d0160ca` |
 | `libemender_ndp.so.1` SHA-256 | `dbb0ea7dd163e0c4b600fe6185bc7ed4ba2bfcc43ad0a0e85512dc98d2ea4645` |
 | `ndp_cxi_service` SHA-256 | `fbb6beb8164c8c6511f4d3726e4586f13538c6ab998abaf092dfca6710241594` |
 | `libemender_ndp_transport.so.1` SHA-256 | `ebe232da8974b7205fd1b43efee41374262ea3472cf66a15dc547beae8ba5572` |
@@ -194,7 +196,7 @@ cohort restart, rollback, partial apply, double commit, or fatal peer exit.
 
 The retained agreement report is
 `reports/conformance/native-lean-v1/job-5105811-agreement.json`, SHA-256
-`ef7c74fda6651ce2d2607445dcea1c2bfbf200f38b4ee137d701de2ae13be8bc`.
+`4fb199d6b504aa9d5b36441d286e8e8c5617b9c4edc691e4bd68d9d5ea4bb99d`.
 
 ## Deliberate actual-mutation divergence
 
@@ -216,7 +218,7 @@ Retained files:
 - first-divergence report:
   `reports/conformance/native-lean-v1/deliberate-fault/native-job-5105811-generation-3-close-restart-rejoin.first-divergence-25.report.json`,
   SHA-256
-  `c6c01cdc22a6534c26d4dcb776c91d79a4c10d40aeed8b73dccf4da85c1429e8`.
+  `f077d1f514af31b8f0cc349d0e073b553bf2ec33c215ab111a8e858fc44811b6`.
 
 Direct reproduction from the repository root:
 
@@ -275,11 +277,12 @@ clean final source identity above.
 "$EMENDER_PYTHON" -m pytest -q tests/test_native_lean_conformance.py
 ```
 
-Result on final source `650efea2`: `7 passed in 98.10s`. The seven tests cover corpus identity and
-canonical encoding; duplicate/reordered/incomplete rejection; Lean unknown
-event rejection before native launch; source call-path audit; all 15 traces
-and 486 live-service events; actual-mutation fault observation and replay; and
-Lean/Python common-view digest equality.
+Result on final integrated source `c97b5d8f`: `7 passed in 79.45s`. The seven
+tests cover corpus identity and canonical encoding; duplicate/reordered/
+incomplete rejection; Lean unknown event rejection before native launch;
+source call-path audit; all 15 traces and 486 live-service events;
+actual-mutation fault observation and replay; and Lean/Python common-view
+digest equality.
 
 ### Syntax and manifest checks
 
