@@ -650,6 +650,13 @@ def test_collector_registration_failure_never_releases_held_payload(
     assert saved["payloads"][plan["payload_digest"]]["collector"]["job_id"] == (
         "71002"
     )
+    scheduler = saved["payloads"][plan["payload_digest"]]["collector"]["scheduler"]
+    assert scheduler == {
+        "Account": "bif148",
+        "Nodes": 1,
+        "Partition": "batch",
+        "QOS": "normal",
+    }
 
 
 def test_repeated_reconciliation_submits_neither_payload_nor_collector_twice(
@@ -706,6 +713,10 @@ def test_repeated_reconciliation_submits_neither_payload_nor_collector_twice(
     assert saved["payloads"][plan["payload_digest"]]["collector"]["job_id"] == (
         "72002"
     )
+    collector_command = calls[collector_submit]
+    assert "--account=bif148" in collector_command
+    assert "--qos=normal" in collector_command
+    assert "--qos=debug" not in collector_command
 
 
 @pytest.mark.parametrize("status", ("terminal", "retired"))
@@ -760,6 +771,66 @@ def test_queued_and_running_payloads_are_recognized_without_resubmission(
             AssertionError("queued/running reconciliation touched scheduler")),
     )
     assert submit_plan(plan) == "73101"
+
+
+def test_fake_frontier_rejects_collector_without_account(tmp_path: Path):
+    fake = Path(__file__).resolve().parent / "support/fake_async_v21_scheduler.py"
+    sbatch = tmp_path / "sbatch"
+    sbatch.symlink_to(fake)
+    environment = {
+        **os.environ,
+        "FAKE_ASYNC_V21_SCHEDULER_STATE": str(tmp_path / "scheduler.json"),
+    }
+    rejected = subprocess.run(
+        [
+            str(sbatch), "--parsable", "--nodes=1", "--partition=batch",
+            "--qos=normal", "--dependency=afterany:81000",
+            "--job-name=collector-without-account",
+        ],
+        env=environment, text=True, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert rejected.returncode != 0
+    assert "requires an explicit account" in rejected.stderr
+    assert not (tmp_path / "scheduler.json").exists()
+
+
+def test_fake_frontier_rejects_second_submitted_debug_qos_job(
+    tmp_path: Path,
+):
+    fake = Path(__file__).resolve().parent / "support/fake_async_v21_scheduler.py"
+    sbatch = tmp_path / "sbatch"
+    sbatch.symlink_to(fake)
+    scheduler_state = tmp_path / "scheduler.json"
+    environment = {
+        **os.environ,
+        "FAKE_ASYNC_V21_SCHEDULER_STATE": str(scheduler_state),
+    }
+    payload = subprocess.run(
+        [
+            str(sbatch), "--parsable", "--hold", "--nodes=2",
+            "--partition=batch", "--qos=debug", "--job-name=held-payload",
+        ],
+        env=environment, check=True, text=True, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    rejected = subprocess.run(
+        [
+            str(sbatch), "--parsable", "--account=bif148", "--nodes=1",
+            "--partition=batch", "--qos=debug",
+            f"--dependency=afterany:{payload.stdout.strip()}",
+            "--job-name=debug-collector",
+        ],
+        env=environment, text=True, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert rejected.returncode != 0
+    assert "QOSMaxSubmitJobPerUserLimit" in rejected.stderr
+    state = json.loads(scheduler_state.read_text())
+    assert len(state["jobs"]) == 1
+    held = next(iter(state["jobs"].values()))
+    assert held["released"] is False
+    assert held["qos"] == "debug"
 
 
 def test_fake_scheduler_collector_survives_worker_death_and_is_exactly_once(
@@ -861,12 +932,20 @@ def test_fake_scheduler_collector_survives_worker_death_and_is_exactly_once(
         if item["kind"] == "collector"
     ]
     assert len(collectors) == 1
+    assert collectors[0]["account"] == "bif148"
+    assert collectors[0]["qos"] == "normal"
     durable_state = json.loads((tmp_path / "state.json").read_text())
     durable_payload = durable_state["payloads"][verdict["payload_digest"]]
     assert durable_state["active_job"] is None
     assert durable_payload["status"] == "terminal"
     assert durable_payload["collector"]["job_id"] == collectors[0]["job_id"]
     assert durable_payload["collector"]["status"] == "completed"
+    assert durable_payload["collector"]["scheduler"] == {
+        "Account": collectors[0]["account"],
+        "Nodes": 1,
+        "Partition": collectors[0]["partition"],
+        "QOS": collectors[0]["qos"],
+    }
     before = (
         verdict_path.stat().st_mtime_ns,
         hashlib.sha256(verdict_path.read_bytes()).hexdigest(),

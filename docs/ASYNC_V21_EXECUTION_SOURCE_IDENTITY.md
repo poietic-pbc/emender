@@ -78,7 +78,13 @@ held payload submission
 
 The model request is exact `Nodes=<reviewed rung>`,
 `Partition=batch`, and `QOS=debug`; the two scheduler fields are retained
-separately. A failed or ambiguous collector registration cannot release the
+separately. The independent collector is identity-bound to
+`Account=bif148`, `Nodes=1`, `Partition=batch`, and `QOS=normal`. It MUST NOT
+consume the model job's `debug` QoS submission slot: Frontier limits that QoS
+to one submitted job per user, and the model payload remains held until the
+collector is registered. The controller derives retained collector scheduler
+identity from the command it actually submits, rather than copying an intended
+identity. A failed or ambiguous collector registration cannot release the
 model job. Deterministic Slurm job names/comments allow reconciliation of a
 scheduler side effect before any retry, and the durable payload state
 recognizes held, queued, running, terminal, and retired identities without a

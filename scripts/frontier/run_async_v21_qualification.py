@@ -37,6 +37,8 @@ PAYLOAD_SCHEMA = "emender-async-v21-qualification-payload-v1"
 STATE_SCHEMA = "emender-async-v21-qualification-state-v2"
 LEGACY_STATE_SCHEMA = "emender-async-v21-qualification-state-v1"
 COLLECTOR_SCHEMA = "emender-async-v21-terminal-collector-v1"
+FRONTIER_ACCOUNT = "bif148"
+COLLECTOR_QOS = "normal"
 EXECUTION_SOURCE_SCHEMA = "emender-async-v21-execution-source-v1"
 # These are append-only human/machine evidence stores.  They are deliberately
 # the complete exclusion list: every other tracked byte, including authority
@@ -962,9 +964,10 @@ def _collector_registration(
     command = [
         "sbatch",
         "--parsable",
+        f"--account={FRONTIER_ACCOUNT}",
         "--nodes=1",
         "--partition=batch",
-        "--qos=debug",
+        f"--qos={COLLECTOR_QOS}",
         "--time=00:10:00",
         f"--job-name={name}",
         f"--comment={comment}",
@@ -985,7 +988,12 @@ def _collector_registration(
         "wrap_argv": wrap_argv,
         "wrap_digest": canonical_digest(wrap_argv),
         "evidence_dir": str(evidence_dir),
-        "scheduler": {"Nodes": 1, "Partition": "batch", "QOS": "debug"},
+        "scheduler": {
+            "Account": _command_option(command, "--account="),
+            "Nodes": int(_command_option(command, "--nodes=")),
+            "Partition": _command_option(command, "--partition="),
+            "QOS": _command_option(command, "--qos="),
+        },
         "scheduler_owned": True,
         "requires_wg_or_codex": False,
     }
