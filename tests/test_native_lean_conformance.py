@@ -193,8 +193,13 @@ def test_fault_injected_actual_mutation_emits_first_divergence_replay(
     replay_trace = load_canonical_trace(replay)
     assert len(replay_trace["steps"]) == 26
     assert str(replay.resolve()) in report["replayCommand"]
+    assert "--fault-event-index 25" in report["replayCommand"]
     report_path = Path(report["reportPath"])
     assert report_path.is_file()
+    assert (
+        json.loads(report_path.read_text(encoding="utf-8"))["reportPath"]
+        == str(report_path.resolve())
+    )
 
 
 def test_python_state_digest_matches_lean_oracle() -> None:

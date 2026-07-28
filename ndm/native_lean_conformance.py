@@ -1547,12 +1547,17 @@ def run_differential_trace(
                             f"--trace {replay_path.resolve()} "
                             f"--build-manifest {Path(build_manifest).resolve()} "
                             f"--lean-runner {Path(lean_runner).resolve()}"
+                            + (
+                                f" --fault-event-index {fault_event_index}"
+                                if fault_event_index is not None
+                                else ""
+                            )
                         ),
+                        "reportPath": str(report_path.resolve()),
                     }
                     report_path.write_text(
                         canonical_json(report) + "\n", encoding="utf-8"
                     )
-                    report["reportPath"] = str(report_path.resolve())
                     raise ConformanceDivergence(report)
         finally:
             if authority is not None:
