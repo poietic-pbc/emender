@@ -471,6 +471,28 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
 
     def _contribute(self, request: Mapping[str, object], payload: bytes) -> dict[str, object]:
         generation, attempt = int(request["generation"]), int(request["attempt"])
+        # Generation admissions are deliberately volatile.  After peer-control
+        # reconstruction, a still-live cohort may replay work for the
+        # generation immediately preceding the authoritative commit even
+        # though this server no longer has that generation's admission object.
+        # This is a fenced catch-up outcome, not a manager failure: returning
+        # only immutable commit authority makes the replay idempotent without
+        # recreating accumulators, membership, or apply state.
+        if (
+            generation < self.committed_generation
+            and (generation, attempt) not in self.admissions
+        ):
+            return {
+                "status": "catch_up",
+                "generation": generation,
+                "attempt": attempt,
+                "authoritative_generation": self.committed_generation,
+                "receipt_digest": self.committed_receipt_digest,
+                "manifest_digest": self.committed_manifest_digest,
+                "result_root": self.committed_result_root,
+                "accepted_tokens": self.committed_accepted_tokens,
+                "requires_reload": True,
+            }
         admission = self._admission_for_identity(generation, attempt)
         if "aggregation_weight" in request:
             raise ValueError(

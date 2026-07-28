@@ -665,3 +665,84 @@ def test_stale_duplicate_and_corrupt_contribution_receipts(tmp_path):
             == "rejected_stale_fence"
     finally:
         server.shutdown(); server.server_close(); owner.shutdown(); owner.server_close()
+
+
+def test_reconstructed_control_returns_idempotent_closed_generation_receipt(tmp_path):
+    """A late peer catches up when volatile generation state was reconstructed.
+
+    This reproduces the fault-job ordering where the control owner recovered at
+    generation 4 while the other live cohort was still submitting generation
+    3.  The old contribution must not become an RPC exception or recreate any
+    mutable generation state.
+    """
+    committed_receipt = "1a" * 32
+    manifest_digest = "2b" * 32
+    result_root = "3c" * 32
+    slo = PoolStageSLO(1, 3, 1, 1, 1, 1, 1, 1)
+    server = PoolControlServer(
+        ("127.0.0.1", _port()),
+        PoolControlConfig(
+            "run-reconstructed", 9, q_min=2, t_min=2,
+            ready_fraction=None, base_digest="base", policy_digest="policy",
+            layout_digest="layout", code_digest="code", slo=slo,
+            committed_generation=4,
+            committed_receipt_digest=committed_receipt,
+            committed_accepted_tokens=1234,
+            committed_result_root=result_root,
+            committed_manifest_digest=manifest_digest,
+            committed_apply_receipts=(
+                ("node-0", "4d" * 32), ("node-1", "5e" * 32)),
+        ),
+        evidence_root=tmp_path,
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    client = PoolControlClient(server.server_address, timeout_s=1).bind(
+        "run-reconstructed", 9)
+    before = {
+        "committed_generation": server.committed_generation,
+        "committed_receipt_digest": server.committed_receipt_digest,
+        "committed_accepted_tokens": server.committed_accepted_tokens,
+        "committed_result_root": server.committed_result_root,
+        "committed_manifest_digest": server.committed_manifest_digest,
+        "admissions": dict(server.admissions),
+        "node_applies": dict(server.node_applies),
+        "membership": dict(server.membership.records),
+    }
+    try:
+        first = client.contribute_and_freeze(
+            generation=3, attempt=1, worker_id="node-1",
+            incarnation="superseded-incarnation", contribution_seq=3,
+            accepted_tokens=100, payload_digest="late-root",
+            deadline=time.monotonic() + 1)
+        second = client.contribute_and_freeze(
+            generation=3, attempt=1, worker_id="node-1",
+            incarnation="superseded-incarnation", contribution_seq=3,
+            accepted_tokens=100, payload_digest="late-root",
+            deadline=time.monotonic() + 1)
+
+        assert first == second
+        assert first == {
+            "status": "catch_up",
+            "generation": 3,
+            "attempt": 1,
+            "authoritative_generation": 4,
+            "receipt_digest": committed_receipt,
+            "manifest_digest": manifest_digest,
+            "result_root": result_root,
+            "accepted_tokens": 1234,
+            "requires_reload": True,
+        }
+        assert server.config.q_min == 2
+        assert {
+            "committed_generation": server.committed_generation,
+            "committed_receipt_digest": server.committed_receipt_digest,
+            "committed_accepted_tokens": server.committed_accepted_tokens,
+            "committed_result_root": server.committed_result_root,
+            "committed_manifest_digest": server.committed_manifest_digest,
+            "admissions": dict(server.admissions),
+            "node_applies": dict(server.node_applies),
+            "membership": dict(server.membership.records),
+        } == before
+    finally:
+        server.shutdown()
+        server.server_close()
