@@ -408,11 +408,13 @@ def _dataplane_policy(args) -> tuple[str, bool, bool]:
 
 def _attest_dataplane(args) -> dict[str, object]:
     backend, production, full_layout = _dataplane_policy(args)
+    required_gate = os.environ.get("NDP_REQUIRED_GATE", "G2")
     attestation = attest_launch(
         backend=backend, production=production, full_layout=full_layout,
         build_manifest=getattr(args, "native_build_manifest", "") or None,
         gate_json=getattr(args, "native_gate_json", "") or None,
         source_root=ROOT if backend != PYTHON_TCP_DEBUG else None,
+        required_gate=required_gate,
     )
     _require_wired_dense_runtime(backend)
     return attestation
