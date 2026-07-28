@@ -189,13 +189,79 @@ def test_live_native_selection_is_wired_and_python_debug_remains_explicit():
     assert "role recovery native runtime digest mismatch" in source
 
 
-def test_native_manager_endpoint_lifetime_spans_all_configured_generations():
+def test_native_manager_endpoint_lifetime_spans_all_configured_generations(
+        monkeypatch):
     from scripts.frontier import resilient_e97_role as role
 
+    monkeypatch.delenv("RESILIENT_E97_REQUESTED_WALLTIME", raising=False)
     args = SimpleNamespace(deadline_s=600.0, generations=3)
     assert role._native_manager_session_lifetime_s(args) == 1800.0
     manager = ROLE.read_text()[ROLE.read_text().index("def _native_manager(args)"):]
     assert "deadline_s=_native_manager_session_lifetime_s(args)" in manager
+
+
+def test_native_manager_endpoint_lifetime_spans_requested_allocation(
+        monkeypatch):
+    """Frontier job 5083780 failed when its healthy session lease expired.
+
+    Seven transactions completed atomically, then the signed manager endpoint
+    expired at 5,040 seconds (420 seconds * 12 generations) during generation
+    eight even though the exact two-node allocation still had time remaining.
+    The native identity must remain usable for the allocation's full requested
+    walltime; Slurm remains the outer hard stop.
+    """
+    from scripts.frontier import resilient_e97_role as role
+
+    monkeypatch.setenv("RESILIENT_E97_REQUESTED_WALLTIME", "02:00:00")
+    args = SimpleNamespace(deadline_s=420.0, generations=12)
+    assert role._native_manager_session_lifetime_s(args) == 7200.0
+
+
+def test_native_generation_lifetime_spans_all_post_result_phase_clocks():
+    """Frontier job 5083440 reached two complete node applies before expiry.
+
+    A finalized native result must remain valid across the independently
+    bounded checkpoint/candidate, safe-boundary rendezvous, and all-eight
+    apply/commit phases.  Treating only 180 seconds as the post-result lifetime
+    made the native COMMIT reject both otherwise complete node transactions.
+    """
+    from scripts.frontier import resilient_e97_role as role
+
+    args = SimpleNamespace(deadline_s=420.0)
+    assert role._native_post_result_lifetime_s(args) == 420.0 + 420.0 + 60.0
+
+
+def test_fenced_atomic_commit_clock_closes_before_safe_boundary_wait():
+    """The authority-commit SLO must not include later bounded phases.
+
+    Frontier job 5083593 retained both all-eight node apply receipts inside
+    the 60-second apply allowance, then node zero raised because the
+    ``fenced_atomic_commit`` clock still included candidate preparation,
+    boundary rendezvous, and apply.  Commit telemetry must close immediately
+    after the immutable commit authority has been verified.
+    """
+    source = ROLE.read_text()
+    manager = source[source.index("def _native_manager(args)"):]
+    commit_start = manager.index("atomic_commit_started = time.monotonic()")
+    commit_verified = manager.index("committed_evidence = (", commit_start)
+    commit_complete = manager.index(
+        'bulk, identity, generation, "fenced_atomic_commit"',
+        commit_verified,
+    )
+    preparation = manager.index('stage="result_preparation"', commit_verified)
+    rendezvous = manager.index(
+        "_coordinate_native_safe_boundary(", preparation)
+    apply_stage = manager.index('stage="peer_apply"', rendezvous)
+    durable_apply = manager.index("record_node_apply(", apply_stage)
+
+    assert (
+        commit_start < commit_verified < commit_complete < preparation
+        < rendezvous < apply_stage < durable_apply
+    )
+    assert (
+        '"fenced_atomic_commit"'
+        not in manager[apply_stage:durable_apply]
+    )
 
 
 def test_restarted_trainer_resolves_newer_authoritative_handoff(tmp_path):
@@ -744,58 +810,26 @@ def test_terminal_native_follower_reuses_fenced_authoritative_checkpoint(tmp_pat
             tmp_path, args, completed=1, deadline=time.monotonic() + 1)
 
 
-def test_native_trainer_background_preparation_is_serialized_by_local_rank(
-        tmp_path):
-    """One reader avoids node contention before the all-eight release."""
-    from scripts.frontier import resilient_e97_role as role
-
-    control = tmp_path / "control"
-    control.mkdir()
-    args = SimpleNamespace(run_id="run-a", coordinator_epoch=4)
-    observed = {}
-
-    def wait_for_rank_one():
-        observed["marker"] = role._wait_for_native_apply_lane(
-            control, args, generation=2, rank=1,
-            result_root="ab" * 32, deadline=time.monotonic() + 2)
-
-    waiter = threading.Thread(target=wait_for_rank_one)
-    waiter.start()
-    time.sleep(.05)
-    assert waiter.is_alive(), "rank one must not contend with rank zero's result view"
-    role.atomic_metadata(control / "native-result-applied-00000002-00.json", {
-        "run_id": "run-a", "fence_epoch": 4, "generation": 2,
-        "result_root": "ab" * 32, "rank": 0,
-    })
-    waiter.join(2)
-
-    assert not waiter.is_alive()
-    assert observed["marker"]["rank"] == 0
-    assert role._wait_for_native_apply_lane(
-        control, args, generation=2, rank=0,
-        result_root="ab" * 32, deadline=time.monotonic() + .1) is None
+def test_native_trainer_background_preparation_is_not_serialized_by_local_rank():
+    """Disjoint CPU sets make all eight immutable result readers concurrent."""
     trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args)"):]
     visible = trainer.index("manifest, aggregate = native_context.__enter__()")
-    lane = trainer.index("_wait_for_native_apply_lane(", visible)
-    apply = trainer.index("state = apply_delta(", lane)
-    assert visible < lane < apply
-    assert "min(args.deadline_s, 420.0)" in trainer[visible:apply]
-    assert "deadline=apply_lane_deadline" in trainer[lane:apply]
+    apply = trainer.index("state = apply_delta(", visible)
+    assert "_wait_for_native_apply_lane(" not in trainer[visible:apply]
 
 
 def test_native_result_preparation_excludes_foreground_apply_interval():
     """Checkpoint work finishes before the finite all-eight foreground swap.
 
-    Trainers prepare independently verified candidates from the one read-only
-    service result through a capacity-one reader credit. Durable checkpoint
-    and reload verification remain background work. Each trainer then reaches
-    a distinct K boundary; the manager release begins the 60-second x/z
+    CPU-partitioned trainers concurrently prepare independently verified
+    candidates from the one read-only service result. Durable checkpoint and
+    reload verification remain background work. Each trainer then reaches a
+    distinct K boundary; the manager release begins the 60-second x/z
     translation interval only after all eight boundary receipts exist.
     """
     trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args)"):]
     visible = trainer.index("manifest, aggregate = native_context.__enter__()")
-    lane = trainer.index("_wait_for_native_apply_lane(", visible)
-    apply = trainer.index("state = apply_delta(", lane)
+    apply = trainer.index("state = apply_delta(", visible)
     lane_credit = trainer.index("native-result-applied-", apply)
     recovery_save = trainer.index("torch.save(", lane_credit)
     prepared = trainer.index("native-candidate-prepared-", recovery_save)
@@ -810,9 +844,48 @@ def test_native_result_preparation_excludes_foreground_apply_interval():
     durable_receipt = trainer.index("native-applied-", live_swap)
 
     assert (
-        visible < lane < apply < lane_credit < recovery_save < prepared
+        visible < apply < lane_credit < recovery_save < prepared
         < rendezvous < boundary_stop < boundary_ready < release < live_swap
         < durable_receipt
+    )
+
+
+def test_checkpoint_publication_clock_closes_before_safe_boundary_wait():
+    """The background checkpoint SLO must not include boundary rendezvous.
+
+    Frontier clean job 5082866 completed immutable checkpoint publication and
+    candidate preparation, then legitimately waited for the next K40 boundary.
+    Keeping ``checkpoint_publication`` open across that independent wait made
+    rank zero raise the 420-second background SLO after live apply and before
+    its durable native-applied receipt.
+    """
+    trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args) -> int:"):]
+    checkpoint_start = trainer.index(
+        "checkpoint_publication_started = time.monotonic()")
+    reload_verified = trainer.index(
+        "_reload_verified_async_v2_latest(", checkpoint_start)
+    checkpoint_complete = trainer.index(
+        'bulk, identity, generation, "checkpoint_publication"',
+        reload_verified,
+    )
+    candidate = trainer.index(
+        "native-candidate-prepared-", reload_verified)
+    rendezvous = trainer.index(
+        'marker_name="native-boundary-rendezvous"', candidate)
+    release = trainer.index(
+        'marker_name="native-apply-release"', rendezvous)
+    live_swap = trainer.index(
+        "safe_apply_started = time.monotonic()", release)
+    durable_receipt = trainer.index(
+        "native-applied-", live_swap)
+
+    assert (
+        checkpoint_start < reload_verified < checkpoint_complete < candidate
+        < rendezvous < release < live_swap < durable_receipt
+    )
+    assert (
+        '"checkpoint_publication"'
+        not in trainer[live_swap:durable_receipt]
     )
 
 
@@ -1359,6 +1432,90 @@ def test_native_trainer_generation_timer_covers_every_result_lifecycle_path():
     assert trainer[started:telemetry].count("generation_started =") == 1
 
 
+def test_native_trainer_sync_window_telemetry_uses_real_window_identity():
+    """A deferred speculative interval must not relabel K40 as a generation.
+
+    Live job 5087352 completed K40 window 72 after generation-7 apply, but the
+    synchronous phase callback recorded its 40 starts as local window 8.  The
+    semantic validator consequently saw a false 139-second foreground hole.
+    """
+    trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args) -> int:"):]
+    callback = trainer.index(
+        "def make_training_phase(local_window, *, overlap_scope):")
+    record = trainer.index('"local_window": local_window', callback)
+    scope = trainer.index('"overlap_scope": overlap_scope', record)
+    synchronous = trainer.index(
+        "phase_callback=make_training_phase(", scope)
+    interval_identity = trainer.index(
+        "interval_window_start", synchronous)
+    terminal_scope = trainer.index(
+        '"terminal_drain"', interval_identity)
+    lookahead = trainer.index("def make_lookahead_phase(local_window):", synchronous)
+
+    assert (
+        callback < record < scope < synchronous < interval_identity
+        < terminal_scope < lookahead
+    )
+    assert '"local_window": generation' not in trainer[callback:synchronous]
+
+
+def test_deferred_interval_resumes_before_next_native_generation_admission():
+    """Native admission must not extend a corrected boundary interruption."""
+    trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args) -> int:"):]
+    deferred_gate = trainer.index("defer_native_admission = bool(")
+    skipped_admission = trainer.index(
+        "if native and not defer_native_admission:", deferred_gate)
+    resumed_window = trainer.index(
+        "window = persistent_worker.run_window(", skipped_admission)
+    delayed_admission = trainer.index(
+        "if native_plane is None:", resumed_window)
+
+    assert (
+        deferred_gate < skipped_admission < resumed_window < delayed_admission
+    )
+
+
+def test_deferred_snapshot_readiness_is_verified_after_ordered_resume():
+    """A deferred host copy must not consume the released apply clock."""
+    trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args) -> int:"):]
+    apply = trainer.index(
+        "mutable_report = async_training_lane.apply_at_boundary(")
+    deferred = trainer.index(
+        "if mutable_report.snapshot_deferred:", apply)
+    next_loop = trainer.index(
+        "for generation in range(start_generation, target_generation):")
+    resumed = trainer.index(
+        "window = persistent_worker.run_window(", next_loop)
+    verified = trainer.index(
+        "persistent_worker.wait_snapshot_ready(\n"
+        "                            interval_start,",
+        resumed,
+    )
+
+    assert "wait_snapshot_ready(" not in trainer[apply:deferred]
+    assert resumed < verified
+
+
+def test_dense_interval_rebase_precedes_boundary_ready_and_released_apply():
+    """Immutable rebase overlaps K40; the 60s clock holds only live x/z."""
+    trainer = ROLE.read_text()[ROLE.read_text().index("def trainer(args) -> int:"):]
+    prepare = trainer.index(
+        "async_training_lane.prepare_at_boundary(")
+    finish = trainer.index(
+        "boundary_report = async_training_lane.finish_at_boundary(", prepare)
+    ready = trainer.index(
+        "boundary_ready_monotonic_s = time.monotonic()", finish)
+    release = trainer.index(
+        'marker_name="native-apply-release"', ready)
+    apply = trainer.index(
+        "mutable_report = async_training_lane.apply_at_boundary(", release)
+    finished = trainer.index(
+        "apply_finished_monotonic_s = time.monotonic()", apply)
+
+    assert prepare < finish < ready < release < apply < finished
+    assert "wait_snapshot_ready(" not in trainer[release:finished]
+
+
 def test_native_pipeline_commit_ready_advances_without_foreground_blocking():
     """Deterministic generation-0 commit/apply then generation-1 handoff path."""
     from ndm.native_pipeline import (
@@ -1410,7 +1567,8 @@ def test_manager_bounds_background_readiness_then_all_eight_apply_separately():
     assert "apply_release_started = float(" in window
     assert 'apply_release["released_monotonic_s"]' in window
     assert "atomic_apply_deadline" in window
-    assert "deadline=atomic_apply_deadline" in window
+    assert "apply_receipt_deadline" in window
+    assert "deadline=apply_receipt_deadline" in window
     assert "ASYNC_V21_ALL_EIGHT_APPLY_S" in window
     assert '"native_node_apply_swap"' in window
 
@@ -1423,6 +1581,40 @@ def test_manager_bounds_background_readiness_then_all_eight_apply_separately():
     assert boundaries < release
 
 
+def test_manager_allows_bounded_receipt_publication_after_on_time_apply():
+    """Receipt discovery must not redefine the immutable 60-second apply clock.
+
+    Frontier clean job 5089570 retained all 16 rank receipts.  Node-zero rank
+    seven finished its atomic apply 3.45 ms before the released deadline, but
+    the manager used that same deadline to discover metadata published after
+    the trainer's telemetry flush.  Receipt collection needs a separate,
+    bounded control-plane grace while ``SafeBoundaryRendezvous.record_applied``
+    continues to reject any recorded apply finish after the original clock.
+    """
+    source = ROLE.read_text()
+    manager = source[source.index("def _native_manager(args)"):
+                     source.index("def manager(args)")]
+    release = manager.index("atomic_apply_deadline = float(")
+    receipt_loop = manager.index(
+        "for rank in range(args.local_quorum):", release)
+    receipt_wait = manager.index("wait_metadata(", receipt_loop)
+    receipt_record = manager.index(
+        "boundary_transaction.record_applied(", receipt_wait)
+    window = manager[release:receipt_record]
+
+    assert "ASYNC_V21_APPLY_RECEIPT_PUBLICATION_S = 10.0" in source
+    assert "apply_receipt_deadline = (" in window
+    receipt_deadline = window[
+        window.index("apply_receipt_deadline = ("):
+        window.index("node_apply = AtomicEightTrainerApply(")
+    ]
+    assert "atomic_apply_deadline" in receipt_deadline
+    assert "ASYNC_V21_APPLY_RECEIPT_PUBLICATION_S" in receipt_deadline
+    assert "deadline=apply_receipt_deadline" in window
+    assert "deadline=atomic_apply_deadline" not in window
+    assert "apply_finished > atomic_apply_deadline" in window
+
+
 def test_final_native_result_lifetime_covers_bounded_recovery_commit_phase():
     source = ROLE.read_text()
     owner = source[source.index("def _native_sharded_owner_reduce("):
@@ -1431,7 +1623,7 @@ def test_final_native_result_lifetime_covers_bounded_recovery_commit_phase():
     assert "final_operation_deadline_s = remaining_s()" in owner
     assert "deadline_s=final_operation_deadline_s" in owner
     assert "generation_deadline_s=(" in owner
-    assert "final_operation_deadline_s + min(float(args.deadline_s), 180.0)" in owner
+    assert "_native_post_result_lifetime_s(args)" in owner
 
 
 def test_import_liveness_does_not_refresh_runtime_import_progress_deadline():

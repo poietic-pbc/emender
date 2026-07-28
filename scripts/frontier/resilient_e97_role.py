@@ -112,6 +112,7 @@ ASYNC_V21_E97_NATIVE_RESIDENT_BYTES = 64_001_671_648
 ASYNC_V21_SNAPSHOT_ADMISSION_S = 1.0
 ASYNC_V21_BOUNDARY_RENDEZVOUS_S = 420.0
 ASYNC_V21_ALL_EIGHT_APPLY_S = 60.0
+ASYNC_V21_APPLY_RECEIPT_PUBLICATION_S = 10.0
 
 _CAUSAL_PHASE_BY_STAGE = {
     "async_v21_endpoint_snapshot": "freeze_snapshot",
@@ -450,6 +451,29 @@ def _native_runtime_resume_compatible(
              if key not in provenance}
             == {key: value for key, value in current.items()
                 if key not in provenance})
+
+
+def _resume_handoff_identity_matches(
+        handoff: object, args, *,
+        recorded_runtime: object, native: bool) -> bool:
+    """Bind a fresh trainer to the stable execution identity and newer fence."""
+    if not isinstance(handoff, dict):
+        return False
+    fence = handoff.get("fence")
+    return bool(
+        isinstance(fence, dict)
+        and handoff.get("run_id") == args.run_id
+        and handoff.get("payload_id") == args.payload_id
+        and handoff.get("source_id") == args.source_id
+        and (not native or handoff.get("code_id") == args.code_id)
+        and (
+            not native
+            or isinstance(recorded_runtime, dict)
+            and len(str(recorded_runtime.get("source_commit", ""))) == 40
+        )
+        and int(fence.get("coordinator_epoch", -1)) <= _fence_epoch(args)
+        and handoff.get("finalized") is True
+    )
 
 
 def _peer_authority(
@@ -810,31 +834,6 @@ def _terminal_native_checkpoint(run: Path, args, *, completed: int,
             or len(str(value.get("checkpoint_sha256", ""))) != 64):
         raise ValueError("terminal native checkpoint extent/digest is invalid")
     return checkpoint
-
-
-def _wait_for_native_apply_lane(control: Path, args, *, generation: int,
-                                rank: int, result_root: str,
-                                deadline: float) -> dict[str, object] | None:
-    """Serialize background readers of the one shared node aggregate.
-
-    The service intentionally exposes one read-only result instead of eight
-    trainer-sized copies.  Job 5080730 proved that eight concurrent full E97
-    readers contend for 262--308 seconds even though the checkpoint leader
-    alone completes in 43 seconds.  The preceding rank's authenticated
-    materialization marker is a node-local metadata credit.  This lane is
-    entirely before the all-eight ready/release barrier, so it cannot consume
-    the reviewed 60-second foreground x/z apply interval.
-    """
-    if rank <= 0:
-        return None
-    return wait_metadata(
-        control / f"native-result-applied-{generation:08d}-{rank - 1:02d}.json",
-        deadline=deadline,
-        expected={"run_id": args.run_id,
-                  "fence_epoch": _fence_epoch(args),
-                  "generation": generation,
-                  "result_root": result_root,
-                  "rank": rank - 1})
 
 
 def _native_safe_boundary_transaction(
@@ -1998,7 +1997,8 @@ def _native_sharded_owner_reduce(
         source_dtype=DType.F64, base_digest=base_digest,
         plan_digest=plan_digest, deadline_s=final_operation_deadline_s,
         generation_deadline_s=(
-            final_operation_deadline_s + min(float(args.deadline_s), 180.0)))
+            final_operation_deadline_s
+            + _native_post_result_lifetime_s(args)))
     try:
         with session.import_reduction_sources(
                 ((bridge_fd, "assembled-global", assembled_identity, 0,
@@ -2029,10 +2029,38 @@ def _native_manager_session_lifetime_s(args) -> float:
     """Bound one endpoint identity across this finite generation sequence."""
     # ``deadline_s`` remains the per-generation/per-operation ceiling at every
     # call site below.  The transport open deadline and signed endpoint expiry
-    # are session lifetime bounds, so they must cover every requested
-    # generation rather than expiring while a healthy manager advertises READY
-    # for the next one.  Slurm's requested walltime remains the outer hard cap.
-    return float(args.deadline_s) * max(1, int(args.generations))
+    # are session lifetime bounds, so they must cover the whole allocation
+    # rather than expiring while a healthy manager advertises READY for the
+    # next generation.  Candidate publication, safe-boundary rendezvous, and
+    # atomic apply each have distinct post-result clocks, so generation count
+    # times the admission ceiling alone is not a sufficient session lifetime.
+    configured_s = float(args.deadline_s) * max(1, int(args.generations))
+    requested = os.environ.get("RESILIENT_E97_REQUESTED_WALLTIME")
+    if not requested:
+        return configured_s
+    try:
+        hours, minutes, seconds = (int(part) for part in requested.split(":"))
+    except (TypeError, ValueError):
+        raise ValueError(
+            "RESILIENT_E97_REQUESTED_WALLTIME must be HH:MM:SS") from None
+    if hours < 0 or not 0 <= minutes < 60 or not 0 <= seconds < 60:
+        raise ValueError(
+            "RESILIENT_E97_REQUESTED_WALLTIME must be HH:MM:SS")
+    # The session starts after allocation admission, so a lease this long
+    # necessarily outlives Slurm's remaining wall clock.  Slurm is still the
+    # authoritative outer hard stop.
+    requested_s = float(hours * 3600 + minutes * 60 + seconds)
+    return max(configured_s, requested_s)
+
+
+def _native_post_result_lifetime_s(args) -> float:
+    """Keep a finalized result valid through each distinct bounded phase."""
+    checkpoint_candidate_s = min(float(args.deadline_s), 420.0)
+    return (
+        checkpoint_candidate_s
+        + ASYNC_V21_BOUNDARY_RENDEZVOUS_S
+        + ASYNC_V21_ALL_EIGHT_APPLY_S
+    )
 
 
 def _native_manager(args) -> int:
@@ -2286,7 +2314,11 @@ def _native_manager(args) -> int:
                     incarnation=incarnation, contribution_seq=generation,
                     accepted_tokens=local_weight,
                     payload_digest=local_result.result_root.hex(),
-                    deadline=time.monotonic() + pool_config.slo.freeze_s)
+                    # ADR-002 gives the complete open-group-to-freeze phase
+                    # one absolute 420-second generation clock.  The 15-second
+                    # native freeze SLO cannot replace that Q/T close window:
+                    # harmless K40 skew can make one node contribute later.
+                    deadline=native_deadline)
                 if close.get("status") != "commit_ready":
                     raise TimeoutError(f"native global freeze failed: {close}")
                 frozen = tuple(close["frozen_identities"])
@@ -2520,6 +2552,19 @@ def _native_manager(args) -> int:
                 }
                 if commit_receipt is not None else {}
             )
+            if node == 0:
+                _stage_telemetry(
+                    bulk, identity, generation, "fenced_atomic_commit",
+                    atomic_commit_started, min(args.deadline_s, 420.0),
+                    policy_id=args._async_v21_policy.policy_id,
+                    allocation_fence=_fence_epoch(args),
+                    base_global_version=generation,
+                    commit_global_version=generation + 1,
+                    commit_lag=1,
+                    exact_tokens=accepted_tokens,
+                    contribution_digest=final_result.result_root.hex(),
+                    accepted_tokens=int(proposal["accepted_tokens"]),
+                    membership=len(proposal["membership"]))
             # Shared-result reads, checkpoint I/O, hashing, and reload
             # verification are background preparation.  The one service-owned
             # aggregate has a capacity-one node-local reader credit; durable
@@ -2552,6 +2597,13 @@ def _native_manager(args) -> int:
                       stage="peer_apply", **committed_evidence)
             atomic_apply_deadline = float(
                 apply_release["apply_deadline_monotonic_s"])
+            # The released 60-second clock bounds the atomic model apply, not
+            # the subsequent telemetry flush and create-once receipt rename.
+            # Keep receipt discovery independently bounded, then fail closed
+            # against the immutable apply-finish timestamp below.
+            apply_receipt_deadline = (
+                atomic_apply_deadline
+                + ASYNC_V21_APPLY_RECEIPT_PUBLICATION_S)
             node_apply = AtomicEightTrainerApply(
                 root=control,
                 run_id=args.run_id,
@@ -2569,7 +2621,7 @@ def _native_manager(args) -> int:
             for rank in range(args.local_quorum):
                 applied = wait_metadata(
                     control / f"native-applied-{generation:08d}-{rank:02d}.json",
-                    deadline=atomic_apply_deadline,
+                    deadline=apply_receipt_deadline,
                     expected={"run_id": args.run_id,
                               "fence_epoch": _fence_epoch(args),
                               "generation": generation,
@@ -2585,6 +2637,7 @@ def _native_manager(args) -> int:
                     or not math.isfinite(apply_finished)
                     or apply_started < apply_release_started
                     or apply_finished < apply_started
+                    or apply_finished > atomic_apply_deadline
                 ):
                     raise ValueError(
                         "trainer apply receipt has an invalid monotonic interval")
@@ -2718,19 +2771,6 @@ def _native_manager(args) -> int:
                 total_foreground_idle=(
                     safe_boundary_metrics["total_foreground_idle"]),
                 policy_bound_s=ASYNC_V21_ALL_EIGHT_APPLY_S)
-            if node == 0:
-                _stage_telemetry(
-                    bulk, identity, generation, "fenced_atomic_commit",
-                    atomic_commit_started, min(args.deadline_s, 420.0),
-                    policy_id=args._async_v21_policy.policy_id,
-                    allocation_fence=_fence_epoch(args),
-                    base_global_version=generation,
-                    commit_global_version=generation + 1,
-                    commit_lag=1,
-                    exact_tokens=accepted_tokens,
-                    contribution_digest=final_result.result_root.hex(),
-                    accepted_tokens=int(proposal["accepted_tokens"]),
-                    membership=len(proposal["membership"]))
             final_result.close(); final_operation.close(); freeze.close()
             heartbeat(bulk, identity, generation=generation + 1,
                       step=(generation + 1) * args.local_steps, loss=None,
@@ -3168,12 +3208,10 @@ def trainer(args) -> int:
                      "policy": "new-harness-handoff"}
         accepted_token_clock = int(handoff.get("accepted_tokens", 0))
         async_chain = list(handoff.get("async_chain", ())) + [str(resume_handoff)]
-        if (handoff.get("run_id") != args.run_id or handoff.get("payload_id") != args.payload_id
-                or handoff.get("source_id") != args.source_id
-                or (native and handoff.get("code_id")
-                    != recorded_runtime.get("source_commit"))
-                or int(handoff["fence"]["coordinator_epoch"]) > _fence_epoch(args)
-                or not handoff.get("finalized")):
+        if not _resume_handoff_identity_matches(
+                handoff, args,
+                recorded_runtime=recorded_runtime,
+                native=native):
             raise ValueError("resume handoff membership/identity/fence mismatch")
     recovery_manifest = control / "recovery" / f"{identity}.json"
     recovery = (
@@ -3271,7 +3309,8 @@ def trainer(args) -> int:
         generation_deadline = time.monotonic() + min(args.deadline_s, 420.0)
         native_plane = None
         owned_marker: dict[str, object] | None = None
-        if native:
+
+        def admit_native_generation():
             elements = state_elements(state)
             layout = layout_identity(elements, payload_max=args.bulk_chunk_bytes)
             if rank == 0:
@@ -3284,18 +3323,28 @@ def trainer(args) -> int:
                     "base_digest": state_digest(state).hex(),
                     "runtime_digests": native_runtime,
                 })
-            native_plane = NativeTrainerDataPlane.connect(
+            admitted = NativeTrainerDataPlane.connect(
                 build_manifest=args.native_build_manifest,
                 socket_path=os.environ["EMENDER_NDP_SOCKET"], run_id=args.run_id,
                 fence_epoch=_fence_epoch(args), generation=generation, rank=rank,
                 identity=identity, incarnation=trainer_incarnation,
                 worker_incarnation=node_incarnation or None,
                 control_root=control, deadline=generation_deadline)
-            if dict(native_plane.metadata.runtime_digests) != native_runtime:
-                native_plane.close()
+            if dict(admitted.metadata.runtime_digests) != native_runtime:
+                admitted.close()
                 raise ValueError("manager/trainer native runtime digest mismatch")
-            native_plane.allocate_delta(
+            admitted.allocate_delta(
                 deadline_s=max(.001, generation_deadline - time.monotonic()))
+            return admitted
+
+        # A capacity-deferred interval already owns a corrected, coherent
+        # boundary.  Resume its K40 before joining the next native-generation
+        # admission barrier; descriptor admission then runs while the adjacent
+        # mutable lane is active instead of extending foreground idle.
+        defer_native_admission = bool(
+            native and not args.control and deferred_interval_start is not None)
+        if native and not defer_native_admission:
+            native_plane = admit_native_generation()
         if args.control:
             loss = 1.0 / (step + args.local_steps + rank + 1)
             delta = {"weight": torch.full_like(state["weight"], float(rank + 1))}
@@ -3312,23 +3361,30 @@ def trainer(args) -> int:
             phase_log = bulk / "telemetry" / f"{identity}.jsonl"
             phase_log.parent.mkdir(parents=True, exist_ok=True)
 
-            def training_phase(phase, details):
-                record = {
-                    "timestamp": time.time(), "monotonic_s": time.monotonic(),
-                    "identity": identity, "generation": generation,
-                    "local_window": generation,
-                    "policy_id": v2_policy.policy_id,
-                    "applied_anchor_version": generation,
-                    "local_model_basis": "worker_local",
-                    "phase": phase, **details,
-                }
-                with phase_log.open("a", encoding="utf-8") as stream:
-                    stream.write(json.dumps(record, sort_keys=True) + "\n")
-                    stream.flush()
-                heartbeat(
-                    bulk, identity, generation=generation,
-                    step=int(details.get("step", step)),
-                    loss=details.get("loss"), stage=phase)
+            def make_training_phase(local_window, *, overlap_scope):
+                def training_phase(phase, details):
+                    record = {
+                        "timestamp": time.time(),
+                        "monotonic_s": time.monotonic(),
+                        "identity": identity,
+                        "generation": generation,
+                        "local_window": local_window,
+                        "overlap_scope": overlap_scope,
+                        "policy_id": v2_policy.policy_id,
+                        "applied_anchor_version": generation,
+                        "local_model_basis": "worker_local",
+                        "phase": phase,
+                        **details,
+                    }
+                    with phase_log.open("a", encoding="utf-8") as stream:
+                        stream.write(json.dumps(record, sort_keys=True) + "\n")
+                        stream.flush()
+                    heartbeat(
+                        bulk, identity, generation=generation,
+                        step=int(details.get("step", step)),
+                        loss=details.get("loss"), stage=phase)
+
+                return training_phase
 
             def publish_trained_delta(base_state, model, tokens):
                 if native:
@@ -3398,7 +3454,12 @@ def trainer(args) -> int:
                         synthetic_vocab_size=256,
                         optimizer_state_dict=optimizer_state,
                         consume_optimizer_state=True,
-                        bootstrap_phase_callback=training_phase)
+                        bootstrap_phase_callback=make_training_phase(
+                            next_local_window,
+                            overlap_scope=(
+                                "steady_state"
+                                if generation + 1 < target_generation
+                                else "terminal_drain")))
                     optimizer_state = {}
                     _stage_telemetry(
                         bulk, identity, generation,
@@ -3430,6 +3491,8 @@ def trainer(args) -> int:
                             "v2 coalesced interval window identity changed")
                     prefetched_interval = None
                 else:
+                    interval_start_was_deferred = (
+                        deferred_interval_start is not None)
                     interval_start = (
                         state if deferred_interval_start is None
                         else deferred_interval_start)
@@ -3440,7 +3503,22 @@ def trainer(args) -> int:
                     window = persistent_worker.run_window(
                         interval_window_start,
                         progress_callback=training_progress,
-                        phase_callback=training_phase)
+                        phase_callback=make_training_phase(
+                            interval_window_start,
+                            overlap_scope=(
+                                "steady_state"
+                                if generation + 1 < target_generation
+                                else "terminal_drain")))
+                    if interval_start_was_deferred:
+                        # The corrected snapshot copy and this K execute on
+                        # the same ordered device stream.  Verify host
+                        # readiness after the K, before the first background
+                        # delta read, without charging that copy to the prior
+                        # all-eight apply clock.
+                        persistent_worker.wait_snapshot_ready(
+                            interval_start,
+                            deadline=generation_deadline,
+                        )
                     interval_window_end = interval_window_start + 1
                     interval_window_count = 1
                     next_local_window = interval_window_end
@@ -3464,6 +3542,7 @@ def trainer(args) -> int:
                                 "identity": identity,
                                 "generation": generation,
                                 "local_window": local_window,
+                                "overlap_scope": "steady_state",
                                 "policy_id": v2_policy.policy_id,
                                 "applied_anchor_version": generation,
                                 "local_model_basis": "worker_local",
@@ -3534,12 +3613,22 @@ def trainer(args) -> int:
                             + ASYNC_V21_SNAPSHOT_ADMISSION_S),
                     )
                     lane_admission_completed = time.monotonic()
+                    v2_owned_seconds_max = max(
+                        v2_owned_seconds_max,
+                        lane_admission_completed - endpoint_snapshot_started)
+                    if native_plane is None:
+                        native_plane = admit_native_generation()
                     # The current anchor digest is already verified and bound
                     # by the native generation metadata.  Rehashing the full
                     # host state here would re-enter the bounded foreground
                     # pause after coherent capture.
                     lookahead_anchor_digest = str(
                         native_plane.metadata.base_digest)
+                if native_plane is None:
+                    # Terminal drain has no next mutable K to overlap, but the
+                    # deferred interval must still publish through the exact
+                    # native generation admitted here.
+                    native_plane = admit_native_generation()
                 # Device sessions transfer the immutable slot locally when
                 # the ordered pinned-memory copy is enqueued.  Completion is
                 # awaited only here, after the next mutable K lane owns state,
@@ -3607,7 +3696,12 @@ def trainer(args) -> int:
                     consume_optimizer_state=True,
                     progress_callback=training_progress,
                     delta_consumer=publish_trained_delta,
-                    phase_callback=training_phase)
+                    phase_callback=make_training_phase(
+                        generation,
+                        overlap_scope=(
+                            "steady_state"
+                            if generation + 1 < target_generation
+                            else "terminal_drain")))
                 if report.update is None:
                     raise RuntimeError(
                         report.error or "real E97 trainer produced no update")
@@ -3665,9 +3759,6 @@ def trainer(args) -> int:
                             interval_window_end - generation),
                     })
                 owned_marker = marker
-                v2_owned_seconds_max = max(
-                    v2_owned_seconds_max,
-                    float(marker["owned_ack_seconds"]))
                 _stage_telemetry(
                     bulk, identity, generation, "native_direct_memfd",
                     descriptor_started, 180.0, trainer_spool_bytes=0,
@@ -3763,13 +3854,20 @@ def trainer(args) -> int:
             exchange_deadline = time.monotonic() + min(args.deadline_s, 180.0)
         if native:
             result_wait_started = time.monotonic()
+            # Owner transport keeps its 180-second inner bound above, while
+            # ADR-002 separately gives freeze-to-reload-verified latest a
+            # 420-second enclosing clock.  Start that clock at result
+            # readiness so harmless inter-node K/checkpoint skew cannot make
+            # one node abandon an already committed global transaction.
+            result_readiness_deadline = (
+                result_wait_started + min(args.deadline_s, 420.0))
             native_context = native_plane.result_shards(
-                deadline=exchange_deadline,
+                deadline=result_readiness_deadline,
                 chunk_elements=max(1, args.bulk_chunk_bytes // 4))
             manifest, aggregate = native_context.__enter__()
             _stage_telemetry(
                 bulk, identity, generation, "async_v21_result_readiness",
-                result_wait_started, min(args.deadline_s, 180.0),
+                result_wait_started, min(args.deadline_s, 420.0),
                 policy_id=v2_policy.policy_id,
                 allocation_fence=_fence_epoch(args),
                 base_global_version=int(manifest["base_global_version"]),
@@ -3790,20 +3888,16 @@ def trainer(args) -> int:
         # Waiting for distributed ownership (and, on node 0 peers, the leader
         # checkpoint marker) has its own bounded window.  Once the complete
         # node-local aggregate is visible, every eligible trainer enters the
-        # bounded background preparation stage.  A capacity-one authenticated
-        # reader credit prevents the 6--7x node contention observed in job
-        # 5080730.  The separate all-eight release below starts the finite
-        # foreground apply window only after every candidate has been
+        # bounded background preparation stage. The node supervisor gives
+        # every trainer a disjoint seven-CPU partition, so all eight read-only
+        # views may materialize concurrently without the 56-thread-per-rank
+        # oversubscription observed in job 5080730. There is still exactly one
+        # service-owned immutable result and one per-trainer bounded
+        # correction cohort. The separate all-eight release below starts the
+        # finite foreground apply window only after every candidate has been
         # reload-verified.
         heartbeat(bulk, identity, generation=generation, step=step, loss=loss,
                   stage="result_preparation")
-        if native:
-            apply_lane_deadline = (
-                time.monotonic() + min(args.deadline_s, 420.0))
-            _wait_for_native_apply_lane(
-                control, args, generation=generation, rank=rank,
-                result_root=str(manifest["result_root"]),
-                deadline=apply_lane_deadline)
         trainer_apply_started = time.monotonic()
         if not native:
             spool.release_trainer(fence, rank)
@@ -4074,6 +4168,52 @@ def trainer(args) -> int:
                         time.monotonic()
                         + min(args.deadline_s, 180.0)),
                 ))
+            semantic_result = {
+                "policy_id": v2_policy.policy_id,
+                "allocation_fence": _fence_epoch(args),
+                "base_global_version": int(manifest["base_global_version"]),
+                "commit_global_version": int(
+                    manifest["commit_global_version"]),
+                "commit_lag": int(manifest["commit_lag"]),
+                "exact_tokens": int(manifest["exact_tokens"]),
+                "contribution_digest": str(manifest["result_root"]),
+            }
+            # Close the independently bounded background checkpoint clock as
+            # soon as publication and reload/CAS verification finish.  The
+            # later K-boundary rendezvous and released all-eight apply have
+            # their own 420s/60s clocks and must never be charged here.
+            _stage_telemetry(
+                bulk, identity, generation, "checkpoint_publication",
+                checkpoint_publication_started, 420.0,
+                checkpoint_bytes=int(published["checkpoint_bytes"]),
+                phase_class="checkpoint_publish_reload",
+                foreground_blocking=False,
+                foreground_component_s=0.0,
+                mutable_training_active=(
+                    async_training_lane is not None),
+                reload_verified=True, latest_cas_verified=True,
+                **semantic_result)
+            if node == 0 and rank == 0:
+                correctness = {
+                    "timestamp": time.time(),
+                    "identity": identity,
+                    "generation": generation,
+                    "stage": "async_v21_correctness",
+                    "policy_id": v2_policy.policy_id,
+                    "allocation_fence": _fence_epoch(args),
+                    "freeze_to_latest_s": (
+                        time.monotonic() - checkpoint_publication_started),
+                    "checkpoint_bytes": int(published["checkpoint_bytes"]),
+                    "manifest_digest": manifest_digest,
+                    "reload_verified": True,
+                    "latest_cas_verified": True,
+                }
+                with (bulk / "telemetry" /
+                      f"{identity}-pool.jsonl").open(
+                          "a", encoding="utf-8") as stream:
+                    stream.write(
+                        json.dumps(correctness, sort_keys=True) + "\n")
+                    stream.flush()
             if not args.control and pending_corrections is None:
                 raise RuntimeError(
                     "verified async v2 result lacks correction ledger")
@@ -4157,6 +4297,16 @@ def trainer(args) -> int:
             mutable_report = None
             boundary_report = None
             if async_training_lane is not None:
+                # The interval basis is a detached immutable CPU snapshot.
+                # Rebase it while the mutable GPU lane finishes its current K
+                # window; boundary-ready is still published only after that
+                # lane drains.  This keeps dense host preparation inside the
+                # 420-second rendezvous and reserves the released 60-second
+                # clock for the atomic resident x/z translation.
+                async_training_lane.prepare_at_boundary(
+                    pending_corrections,
+                    deadline=boundary_deadline,
+                )
                 boundary_report = async_training_lane.finish_at_boundary(
                     deadline=boundary_deadline,
                     corrections=None,
@@ -4270,10 +4420,6 @@ def trainer(args) -> int:
                 if async_training_lane is not None:
                     mutable_report = async_training_lane.apply_at_boundary(
                         pending_corrections)
-                    persistent_worker.wait_snapshot_ready(
-                        async_training_lane.start_state,
-                        deadline=apply_deadline,
-                    )
                     if mutable_report.snapshot_deferred:
                         # Capacity exhaustion defers the speculative snapshot,
                         # never the trainer.  The corrected live boundary is
@@ -4311,16 +4457,6 @@ def trainer(args) -> int:
             if apply_finished_monotonic_s > apply_deadline:
                 raise TimeoutError(
                     "trainer atomic x/z apply exceeded the released 60s clock")
-            semantic_result = {
-                "policy_id": v2_policy.policy_id,
-                "allocation_fence": _fence_epoch(args),
-                "base_global_version": int(manifest["base_global_version"]),
-                "commit_global_version": int(
-                    manifest["commit_global_version"]),
-                "commit_lag": int(manifest["commit_lag"]),
-                "exact_tokens": int(manifest["exact_tokens"]),
-                "contribution_digest": str(manifest["result_root"]),
-            }
             _stage_telemetry(
                 bulk, identity, generation, "native_trainer_apply",
                 safe_apply_started, ASYNC_V21_ALL_EIGHT_APPLY_S,
@@ -4354,17 +4490,6 @@ def trainer(args) -> int:
                 release_monotonic_s=release_monotonic_s,
                 result_reload_verified=True,
                 latest_cas_verified=True,
-                **semantic_result)
-            _stage_telemetry(
-                bulk, identity, generation, "checkpoint_publication",
-                checkpoint_publication_started, 420.0,
-                checkpoint_bytes=int(published["checkpoint_bytes"]),
-                phase_class="checkpoint_publish_reload",
-                foreground_blocking=False,
-                foreground_component_s=0.0,
-                mutable_training_active=(
-                    mutable_report is not None),
-                reload_verified=True, latest_cas_verified=True,
                 **semantic_result)
             control_integrity_started = time.monotonic()
             _stage_telemetry(
@@ -4413,27 +4538,6 @@ def trainer(args) -> int:
                 stream.write(
                     json.dumps(apply_receipt, sort_keys=True) + "\n")
                 stream.flush()
-            if node == 0 and rank == 0:
-                correctness = {
-                    "timestamp": time.time(),
-                    "identity": identity,
-                    "generation": generation,
-                    "stage": "async_v21_correctness",
-                    "policy_id": v2_policy.policy_id,
-                    "allocation_fence": _fence_epoch(args),
-                    "freeze_to_latest_s": (
-                        time.monotonic() - checkpoint_publication_started),
-                    "checkpoint_bytes": int(published["checkpoint_bytes"]),
-                    "manifest_digest": manifest_digest,
-                    "reload_verified": True,
-                    "latest_cas_verified": True,
-                }
-                with (bulk / "telemetry" /
-                      f"{identity}-pool.jsonl").open(
-                          "a", encoding="utf-8") as stream:
-                    stream.write(
-                        json.dumps(correctness, sort_keys=True) + "\n")
-                    stream.flush()
             atomic_metadata(
                 control / f"native-applied-{generation:08d}-{rank:02d}.json", {
                     "schema": "emender-native-e97-applied-v2.1",

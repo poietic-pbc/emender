@@ -1368,6 +1368,9 @@ class PersistentAsyncTrainingLane:
         self._start_state: dict[str, torch.Tensor] | None = None
         self._snapshot_deferred = False
         self._boundary_report: CoalescedWindowReport | None = None
+        self._prepared_correction_identity: tuple[
+            tuple[str, tuple[int, ...], str, str, int], ...
+        ] | None = None
         self._correction_applied = False
 
     def start(
@@ -1514,7 +1517,80 @@ class PersistentAsyncTrainingLane:
         )
         if corrections is None:
             return self._boundary_report
+        self.prepare_at_boundary(corrections, deadline=deadline)
         return self.apply_at_boundary(corrections)
+
+    @staticmethod
+    def _correction_identity(
+        corrections: Mapping[str, torch.Tensor],
+    ) -> tuple[tuple[str, tuple[int, ...], str, str, int], ...]:
+        return tuple(
+            (
+                name,
+                tuple(int(size) for size in value.shape),
+                str(value.dtype),
+                str(value.device),
+                int(value.data_ptr()),
+            )
+            for name, value in sorted(corrections.items())
+        )
+
+    def prepare_at_boundary(
+        self,
+        corrections: Mapping[str, torch.Tensor],
+        *,
+        deadline: float,
+    ) -> CoalescedWindowReport | None:
+        """Prepare the detached host interval rebase before all-eight release.
+
+        The retained interval start is an immutable CPU snapshot, independent
+        of the mutable model and ScheduleFree z state.  Rebase it while the
+        adjacent GPU K window is still active so the dense host pass overlaps
+        useful work.  The caller still drains to a real K boundary before
+        publishing boundary-ready, and only the atomic resident x/z
+        translation runs after the manager releases the exact transaction.
+        """
+        if self._thread is None:
+            raise RuntimeError(
+                "persistent async lane has not started")
+        if self._prepared_correction_identity is not None:
+            raise RuntimeError(
+                "persistent async lane correction was already prepared")
+        if self._correction_applied:
+            raise RuntimeError(
+                "persistent async lane correction was already applied")
+        if not corrections or self._start_state is None:
+            raise ValueError(
+                "persistent async lane correction preparation is empty")
+        if self._snapshot_deferred:
+            # The over-age contribution is discarded, but the next interval
+            # must still begin from the corrected quiescent live boundary.
+            self._start_state = self.session.snapshot()
+        wait_snapshot_ready = getattr(
+            self.session, "wait_snapshot_ready", None)
+        if wait_snapshot_ready is not None:
+            wait_snapshot_ready(self._start_state, deadline=deadline)
+        for name, start in self._start_state.items():
+            correction = corrections.get(name)
+            if (
+                correction is None
+                or correction.shape != start.shape
+                or not torch.isfinite(correction).all()
+            ):
+                raise ValueError(
+                    "persistent async interval correction is malformed")
+        with torch.no_grad():
+            for name, start in self._start_state.items():
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        "persistent interval rebase preparation expired")
+                start.add_(corrections[name].to(start))
+        if time.monotonic() > deadline:
+            raise TimeoutError(
+                "persistent interval rebase preparation expired")
+        self._prepared_correction_identity = self._correction_identity(
+            corrections)
+        return self._boundary_report
 
     def apply_at_boundary(
         self,
@@ -1529,25 +1605,20 @@ class PersistentAsyncTrainingLane:
                 "persistent async lane correction was already applied")
         if not corrections:
             raise ValueError("persistent async lane correction is empty")
+        if (
+            self._prepared_correction_identity is None
+            or self._prepared_correction_identity
+            != self._correction_identity(corrections)
+        ):
+            raise RuntimeError(
+                "persistent async lane correction was not exactly prepared")
         translation_elapsed_s = 0.0
         if self._start_state is None:
             raise RuntimeError("persistent async lane lost its interval start")
         translation_started = time.monotonic()
         self.session.translate(corrections)
-        for name, correction in corrections.items():
-            start = self._start_state.get(name)
-            if start is None or start.shape != correction.shape:
-                raise ValueError(
-                    "persistent async interval correction layout changed")
-            start.add_(correction.to(start))
         translation_elapsed_s = max(
             0.0, time.monotonic() - translation_started)
-        if self._snapshot_deferred:
-            # Background lag exhausted snapshot admission capacity, not
-            # foreground progress.  Start the next admissible interval at
-            # the now-corrected live boundary and discard the over-age local
-            # displacement from contribution accounting.
-            self._start_state = self.session.snapshot()
         self._correction_applied = True
         self._boundary_report = replace(
             self._boundary_report,

@@ -71,6 +71,52 @@ def test_stage_slos_are_derived_from_measured_k40_baseline():
     assert slo.generation_hard_s < 4 * slo.generation_expected_s
 
 
+def test_ready_lease_spans_post_commit_preparation_boundary_and_apply(tmp_path):
+    """A healthy incarnation must remain renewable after all bounded phases.
+
+    Frontier clean job 5090637 completed all 16 generation-zero trainer
+    applies and both immutable node-apply receipts without a restart.  The
+    faster node opened generation one just after the old 810-second READY
+    lease and expired the slower peer, whose same-incarnation renewal was
+    then rejected as superseded.  The membership lease must span the initial
+    generation/commit clock plus candidate preparation, boundary rendezvous,
+    and atomic apply clocks.
+    """
+    slo = PoolStageSLO.production()
+    assert slo.ready_lease_s == (
+        slo.generation_hard_s
+        + 2 * slo.training_hard_s
+        + slo.apply_s
+    )
+    control = PoolControlServer(
+        ("127.0.0.1", 0),
+        PoolControlConfig(
+            "lease-run", 9, q_min=1, t_min=1, ready_fraction=None,
+            base_digest="base", policy_digest="policy",
+            layout_digest="layout", code_digest="code", slo=slo,
+        ),
+        evidence_root=tmp_path / "evidence",
+    )
+    now = [0.0]
+    control.membership._clock = lambda: now[0]
+    request = {
+        "worker_id": "node-0",
+        "incarnation": "incarnation-0",
+        "host": "127.0.0.1",
+        "port": 12345,
+        "generation": 0,
+    }
+    try:
+        assert control._ready(request)["status"] == "READY"
+        old_lease_s = slo.generation_hard_s + slo.transport_s
+        now[0] = old_lease_s + 0.001
+        control.membership.expire_due()
+        assert control.membership.records["node-0"].state.value == "READY"
+        assert control._ready({**request, "generation": 1})["status"] == "READY"
+    finally:
+        control.server_close()
+
+
 def test_ready_token_floor_distributed_owner_loss_and_late_join(tmp_path):
     slo = PoolStageSLO(1, 3, 1, 1, 1, 1, 1, 1)
     control = PoolControlServer(

@@ -63,6 +63,16 @@ CAUSAL_PHASES = frozenset({
     "result_wait",
     "apply_swap",
 })
+TRAINER_FOREGROUND_STAGES = frozenset({
+    "async_v21_endpoint_snapshot",
+    "async_v21_snapshot_admission",
+    "native_boundary_rendezvous",
+    "native_trainer_apply",
+})
+NODE_FOREGROUND_STAGES = frozenset({
+    "native_node_boundary_rendezvous",
+    "native_node_apply_swap",
+})
 
 
 def _records(root: Path) -> list[dict[str, Any]]:
@@ -123,6 +133,113 @@ def _percentile(values: Iterable[int | float], fraction: float) -> float:
         raise ValueError("cannot compute a percentile from no values")
     index = max(0, math.ceil(fraction * len(ordered)) - 1)
     return ordered[index]
+
+
+def _permitted_foreground_intervals(
+    records: list[dict[str, Any]],
+    *,
+    trainer: str,
+) -> list[tuple[float, float]]:
+    """Return phase-validated foreground intervals for one trainer lane."""
+    if "-trainer-" not in trainer:
+        raise ValueError("trainer identity lacks its node scope")
+    node = trainer.rsplit("-trainer-", 1)[0]
+    manager = f"{node}-manager"
+    intervals: list[tuple[float, float]] = []
+    for value in records:
+        stage = str(value.get("stage", ""))
+        identity = str(value.get("identity", ""))
+        if not (
+            identity == trainer and stage in TRAINER_FOREGROUND_STAGES
+            or identity == manager and stage in NODE_FOREGROUND_STAGES
+        ):
+            continue
+        started = _finite(
+            value.get("monotonic_start_s"), f"{stage} foreground start")
+        ended = _finite(
+            value.get("monotonic_end_s"), f"{stage} foreground end")
+        if ended < started:
+            raise ValueError(f"{stage} foreground interval is negative")
+        intervals.append((started, ended))
+    return intervals
+
+
+def _unattributed_seconds(
+    begin: float,
+    end: float,
+    intervals: Iterable[tuple[float, float]],
+) -> float:
+    """Subtract the union of permitted phase intervals from one raw gap."""
+    clipped = sorted(
+        (max(begin, started), min(end, ended))
+        for started, ended in intervals
+        if started < end and ended > begin
+    )
+    covered = 0.0
+    cursor = begin
+    for started, ended in clipped:
+        if ended <= cursor:
+            continue
+        started = max(started, cursor)
+        covered += ended - started
+        cursor = ended
+    return max(0.0, end - begin - covered)
+
+
+def _post_apply_rebase(
+    records: list[dict[str, Any]],
+    *,
+    trainer: str,
+    local_window: int,
+    window_started: float,
+) -> dict[str, float | int | str] | None:
+    """Prove that a non-overlapped K40 is the exact post-apply rebase."""
+    receipts = [
+        value for value in records
+        if (
+            value.get("stage") == "safe_boundary_apply"
+            and value.get("identity") == trainer
+            and _integer(
+                value.get("local_window"), "rebase receipt local window")
+            == local_window
+        )
+    ]
+    applies = [
+        value for value in records
+        if (
+            value.get("stage") == "native_trainer_apply"
+            and value.get("identity") == trainer
+            and _integer(
+                value.get("local_window_end"), "rebase apply local window")
+            == local_window
+        )
+    ]
+    if len(receipts) != 1 or len(applies) != 1:
+        return None
+    receipt = receipts[0]
+    apply = applies[0]
+    transaction = _digest(
+        receipt.get("transaction_digest"), "rebase receipt transaction")
+    if (
+        _digest(apply.get("transaction_digest"), "rebase apply transaction")
+        != transaction
+        or _integer(receipt.get("generation"), "rebase receipt generation")
+        != _integer(apply.get("generation"), "rebase apply generation")
+    ):
+        return None
+    apply_ended = _finite(
+        apply.get("monotonic_end_s"), "rebase apply end")
+    resume_delay = window_started - apply_ended
+    if not 0 <= resume_delay <= MAX_FOREGROUND_GAP_S:
+        return None
+    return {
+        "generation": _integer(
+            apply.get("generation"), "rebase apply generation"),
+        "transaction_digest": transaction,
+        "apply_ended_monotonic_s": apply_ended,
+        "window_started_monotonic_s": window_started,
+        "resume_delay_seconds": resume_delay,
+    }
 
 
 def _causal_work_id(identity: str, generation: int) -> str:
@@ -813,23 +930,29 @@ def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
     raw: list[float] = []
     cadence: list[float] = []
     idle: list[float] = []
+    unattributed_idle: list[float] = []
     overlaps: list[dict[str, Any]] = []
     measured_windows: dict[str, set[int]] = {}
     for identity, windows_by_id in trainer.items():
         ordered = sorted(windows_by_id)
-        if len(ordered) < WARMUP_WINDOWS + MEASURED_WINDOWS:
-            raise ValueError(
-                f"{identity} lacks two warm-up plus ten measured K40 windows")
-        selected = ordered[-MEASURED_WINDOWS:]
-        measured_windows[identity] = set(selected)
         windows: dict[int, tuple[float, float, float]] = {}
-        for window in selected:
+        steady_state: list[int] = []
+        for window in ordered:
             phases = windows_by_id[window]
             starts = phases.get("optimizer_step_start", [])
             ends = phases.get("optimizer_step_end", [])
             if len(starts) != K_LOCAL_STEPS or len(ends) != K_LOCAL_STEPS:
                 raise ValueError(
                     f"{identity} local window {window} lacks exact K40 step timestamps")
+            scopes = {
+                str(value.get("overlap_scope", ""))
+                for value in starts + ends
+            }
+            if scopes not in ({"steady_state"}, {"terminal_drain"}):
+                raise ValueError(
+                    f"{identity} local window {window} has ambiguous overlap scope")
+            if scopes == {"steady_state"}:
+                steady_state.append(window)
             monotonic_start = min(
                 _finite(value["monotonic_s"], "K40 monotonic start")
                 for value in starts)
@@ -849,8 +972,17 @@ def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
             offset = _finite(first["timestamp"], "K40 wall timestamp") - _finite(
                 first["monotonic_s"], "K40 monotonic timestamp")
             windows[window] = (monotonic_start, monotonic_end, offset)
+        if len(steady_state) < WARMUP_WINDOWS + MEASURED_WINDOWS:
+            raise ValueError(
+                f"{identity} lacks two warm-up plus ten measured K40 windows")
+        selected = steady_state[-MEASURED_WINDOWS:]
+        measured_windows[identity] = set(selected)
+        for window in selected:
+            monotonic_start, monotonic_end, _ = windows[window]
             raw.append(monotonic_end - monotonic_start)
         identity_matches = 0
+        foreground_intervals = _permitted_foreground_intervals(
+            records, trainer=identity)
         for previous, current in zip(selected, selected[1:]):
             previous_window = windows[previous]
             current_window = windows[current]
@@ -860,6 +992,11 @@ def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
             control_idle = max(0.0, current_window[0] - previous_window[1])
             cadence.append(observed_cadence)
             idle.append(control_idle)
+            unattributed_idle.append(_unattributed_seconds(
+                previous_window[1],
+                current_window[0],
+                foreground_intervals,
+            ))
             wall = (
                 current_window[0] + current_window[2],
                 current_window[1] + current_window[2],
@@ -868,10 +1005,19 @@ def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
                 value for value in backgrounds
                 if value["begin"] < wall[1] and value["end"] > wall[0]
             ]
+            post_apply_rebase = None
             if not matched:
-                raise ValueError(
-                    f"{identity} local window {current} lacks true versioned "
-                    "background overlap")
+                post_apply_rebase = _post_apply_rebase(
+                    records,
+                    trainer=identity,
+                    local_window=current,
+                    window_started=current_window[0],
+                )
+                if post_apply_rebase is None:
+                    raise ValueError(
+                        f"{identity} local window {current} lacks true "
+                        "versioned background overlap or an exact post-apply "
+                        "rebase")
             identity_matches += 1
             overlaps.append({
                 "identity": identity,
@@ -893,6 +1039,7 @@ def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
                     }
                     for value in matched
                 ],
+                "post_apply_rebase": post_apply_rebase,
             })
         if identity_matches != MEASURED_WINDOWS - 1:
             raise ValueError("training lane overlap sample is incomplete")
@@ -903,7 +1050,12 @@ def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
     idle_fraction = sum(idle) / sum(cadence)
     idle_p99 = _percentile(idle, .99)
     idle_max = max(idle)
-    if idle_max > MAX_FOREGROUND_GAP_S or idle_p99 > MAX_FOREGROUND_GAP_S:
+    unattributed_idle_p99 = _percentile(unattributed_idle, .99)
+    unattributed_idle_max = max(unattributed_idle)
+    if (
+        unattributed_idle_max > MAX_FOREGROUND_GAP_S
+        or unattributed_idle_p99 > MAX_FOREGROUND_GAP_S
+    ):
         raise ValueError(
             "training-lane every-event foreground tail exceeds the "
             "60-second interruption bound")
@@ -952,6 +1104,8 @@ def validate(records: list[dict[str, Any]]) -> dict[str, Any]:
         "foreground_control_plane_idle_fraction": idle_fraction,
         "foreground_control_plane_idle_seconds_p99": idle_p99,
         "foreground_control_plane_idle_seconds_max": idle_max,
+        "unattributed_foreground_idle_seconds_p99": unattributed_idle_p99,
+        "unattributed_foreground_idle_seconds_max": unattributed_idle_max,
         "overlaps": overlaps,
         "stage_seconds": {
             name: {

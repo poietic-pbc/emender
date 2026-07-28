@@ -12,6 +12,9 @@ import pytest
 
 from ndm.manifest_peer_control import ManifestPeerAuthority
 from scripts.frontier.resilient_e97_allocation_supervisor import AllocationSupervisor, Child
+from scripts.frontier.resilient_e97_allocation_supervisor import (
+    _node_local_child_cpu_set,
+)
 from scripts.frontier.check_resilient_e97_parity import compare
 
 
@@ -535,6 +538,25 @@ def test_launch_modes_preserve_identical_local_role_identity_and_environment(tmp
     assert Path(local_env["TORCHINDUCTOR_CACHE_DIR"]).is_dir()
     assert any(value.startswith("TRITON_CACHE_DIR=") for value in step_argv)
     assert any(value.startswith("TORCHINDUCTOR_CACHE_DIR=") for value in step_argv)
+
+
+def test_node_local_trainers_partition_the_existing_fifty_six_cpu_step():
+    available = tuple(range(100, 156))
+    trainer_sets = [
+        _node_local_child_cpu_set(
+            Child("trainer", 0, "node000", rank, "trainer"),
+            available,
+        )
+        for rank in range(8)
+    ]
+
+    assert all(len(cpus) == 7 for cpus in trainer_sets)
+    assert set().union(*trainer_sets) == set(available)
+    assert sum(len(cpus) for cpus in trainer_sets) == len(available)
+    assert _node_local_child_cpu_set(
+        Child("manager", 0, "node000", None, "manager"),
+        available,
+    ) == set(available)
 
 
 def test_node_local_native_service_uses_pinned_cxi_domain_without_hostname_bind(
@@ -1113,6 +1135,37 @@ def test_fresh_allocation_manager_syncs_older_authoritative_handoff(
     }
 
 
+def test_fresh_trainer_accepts_stable_execution_code_id_not_git_commit():
+    from types import SimpleNamespace
+
+    from scripts.frontier import resilient_e97_role as role
+
+    args = SimpleNamespace(
+        run_id="run",
+        payload_id="payload",
+        source_id="seed",
+        code_id="execution-sha256-" + "a" * 64,
+        coordinator_epoch=8,
+    )
+    handoff = {
+        "run_id": "run",
+        "payload_id": "payload",
+        "source_id": "seed",
+        "code_id": args.code_id,
+        "fence": {"coordinator_epoch": 7},
+        "finalized": True,
+    }
+    runtime = {"source_commit": "b" * 40}
+    assert role._resume_handoff_identity_matches(
+        handoff, args, recorded_runtime=runtime, native=True)
+    assert not role._resume_handoff_identity_matches(
+        {**handoff, "code_id": "execution-sha256-" + "c" * 64},
+        args,
+        recorded_runtime=runtime,
+        native=True,
+    )
+
+
 def test_native_restart_runtime_compatibility_rejects_substantive_digest_change():
     from scripts.frontier import resilient_e97_role as role
 
@@ -1360,6 +1413,28 @@ def test_generation_deadline_includes_local_training_and_aggregate_wait():
     assert "generation_started, pool_config.slo.training_hard_s" in role
 
 
+def test_native_manager_freeze_wait_spans_the_open_generation_deadline():
+    """Node skew must not turn the 15-second inner freeze SLO into Q/T loss."""
+    source = (
+        ROOT / "scripts/frontier/resilient_e97_role.py"
+    ).read_text(encoding="utf-8")
+    manager = source[
+        source.index("def _native_manager(args) -> int:"):
+        source.index("def manager(args) -> int:")
+    ]
+    contribute = manager[
+        manager.index("close = pool_client.contribute_and_freeze("):
+        manager.index('if close.get("status") != "commit_ready":')
+    ]
+
+    # ADR-002 bounds open-group-to-freeze at 420 seconds. The faster node
+    # therefore waits on the generation's existing absolute deadline for the
+    # slower node contribution; a fresh 15-second freeze_s clock is only an
+    # inner native operation bound and cannot replace the Q/T close window.
+    assert "deadline=native_deadline)" in contribute
+    assert "pool_config.slo.freeze_s" not in contribute
+
+
 def test_local_and_owner_transport_use_separate_bounded_frontier_chunks():
     from ndm.resilient_e97_reducer import TensorLayout
 
@@ -1422,7 +1497,7 @@ def test_native_manager_advances_progress_after_owner_transport():
     assert proposal_wait < apply_stage < apply_receipt_wait
 
 
-def test_native_all_eight_apply_releases_only_after_bounded_serial_preparation():
+def test_native_all_eight_apply_releases_after_bounded_concurrent_preparation():
     """One reader prepares at a time; eight K boundaries precede release."""
     role = (
         ROOT / "scripts/frontier/resilient_e97_role.py"
@@ -1469,11 +1544,11 @@ def test_native_all_eight_apply_releases_only_after_bounded_serial_preparation()
     trainer = role[role.index("def trainer(args) -> int:"):]
     result_visible = trainer.index(
         "manifest, aggregate = native_context.__enter__()")
-    result_lane = trainer.index(
-        "_wait_for_native_apply_lane(", result_visible)
     result_apply = trainer.index(
-        "apply_delta_with_correction_ledger(", result_lane)
-    assert result_visible < result_lane < result_apply
+        "apply_delta_with_correction_ledger(", result_visible)
+    assert result_visible < result_apply
+    assert "_wait_for_native_apply_lane(" not in trainer[
+        result_visible:result_apply]
     result_materialized = trainer.index(
         'control / f"native-result-applied-{generation:08d}-{rank:02d}.json"')
     reload_verified = trainer.index(
@@ -1610,6 +1685,37 @@ def test_checkpoint_leader_wait_uses_enclosing_result_preparation_deadline():
     assert '"leader_apply_wait": RESULT_PREPARATION_HARD_S' in supervisor
 
 
+def test_native_result_readiness_uses_the_freeze_to_latest_deadline():
+    """Owner exchange's 180-second clock must not bound result publication."""
+    role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
+    trainer = role[role.index("def trainer(args)"):]
+    exchange = trainer.index(
+        "exchange_deadline = time.monotonic() + min(args.deadline_s, 180.0)"
+    )
+    result_call = trainer.index("native_plane.result_shards(", exchange)
+    result_stage = trainer.index(
+        '"async_v21_result_readiness"', result_call)
+    result_path = trainer[exchange:result_stage]
+
+    # ADR-002 gives freeze-to-reload-verified latest its own 420-second
+    # enclosing clock. Owner transport remains independently capped at 180
+    # seconds; the two clocks are not interchangeable when one node reaches
+    # result readiness earlier than its peer.
+    assert (
+        "result_readiness_deadline = ("
+        in result_path
+    )
+    assert (
+        "result_wait_started + min(args.deadline_s, 420.0)"
+        in result_path
+    )
+    assert "deadline=result_readiness_deadline" in result_path
+    assert (
+        "result_wait_started, min(args.deadline_s, 420.0)"
+        in trainer[result_call:result_stage + 200]
+    )
+
+
 def test_all_peers_get_fresh_supervised_apply_window_after_aggregate_visibility():
     role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
     trainer = role[role.index("def trainer(args)"):]
@@ -1739,19 +1845,20 @@ def test_frontier_native_trainer_has_one_async_v21_production_authority():
 def test_production_k_next_starts_after_snapshot_before_publication_and_result():
     """Guard the immutable-snapshot foreground edge in the rendered trainer.
 
-    The sole mutable lane resumes from the coherent endpoint before queue
-    admission/OWNED, result readiness, aggregate materialization, and
-    checkpoint write.  All work after that boundary consumes only the retained
-    immutable snapshot until the verified result is applied at a later K edge.
+    The sole mutable lane resumes from the coherent endpoint as local
+    admission transfers the immutable slot to OWNED, before publication,
+    result readiness, aggregate materialization, and checkpoint write.  All
+    work after that boundary consumes only the retained immutable snapshot
+    until the verified result is applied at a later K edge.
     """
     role = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
     trainer = role[role.index("def trainer(args) -> int:"):]
     snapshot = trainer.index(
         "retained_endpoint = persistent_worker.snapshot()")
     next_k = trainer.index("async_training_lane.start(", snapshot)
+    owned = trainer.index("v2_owned_seconds_max = max(", next_k)
     publish = trainer.index("marker = native_plane.publish_state_delta(")
-    owned = trainer.index("v2_owned_seconds_max = max(", publish)
-    result = trainer.index("native_plane.result_shards(", owned)
+    result = trainer.index("native_plane.result_shards(", publish)
     apply = trainer.index("state = apply_delta(", result)
     checkpoint = trainer.index("torch.save(", apply)
     verified = trainer.index(
@@ -1759,7 +1866,7 @@ def test_production_k_next_starts_after_snapshot_before_publication_and_result()
     boundary = trainer.index(
         "async_training_lane.finish_at_boundary(", verified)
 
-    assert (snapshot < next_k < publish < owned < result < apply
+    assert (snapshot < next_k < owned < publish < result < apply
             < checkpoint < verified < boundary)
     between = trainer[next_k:result]
     assert "fabric_receipt_waited=False" in between

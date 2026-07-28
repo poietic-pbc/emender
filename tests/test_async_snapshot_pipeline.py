@@ -144,6 +144,36 @@ def test_snapshot_admission_deadline_excludes_telemetry_io():
     )
 
 
+def test_native_owned_bound_uses_foreground_admission_not_background_submit_ack():
+    """The one-second OWNED clock ends before native hash/finite validation.
+
+    The persistent native service already owns the sealed immutable buffer
+    when the next mutable K lane is admitted.  The later submit RPC performs
+    background checksum and finiteness scans, so charging its multi-second
+    runtime to local OWNED falsely rejects otherwise conforming overlap.
+    """
+    source = (
+        Path(__file__).parents[1]
+        / "scripts/frontier/resilient_e97_role.py"
+    ).read_text(encoding="utf-8")
+    trainer = source[source.index("def trainer(args) -> int:"):]
+    lane_owned = trainer.index(
+        "lane_admission_completed = time.monotonic()")
+    native_publish = trainer.index(
+        "native_plane.publish_state_delta(", lane_owned)
+    bounds_emit = trainer.index(
+        '"native_owned_seconds_max": v2_owned_seconds_max', native_publish)
+
+    foreground = trainer[lane_owned:native_publish]
+    background = trainer[native_publish:bounds_emit]
+    assert "v2_owned_seconds_max = max(" in foreground
+    assert (
+        "lane_admission_completed - endpoint_snapshot_started"
+        in foreground
+    )
+    assert 'float(marker["owned_ack_seconds"])' not in background
+
+
 def test_snapshot_dma_completion_is_deferred_until_after_local_owned():
     """A coherent device snapshot may finish only after the next K owns state.
 
@@ -340,7 +370,10 @@ def test_training_lane_reaches_boundary_before_release_then_translates_once():
     assert boundary.translation_elapsed_s == 0.0
     torch.testing.assert_close(session.value, value_at_boundary)
 
-    applied = lane.apply_at_boundary({"weight": torch.tensor([3.0])})
+    correction = {"weight": torch.tensor([3.0])}
+    lane.prepare_at_boundary(
+        correction, deadline=time.monotonic() + 1)
+    applied = lane.apply_at_boundary(correction)
 
     torch.testing.assert_close(session.value, value_at_boundary + 3.0)
     assert applied.translation_elapsed_s >= 0.0
