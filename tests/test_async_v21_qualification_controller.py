@@ -1,19 +1,27 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
+import time
 
 import pytest
 
 from scripts.frontier.run_async_v21_qualification import (
+    EVIDENCE_ONLY_PATH_PREFIXES,
+    EXECUTION_SOURCE_SCHEMA,
     PAYLOAD_SCHEMA,
     SEED_SHA256,
     TOKENIZER_SHA256,
     V21ScaleClosure,
+    _source_digest,
     build_plan,
     canonical_digest,
+    submit_plan,
     validate_scale_evidence,
 )
 
@@ -106,6 +114,7 @@ def test_v21_two_node_dry_run_pins_scheduler_queue(tmp_path: Path, gate: str):
     assert "--nodes=2" in plan["command"]
     assert "--partition=batch" in plan["command"]
     assert "--qos=debug" in plan["command"]
+    assert "--hold" in plan["command"]
 
 
 def test_v21_clean_plan_binds_reviewed_full_acceptance_launch(tmp_path: Path):
@@ -120,6 +129,10 @@ def test_v21_clean_plan_binds_reviewed_full_acceptance_launch(tmp_path: Path):
         clean_launch={
             "repo": str(repo),
             "source_commit": "9" * 40,
+            "native_source_commit": "8" * 40,
+            "execution_source_schema":
+                "emender-async-v21-execution-source-v1",
+            "execution_source_digest": IDENTITIES["source_digest"],
             "seed_config": str(repo / "configs/frontier/e97_async_256.yaml"),
             "native_build_manifest": str(tmp_path / "native-artifacts.json"),
             "native_build_manifest_sha256": "a" * 64,
@@ -179,8 +192,11 @@ def test_v21_clean_plan_binds_reviewed_full_acceptance_launch(tmp_path: Path):
     }
     assert plan["payload"]["training_inputs"] == {
         "data_identity_digest": "7" * 64,
+        "execution_source_digest": IDENTITIES["source_digest"],
+        "execution_source_schema": "emender-async-v21-execution-source-v1",
         "full_layout_gate_sha256": "b" * 64,
         "native_build_manifest_sha256": "a" * 64,
+        "native_source_commit": "8" * 40,
         "seed_config": str(repo / "configs/frontier/e97_async_256.yaml"),
         "seed_attestation_sha256": "6" * 64,
         "source_commit": "9" * 40,
@@ -466,3 +482,403 @@ def test_v21_scale_rejects_two_node_early_close_parameters(tmp_path: Path):
             },
             **IDENTITIES,
         )
+
+
+def _git(repo: Path, *arguments: str) -> str:
+    return subprocess.check_output(
+        ["git", "-C", str(repo), *arguments], text=True,
+    ).strip()
+
+
+def _execution_identity_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "identity-repo"
+    paths = {
+        "scripts/frontier/controller.py": "controller-v1\n",
+        "native/dataplane/protocol.cpp": "wire-v1\n",
+        "src/runtime.cpp": "runtime-v1\n",
+        "docs/RESILIENT_DILOCO_COMPUTE_POOL.md": "policy-v1\n",
+        "configs/schema.json": '{"schema":"v1"}\n',
+        "include/emender/ndp.h": "#define NDP_ABI 1\n",
+        "data/training-index.json": '{"shard":"a"}\n',
+        "tokenizers/p50k.sha256": "tokenizer-v1\n",
+        "configs/frontier/e97_async_256.yaml": '{"seed":"v1"}\n',
+        "docs/validation/pass.md": "evidence-v1\n",
+        "reports/frontier/pass.json": '{"passed":true}\n',
+        "logs/frontier/job.out": "job evidence\n",
+    }
+    for relative, content in paths.items():
+        target = repo / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "test@example.invalid"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.name", "Test"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-q", "-m", "initial"],
+        check=True,
+    )
+    return repo
+
+
+def test_execution_source_identity_ignores_only_reviewed_evidence_paths(
+    tmp_path: Path,
+):
+    repo = _execution_identity_repo(tmp_path)
+    initial = _source_digest(repo)
+    assert initial["schema"] == EXECUTION_SOURCE_SCHEMA
+    assert tuple(initial["evidence_only_path_prefixes"]) == (
+        EVIDENCE_ONLY_PATH_PREFIXES
+    )
+
+    for relative in (
+        "docs/validation/pass.md",
+        "reports/frontier/pass.json",
+        "logs/frontier/job.out",
+    ):
+        target = repo / relative
+        original = target.read_text()
+        target.write_text(original + "retained evidence\n")
+        assert _source_digest(repo)["digest"] == initial["digest"]
+        target.write_text(original)
+
+    for relative in (
+        "scripts/frontier/controller.py",
+        "native/dataplane/protocol.cpp",
+        "src/runtime.cpp",
+        "docs/RESILIENT_DILOCO_COMPUTE_POOL.md",
+        "configs/schema.json",
+        "include/emender/ndp.h",
+        "data/training-index.json",
+        "tokenizers/p50k.sha256",
+        "configs/frontier/e97_async_256.yaml",
+    ):
+        target = repo / relative
+        original = target.read_text()
+        target.write_text(original + "executable drift\n")
+        assert _source_digest(repo)["digest"] != initial["digest"], relative
+        target.write_text(original)
+
+    for relative in (
+        "docs/validation/pass.md",
+        "reports/frontier/pass.json",
+        "logs/frontier/job.out",
+    ):
+        (repo / relative).write_text("new evidence commit\n")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-q", "-m", "evidence only"],
+        check=True,
+    )
+    assert _source_digest(repo, revision="HEAD")["digest"] == initial["digest"]
+    assert _source_digest(repo, revision="HEAD~1")["digest"] == initial["digest"]
+
+
+def _transaction_plan(tmp_path: Path) -> dict[str, object]:
+    return build_plan(
+        gate="faults",
+        nodes=2,
+        state_path=tmp_path / "state.json",
+        evidence_root=tmp_path / "evidence",
+        parameters={"scenario": "owner-loss"},
+        **IDENTITIES,
+    )
+
+
+def test_collector_registration_failure_never_releases_held_payload(
+    monkeypatch, tmp_path: Path,
+):
+    plan = _transaction_plan(tmp_path)
+    calls: list[list[str]] = []
+    collector_attempts = 0
+
+    def run(command, **kwargs):
+        nonlocal collector_attempts
+        command = [str(item) for item in command]
+        calls.append(command)
+        if command[0] == "squeue":
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[0] == "sacct":
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[0] == "sbatch" and "--hold" in command:
+            return subprocess.CompletedProcess(
+                command, 0, stdout="71001\n", stderr="")
+        if command[0] == "sbatch":
+            collector_attempts += 1
+            if collector_attempts == 1:
+                raise subprocess.CalledProcessError(
+                    1, command, output="", stderr="collector rejected")
+            return subprocess.CompletedProcess(
+                command, 0, stdout="71002\n", stderr="")
+        if command[:2] == ["scontrol", "release"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        raise AssertionError(command)
+
+    monkeypatch.setattr(
+        "scripts.frontier.run_async_v21_qualification.subprocess.run", run)
+    with pytest.raises(subprocess.CalledProcessError):
+        submit_plan(plan)
+
+    assert not any(command[:2] == ["scontrol", "release"] for command in calls)
+    payload = json.loads((tmp_path / "state.json").read_text())["payloads"][
+        plan["payload_digest"]
+    ]
+    assert payload["job_id"] == "71001"
+    assert payload["status"] == "held"
+    assert payload["collector"]["status"] == "registration-failed"
+    held_submissions = [
+        command for command in calls
+        if command[0] == "sbatch" and "--hold" in command
+    ]
+    assert len(held_submissions) == 1
+
+    # A retry reconciles the durable held job, registers one successful
+    # collector, and only then releases.  It never submits the payload again.
+    assert submit_plan(plan) == "71001"
+    assert len([
+        command for command in calls
+        if command[0] == "sbatch" and "--hold" in command
+    ]) == 1
+    saved = json.loads((tmp_path / "state.json").read_text())
+    assert saved["payloads"][plan["payload_digest"]]["status"] == "released"
+    assert saved["payloads"][plan["payload_digest"]]["collector"]["job_id"] == (
+        "71002"
+    )
+
+
+def test_repeated_reconciliation_submits_neither_payload_nor_collector_twice(
+    monkeypatch, tmp_path: Path,
+):
+    plan = _transaction_plan(tmp_path)
+    calls: list[list[str]] = []
+
+    def run(command, **kwargs):
+        command = [str(item) for item in command]
+        calls.append(command)
+        if command[0] == "squeue":
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[0] == "sacct":
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[0] == "sbatch" and "--hold" in command:
+            return subprocess.CompletedProcess(
+                command, 0, stdout="72001\n", stderr="")
+        if command[0] == "sbatch":
+            return subprocess.CompletedProcess(
+                command, 0, stdout="72002\n", stderr="")
+        if command[:2] == ["scontrol", "release"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        raise AssertionError(command)
+
+    monkeypatch.setattr(
+        "scripts.frontier.run_async_v21_qualification.subprocess.run", run)
+    assert submit_plan(plan) == "72001"
+    assert submit_plan(plan) == "72001"
+    assert len([
+        command for command in calls
+        if command[0] == "sbatch" and "--hold" in command
+    ]) == 1
+    assert len([
+        command for command in calls
+        if command[0] == "sbatch" and "--hold" not in command
+    ]) == 1
+    assert len([
+        command for command in calls
+        if command[:2] == ["scontrol", "release"]
+    ]) == 1
+    payload_submit = next(
+        index for index, command in enumerate(calls)
+        if command[0] == "sbatch" and "--hold" in command)
+    collector_submit = next(
+        index for index, command in enumerate(calls)
+        if command[0] == "sbatch" and "--hold" not in command)
+    release = next(
+        index for index, command in enumerate(calls)
+        if command[:2] == ["scontrol", "release"])
+    assert payload_submit < collector_submit < release
+    saved = json.loads((tmp_path / "state.json").read_text())
+    assert saved["payloads"][plan["payload_digest"]]["status"] == "released"
+    assert saved["payloads"][plan["payload_digest"]]["collector"]["job_id"] == (
+        "72002"
+    )
+
+
+@pytest.mark.parametrize("status", ("terminal", "retired"))
+def test_terminal_and_retired_payloads_are_recognized_without_resubmission(
+    monkeypatch, tmp_path: Path, status: str,
+):
+    plan = _transaction_plan(tmp_path)
+    state = {
+        "schema": "emender-async-v21-qualification-state-v2",
+        "payloads": {
+            plan["payload_digest"]: {
+                "status": status,
+                "job_id": "73001",
+                "collector": {"job_id": "73002", "status": "completed"},
+            },
+        },
+        "active_job": None,
+    }
+    (tmp_path / "state.json").write_text(json.dumps(state))
+    monkeypatch.setattr(
+        "scripts.frontier.run_async_v21_qualification.subprocess.run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("terminal/retired reconciliation touched scheduler")),
+    )
+    assert submit_plan(plan) == "73001"
+
+
+@pytest.mark.parametrize("status", ("queued", "running"))
+def test_queued_and_running_payloads_are_recognized_without_resubmission(
+    monkeypatch, tmp_path: Path, status: str,
+):
+    plan = _transaction_plan(tmp_path)
+    state = {
+        "schema": "emender-async-v21-qualification-state-v2",
+        "payloads": {
+            plan["payload_digest"]: {
+                "status": status,
+                "job_id": "73101",
+                "collector": {"job_id": "73102", "status": "registered"},
+            },
+        },
+        "active_job": {
+            "status": status,
+            "job_id": "73101",
+            "payload_digest": plan["payload_digest"],
+        },
+    }
+    (tmp_path / "state.json").write_text(json.dumps(state))
+    monkeypatch.setattr(
+        "scripts.frontier.run_async_v21_qualification.subprocess.run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("queued/running reconciliation touched scheduler")),
+    )
+    assert submit_plan(plan) == "73101"
+
+
+def test_fake_scheduler_collector_survives_worker_death_and_is_exactly_once(
+    tmp_path: Path,
+):
+    repo = Path(__file__).resolve().parents[1]
+    fake_scheduler = (
+        repo / "tests/support/fake_async_v21_scheduler.py").resolve()
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    for name in ("sbatch", "scontrol", "squeue", "sacct"):
+        (fake_bin / name).symlink_to(fake_scheduler)
+    scheduler_state = tmp_path / "fake-slurm.json"
+    worker = tmp_path / "worker.py"
+    worker.write_text(
+        "\n".join([
+            "import json",
+            "import time",
+            "from pathlib import Path",
+            "from scripts.frontier.run_async_v21_qualification import (",
+            "    SEED_SHA256, build_plan, submit_plan)",
+            f"root = Path({str(tmp_path)!r})",
+            "plan = build_plan(",
+            "    gate='faults', nodes=2, state_path=root/'state.json',",
+            "    evidence_root=root/'evidence',",
+            "    source_digest='1'*64, policy_digest='2'*64,",
+            "    bundle_digest='3'*64, seed_digest=SEED_SHA256,",
+            "    launcher_digest='5'*64, parameters={'scenario':'death'})",
+            "semantic = root/'semantic-verdict.json'",
+            "semantic.write_text(json.dumps({'status':'passed'})+'\\n')",
+            "plan['collector']['semantic_verdict'] = str(semantic)",
+            "submit_plan(plan)",
+            "while True: time.sleep(1)",
+        ]) + "\n"
+    )
+    environment = dict(os.environ)
+    environment.update({
+        "PATH": f"{fake_bin}:{environment['PATH']}",
+        "FAKE_ASYNC_V21_SCHEDULER_STATE": str(scheduler_state),
+        "FAKE_ASYNC_V21_PYTHON": sys.executable,
+        "PYTHONPATH": str(repo),
+        "USER": environment.get("USER", "fake-user"),
+    })
+    monitor = subprocess.Popen(
+        [sys.executable, str(worker)],
+        cwd=repo,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    evidence = tmp_path / "evidence"
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        if scheduler_state.exists():
+            scheduler = json.loads(scheduler_state.read_text())
+            payloads = [
+                item for item in scheduler.get("jobs", {}).values()
+                if item.get("kind") == "payload"
+            ]
+            if payloads and payloads[0].get("released"):
+                break
+        time.sleep(0.05)
+    else:
+        monitor.kill()
+        stdout, stderr = monitor.communicate()
+        pytest.fail(f"payload was not released\nstdout={stdout}\nstderr={stderr}")
+    os.kill(monitor.pid, signal.SIGKILL)
+    monitor.wait(timeout=10)
+
+    verdicts = []
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        verdicts = list(evidence.rglob("terminal-verdict.json"))
+        if verdicts:
+            break
+        time.sleep(0.05)
+    assert len(verdicts) == 1
+    verdict_path = verdicts[0]
+    verdict = json.loads(verdict_path.read_text())
+    assert verdict["verdict"] == "passed"
+    assert verdict["passed"] is True
+    assert verdict["scheduler"]["partition"] == "batch"
+    assert verdict["scheduler"]["qos"] == "debug"
+    assert verdict["scheduler"]["exit_code"] == "0:0"
+    assert verdict["scheduler"]["derived_exit_code"] == "0:0"
+    assert verdict["validator_inputs"]["payload"]["sha256"]
+    assert verdict["validator_inputs"]["semantic_verdict"]["sha256"]
+    assert verdict["logs"]["stdout"]["sha256"]
+    assert verdict["logs"]["stderr"]["sha256"]
+
+    scheduler = json.loads(scheduler_state.read_text())
+    assert len([
+        item for item in scheduler["jobs"].values()
+        if item["kind"] == "payload"
+    ]) == 1
+    collectors = [
+        item for item in scheduler["jobs"].values()
+        if item["kind"] == "collector"
+    ]
+    assert len(collectors) == 1
+    durable_state = json.loads((tmp_path / "state.json").read_text())
+    durable_payload = durable_state["payloads"][verdict["payload_digest"]]
+    assert durable_state["active_job"] is None
+    assert durable_payload["status"] == "terminal"
+    assert durable_payload["collector"]["job_id"] == collectors[0]["job_id"]
+    assert durable_payload["collector"]["status"] == "completed"
+    before = (
+        verdict_path.stat().st_mtime_ns,
+        hashlib.sha256(verdict_path.read_bytes()).hexdigest(),
+    )
+    subprocess.run(
+        collectors[0]["wrap_argv"],
+        cwd=repo,
+        env=environment,
+        check=True,
+    )
+    after = (
+        verdict_path.stat().st_mtime_ns,
+        hashlib.sha256(verdict_path.read_bytes()).hexdigest(),
+    )
+    assert after == before
