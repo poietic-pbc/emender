@@ -1404,6 +1404,27 @@ def test_native_manager_freeze_wait_spans_the_open_generation_deadline():
     assert "pool_config.slo.freeze_s" not in contribute
 
 
+def test_native_manager_treats_generation_catch_up_as_successful_reload_handoff():
+    source = (
+        ROOT / "scripts/frontier/resilient_e97_role.py"
+    ).read_text(encoding="utf-8")
+    manager = source[
+        source.index("def _native_manager(args) -> int:"):
+        source.index("def manager(args) -> int:")
+    ]
+
+    assert 'if close.get("status") == "catch_up":' in manager
+    assert '"generation catch-up receipt lacks immutable authority"' in manager
+    assert 'stage="generation_catch_up"' in manager
+    assert "terminal_published = True" in manager
+    assert "return 0" in manager
+    catch_up = manager[
+        manager.index('if close.get("status") == "catch_up":'):
+        manager.index('if close.get("status") != "commit_ready":')
+    ]
+    assert "raise TimeoutError" not in catch_up
+
+
 def test_local_and_owner_transport_use_separate_bounded_frontier_chunks():
     from ndm.resilient_e97_reducer import TensorLayout
 

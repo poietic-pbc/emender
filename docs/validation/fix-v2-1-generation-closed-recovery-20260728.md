@@ -30,6 +30,13 @@ membership, node-apply receipts, accepted tokens, result roots, or any
 incarnation. A current or future generation with no admission still fails
 closed. Run and allocation-fence checks still precede dispatch.
 
+The native manager validates that every returned digest is complete, the
+authoritative generation strictly advances the submitted generation, the token
+clock is nonnegative, and reload is explicitly required. It then writes a
+fenced generation-catch-up handoff, releases the local native result, and exits
+successfully. The supervisor therefore does not charge this fenced recovery
+outcome against the unrelated atomic-cohort restart budget.
+
 ## Validation
 
 The regression
@@ -61,7 +68,7 @@ Passing checks:
   test_reconstructed_control_returns_idempotent_closed_generation_receipt
   test_stale_duplicate_and_corrupt_contribution_receipts
 
-78 passed in 43.76s
+79 passed in 36.93s
   tests/test_resilient_pool_runtime.py
   tests/test_resilient_e97_true_2n_launcher.py
 
