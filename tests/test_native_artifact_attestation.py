@@ -74,6 +74,23 @@ def _gate(tmp_path: Path, manifest: dict[str, object]) -> Path:
     return path
 
 
+def _fault_gate(tmp_path: Path, manifest: dict[str, object]) -> Path:
+    path = _gate(tmp_path, manifest)
+    value = json.loads(path.read_text())
+    value["gate"] = "G2-fault-rejoin-replay"
+    value["fault"] = {
+        "peer_loss": True,
+        "new_incarnation": True,
+        "old_epoch_rejected": True,
+        "partial_commit": False,
+        "reassignment_count": 1,
+        "replay_bytes": 134_217_728,
+    }
+    path = tmp_path / "failure-injection-gate.json"
+    path.write_bytes(_canonical(value) + b"\n")
+    return path
+
+
 def test_production_attestation_binds_source_binaries_provider_and_full_layout(tmp_path):
     manifest_path, manifest = _manifest(tmp_path)
     gate_path = _gate(tmp_path, manifest)
@@ -85,6 +102,43 @@ def test_production_attestation_binds_source_binaries_provider_and_full_layout(t
     assert result["bundle_sha256"] == manifest["bundle_sha256"]
     assert result["artifacts"] == {
         name: record["sha256"] for name, record in manifest["artifacts"].items()}
+
+
+def test_fault_attestation_accepts_only_exact_passing_fault_gate(tmp_path):
+    manifest_path, manifest = _manifest(tmp_path)
+    gate_path = _fault_gate(tmp_path, manifest)
+
+    result = attest_launch(
+        backend=NATIVE_CXI,
+        production=True,
+        full_layout=True,
+        build_manifest=manifest_path,
+        gate_json=gate_path,
+        required_gate="G2-fault-rejoin-replay",
+    )
+    assert result["status"] == "attested"
+
+    with pytest.raises(ValueError, match="gate identity"):
+        attest_launch(
+            backend=NATIVE_CXI,
+            production=True,
+            full_layout=True,
+            build_manifest=manifest_path,
+            gate_json=gate_path,
+        )
+
+    value = json.loads(gate_path.read_text())
+    value["fault"]["old_epoch_rejected"] = False
+    gate_path.write_bytes(_canonical(value) + b"\n")
+    with pytest.raises(ValueError, match="fault identity"):
+        attest_launch(
+            backend=NATIVE_CXI,
+            production=True,
+            full_layout=True,
+            build_manifest=manifest_path,
+            gate_json=gate_path,
+            required_gate="G2-fault-rejoin-replay",
+        )
 
 
 def test_historical_component_manifest_is_valid_but_cannot_claim_g2(tmp_path):
