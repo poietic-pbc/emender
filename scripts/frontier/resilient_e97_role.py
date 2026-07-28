@@ -2322,6 +2322,47 @@ def _native_manager(args) -> int:
                     # native freeze SLO cannot replace that Q/T close window:
                     # harmless K40 skew can make one node contribute later.
                     deadline=native_deadline)
+                if close.get("status") == "catch_up":
+                    authoritative_generation = int(
+                        close.get("authoritative_generation", -1))
+                    if (
+                        authoritative_generation <= generation
+                        or len(str(close.get("receipt_digest", ""))) != 64
+                        or len(str(close.get("manifest_digest", ""))) != 64
+                        or len(str(close.get("result_root", ""))) != 64
+                        or int(close.get("accepted_tokens", -1)) < 0
+                        or close.get("requires_reload") is not True
+                    ):
+                        raise ValueError(
+                            "generation catch-up receipt lacks immutable authority")
+                    atomic_metadata(
+                        control
+                        / f"native-generation-catch-up-{generation:08d}.json", {
+                            "schema":
+                                "emender-native-generation-catch-up-v1",
+                            "run_id": args.run_id,
+                            "fence_epoch": _fence_epoch(args),
+                            "worker_id": f"node-{node}",
+                            "incarnation": incarnation,
+                            **close,
+                        })
+                    heartbeat(
+                        bulk, identity, generation=authoritative_generation,
+                        step=authoritative_generation * args.local_steps,
+                        loss=None, stage="generation_catch_up",
+                        source_generation=generation,
+                        authoritative_generation=authoritative_generation,
+                        commit_receipt_digest=close["receipt_digest"],
+                        requires_reload=True)
+                    # The model-free manager owns no model/optimizer state.
+                    # Its successful exit leaves the supervisor restart budget
+                    # untouched while the immutable handoff directs the local
+                    # trainers' bounded authoritative reload.
+                    final_result.close()
+                    final_operation.close()
+                    freeze.close()
+                    terminal_published = True
+                    return 0
                 if close.get("status") != "commit_ready":
                     raise TimeoutError(f"native global freeze failed: {close}")
                 frozen = tuple(close["frozen_identities"])
