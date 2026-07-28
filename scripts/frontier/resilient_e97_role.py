@@ -453,6 +453,29 @@ def _native_runtime_resume_compatible(
                 if key not in provenance})
 
 
+def _resume_handoff_identity_matches(
+        handoff: object, args, *,
+        recorded_runtime: object, native: bool) -> bool:
+    """Bind a fresh trainer to the stable execution identity and newer fence."""
+    if not isinstance(handoff, dict):
+        return False
+    fence = handoff.get("fence")
+    return bool(
+        isinstance(fence, dict)
+        and handoff.get("run_id") == args.run_id
+        and handoff.get("payload_id") == args.payload_id
+        and handoff.get("source_id") == args.source_id
+        and (not native or handoff.get("code_id") == args.code_id)
+        and (
+            not native
+            or isinstance(recorded_runtime, dict)
+            and len(str(recorded_runtime.get("source_commit", ""))) == 40
+        )
+        and int(fence.get("coordinator_epoch", -1)) <= _fence_epoch(args)
+        and handoff.get("finalized") is True
+    )
+
+
 def _peer_authority(
         args,
         ) -> tuple[ManifestPeerAuthority, AllocationClaim] | None:
@@ -3185,12 +3208,10 @@ def trainer(args) -> int:
                      "policy": "new-harness-handoff"}
         accepted_token_clock = int(handoff.get("accepted_tokens", 0))
         async_chain = list(handoff.get("async_chain", ())) + [str(resume_handoff)]
-        if (handoff.get("run_id") != args.run_id or handoff.get("payload_id") != args.payload_id
-                or handoff.get("source_id") != args.source_id
-                or (native and handoff.get("code_id")
-                    != recorded_runtime.get("source_commit"))
-                or int(handoff["fence"]["coordinator_epoch"]) > _fence_epoch(args)
-                or not handoff.get("finalized")):
+        if not _resume_handoff_identity_matches(
+                handoff, args,
+                recorded_runtime=recorded_runtime,
+                native=native):
             raise ValueError("resume handoff membership/identity/fence mismatch")
     recovery_manifest = control / "recovery" / f"{identity}.json"
     recovery = (

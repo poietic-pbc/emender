@@ -77,6 +77,68 @@ CLEAN_GENERATIONS = 10
 CLEAN_SIGNAL = "B:TERM@60"
 CLEAN_PROGRESS_DEADLINE_S = 45 * 60
 CLEAN_GENERATION_DEADLINE_S = 420
+FAULT_WALLTIME = "02:00:00"
+FAULT_SIGNAL = "B:TERM@60"
+FAULT_PROGRESS_DEADLINE_S = 45 * 60
+FAULT_GENERATION_DEADLINE_S = 420
+FAULT_PHASE_SPECS = (
+    {
+        "name": "fault-baseline",
+        "initial_generation": 0,
+        "generations": 2,
+        "minimum_commits": 2,
+        "fresh_allocation": False,
+        "max_restarts": 0,
+        "injections": {},
+    },
+    {
+        "name": "fault-rejoin",
+        "initial_generation": 2,
+        "generations": 4,
+        "minimum_commits": 4,
+        "fresh_allocation": False,
+        "max_restarts": 3,
+        "injections": {
+            "RESILIENT_E97_DELAY_READY": "1:2:45",
+            "RESILIENT_E97_INJECT_TRAINER": "0:3:2",
+            "RESILIENT_E97_INJECT_MANAGER":
+                "1:-1:4:published_node_applied",
+            "RESILIENT_E97_INJECT_NATIVE_SERVICE":
+                "0:-1:4:owner_transport",
+        },
+    },
+    {
+        "name": "fresh-recovery",
+        "initial_generation": 6,
+        "generations": 5,
+        "minimum_commits": 3,
+        "fresh_allocation": True,
+        "max_restarts": 0,
+        "injections": {},
+    },
+)
+FAULT_REQUIREMENTS = {
+    "compute_pool": [f"R{index:02d}" for index in range(1, 17)],
+    "native": [f"NDP{index:02d}" for index in range(1, 18)],
+    "async_v21": [f"V21S{index:02d}" for index in range(1, 18)],
+    "immutable_snapshot": [f"ISP{index:02d}" for index in range(1, 8)],
+}
+FAULT_SCENARIOS = (
+    "delayed_or_missing_contribution",
+    "lag_0_1_2_admission",
+    "lag_3_drop_and_catch_up",
+    "duplicate_idempotence_and_conflict_rejection",
+    "checksum_nonfinite_wrong_fence_rejection",
+    "local_owned_timeout",
+    "trainer_loss",
+    "native_service_loss",
+    "manager_loss_new_incarnation",
+    "owner_reassignment",
+    "failed_publication_invisibility",
+    "mailbox_replacement",
+    "all_eight_trainer_atomic_apply",
+    "fresh_allocation_model_outer_token_restore",
+)
 APPROVED_ENV = (
     "/lustre/orion/bif148/scratch/erikgarrison/emender/"
     ".envs/olcf-rocm711-torch210-py312"
@@ -172,6 +234,136 @@ def _load_json(path: str | Path, *, schema: str) -> dict[str, object]:
     if encoded_digest != canonical_digest(unsigned):
         raise ValueError(f"{schema} manifest digest mismatch")
     return value
+
+
+def _verify_prior_clean_gate(
+    path: str | Path,
+    *,
+    expected_identities: Mapping[str, str],
+) -> dict[str, object]:
+    """Verify the scheduler-owned clean pass and its exact submitted payload."""
+    target = Path(path).resolve()
+    terminal = _load_json(
+        target, schema="emender-async-v21-terminal-verdict-v1")
+    scheduler = terminal.get("scheduler")
+    validator_inputs = terminal.get("validator_inputs")
+    payload_reference = (
+        validator_inputs.get("payload")
+        if isinstance(validator_inputs, Mapping) else None
+    )
+    semantic = (
+        validator_inputs.get("semantic_verdict")
+        if isinstance(validator_inputs, Mapping) else None
+    )
+    if (
+        terminal.get("passed") is not True
+        or terminal.get("verdict") != "passed"
+        or not isinstance(scheduler, Mapping)
+        or scheduler.get("state") != "COMPLETED"
+        or scheduler.get("exit_code") != "0:0"
+        or scheduler.get("derived_exit_code") != "0:0"
+        or scheduler.get("nodes") != 2
+        or scheduler.get("partition") != "batch"
+        or scheduler.get("qos") != "debug"
+        or not isinstance(semantic, Mapping)
+        or semantic.get("required") is not True
+        or semantic.get("passed") is not True
+        or not isinstance(payload_reference, Mapping)
+    ):
+        raise ValueError(
+            "fault qualification requires a semantic clean pass at "
+            "Nodes=2, Partition=batch, QOS=debug")
+    payload_path = Path(str(payload_reference.get("path", ""))).resolve()
+    if (
+        not payload_path.is_file()
+        or payload_reference.get("sha256") != _file_sha256(payload_path)
+        or payload_reference.get("bytes") != payload_path.stat().st_size
+    ):
+        raise ValueError("prior clean payload input is missing or changed")
+    payload_input = json.loads(payload_path.read_text(encoding="utf-8"))
+    payload = (
+        payload_input.get("payload")
+        if isinstance(payload_input, Mapping) else None
+    )
+    submitted_scheduler = (
+        payload_input.get("scheduler")
+        if isinstance(payload_input, Mapping) else None
+    )
+    if (
+        payload_input.get("schema")
+        != "emender-async-v21-collector-input-v1"
+        or payload_input.get("payload_digest")
+        != terminal.get("payload_digest")
+        or not isinstance(payload, Mapping)
+        or payload.get("schema") != PAYLOAD_SCHEMA
+        or payload.get("gate") != "clean"
+        or payload.get("nodes") != 2
+        or payload.get("identities") != dict(expected_identities)
+        or not isinstance(submitted_scheduler, Mapping)
+        or submitted_scheduler.get("Nodes") != 2
+        or submitted_scheduler.get("Partition") != "batch"
+        or submitted_scheduler.get("QOS") != "debug"
+    ):
+        raise ValueError(
+            "prior clean pass does not bind this exact two-node payload")
+    return {
+        "path": str(target),
+        "sha256": _file_sha256(target),
+        "payload_digest": str(terminal["payload_digest"]),
+        "payload_job_id": str(terminal["payload_job_id"]),
+        "identities": dict(expected_identities),
+        "training_inputs": dict(payload.get("training_inputs", {})),
+    }
+
+
+def _next_fault_phase(
+    state_path: str | Path,
+    *,
+    campaign_digest: str,
+    prior_gate: Mapping[str, object],
+) -> dict[str, object] | None:
+    """Return the only phase eligible to reconcile or submit.
+
+    Terminal passing phases advance in the fixed order.  A failed/retired
+    phase is a permanent stop for this campaign digest; later phases cannot be
+    rendered, much less submitted.
+    """
+    _digest(campaign_digest, "fault campaign")
+    state = _state(Path(state_path).resolve())
+    records = [
+        value for value in state["payloads"].values()
+        if (
+            isinstance(value, Mapping)
+            and value.get("campaign_digest") == campaign_digest
+        )
+    ]
+    by_index: dict[int, Mapping[str, object]] = {}
+    for record in records:
+        if record.get("prior_payload_digest") != prior_gate.get(
+                "payload_digest"):
+            raise ValueError("fault campaign prior clean identity changed")
+        index = int(record.get("fault_phase_index", -1))
+        if index in by_index:
+            raise ValueError("fault campaign has duplicate phase payloads")
+        if index < 0 or index >= len(FAULT_PHASE_SPECS):
+            raise ValueError("fault campaign phase index is invalid")
+        by_index[index] = record
+    for index, phase in enumerate(FAULT_PHASE_SPECS):
+        record = by_index.get(index)
+        if record is None:
+            if any(later > index for later in by_index):
+                raise ValueError("fault campaign phase history is out of order")
+            return dict(phase)
+        if record.get("fault_phase") != phase["name"]:
+            raise ValueError("fault campaign phase identity changed")
+        status = str(record.get("status", ""))
+        if status == "retired" or record.get("verdict") == "failed":
+            raise ValueError(
+                f"fault phase {phase['name']} failed; later phases are blocked")
+        if status == "terminal" and record.get("verdict") == "passed":
+            continue
+        return dict(phase)
+    return None
 
 
 def _verify_review_signature(
@@ -480,6 +672,7 @@ def build_plan(
     trusted_reviewer_key: str | Path | None = None,
     allow_test_signatures: bool = False,
     clean_launch: Mapping[str, object] | None = None,
+    fault_launch: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     _verify_canonical_config()
     if gate not in ALL_GATES:
@@ -500,9 +693,15 @@ def build_plan(
             "launched-rank membership, and an all-READY barrier")
     if clean_launch is not None and gate != "clean":
         raise ValueError("the reviewed clean launch applies only to the clean gate")
+    if fault_launch is not None and gate != "faults":
+        raise ValueError("the reviewed fault launch applies only to the fault gate")
+    if clean_launch is not None and fault_launch is not None:
+        raise ValueError("only one production launch profile may be supplied")
     launch: dict[str, str] | None = None
     rendered_parameters = dict(parameters)
-    if clean_launch is not None:
+    production_launch = (
+        clean_launch if clean_launch is not None else fault_launch)
+    if production_launch is not None:
         required_launch = {
             "repo", "seed_config", "native_build_manifest",
             "full_layout_gate", "run_dir", "acceptance_manifest",
@@ -514,12 +713,12 @@ def build_plan(
             "train_args_sha256",
         }
         missing = sorted(
-            name for name in required_launch if not clean_launch.get(name))
+            name for name in required_launch if not production_launch.get(name))
         if missing:
             raise ValueError(
-                "reviewed clean launch is missing immutable bindings: "
+                "reviewed production launch is missing immutable bindings: "
                 + ", ".join(missing))
-        launch = {name: str(value) for name, value in clean_launch.items()}
+        launch = {name: str(value) for name, value in production_launch.items()}
         for name in (
             "seed_attestation_sha256", "data_identity_digest",
             "execution_source_digest",
@@ -532,26 +731,72 @@ def build_plan(
             or any(character not in "0123456789abcdef"
                    for character in launch["source_commit"])
         ):
-            raise ValueError("clean launch source commit must be a Git SHA-1")
+            raise ValueError("production launch source commit must be a Git SHA-1")
         if launch["tokenizer_sha256"] != TOKENIZER_SHA256:
-            raise ValueError("clean launch must bind the reviewed p50k tokenizer")
+            raise ValueError(
+                "production launch must bind the reviewed p50k tokenizer")
         if launch["execution_source_schema"] != EXECUTION_SOURCE_SCHEMA:
-            raise ValueError("clean launch execution-source schema is unsupported")
+            raise ValueError(
+                "production launch execution-source schema is unsupported")
         if (
             len(launch["native_source_commit"]) != 40
             or any(character not in "0123456789abcdef"
                    for character in launch["native_source_commit"])
         ):
-            raise ValueError("clean launch native source commit must be a Git SHA-1")
-        conflicting = {
-            name: value
-            for name, value in rendered_parameters.items()
-            if name in CLEAN_PARAMETERS and value != CLEAN_PARAMETERS[name]
-        }
-        if conflicting:
             raise ValueError(
-                "clean parameters differ from the reviewed acceptance profile")
-        rendered_parameters = {**CLEAN_PARAMETERS, **rendered_parameters}
+                "production launch native source commit must be a Git SHA-1")
+        if clean_launch is not None:
+            conflicting = {
+                name: value
+                for name, value in rendered_parameters.items()
+                if name in CLEAN_PARAMETERS and value != CLEAN_PARAMETERS[name]
+            }
+            if conflicting:
+                raise ValueError(
+                    "clean parameters differ from the reviewed acceptance profile")
+            rendered_parameters = {**CLEAN_PARAMETERS, **rendered_parameters}
+        else:
+            required_fault = {
+                "fault_campaign_digest", "fault_phase", "fault_phase_index",
+                "initial_generation", "generations", "coordinator_epoch",
+                "prior_gate", "prior_gate_sha256", "prior_payload_digest",
+            }
+            missing_fault = sorted(
+                name for name in required_fault if not launch.get(name))
+            if missing_fault:
+                raise ValueError(
+                    "reviewed fault launch is missing campaign bindings: "
+                    + ", ".join(missing_fault))
+            _digest(launch["fault_campaign_digest"], "fault campaign")
+            _digest(launch["prior_gate_sha256"], "prior clean gate")
+            phase_index = int(launch["fault_phase_index"])
+            if (
+                phase_index < 0
+                or phase_index >= len(FAULT_PHASE_SPECS)
+                or FAULT_PHASE_SPECS[phase_index]["name"]
+                != launch["fault_phase"]
+                or int(launch["initial_generation"])
+                != FAULT_PHASE_SPECS[phase_index]["initial_generation"]
+                or int(launch["generations"])
+                != FAULT_PHASE_SPECS[phase_index]["generations"]
+            ):
+                raise ValueError("reviewed fault phase differs from fixed campaign")
+            rendered_parameters = {
+                "fault_phase": launch["fault_phase"],
+                "fault_phase_index": phase_index,
+                "initial_generation": int(launch["initial_generation"]),
+                "generations": int(launch["generations"]),
+                "minimum_commits":
+                    FAULT_PHASE_SPECS[phase_index]["minimum_commits"],
+                "fresh_allocation":
+                    FAULT_PHASE_SPECS[phase_index]["fresh_allocation"],
+                "q_min": 2,
+                "one_node_commit_authority": False,
+                "max_speculative_windows": 2,
+                "scenarios": list(FAULT_SCENARIOS),
+                "requirements": FAULT_REQUIREMENTS,
+                **rendered_parameters,
+            }
     identities = {
         "source_digest": _digest(source_digest, "source"),
         "policy_digest": _digest(policy_digest, "policy"),
@@ -611,6 +856,14 @@ def build_plan(
                     else launch[name]
                 )
         payload["training_inputs"] = training_inputs
+        if gate == "faults":
+            payload["prior_gate"] = {
+                "path": str(Path(launch["prior_gate"]).resolve()),
+                "sha256": launch["prior_gate_sha256"],
+                "payload_digest": launch["prior_payload_digest"],
+            }
+            payload["fault_campaign_digest"] = launch[
+                "fault_campaign_digest"]
     payload_digest = canonical_digest(payload)
     retained_state = _state(Path(state_path).resolve())
     old = retained_state["payloads"].get(payload_digest)
@@ -675,7 +928,8 @@ def build_plan(
 
     scheduler = {"Nodes": nodes, "Partition": "batch", "QOS": "debug"}
     if launch is not None:
-        scheduler["TimeLimit"] = CLEAN_WALLTIME
+        scheduler["TimeLimit"] = (
+            CLEAN_WALLTIME if gate == "clean" else FAULT_WALLTIME)
     config_path = launch["seed_config"] if launch else str(CONFIG_PATH)
     exports = [
         "ALL",
@@ -695,11 +949,33 @@ def build_plan(
     ]
     if launch is not None:
         execution_digest = launch.get("execution_source_digest", source_digest)
+        phase_name = (
+            CLEAN_PHASE if gate == "clean" else launch["fault_phase"])
+        campaign_identity = (
+            payload_digest
+            if gate == "clean"
+            else launch["fault_campaign_digest"]
+        )
+        generations = (
+            CLEAN_GENERATIONS
+            if gate == "clean" else int(launch["generations"])
+        )
+        initial_generation = (
+            0 if gate == "clean" else int(launch["initial_generation"])
+        )
+        coordinator_epoch = (
+            1 if gate == "clean" else int(launch["coordinator_epoch"])
+        )
+        max_restarts = (
+            0 if gate == "clean"
+            else int(FAULT_PHASE_SPECS[int(
+                launch["fault_phase_index"])]["max_restarts"])
+        )
         exports.extend([
             f"REPO={launch['repo']}",
             "RESILIENT_E97_ACCEPTANCE_MANIFEST="
             + launch["acceptance_manifest"],
-            f"RESILIENT_E97_ACCEPTANCE_PHASE={CLEAN_PHASE}",
+            f"RESILIENT_E97_ACCEPTANCE_PHASE={phase_name}",
             f"RUN_DIR={launch['run_dir']}",
             f"NDP_BUILD_MANIFEST={launch['native_build_manifest']}",
             f"NDP_FULL_LAYOUT_GATE_JSON={launch['full_layout_gate']}",
@@ -708,11 +984,12 @@ def build_plan(
             "FI_PROVIDER=cxi",
             "FI_MR_CACHE_MONITOR=kdreg2",
             "FI_CXI_ATS=0",
-            "RESILIENT_E97_RUN_ID=async-v21-clean-" + payload_digest[:16],
+            f"RESILIENT_E97_RUN_ID=async-v21-{gate}-"
+            + campaign_identity[:16],
             "RESILIENT_E97_SOURCE_ID="
             f"step-{SEED_STEP}-tokens-{SEED_ACCEPTED_TOKENS}-"
             f"sha256-{SEED_SHA256}",
-            "RESILIENT_E97_PAYLOAD_ID=" + payload_digest,
+            "RESILIENT_E97_PAYLOAD_ID=" + campaign_identity,
             f"RESILIENT_E97_CODE_ID=execution-sha256-{execution_digest}",
             f"RESILIENT_E97_SEED_CONFIG={launch['seed_config']}",
             f"RESILIENT_E97_SEED_STEP={SEED_STEP}",
@@ -729,28 +1006,52 @@ def build_plan(
             + launch["data_identity_digest"],
             f"RESILIENT_E97_TIKTOKEN_CACHE_FILE={launch['tokenizer']}",
             f"RESILIENT_E97_TIKTOKEN_SHA256={launch['tokenizer_sha256']}",
-            f"RESILIENT_E97_GENERATIONS={CLEAN_GENERATIONS}",
-            "RESILIENT_E97_INITIAL_GENERATION=0",
-            "RESILIENT_E97_COORDINATOR_EPOCH=1",
+            f"RESILIENT_E97_GENERATIONS={generations}",
+            f"RESILIENT_E97_INITIAL_GENERATION={initial_generation}",
+            f"RESILIENT_E97_COORDINATOR_EPOCH={coordinator_epoch}",
             "RESILIENT_E97_GLOBAL_QUORUM=2",
             "RESILIENT_E97_STARTUP_SMOKE=0",
-            f"RESILIENT_E97_REQUESTED_WALLTIME={CLEAN_WALLTIME}",
+            "RESILIENT_E97_REQUESTED_WALLTIME="
+            + (CLEAN_WALLTIME if gate == "clean" else FAULT_WALLTIME),
             "RESILIENT_E97_LAUNCH_MODE=node-local",
             "RESILIENT_E97_STARTUP_DEADLINE_S=180",
             "RESILIENT_E97_HEARTBEAT_DEADLINE_S=60",
             f"RESILIENT_E97_PROGRESS_DEADLINE_S="
-            f"{CLEAN_PROGRESS_DEADLINE_S}",
+            f"{CLEAN_PROGRESS_DEADLINE_S if gate == 'clean' else FAULT_PROGRESS_DEADLINE_S}",
             f"RESILIENT_E97_GENERATION_DEADLINE_S="
-            f"{CLEAN_GENERATION_DEADLINE_S}",
-            "RESILIENT_E97_MAX_RESTARTS=0",
-            "RESILIENT_E97_INJECT_TRAINER=",
-            "RESILIENT_E97_INJECT_MANAGER=",
-            "RESILIENT_E97_INJECT_NODE_STEP=",
-            "RESILIENT_E97_INJECT_NATIVE_SERVICE=",
-            "RESILIENT_E97_DELAY_READY=",
-            "RESILIENT_E97_BULK_ROOT=/tmp/async-v21-clean-"
-            + payload_digest[:16],
+            f"{CLEAN_GENERATION_DEADLINE_S if gate == 'clean' else FAULT_GENERATION_DEADLINE_S}",
+            f"RESILIENT_E97_MAX_RESTARTS={max_restarts}",
+            "RESILIENT_E97_BULK_ROOT=/tmp/async-v21-"
+            + f"{gate}-{campaign_identity[:16]}-{phase_name}",
         ])
+        injection_values = (
+            {}
+            if gate == "clean"
+            else FAULT_PHASE_SPECS[int(
+                launch["fault_phase_index"])]["injections"]
+        )
+        for variable in (
+            "RESILIENT_E97_INJECT_TRAINER",
+            "RESILIENT_E97_INJECT_MANAGER",
+            "RESILIENT_E97_INJECT_NODE_STEP",
+            "RESILIENT_E97_INJECT_NATIVE_SERVICE",
+            "RESILIENT_E97_DELAY_READY",
+        ):
+            exports.append(f"{variable}={injection_values.get(variable, '')}")
+        if gate == "faults":
+            exports.extend([
+                "ASYNC_V21_PRIOR_CLEAN_GATE=" + launch["prior_gate"],
+                "ASYNC_V21_PRIOR_CLEAN_GATE_SHA256="
+                + launch["prior_gate_sha256"],
+                "ASYNC_V21_FAULT_CAMPAIGN_DIGEST="
+                + launch["fault_campaign_digest"],
+                "ASYNC_V21_FAULT_PHASE_INDEX="
+                + launch["fault_phase_index"],
+            ])
+            if launch.get("resume_handoff"):
+                exports.append(
+                    "RESILIENT_E97_RESUME_HANDOFF="
+                    + launch["resume_handoff"])
     if scale_evidence is not None:
         exports.extend([
             "ASYNC_V21_SCALE_AUTHORIZATION="
@@ -795,9 +1096,11 @@ def build_plan(
             "scripts/frontier/resilient_e97_true_2n.sbatch")
         run_dir = Path(launch["run_dir"])
         model_log_root = run_dir
+        walltime = CLEAN_WALLTIME if gate == "clean" else FAULT_WALLTIME
+        signal_spec = CLEAN_SIGNAL if gate == "clean" else FAULT_SIGNAL
         command.extend([
-            f"--time={CLEAN_WALLTIME}",
-            f"--signal={CLEAN_SIGNAL}",
+            f"--time={walltime}",
+            f"--signal={signal_spec}",
             "--network=job_vni",
             f"--chdir={launch['repo']}",
             f"--output={run_dir / 'slurm-%j.out'}",
@@ -830,7 +1133,13 @@ def build_plan(
             "semantic_verdict": (
                 str(model_log_root / "pipelined-performance.json")
                 if launch is not None and gate == "clean"
-                else None
+                else (
+                    str(
+                        model_log_root
+                        / f"{launch['fault_phase']}-verdict.json")
+                    if launch is not None and gate == "faults"
+                    else None
+                )
             ),
             "scheduler_owned": True,
             "dependency": "afterany",
@@ -838,7 +1147,9 @@ def build_plan(
         },
     }
     if launch is not None:
-        plan["clean_launch"] = launch
+        plan[
+            "clean_launch" if gate == "clean" else "fault_launch"
+        ] = launch
     return plan
 
 
@@ -850,7 +1161,7 @@ def _atomic_json(path: Path, value: Mapping[str, object]) -> None:
 
 
 def _verify_clean_plan_immutable(plan: Mapping[str, object]) -> None:
-    launch = plan.get("clean_launch")
+    launch = plan.get("clean_launch") or plan.get("fault_launch")
     if not isinstance(launch, Mapping):
         return
     repo = Path(str(launch["repo"])).resolve()
@@ -858,7 +1169,7 @@ def _verify_clean_plan_immutable(plan: Mapping[str, object]) -> None:
     current_source = _source_digest(repo)
     if current_source["digest"] != launch["execution_source_digest"]:
         raise ValueError(
-            "authoritative execution source changed after clean plan rendering")
+            "authoritative execution source changed after plan rendering")
     for path_name, digest_name in (
         ("native_build_manifest", "native_build_manifest_sha256"),
         ("full_layout_gate", "full_layout_gate_sha256"),
@@ -868,7 +1179,7 @@ def _verify_clean_plan_immutable(plan: Mapping[str, object]) -> None:
     ):
         if _file_sha256(Path(str(launch[path_name]))) != launch[digest_name]:
             raise ValueError(
-                f"clean launch artifact changed after rendering: {path_name}")
+                f"launch artifact changed after rendering: {path_name}")
     data = _data_identity(Path(str(launch["data"])))
     if data["identity_digest"] != launch["data_identity_digest"]:
         raise ValueError("reviewed E97 data object changed after rendering")
@@ -879,6 +1190,11 @@ def _verify_clean_plan_immutable(plan: Mapping[str, object]) -> None:
         or cache.name != f"sha256-{SEED_SHA256}.pt"
     ):
         raise ValueError("verified content-addressed seed cache is unavailable")
+    if "prior_gate" in launch and (
+        _file_sha256(Path(str(launch["prior_gate"])))
+        != launch.get("prior_gate_sha256")
+    ):
+        raise ValueError("prior clean terminal verdict changed after rendering")
 
 
 def _command_option(command: Sequence[object], prefix: str) -> str:
@@ -1086,6 +1402,19 @@ def submit_plan(plan: Mapping[str, object]) -> str:
                     "held": True,
                 },
             })
+            parameters = plan.get("payload", {}).get("parameters", {})
+            if (
+                isinstance(parameters, Mapping)
+                and "fault_phase" in parameters
+            ):
+                record.update({
+                    "campaign_digest":
+                        plan["payload"]["fault_campaign_digest"],
+                    "fault_phase": parameters["fault_phase"],
+                    "fault_phase_index": parameters["fault_phase_index"],
+                    "prior_payload_digest":
+                        plan["payload"]["prior_gate"]["payload_digest"],
+                })
             state["payloads"][payload_digest] = record
             state["active_job"] = {
                 "job_id": job_id,
@@ -1420,6 +1749,153 @@ def _clean_launch_context(
     return context, bundle_digest
 
 
+def _fault_resume_handoff(
+    *,
+    run_dir: Path,
+    campaign_digest: str,
+    expected_generation: int,
+) -> str:
+    latest_path = run_dir.resolve() / "handoff" / "latest.json"
+    if not latest_path.is_file():
+        raise FileNotFoundError(
+            "passing prior fault phase did not retain an immutable handoff")
+    latest = json.loads(latest_path.read_text(encoding="utf-8"))
+    manifest = Path(str(latest.get("manifest", ""))).resolve()
+    manifest.relative_to((run_dir.resolve() / "handoff").resolve())
+    if (
+        latest.get("generation") != expected_generation
+        or not manifest.is_file()
+        or latest.get("manifest_sha256") != _file_sha256(manifest)
+    ):
+        raise ValueError(
+            "fault phase handoff does not match the required generation")
+    value = json.loads(manifest.read_text(encoding="utf-8"))
+    expected_run = "async-v21-faults-" + campaign_digest[:16]
+    expected_tokens = (
+        SEED_ACCEPTED_TOKENS + expected_generation * 5_245_440)
+    if (
+        value.get("finalized") is not True
+        or value.get("run_id") != expected_run
+        or value.get("payload_id") != campaign_digest
+        or value.get("generation") != expected_generation
+        or value.get("membership") != ["node-0", "node-1"]
+        or value.get("accepted_tokens") != expected_tokens
+        or value.get("outer_update_state") != {
+            "mode": "delta_sgd",
+            "eta_outer": 1.0,
+            "step": expected_generation,
+            "accepted_tokens": expected_tokens,
+        }
+        or not Path(str(value.get("checkpoint", ""))).is_file()
+        or value.get("checkpoint_sha256")
+        != _file_sha256(Path(str(value.get("checkpoint", ""))))
+    ):
+        raise ValueError(
+            "fault phase handoff model/outer/token identity is invalid")
+    return str(manifest)
+
+
+def _fault_campaign_verdict(
+    *,
+    state_path: Path,
+    campaign_digest: str,
+    prior_gate: Mapping[str, object],
+    identities: Mapping[str, str],
+) -> dict[str, object]:
+    state = _state(state_path)
+    records = [
+        record for record in state["payloads"].values()
+        if (
+            isinstance(record, Mapping)
+            and record.get("campaign_digest") == campaign_digest
+        )
+    ]
+    if len(records) != len(FAULT_PHASE_SPECS):
+        raise ValueError("fault campaign does not have every terminal phase")
+    phases = []
+    for index, spec in enumerate(FAULT_PHASE_SPECS):
+        matches = [
+            record for record in records
+            if record.get("fault_phase_index") == index
+        ]
+        if len(matches) != 1:
+            raise ValueError("fault campaign phase history is ambiguous")
+        record = matches[0]
+        terminal_reference = record.get("terminal_evidence")
+        if (
+            record.get("status") != "terminal"
+            or record.get("verdict") != "passed"
+            or record.get("fault_phase") != spec["name"]
+            or not isinstance(terminal_reference, Mapping)
+        ):
+            raise ValueError(
+                f"fault campaign phase {spec['name']} is not a pass")
+        terminal_path = Path(str(terminal_reference.get("path", ""))).resolve()
+        if (
+            not terminal_path.is_file()
+            or terminal_reference.get("sha256")
+            != _file_sha256(terminal_path)
+        ):
+            raise ValueError("fault terminal evidence changed after collection")
+        terminal = _load_json(
+            terminal_path, schema="emender-async-v21-terminal-verdict-v1")
+        scheduler = terminal.get("scheduler")
+        semantic = terminal.get("validator_inputs", {}).get(
+            "semantic_verdict", {})
+        if (
+            terminal.get("passed") is not True
+            or terminal.get("payload_digest") != record.get("payload_digest")
+            or not isinstance(scheduler, Mapping)
+            or scheduler.get("state") != "COMPLETED"
+            or scheduler.get("exit_code") != "0:0"
+            or scheduler.get("derived_exit_code") != "0:0"
+            or scheduler.get("nodes") != 2
+            or scheduler.get("partition") != "batch"
+            or scheduler.get("qos") != "debug"
+            or not isinstance(semantic, Mapping)
+            or semantic.get("required") is not True
+            or semantic.get("passed") is not True
+        ):
+            raise ValueError(
+                f"fault phase {spec['name']} lacks its exact terminal pass")
+        phases.append({
+            "name": spec["name"],
+            "payload_digest": record["payload_digest"],
+            "job_id": record["job_id"],
+            "collector_job_id": record["collector"]["job_id"],
+            "terminal_verdict": str(terminal_path),
+            "terminal_verdict_sha256": _file_sha256(terminal_path),
+            "semantic_verdict": semantic.get("retained_path"),
+            "semantic_verdict_sha256": semantic.get("sha256"),
+            "scheduler": dict(scheduler),
+        })
+    value: dict[str, object] = {
+        "schema": "emender-async-v21-fault-campaign-verdict-v1",
+        "status": "passed",
+        "passed": True,
+        "gate": "faults",
+        "nodes": 2,
+        "partition": "batch",
+        "qos": "debug",
+        "campaign_digest": campaign_digest,
+        "identities": dict(identities),
+        "prior_gate": {
+            "path": prior_gate["path"],
+            "sha256": prior_gate["sha256"],
+            "payload_digest": prior_gate["payload_digest"],
+        },
+        "phases": phases,
+        "scenarios": list(FAULT_SCENARIOS),
+        "requirements": FAULT_REQUIREMENTS,
+        "no_one_node_commit_authority": True,
+        "maximum_speculative_windows": 2,
+        "fresh_allocation_additional_windows": 5,
+        "fresh_allocation_minimum_commits": 3,
+    }
+    value["manifest_digest"] = canonical_digest(value)
+    return value
+
+
 def _arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gate", choices=ALL_GATES, required=True)
@@ -1435,6 +1911,7 @@ def _arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--evidence-root")
     parser.add_argument("--authorization")
     parser.add_argument("--prior-rung")
+    parser.add_argument("--prior-gate")
     parser.add_argument("--trusted-reviewer-key")
     parser.add_argument("--source-digest")
     parser.add_argument("--policy-digest")
@@ -1478,8 +1955,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         policy_digest = args.policy_digest
     clean_launch = None
+    fault_launch = None
     bundle_digest = args.bundle_digest
-    if args.gate == "clean" and any((
+    if args.gate in {"clean", "faults"} and any((
         args.native_build_manifest,
         args.full_layout_gate,
         args.run_root,
@@ -1491,18 +1969,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.output,
         )):
             raise ValueError(
-                "integrated clean launch requires --native-build-manifest, "
+                "integrated production launch requires --native-build-manifest, "
                 "--full-layout-gate, --run-root, and --output")
-        clean_launch, derived_bundle = _clean_launch_context(
+        launch_context, derived_bundle = _clean_launch_context(
             repo=repo,
             source_commit=source_commit,
             seed_config=seed_config,
             native_build_manifest=args.native_build_manifest.resolve(),
             full_layout_gate=args.full_layout_gate.resolve(),
-            run_dir=(args.run_root.resolve() / CLEAN_PHASE),
+            run_dir=(
+                args.run_root.resolve()
+                / (CLEAN_PHASE if args.gate == "clean" else "faults")
+            ),
             acceptance_manifest=Path(args.output).resolve(),
             submit=args.submit,
         )
+        if args.gate == "clean":
+            clean_launch = launch_context
+        else:
+            fault_launch = launch_context
         if bundle_digest is not None and bundle_digest != derived_bundle:
             raise ValueError(
                 "explicit bundle digest differs from the native build manifest")
@@ -1510,6 +1995,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.submit and args.gate == "clean" and clean_launch is None:
         raise ValueError(
             "clean submission requires the integrated build/G2/run launch")
+    if args.submit and args.gate == "faults" and fault_launch is None:
+        raise ValueError(
+            "fault submission requires the integrated build/G2/run launch")
     if bundle_digest is None:
         raise ValueError(
             "--bundle-digest or an integrated native build manifest is required")
@@ -1524,21 +2012,99 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if evidence_root is None:
         raise ValueError("--evidence-root or --run-root is required")
+    source_digest = args.source_digest or str(_source_digest(repo)["digest"])
+    launcher_digest = args.launcher_digest or _file_sha256(launcher_path)
+    if fault_launch is not None:
+        if args.prior_gate is None:
+            raise ValueError(
+                "integrated fault launch requires the passed --prior-gate")
+        fault_gate_value = json.loads(
+            Path(fault_launch["full_layout_gate"]).read_text(
+                encoding="utf-8"))
+        if (
+            not isinstance(fault_gate_value, Mapping)
+            or fault_gate_value.get("status") != "passed"
+            or fault_gate_value.get("gate") != "G2-fault-rejoin-replay"
+            or fault_gate_value.get("nodes") != 2
+            or fault_gate_value.get("provider") != "cxi"
+            or not isinstance(fault_gate_value.get("fault"), Mapping)
+            or fault_gate_value["fault"].get("partial_commit") is not False
+        ):
+            raise ValueError(
+                "fault launch requires the exact passing two-node CXI "
+                "G2-fault-rejoin-replay artifact")
+        identities = {
+            "source_digest": source_digest,
+            "policy_digest": policy_digest,
+            "bundle_digest": bundle_digest,
+            "seed_digest": args.seed_digest,
+            "launcher_digest": launcher_digest,
+        }
+        prior_gate = _verify_prior_clean_gate(
+            args.prior_gate, expected_identities=identities)
+        campaign_digest = canonical_digest({
+            "schema": "emender-async-v21-fault-campaign-v1",
+            "identities": identities,
+            "prior_gate_sha256": prior_gate["sha256"],
+            "full_layout_gate_sha256":
+                fault_launch["full_layout_gate_sha256"],
+            "phases": list(FAULT_PHASE_SPECS),
+            "scenarios": list(FAULT_SCENARIOS),
+        })
+        phase = _next_fault_phase(
+            args.state,
+            campaign_digest=campaign_digest,
+            prior_gate=prior_gate,
+        )
+        if phase is None:
+            verdict = _fault_campaign_verdict(
+                state_path=Path(args.state).resolve(),
+                campaign_digest=campaign_digest,
+                prior_gate=prior_gate,
+                identities=identities,
+            )
+            if args.output:
+                _atomic_json(Path(args.output).resolve(), verdict)
+            print(json.dumps(verdict, sort_keys=True, indent=2))
+            return 0
+        phase_index = next(
+            index for index, item in enumerate(FAULT_PHASE_SPECS)
+            if item["name"] == phase["name"])
+        resume_handoff = ""
+        if phase_index:
+            resume_handoff = _fault_resume_handoff(
+                run_dir=Path(fault_launch["run_dir"]),
+                campaign_digest=campaign_digest,
+                expected_generation=int(phase["initial_generation"]),
+            )
+        fault_launch.update({
+            "fault_campaign_digest": campaign_digest,
+            "fault_phase": str(phase["name"]),
+            "fault_phase_index": str(phase_index),
+            "initial_generation": str(phase["initial_generation"]),
+            "generations": str(phase["generations"]),
+            "coordinator_epoch": str(phase_index + 1),
+            "resume_handoff": resume_handoff,
+            "prior_gate": str(prior_gate["path"]),
+            "prior_gate_sha256": str(prior_gate["sha256"]),
+            "prior_payload_digest": str(prior_gate["payload_digest"]),
+        })
     plan = build_plan(
         gate=args.gate,
         nodes=args.nodes,
         state_path=args.state,
         evidence_root=evidence_root,
-        source_digest=args.source_digest or str(_source_digest(repo)["digest"]),
+        source_digest=source_digest,
         policy_digest=policy_digest,
         bundle_digest=bundle_digest,
         seed_digest=args.seed_digest,
-        launcher_digest=args.launcher_digest or _file_sha256(launcher_path),
+        launcher_digest=launcher_digest,
         parameters=parameters,
         authorization_path=args.authorization,
         predecessor_path=args.prior_rung,
         trusted_reviewer_key=args.trusted_reviewer_key,
         clean_launch=clean_launch,
+        fault_launch=fault_launch,
     )
     if args.output:
         _atomic_json(Path(args.output).resolve(), plan)

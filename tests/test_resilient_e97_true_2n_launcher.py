@@ -1135,6 +1135,37 @@ def test_fresh_allocation_manager_syncs_older_authoritative_handoff(
     }
 
 
+def test_fresh_trainer_accepts_stable_execution_code_id_not_git_commit():
+    from types import SimpleNamespace
+
+    from scripts.frontier import resilient_e97_role as role
+
+    args = SimpleNamespace(
+        run_id="run",
+        payload_id="payload",
+        source_id="seed",
+        code_id="execution-sha256-" + "a" * 64,
+        coordinator_epoch=8,
+    )
+    handoff = {
+        "run_id": "run",
+        "payload_id": "payload",
+        "source_id": "seed",
+        "code_id": args.code_id,
+        "fence": {"coordinator_epoch": 7},
+        "finalized": True,
+    }
+    runtime = {"source_commit": "b" * 40}
+    assert role._resume_handoff_identity_matches(
+        handoff, args, recorded_runtime=runtime, native=True)
+    assert not role._resume_handoff_identity_matches(
+        {**handoff, "code_id": "execution-sha256-" + "c" * 64},
+        args,
+        recorded_runtime=runtime,
+        native=True,
+    )
+
+
 def test_native_restart_runtime_compatibility_rejects_substantive_digest_change():
     from scripts.frontier import resilient_e97_role as role
 

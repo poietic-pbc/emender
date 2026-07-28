@@ -361,4 +361,20 @@ if [[ ${RESILIENT_E97_ACCEPTANCE_PHASE:-} == clean-overlap ]]; then
   "$TRAIN_PYTHON_BIN" "$REPO/scripts/frontier/validate_pipelined_e97_performance.py" \
     --telemetry-root "$RUN_DIR/retained-evidence" \
     --output "$RUN_DIR/pipelined-performance.json"
+elif [[ ${ASYNC_V21_GATE:-} == faults ]]; then
+  : "${ASYNC_V21_PRIOR_CLEAN_GATE:?fault phase requires the exact clean pass}"
+  : "${ASYNC_V21_PRIOR_CLEAN_GATE_SHA256:?fault phase requires the clean pass digest}"
+  : "${ASYNC_V21_FAULT_CAMPAIGN_DIGEST:?fault phase requires a campaign digest}"
+  [[ $(sha256sum "$ASYNC_V21_PRIOR_CLEAN_GATE" | awk '{print $1}') == \
+     "$ASYNC_V21_PRIOR_CLEAN_GATE_SHA256" ]] || {
+    echo "prior clean terminal verdict changed after submission" >&2
+    exit 64
+  }
+  "$TRAIN_PYTHON_BIN" \
+    "$REPO/scripts/frontier/validate_async_v21_fault_phase.py" \
+    --run-dir "$RUN_DIR" \
+    --phase "$RESILIENT_E97_ACCEPTANCE_PHASE" \
+    --full-layout-gate "$NDP_FULL_LAYOUT_GATE_JSON" \
+    --prior-gate "$ASYNC_V21_PRIOR_CLEAN_GATE" \
+    --output "$RUN_DIR/$RESILIENT_E97_ACCEPTANCE_PHASE-verdict.json"
 fi
