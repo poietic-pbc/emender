@@ -22,6 +22,7 @@ import json
 import math
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 from typing import Mapping, Sequence
@@ -33,7 +34,18 @@ if str(ROOT) not in sys.path:
 POLICY_ID = "async-decoupled-v2.1-simple"
 POLICY_SCHEMA = "emender-async-policy-v2.1"
 PAYLOAD_SCHEMA = "emender-async-v21-qualification-payload-v1"
-STATE_SCHEMA = "emender-async-v21-qualification-state-v1"
+STATE_SCHEMA = "emender-async-v21-qualification-state-v2"
+LEGACY_STATE_SCHEMA = "emender-async-v21-qualification-state-v1"
+COLLECTOR_SCHEMA = "emender-async-v21-terminal-collector-v1"
+EXECUTION_SOURCE_SCHEMA = "emender-async-v21-execution-source-v1"
+# These are append-only human/machine evidence stores.  They are deliberately
+# the complete exclusion list: every other tracked byte, including authority
+# documents and experiment/data preparation code, remains executable identity.
+EVIDENCE_ONLY_PATH_PREFIXES = (
+    "docs/validation/",
+    "logs/",
+    "reports/",
+)
 AUTHORIZATION_SCHEMA = "emender-async-v21-scale-authorization-v1"
 RUNG_PASS_SCHEMA = "emender-async-v21-rung-pass-v1"
 CLOSURE_SCHEMA = "emender-v21s17-scale-closure-v1"
@@ -430,10 +442,15 @@ def _state(path: Path) -> dict[str, object]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if (
         not isinstance(value, dict)
-        or value.get("schema") != STATE_SCHEMA
+        or value.get("schema") not in {STATE_SCHEMA, LEGACY_STATE_SCHEMA}
         or not isinstance(value.get("payloads"), dict)
     ):
         raise ValueError("retained qualification state identity is invalid")
+    value["schema"] = STATE_SCHEMA
+    for record in value["payloads"].values():
+        if isinstance(record, dict) and record.get("status") == "failed":
+            record["status"] = "retired"
+            record.setdefault("verdict", "failed")
     return value
 
 
@@ -489,7 +506,8 @@ def build_plan(
             "full_layout_gate", "run_dir", "acceptance_manifest",
             "seed_cache", "seed_attestation", "seed_attestation_sha256",
             "train_args", "data", "data_identity_digest", "tokenizer",
-            "tokenizer_sha256", "source_commit",
+            "tokenizer_sha256", "source_commit", "native_source_commit",
+            "execution_source_digest", "execution_source_schema",
             "native_build_manifest_sha256", "full_layout_gate_sha256",
             "train_args_sha256",
         }
@@ -502,6 +520,7 @@ def build_plan(
         launch = {name: str(value) for name, value in clean_launch.items()}
         for name in (
             "seed_attestation_sha256", "data_identity_digest",
+            "execution_source_digest",
             "tokenizer_sha256", "native_build_manifest_sha256",
             "full_layout_gate_sha256", "train_args_sha256",
         ):
@@ -514,6 +533,14 @@ def build_plan(
             raise ValueError("clean launch source commit must be a Git SHA-1")
         if launch["tokenizer_sha256"] != TOKENIZER_SHA256:
             raise ValueError("clean launch must bind the reviewed p50k tokenizer")
+        if launch["execution_source_schema"] != EXECUTION_SOURCE_SCHEMA:
+            raise ValueError("clean launch execution-source schema is unsupported")
+        if (
+            len(launch["native_source_commit"]) != 40
+            or any(character not in "0123456789abcdef"
+                   for character in launch["native_source_commit"])
+        ):
+            raise ValueError("clean launch native source commit must be a Git SHA-1")
         conflicting = {
             name: value
             for name, value in rendered_parameters.items()
@@ -532,6 +559,12 @@ def build_plan(
     }
     if identities["seed_digest"] != SEED_SHA256:
         raise ValueError("qualification payload must bind the canonical E97 seed")
+    if (
+        launch is not None
+        and identities["source_digest"] != launch["execution_source_digest"]
+    ):
+        raise ValueError(
+            "qualification payload source differs from reviewed execution source")
     payload = {
         "schema": PAYLOAD_SCHEMA,
         "policy_id": POLICY_ID,
@@ -553,9 +586,12 @@ def build_plan(
     if launch is not None:
         training_inputs = {
             "data_identity_digest": launch["data_identity_digest"],
+            "execution_source_digest": launch["execution_source_digest"],
+            "execution_source_schema": launch["execution_source_schema"],
             "full_layout_gate_sha256": launch["full_layout_gate_sha256"],
             "native_build_manifest_sha256":
                 launch["native_build_manifest_sha256"],
+            "native_source_commit": launch["native_source_commit"],
             "seed_config": launch["seed_config"],
             "seed_attestation_sha256": launch["seed_attestation_sha256"],
             "source_commit": launch["source_commit"],
@@ -576,10 +612,14 @@ def build_plan(
     payload_digest = canonical_digest(payload)
     retained_state = _state(Path(state_path).resolve())
     old = retained_state["payloads"].get(payload_digest)
-    if isinstance(old, Mapping) and old.get("status") == "failed":
+    if isinstance(old, Mapping) and old.get("status") == "retired":
         raise ValueError("unchanged failed payload cannot be resubmitted")
     active = retained_state.get("active_job")
-    if isinstance(active, Mapping) and active.get("job_id"):
+    if (
+        isinstance(active, Mapping)
+        and active.get("job_id")
+        and active.get("payload_digest") != payload_digest
+    ):
         raise ValueError("at most one active job is permitted")
 
     scale_evidence = None
@@ -628,7 +668,7 @@ def build_plan(
         payload["scale_closure"] = scale_evidence
         payload_digest = canonical_digest(payload)
         old = retained_state["payloads"].get(payload_digest)
-        if isinstance(old, Mapping) and old.get("status") == "failed":
+        if isinstance(old, Mapping) and old.get("status") == "retired":
             raise ValueError("unchanged failed payload cannot be resubmitted")
 
     scheduler = {"Nodes": nodes, "Partition": "batch", "QOS": "debug"}
@@ -652,7 +692,7 @@ def build_plan(
         "RESILIENT_E97_COMPUTE_NODE_NETWORK_FETCHES=0",
     ]
     if launch is not None:
-        source_commit = launch.get("source_commit", source_digest)
+        execution_digest = launch.get("execution_source_digest", source_digest)
         exports.extend([
             f"REPO={launch['repo']}",
             "RESILIENT_E97_ACCEPTANCE_MANIFEST="
@@ -671,7 +711,7 @@ def build_plan(
             f"step-{SEED_STEP}-tokens-{SEED_ACCEPTED_TOKENS}-"
             f"sha256-{SEED_SHA256}",
             "RESILIENT_E97_PAYLOAD_ID=" + payload_digest,
-            f"RESILIENT_E97_CODE_ID={source_commit}",
+            f"RESILIENT_E97_CODE_ID=execution-sha256-{execution_digest}",
             f"RESILIENT_E97_SEED_CONFIG={launch['seed_config']}",
             f"RESILIENT_E97_SEED_STEP={SEED_STEP}",
             f"RESILIENT_E97_SEED_TOKENS={SEED_ACCEPTED_TOKENS}",
@@ -737,15 +777,22 @@ def build_plan(
     command = [
         "sbatch",
         "--parsable",
+        "--hold",
         f"--nodes={nodes}",
         "--partition=batch",
         "--qos=debug",
+        f"--job-name=em-v21-{gate}-{payload_digest[:12]}",
+        "--comment=emender-v21-payload:"
+        f"{payload_digest}:{EXECUTION_SOURCE_SCHEMA}",
     ]
     launcher_path = LAUNCHER_PATH
+    evidence_path = Path(evidence_root).resolve()
+    model_log_root = evidence_path / "payloads" / payload_digest
     if launch is not None:
         launcher_path = Path(launch["repo"]) / (
             "scripts/frontier/resilient_e97_true_2n.sbatch")
         run_dir = Path(launch["run_dir"])
+        model_log_root = run_dir
         command.extend([
             f"--time={CLEAN_WALLTIME}",
             f"--signal={CLEAN_SIGNAL}",
@@ -753,6 +800,12 @@ def build_plan(
             f"--chdir={launch['repo']}",
             f"--output={run_dir / 'slurm-%j.out'}",
             f"--error={run_dir / 'slurm-%j.err'}",
+        ])
+    else:
+        command.extend([
+            f"--chdir={ROOT}",
+            f"--output={model_log_root / 'slurm-%j.out'}",
+            f"--error={model_log_root / 'slurm-%j.err'}",
         ])
     command.extend([
         f"--export={','.join(exports)}",
@@ -766,6 +819,21 @@ def build_plan(
         "state_path": str(Path(state_path).resolve()),
         "evidence_root": str(Path(evidence_root).resolve()),
         "repo": launch["repo"] if launch else str(ROOT),
+        "collector": {
+            "schema": COLLECTOR_SCHEMA,
+            "evidence_dir": str(
+                evidence_path / "terminal-collector" / payload_digest),
+            "stdout_pattern": str(model_log_root / "slurm-%j.out"),
+            "stderr_pattern": str(model_log_root / "slurm-%j.err"),
+            "semantic_verdict": (
+                str(model_log_root / "pipelined-performance.json")
+                if launch is not None and gate == "clean"
+                else None
+            ),
+            "scheduler_owned": True,
+            "dependency": "afterany",
+            "requires_wg_or_codex": False,
+        },
     }
     if launch is not None:
         plan["clean_launch"] = launch
@@ -784,8 +852,11 @@ def _verify_clean_plan_immutable(plan: Mapping[str, object]) -> None:
     if not isinstance(launch, Mapping):
         return
     repo = Path(str(launch["repo"])).resolve()
-    if _require_submission_source(repo) != launch["source_commit"]:
-        raise ValueError("authoritative source changed after clean plan rendering")
+    _require_submission_source(repo)
+    current_source = _source_digest(repo)
+    if current_source["digest"] != launch["execution_source_digest"]:
+        raise ValueError(
+            "authoritative execution source changed after clean plan rendering")
     for path_name, digest_name in (
         ("native_build_manifest", "native_build_manifest_sha256"),
         ("full_layout_gate", "full_layout_gate_sha256"),
@@ -808,46 +879,290 @@ def _verify_clean_plan_immutable(plan: Mapping[str, object]) -> None:
         raise ValueError("verified content-addressed seed cache is unavailable")
 
 
+def _command_option(command: Sequence[object], prefix: str) -> str:
+    matches = [
+        str(item)[len(prefix):]
+        for item in command
+        if str(item).startswith(prefix)
+    ]
+    if len(matches) != 1 or not matches[0]:
+        raise ValueError(f"scheduler command requires exactly one {prefix} option")
+    return matches[0]
+
+
+def _find_scheduler_job(*, name: str, comment: str) -> str | None:
+    """Recover a prior scheduler side effect by its deterministic identity."""
+    found: set[str] = set()
+    queued = subprocess.run(
+        ["squeue", "-h", "--name", name, "-o", "%i|%j|%k"],
+        check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    for line in queued.stdout.splitlines():
+        fields = line.strip().split("|")
+        if len(fields) >= 3 and fields[1] == name and fields[2] == comment:
+            found.add(fields[0].split(".", 1)[0])
+    accounting = subprocess.run(
+        [
+            "sacct", "-n", "-X", "--name", name,
+            "--format=JobIDRaw,JobName,Comment,State", "-P",
+        ],
+        check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    for line in accounting.stdout.splitlines():
+        fields = line.strip().split("|")
+        if len(fields) >= 4 and fields[1] == name and fields[2] == comment:
+            found.add(fields[0].split(".", 1)[0])
+    found = {job_id for job_id in found if job_id.isdigit()}
+    if len(found) > 1:
+        raise ValueError(
+            f"duplicate scheduler identities exist for {name}: {sorted(found)}")
+    return next(iter(found), None)
+
+
+def _collector_registration(
+    plan: Mapping[str, object],
+    *,
+    payload_job_id: str,
+    payload_input: Path,
+) -> tuple[list[str], dict[str, object]]:
+    collector = plan.get("collector")
+    if (
+        not isinstance(collector, Mapping)
+        or collector.get("schema") != COLLECTOR_SCHEMA
+    ):
+        raise ValueError("durable scheduler-owned collector plan is required")
+    script = (
+        Path(str(plan.get("repo", ROOT))).resolve()
+        / "scripts/frontier/async_v21_terminal_collector.py"
+    )
+    if not script.is_file():
+        raise FileNotFoundError(f"terminal collector is missing: {script}")
+    evidence_dir = Path(str(collector["evidence_dir"])).resolve()
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    wrap_argv = [
+        sys.executable,
+        str(script),
+        "--state", str(Path(str(plan["state_path"])).resolve()),
+        "--payload-digest", str(plan["payload_digest"]),
+        "--payload-job-id", payload_job_id,
+        "--evidence-dir", str(evidence_dir),
+        "--payload-input", str(payload_input),
+        "--stdout-pattern", str(collector["stdout_pattern"]),
+        "--stderr-pattern", str(collector["stderr_pattern"]),
+    ]
+    semantic = collector.get("semantic_verdict")
+    if semantic:
+        wrap_argv.extend(["--semantic-verdict", str(semantic)])
+    name = f"em-v21-collector-{str(plan['payload_digest'])[:12]}"
+    script_sha256 = _file_sha256(script)
+    comment = (
+        "emender-v21-collector:"
+        f"{plan['payload_digest']}:{payload_job_id}:{script_sha256}"
+    )
+    command = [
+        "sbatch",
+        "--parsable",
+        "--nodes=1",
+        "--partition=batch",
+        "--qos=debug",
+        "--time=00:10:00",
+        f"--job-name={name}",
+        f"--comment={comment}",
+        f"--dependency=afterany:{payload_job_id}",
+        f"--chdir={plan.get('repo', ROOT)}",
+        f"--output={evidence_dir / 'collector-%j.out'}",
+        f"--error={evidence_dir / 'collector-%j.err'}",
+        "--export=NONE",
+        f"--wrap={shlex.join(wrap_argv)}",
+    ]
+    identity = {
+        "schema": COLLECTOR_SCHEMA,
+        "name": name,
+        "comment": comment,
+        "dependency": f"afterany:{payload_job_id}",
+        "script": str(script),
+        "script_sha256": script_sha256,
+        "wrap_argv": wrap_argv,
+        "wrap_digest": canonical_digest(wrap_argv),
+        "evidence_dir": str(evidence_dir),
+        "scheduler": {"Nodes": 1, "Partition": "batch", "QOS": "debug"},
+        "scheduler_owned": True,
+        "requires_wg_or_codex": False,
+    }
+    return command, identity
+
+
 def submit_plan(plan: Mapping[str, object]) -> str:
-    """Submit exactly one job after a final retained-state active-job check."""
+    """Reconcile one held-payload/afterany-collector/release transaction."""
     state_path = Path(str(plan["state_path"]))
     lock_path = state_path.with_suffix(state_path.suffix + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+b") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         state = _state(state_path)
-        if isinstance(state.get("active_job"), Mapping):
+        payload_digest = str(plan["payload_digest"])
+        existing = state["payloads"].get(payload_digest)
+        if isinstance(existing, Mapping) and existing.get("status") in {
+            "terminal", "retired",
+        }:
+            job_id = str(existing.get("job_id", ""))
+            if not job_id.isdigit():
+                raise ValueError("terminal payload lacks its scheduler identity")
+            return job_id
+        if isinstance(existing, Mapping) and existing.get("status") in {
+            "released", "queued", "running",
+        }:
+            job_id = str(existing.get("job_id", ""))
+            collector = existing.get("collector")
+            if (
+                not job_id.isdigit()
+                or not isinstance(collector, Mapping)
+                or not str(collector.get("job_id", "")).isdigit()
+            ):
+                raise ValueError(
+                    "active payload lacks its durable scheduler/collector identity")
+            return job_id
+        active = state.get("active_job")
+        if (
+            isinstance(active, Mapping)
+            and active.get("job_id")
+            and active.get("payload_digest") != payload_digest
+        ):
             raise ValueError("at most one active job is permitted")
         _verify_clean_plan_immutable(plan)
-        queued = subprocess.run(
-            ["squeue", "-u", os.environ["USER"], "-h", "-o", "%i"],
-            check=True, text=True, stdout=subprocess.PIPE,
-        ).stdout.strip()
-        if queued:
-            raise ValueError(
-                "serial qualification refuses to overlap another allocation")
-        completed = subprocess.run(
-            [str(item) for item in plan["command"]],
-            cwd=Path(str(plan.get("repo", ROOT))),
-            check=True,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+        record = (
+            existing
+            if isinstance(existing, dict)
+            else {"status": "new", "payload_digest": payload_digest}
         )
-        job_id = completed.stdout.strip().split(";", 1)[0]
-        if not job_id.isdigit():
-            raise RuntimeError("sbatch did not return one numeric job id")
-        payload_digest = str(plan["payload_digest"])
-        state["active_job"] = {
-            "job_id": job_id,
-            "payload_digest": payload_digest,
-            "status": "submitted",
-        }
-        state["payloads"][payload_digest] = {
-            "status": "submitted",
-            "job_id": job_id,
-        }
-        _atomic_json(state_path, state)
+        job_id = str(record.get("job_id", ""))
+        model_command = [str(item) for item in plan["command"]]
+        if "--hold" not in model_command:
+            raise ValueError("payload must be submitted held")
+        model_name = _command_option(model_command, "--job-name=")
+        model_comment = _command_option(model_command, "--comment=")
+        if not job_id:
+            job_id = _find_scheduler_job(
+                name=model_name, comment=model_comment) or ""
+            if not job_id:
+                queued = subprocess.run(
+                    ["squeue", "-u", os.environ["USER"], "-h", "-o", "%i"],
+                    check=True, text=True, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                ).stdout.strip()
+                if queued:
+                    raise ValueError(
+                        "serial qualification refuses to overlap another allocation")
+                for pattern_name in ("stdout_pattern", "stderr_pattern"):
+                    Path(str(plan["collector"][pattern_name])).parent.mkdir(
+                        parents=True, exist_ok=True)
+                completed = subprocess.run(
+                    model_command,
+                    cwd=Path(str(plan.get("repo", ROOT))),
+                    check=True,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                job_id = completed.stdout.strip().split(";", 1)[0]
+                if not job_id.isdigit():
+                    raise RuntimeError(
+                        "held sbatch did not return one numeric job id")
+            record.update({
+                "status": "held",
+                "job_id": job_id,
+                "payload_digest": payload_digest,
+                "model_scheduler_identity": {
+                    "name": model_name,
+                    "comment": model_comment,
+                    "held": True,
+                },
+            })
+            state["payloads"][payload_digest] = record
+            state["active_job"] = {
+                "job_id": job_id,
+                "payload_digest": payload_digest,
+                "status": "held",
+            }
+            # This is the first durable record containing both the held Slurm
+            # job and exact payload identity.
+            _atomic_json(state_path, state)
+
+        if not isinstance(state.get("active_job"), dict):
+            state["active_job"] = {
+                "job_id": job_id,
+                "payload_digest": payload_digest,
+                "status": str(record.get("status", "held")),
+            }
+        evidence_dir = Path(str(plan["collector"]["evidence_dir"])).resolve()
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        payload_input = evidence_dir / "payload-input.json"
+        if not payload_input.exists():
+            _atomic_json(payload_input, {
+                "schema": "emender-async-v21-collector-input-v1",
+                "payload_digest": payload_digest,
+                "payload": plan["payload"],
+                "scheduler": plan["scheduler"],
+                "model_command": model_command,
+            })
+
+        collector_command, collector_identity = _collector_registration(
+            plan, payload_job_id=job_id, payload_input=payload_input)
+        collector_record = record.get("collector")
+        collector_job_id = (
+            str(collector_record.get("job_id", ""))
+            if isinstance(collector_record, Mapping)
+            else ""
+        )
+        if not collector_job_id:
+            collector_job_id = _find_scheduler_job(
+                name=str(collector_identity["name"]),
+                comment=str(collector_identity["comment"]),
+            ) or ""
+            if not collector_job_id:
+                try:
+                    completed = subprocess.run(
+                        collector_command,
+                        cwd=Path(str(plan.get("repo", ROOT))),
+                        check=True,
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                    )
+                except subprocess.CalledProcessError:
+                    record["collector"] = {
+                        **collector_identity,
+                        "status": "registration-failed",
+                    }
+                    record["status"] = "held"
+                    state["active_job"]["status"] = "held"
+                    _atomic_json(state_path, state)
+                    raise
+                collector_job_id = completed.stdout.strip().split(";", 1)[0]
+                if not collector_job_id.isdigit():
+                    raise RuntimeError(
+                        "collector sbatch did not return one numeric job id")
+            record["collector"] = {
+                **collector_identity,
+                "status": "registered",
+                "job_id": collector_job_id,
+            }
+            record["status"] = "collector-registered"
+            state["active_job"]["status"] = "collector-registered"
+            # The scheduler-owned collector identity is durable before release.
+            _atomic_json(state_path, state)
+
+        if record.get("status") != "released":
+            subprocess.run(
+                ["scontrol", "release", job_id],
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            record["status"] = "released"
+            state["active_job"]["status"] = "released"
+            _atomic_json(state_path, state)
         return job_id
 
 
@@ -859,25 +1174,94 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _source_digest(repo: Path = ROOT) -> str:
-    completed = subprocess.run(
-        ["git", "ls-files", "-z"],
-        cwd=repo,
-        check=True,
-        stdout=subprocess.PIPE,
-    )
-    digest = hashlib.sha256(b"emender-async-v21-source-v1\0")
-    for encoded in completed.stdout.split(b"\0"):
-        if not encoded:
-            continue
-        path = repo / os.fsdecode(encoded)
-        if path.is_file():
-            payload = path.read_bytes()
-            digest.update(len(encoded).to_bytes(4, "little"))
-            digest.update(encoded)
-            digest.update(len(payload).to_bytes(8, "little"))
-            digest.update(payload)
-    return digest.hexdigest()
+def _source_digest(
+    repo: Path = ROOT, *, revision: str | None = None,
+) -> dict[str, object]:
+    """Hash every tracked execution byte except reviewed append-only evidence."""
+    digest = hashlib.sha256(
+        b"emender-async-v21-execution-source-v1\0")
+    included = 0
+    excluded = 0
+    entries: list[tuple[bytes, bytes]] = []
+    if revision is None:
+        completed = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=repo, check=True, stdout=subprocess.PIPE,
+        )
+        for encoded in sorted(completed.stdout.split(b"\0")):
+            if not encoded:
+                continue
+            relative = os.fsdecode(encoded)
+            if relative.startswith(EVIDENCE_ONLY_PATH_PREFIXES):
+                excluded += 1
+                continue
+            path = repo / relative
+            if path.is_symlink():
+                payload = os.fsencode(os.readlink(path))
+            elif path.is_file():
+                payload = path.read_bytes()
+            else:
+                continue
+            entries.append((encoded, payload))
+    else:
+        completed = subprocess.run(
+            ["git", "ls-tree", "-r", "-z", revision, "--"],
+            cwd=repo, check=True, stdout=subprocess.PIPE,
+        )
+        blobs: list[tuple[bytes, bytes]] = []
+        for entry in completed.stdout.split(b"\0"):
+            if not entry:
+                continue
+            metadata, encoded = entry.split(b"\t", 1)
+            _mode, object_type, object_id = metadata.split()
+            relative = os.fsdecode(encoded)
+            if relative.startswith(EVIDENCE_ONLY_PATH_PREFIXES):
+                excluded += 1
+                continue
+            if object_type != b"blob":
+                continue
+            blobs.append((encoded, object_id))
+        batch = subprocess.run(
+            ["git", "cat-file", "--batch"],
+            cwd=repo,
+            check=True,
+            input=b"".join(object_id + b"\n" for _path, object_id in blobs),
+            stdout=subprocess.PIPE,
+        ).stdout
+        offset = 0
+        for (encoded, expected_id) in blobs:
+            header_end = batch.index(b"\n", offset)
+            header = batch[offset:header_end].split()
+            if (
+                len(header) != 3
+                or header[0] != expected_id
+                or header[1] != b"blob"
+            ):
+                raise ValueError("Git historical execution-source blob mismatch")
+            size = int(header[2])
+            begin = header_end + 1
+            end = begin + size
+            if batch[end:end + 1] != b"\n":
+                raise ValueError("Git historical execution-source framing mismatch")
+            entries.append((encoded, batch[begin:end]))
+            offset = end + 1
+        if offset != len(batch):
+            raise ValueError("Git historical execution-source batch has extra bytes")
+    for encoded, payload in entries:
+        included += 1
+        digest.update(len(encoded).to_bytes(4, "little"))
+        digest.update(encoded)
+        digest.update(len(payload).to_bytes(8, "little"))
+        digest.update(payload)
+    boundary = {
+        "schema": EXECUTION_SOURCE_SCHEMA,
+        "digest": digest.hexdigest(),
+        "algorithm": "sha256-domain-separated-path-length-content",
+        "evidence_only_path_prefixes": list(EVIDENCE_ONLY_PATH_PREFIXES),
+        "included_tracked_files": included,
+        "excluded_evidence_files": excluded,
+    }
+    return boundary
 
 
 def _require_submission_source(repo: Path = ROOT) -> str:
@@ -951,24 +1335,35 @@ def _clean_launch_context(
     if (
         not isinstance(build, Mapping)
         or build.get("schema") != "emender-native-dataplane-build-v1"
-        or build.get("source_commit") != source_commit
         or build.get("source_tree_dirty") is not False
     ):
         raise ValueError(
             "native build manifest is not current clean authoritative source")
+    native_source_commit = str(build.get("source_commit", ""))
+    current_execution_source = _source_digest(repo)
+    if (
+        len(native_source_commit) != 40
+        or _source_digest(
+            repo, revision=native_source_commit)["digest"]
+        != current_execution_source["digest"]
+    ):
+        raise ValueError(
+            "native build execution source differs from authoritative source")
     bundle_digest = _digest(build.get("bundle_sha256"), "native bundle")
 
-    subprocess.run([
-        sys.executable,
-        str(repo / "scripts/frontier/attest_native_dataplane.py"),
-        "verify",
-        "--backend", "native-cxi",
-        "--production",
-        "--full-layout",
-        "--build-manifest", str(native_build_manifest),
-        "--gate-json", str(full_layout_gate),
-        "--source-root", str(repo),
-    ], cwd=repo, check=True)
+    from ndm.native_artifacts import attest_launch
+    attest_launch(
+        backend="native-cxi",
+        production=True,
+        full_layout=True,
+        build_manifest=native_build_manifest,
+        gate_json=full_layout_gate,
+        # The controller has just recomputed and compared the reviewed
+        # execution-source digests for current main and the native build
+        # commit.  Native/G2 remain exact to each other, while evidence-only
+        # Git commits are intentionally allowed to differ.
+        source_root=None,
+    )
     if _file_sha256(TOKENIZER_PATH) != TOKENIZER_SHA256:
         raise ValueError("reviewed p50k tokenizer digest mismatch")
 
@@ -991,6 +1386,9 @@ def _clean_launch_context(
     context = {
         "repo": str(repo),
         "source_commit": source_commit,
+        "native_source_commit": native_source_commit,
+        "execution_source_schema": EXECUTION_SOURCE_SCHEMA,
+        "execution_source_digest": str(current_execution_source["digest"]),
         "seed_config": str(seed_config),
         "native_build_manifest": str(native_build_manifest),
         "native_build_manifest_sha256": _file_sha256(native_build_manifest),
@@ -1123,7 +1521,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         nodes=args.nodes,
         state_path=args.state,
         evidence_root=evidence_root,
-        source_digest=args.source_digest or _source_digest(repo),
+        source_digest=args.source_digest or str(_source_digest(repo)["digest"]),
         policy_digest=policy_digest,
         bundle_digest=bundle_digest,
         seed_digest=args.seed_digest,

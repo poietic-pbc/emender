@@ -16,6 +16,12 @@ the admission, membership, weighting, fencing, atomicity, or recovery rules here
 Existing experiments may finish; these documents do not authorize cancelling
 or mutating jobs.
 
+Async-v2.1 qualification and scale submission additionally use the reviewed
+[execution-source identity and durable scheduler transaction](ASYNC_V21_EXECUTION_SOURCE_IDENTITY.md).
+Evidence-only commits may advance without changing that immutable execution
+identity, but every operational tracked byte and every separately bound
+native/data/tokenizer/seed identity remains fail closed.
+
 The practical Frontier MVP is one Slurm allocation of any supported size. It
 binds a monotonically increasing scheduler fence to an immutable allocation
 claim before model load. The in-memory native peer-control protocol owns live
