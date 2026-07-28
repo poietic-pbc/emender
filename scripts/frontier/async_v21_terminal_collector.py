@@ -288,14 +288,31 @@ def collect_terminal_evidence(
         }
         semantic_passed = True
         if semantic_verdict is not None:
-            _semantic_value, semantic_passed = _load_semantic_verdict(
-                semantic_verdict.resolve())
-            validator_inputs["semantic_verdict"] = _retained_file(
-                semantic_verdict.resolve(),
-                evidence_dir / "semantic-verdict.json",
-            )
-            validator_inputs["semantic_verdict"]["passed"] = semantic_passed
-            validator_inputs["semantic_verdict"]["required"] = True
+            semantic_source = semantic_verdict.resolve()
+            if not semantic_source.is_file():
+                semantic_passed = False
+                validator_inputs["semantic_verdict"] = {
+                    "required": True,
+                    "present": False,
+                    "source_path": str(semantic_source),
+                    "reason": "missing",
+                }
+            else:
+                retained_semantic = evidence_dir / "semantic-verdict.json"
+                semantic_reference = _retained_file(
+                    semantic_source,
+                    retained_semantic,
+                )
+                try:
+                    _semantic_value, semantic_passed = _load_semantic_verdict(
+                        retained_semantic)
+                except (json.JSONDecodeError, UnicodeError, ValueError) as error:
+                    semantic_passed = False
+                    semantic_reference["validation_error"] = type(error).__name__
+                semantic_reference["passed"] = semantic_passed
+                semantic_reference["present"] = True
+                semantic_reference["required"] = True
+                validator_inputs["semantic_verdict"] = semantic_reference
         else:
             validator_inputs["semantic_verdict"] = {
                 "required": False,

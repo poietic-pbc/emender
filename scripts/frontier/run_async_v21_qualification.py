@@ -64,6 +64,7 @@ SEED_SHA256 = (
     "0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2"
 )
 SEED_NODE_PATH = "/tmp/emender-e97-seed-$SLURM_JOB_ID"
+LINUX_SUN_PATH_BYTES = 108
 CLEAN_WALLTIME = "02:00:00"
 CLEAN_PHASE = "clean-overlap"
 # The debug QoS caps the clean gate at two hours.  Ten finalized generations
@@ -197,6 +198,20 @@ def canonical_bytes(value: object) -> bytes:
 
 def canonical_digest(value: object) -> str:
     return hashlib.sha256(canonical_bytes(value)).hexdigest()
+
+
+def _qualification_bulk_root(*, run_id: str, phase_name: str) -> str:
+    """Return a phase-unique node-local root that always fits AF_UNIX."""
+    phase_identity = canonical_digest({
+        "run_id": run_id,
+        "phase_name": phase_name,
+    })[:20]
+    root = Path("/tmp") / f"emv21-{phase_identity}"
+    control_socket = root / run_id / "node-0" / "control" / "ndp.sock"
+    if len(os.fsencode(control_socket)) >= LINUX_SUN_PATH_BYTES:
+        raise ValueError(
+            "qualification node-local control socket exceeds Linux sun_path")
+    return str(root)
 
 
 def _verify_canonical_config() -> None:
@@ -956,6 +971,11 @@ def build_plan(
             if gate == "clean"
             else launch["fault_campaign_digest"]
         )
+        run_id = f"async-v21-{gate}-{campaign_identity[:16]}"
+        bulk_root = _qualification_bulk_root(
+            run_id=run_id,
+            phase_name=phase_name,
+        )
         generations = (
             CLEAN_GENERATIONS
             if gate == "clean" else int(launch["generations"])
@@ -984,8 +1004,7 @@ def build_plan(
             "FI_PROVIDER=cxi",
             "FI_MR_CACHE_MONITOR=kdreg2",
             "FI_CXI_ATS=0",
-            f"RESILIENT_E97_RUN_ID=async-v21-{gate}-"
-            + campaign_identity[:16],
+            f"RESILIENT_E97_RUN_ID={run_id}",
             "RESILIENT_E97_SOURCE_ID="
             f"step-{SEED_STEP}-tokens-{SEED_ACCEPTED_TOKENS}-"
             f"sha256-{SEED_SHA256}",
@@ -1021,8 +1040,7 @@ def build_plan(
             f"RESILIENT_E97_GENERATION_DEADLINE_S="
             f"{CLEAN_GENERATION_DEADLINE_S if gate == 'clean' else FAULT_GENERATION_DEADLINE_S}",
             f"RESILIENT_E97_MAX_RESTARTS={max_restarts}",
-            "RESILIENT_E97_BULK_ROOT=/tmp/async-v21-"
-            + f"{gate}-{campaign_identity[:16]}-{phase_name}",
+            f"RESILIENT_E97_BULK_ROOT={bulk_root}",
         ])
         injection_values = (
             {}

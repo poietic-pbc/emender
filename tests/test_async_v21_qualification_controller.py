@@ -11,16 +11,19 @@ import time
 
 import pytest
 
+from scripts.frontier import async_v21_terminal_collector as terminal_collector
 from scripts.frontier.run_async_v21_qualification import (
     EVIDENCE_ONLY_PATH_PREFIXES,
     EXECUTION_SOURCE_SCHEMA,
     FAULT_PHASE_SPECS,
+    LINUX_SUN_PATH_BYTES,
     PAYLOAD_SCHEMA,
     SEED_SHA256,
     TOKENIZER_SHA256,
     V21ScaleClosure,
     _arguments,
     _next_fault_phase,
+    _qualification_bulk_root,
     _source_digest,
     _verify_prior_clean_gate,
     build_plan,
@@ -121,6 +124,25 @@ def test_v21_two_node_dry_run_pins_scheduler_queue(tmp_path: Path, gate: str):
     assert "--hold" in plan["command"]
 
 
+def test_qualification_bulk_roots_are_phase_unique_and_fit_linux_sun_path():
+    run_ids = (
+        "async-v21-clean-" + "a" * 16,
+        "async-v21-faults-" + "b" * 16,
+    )
+    roots = {
+        _qualification_bulk_root(run_id=run_id, phase_name=phase)
+        for run_id in run_ids
+        for phase in ("clean-overlap", *(
+            spec["name"] for spec in FAULT_PHASE_SPECS))
+    }
+    assert len(roots) == len(run_ids) * (len(FAULT_PHASE_SPECS) + 1)
+    for root in roots:
+        for run_id in run_ids:
+            control_socket = (
+                Path(root) / run_id / "node-0" / "control" / "ndp.sock")
+            assert len(os.fsencode(control_socket)) < LINUX_SUN_PATH_BYTES
+
+
 def test_v21_clean_plan_binds_reviewed_full_acceptance_launch(tmp_path: Path):
     repo = tmp_path / "repo"
     run_dir = tmp_path / "run"
@@ -219,6 +241,18 @@ def test_v21_clean_plan_binds_reviewed_full_acceptance_launch(tmp_path: Path):
         for item in plan["command"]
         if item.startswith("--export=")
     ).split(",")
+    export_values = dict(item.split("=", 1) for item in exports if "=" in item)
+    control_socket = (
+        Path(export_values["RESILIENT_E97_BULK_ROOT"])
+        / export_values["RESILIENT_E97_RUN_ID"]
+        / "node-0"
+        / "control"
+        / "ndp.sock"
+    )
+    # Frontier job 5102376 reached CXI fabric readiness but both services
+    # failed local RPC setup because this path occupied all 108 sun_path
+    # bytes, leaving no room for the required trailing NUL.
+    assert len(os.fsencode(control_socket)) < 108
     assert "RESILIENT_E97_ACCEPTANCE_PHASE=clean-overlap" in exports
     # Job 5084736 reached the tenth immutable checkpoint but Slurm delivered
     # the launcher's five-minute TERM signal before its tenth all-rank apply.
@@ -1035,6 +1069,87 @@ def test_fake_frontier_rejects_second_submitted_debug_qos_job(
     held = next(iter(state["jobs"].values()))
     assert held["released"] is False
     assert held["qos"] == "debug"
+
+
+def test_terminal_collector_retains_missing_semantic_verdict_as_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    payload_digest = "a" * 64
+    payload_job_id = "5102376"
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({
+        "schema": "emender-async-v21-qualification-state-v2",
+        "payloads": {
+            payload_digest: {
+                "job_id": payload_job_id,
+                "status": "released",
+                "collector": {"job_id": "5102377", "status": "registered"},
+            },
+        },
+        "active_job": {
+            "job_id": payload_job_id,
+            "payload_digest": payload_digest,
+        },
+    }))
+    payload_input = tmp_path / "payload-input.json"
+    payload_input.write_text("{}\n")
+    stdout = tmp_path / f"slurm-{payload_job_id}.out"
+    stderr = tmp_path / f"slurm-{payload_job_id}.err"
+    stdout.write_text("fabric_ready\n")
+    stderr.write_text("local RPC setup failed\n")
+    missing_semantic = tmp_path / "pipelined-performance.json"
+    sacct = (
+        "5102376|em-v21-clean|FAILED|1:0|1:0|batch|debug|2|"
+        "frontier[1-2]|submit|eligible|start|end|494|\n"
+    )
+    scheduler = {
+        "job_id": payload_job_id,
+        "job_name": "em-v21-clean",
+        "state": "FAILED",
+        "exit_code": "1:0",
+        "derived_exit_code": "1:0",
+        "partition": "batch",
+        "qos": "debug",
+        "nodes": 2,
+        "node_list": "frontier[1-2]",
+        "submit": "submit",
+        "eligible": "eligible",
+        "start": "start",
+        "end": "end",
+        "elapsed_raw_seconds": 494,
+    }
+    monkeypatch.setattr(
+        terminal_collector,
+        "_terminal_accounting",
+        lambda _job_id: (sacct, scheduler),
+    )
+
+    verdict = terminal_collector.collect_terminal_evidence(
+        state_path=state_path,
+        payload_digest=payload_digest,
+        payload_job_id=payload_job_id,
+        evidence_dir=tmp_path / "evidence",
+        payload_input=payload_input,
+        stdout_pattern=str(tmp_path / "slurm-%j.out"),
+        stderr_pattern=str(tmp_path / "slurm-%j.err"),
+        semantic_verdict=missing_semantic,
+    )
+
+    assert verdict["passed"] is False
+    assert verdict["verdict"] == "failed"
+    assert verdict["validator_inputs"]["semantic_verdict"] == {
+        "required": True,
+        "present": False,
+        "source_path": str(missing_semantic.resolve()),
+        "reason": "missing",
+    }
+    durable_state = json.loads(state_path.read_text())
+    assert durable_state["active_job"] is None
+    assert durable_state["payloads"][payload_digest]["status"] == "retired"
+    assert (
+        durable_state["payloads"][payload_digest]["collector"]["status"]
+        == "completed"
+    )
 
 
 def test_fake_scheduler_collector_survives_worker_death_and_is_exactly_once(
