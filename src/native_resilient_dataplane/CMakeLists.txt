@@ -10,6 +10,7 @@ option(NDP_ENABLE_XPMEM "Enable same-process XPMEM-address ABI registration hook
 option(NDP_ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
 
 add_library(emender_ndp_service_core STATIC
+    src/coordination_kernel.cpp
     src/ndp.cpp
     src/rpc_server.cpp)
 set_target_properties(emender_ndp_service_core PROPERTIES
@@ -74,4 +75,15 @@ if(BUILD_TESTING)
     set_target_properties(ndp_local_abi_test PROPERTIES
         C_STANDARD 11 C_EXTENSIONS OFF LINKER_LANGUAGE CXX)
     add_test(NAME ndp_local_abi_test COMMAND ndp_local_abi_test)
+
+    add_executable(ndp_coordination_kernel_test
+        tests/coordination_kernel_test.cpp)
+    target_include_directories(ndp_coordination_kernel_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(ndp_coordination_kernel_test PRIVATE
+        emender_ndp_service_core)
+    target_compile_options(ndp_coordination_kernel_test PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror=return-type)
+    add_test(NAME ndp_coordination_kernel_test
+        COMMAND ndp_coordination_kernel_test)
 endif()

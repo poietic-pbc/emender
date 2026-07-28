@@ -1,12 +1,14 @@
-"""Component native-service lifecycle for control-plane integration tests.
+"""Component native-service lifecycle for production and integration tests.
 
-The allocation holder continues to own leases, READY membership, generation
-freeze, checkpoint policy, and atomic publication.  This module owns the two
-compiled ABI handles as one manager-scoped resource: the local exact reducer
-and the libfabric endpoint start together, native routes are installed from
-leased endpoint records, and cleanup drains both without a peer rendezvous.
-Dense owner frames are transferred and replayed through the same session, so
-callers cannot accidentally fall back to a Python dense socket after freezing.
+The persistent compiled service owns the authoritative READY, generation,
+freeze, commit, apply, and recovery transition kernel.  Python remains
+responsible for lease clocks, networking, durable checkpoint publication, and
+executing the kernel's explicit effects.  This module owns the two compiled ABI
+handles as one manager-scoped resource: the local exact reducer and the
+libfabric endpoint start together, native routes are installed from leased
+endpoint records, and cleanup drains both without a peer rendezvous.  Dense
+owner frames are transferred and replayed through the same session, so callers
+cannot accidentally fall back to a Python dense socket after freezing.
 """
 
 from __future__ import annotations
@@ -349,6 +351,32 @@ class NativeManagerSession:
         self.routes = desired
         return dict(self.routes)
 
+    def coordination_authority(self, config, *,
+                               trace_path: str | Path | None = None):
+        """Bind this controller to the service's sole fenced decision kernel."""
+        from ndm.native_coordination import NativeCoordinationAuthority
+
+        if (config.run_id != self.run_id
+                or int(config.fence) != self.fence_epoch
+                or config.dataplane_backend == PYTHON_TCP_DEBUG):
+            raise ValueError(
+                "native coordination config differs from the manager session")
+        return NativeCoordinationAuthority(
+            self.local,
+            run_id=config.run_id,
+            fence=config.fence,
+            q_min=config.q_min,
+            t_min=config.t_min,
+            policy_digest=config.policy_digest,
+            committed_generation=config.committed_generation,
+            committed_receipt_digest=config.committed_receipt_digest,
+            committed_accepted_tokens=config.committed_accepted_tokens,
+            committed_manifest_digest=config.committed_manifest_digest,
+            committed_result_root=config.committed_result_root,
+            committed_apply_receipts=config.committed_apply_receipts,
+            trace_path=trace_path,
+        )
+
     def install_generation(self, *, total_elements: int, generation: int,
                            attempt: int = 1, owner_epoch: int = 1,
                            source_dtype: DType = DType.F32,
@@ -501,7 +529,7 @@ class NativeManagerSession:
             deadline_s=deadline_s)
 
     def freeze(self, *, deadline_s: float = 30.0) -> Operation:
-        """Execute Python's immutable accepted-set decision in native memory."""
+        """Execute the coordination kernel's immutable accepted set in memory."""
         if not self._generation_installed:
             raise RuntimeError("native contribution set cannot be frozen")
         # Native FREEZE is identity-fenced and idempotent, including after the

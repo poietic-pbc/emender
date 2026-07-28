@@ -167,6 +167,15 @@ struct ResultResponse {
     ndp_buffer_t buffer;
 };
 
+struct CoordinationResponse {
+    ndp_coord_result_v1 result;
+    std::uint32_t trace_bytes;
+    std::array<char, NDP_COORD_TRACE_CAPACITY> trace;
+};
+
+static_assert(sizeof(CoordinationResponse) <= rpc::kMaxPayloadBytes,
+              "coordination response exceeds one bounded RPC packet");
+
 }  // namespace
 }  // namespace emender_ndp::client
 
@@ -568,6 +577,44 @@ int ndp_client_metrics_v1(ndp_client_t client, ndp_metrics_v1* output) {
         if (result != NDP_OK) return result;
         if (expect_fds(response, 0) != NDP_OK
             || !rpc::payload_object(response, *output)) return NDP_EROUTE;
+        return NDP_OK;
+    });
+}
+
+int ndp_coord_step_v1(
+        ndp_client_t client, const ndp_coord_event_v1* input,
+        ndp_coord_result_v1* output, char* canonical_trace,
+        uint32_t trace_capacity, uint32_t* trace_bytes) {
+    using namespace emender_ndp::client;
+    return guarded([&]() -> int {
+        if (!valid_input(input) || output == nullptr
+            || canonical_trace == nullptr || trace_bytes == nullptr)
+            return input_error(input);
+        if (trace_capacity < NDP_COORD_TRACE_CAPACITY)
+            return NDP_EBOUNDS;
+        *output = {};
+        *trace_bytes = 0;
+        canonical_trace[0] = '\0';
+        auto current = connection(client);
+        if (!current) return NDP_EINVAL;
+        const ndp_coord_event_v1 request = prefix_copy(input);
+        Header header = current->base(Opcode::CoordinationStep);
+        header.sequence = request.sequence;
+        header.extent = sizeof(request);
+        Packet response;
+        const int result = current->call(
+            header, rpc::object_payload(request), {}, response);
+        if (result != NDP_OK) return result;
+        CoordinationResponse wire{};
+        if (expect_fds(response, 0) != NDP_OK
+            || !rpc::payload_object(response, wire)
+            || wire.trace_bytes >= wire.trace.size()
+            || wire.trace_bytes >= trace_capacity)
+            return NDP_EROUTE;
+        *output = wire.result;
+        *trace_bytes = wire.trace_bytes;
+        std::memcpy(canonical_trace, wire.trace.data(), wire.trace_bytes);
+        canonical_trace[wire.trace_bytes] = '\0';
         return NDP_OK;
     });
 }
