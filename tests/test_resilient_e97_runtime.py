@@ -182,11 +182,47 @@ def test_live_native_selection_is_wired_and_python_debug_remains_explicit():
     assert "LocalTrainerSpool(" not in native_manager
     assert "DistributedOwnerServer(" not in native_manager
     assert "NativeManagerSession.start(" in native_manager
+    assert 'required_gate=os.environ.get("NDP_REQUIRED_GATE", "G2")' in native_manager
     assert "spool = (LocalTrainerSpool" in source
     assert "if not native else None" in source
     assert "manager/trainer native runtime digest mismatch" in source
     assert "resume checkpoint native runtime digest mismatch" in source
     assert "role recovery native runtime digest mismatch" in source
+
+
+@pytest.mark.parametrize(
+    "required_gate", ["G2", "G2-fault-rejoin-replay"])
+def test_role_dataplane_attestation_forwards_required_gate_kind(
+        monkeypatch, required_gate):
+    """The per-role hard gate must match the launcher's retained G2 kind.
+
+    Frontier fault-baseline job 5104622 passed the launcher attestation for
+    ``G2-fault-rejoin-replay`` and then both managers rejected the same
+    artifact because the role-level call silently used ``attest_launch``'s
+    clean-G2 default.
+    """
+    from ndm.native_artifacts import NATIVE_CXI
+    from scripts.frontier import resilient_e97_role as role
+
+    captured = {}
+
+    def fake_attest_launch(**kwargs):
+        captured.update(kwargs)
+        return {"status": "attested"}
+
+    monkeypatch.setattr(
+        role, "_dataplane_policy",
+        lambda _args: (NATIVE_CXI, True, True))
+    monkeypatch.setattr(role, "attest_launch", fake_attest_launch)
+    monkeypatch.setenv("NDP_REQUIRED_GATE", required_gate)
+
+    result = role._attest_dataplane(SimpleNamespace(
+        native_build_manifest="/immutable/native-artifacts.json",
+        native_gate_json="/immutable/native-gate.json",
+    ))
+
+    assert result == {"status": "attested"}
+    assert captured["required_gate"] == required_gate
 
 
 def test_native_manager_endpoint_lifetime_spans_all_configured_generations(

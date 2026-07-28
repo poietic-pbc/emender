@@ -11,16 +11,24 @@ import time
 
 import pytest
 
+from scripts.frontier import async_v21_terminal_collector as terminal_collector
 from scripts.frontier.run_async_v21_qualification import (
     EVIDENCE_ONLY_PATH_PREFIXES,
     EXECUTION_SOURCE_SCHEMA,
+    FAULT_PHASE_SPECS,
+    LINUX_SUN_PATH_BYTES,
     PAYLOAD_SCHEMA,
     SEED_SHA256,
     TOKENIZER_SHA256,
     V21ScaleClosure,
+    _arguments,
+    _next_fault_phase,
+    _qualification_bulk_root,
     _source_digest,
+    _verify_prior_clean_gate,
     build_plan,
     canonical_digest,
+    main as qualification_main,
     submit_plan,
     validate_scale_evidence,
 )
@@ -115,6 +123,25 @@ def test_v21_two_node_dry_run_pins_scheduler_queue(tmp_path: Path, gate: str):
     assert "--partition=batch" in plan["command"]
     assert "--qos=debug" in plan["command"]
     assert "--hold" in plan["command"]
+
+
+def test_qualification_bulk_roots_are_phase_unique_and_fit_linux_sun_path():
+    run_ids = (
+        "async-v21-clean-" + "a" * 16,
+        "async-v21-faults-" + "b" * 16,
+    )
+    roots = {
+        _qualification_bulk_root(run_id=run_id, phase_name=phase)
+        for run_id in run_ids
+        for phase in ("clean-overlap", *(
+            spec["name"] for spec in FAULT_PHASE_SPECS))
+    }
+    assert len(roots) == len(run_ids) * (len(FAULT_PHASE_SPECS) + 1)
+    for root in roots:
+        for run_id in run_ids:
+            control_socket = (
+                Path(root) / run_id / "node-0" / "control" / "ndp.sock")
+            assert len(os.fsencode(control_socket)) < LINUX_SUN_PATH_BYTES
 
 
 def test_v21_clean_plan_binds_reviewed_full_acceptance_launch(tmp_path: Path):
@@ -215,6 +242,18 @@ def test_v21_clean_plan_binds_reviewed_full_acceptance_launch(tmp_path: Path):
         for item in plan["command"]
         if item.startswith("--export=")
     ).split(",")
+    export_values = dict(item.split("=", 1) for item in exports if "=" in item)
+    control_socket = (
+        Path(export_values["RESILIENT_E97_BULK_ROOT"])
+        / export_values["RESILIENT_E97_RUN_ID"]
+        / "node-0"
+        / "control"
+        / "ndp.sock"
+    )
+    # Frontier job 5102376 reached CXI fabric readiness but both services
+    # failed local RPC setup because this path occupied all 108 sun_path
+    # bytes, leaving no room for the required trailing NUL.
+    assert len(os.fsencode(control_socket)) < 108
     assert "RESILIENT_E97_ACCEPTANCE_PHASE=clean-overlap" in exports
     # Job 5084736 reached the tenth immutable checkpoint but Slurm delivered
     # the launcher's five-minute TERM signal before its tenth all-rank apply.
@@ -233,9 +272,265 @@ def test_v21_clean_plan_binds_reviewed_full_acceptance_launch(tmp_path: Path):
         tmp_path / "native-artifacts.json") in exports
     assert "NDP_FULL_LAYOUT_GATE_JSON=" + str(
         tmp_path / "full-layout-gate.json") in exports
+    assert "NDP_REQUIRED_GATE=G2" in exports
     assert "RESILIENT_E97_SEED_CACHE=" + str(
         tmp_path / f"sha256-{SEED_SHA256}.pt") in exports
     assert "RESILIENT_E97_TIKTOKEN_SHA256=" + TOKENIZER_SHA256 in exports
+
+
+def _production_launch(tmp_path: Path) -> dict[str, str]:
+    repo = tmp_path / "repo"
+    run_dir = tmp_path / "run"
+    return {
+        "repo": str(repo),
+        "source_commit": "9" * 40,
+        "native_source_commit": "8" * 40,
+        "execution_source_schema": EXECUTION_SOURCE_SCHEMA,
+        "execution_source_digest": IDENTITIES["source_digest"],
+        "seed_config": str(repo / "configs/frontier/e97_async_256.yaml"),
+        "native_build_manifest": str(tmp_path / "native-artifacts.json"),
+        "native_build_manifest_sha256": "a" * 64,
+        "full_layout_gate": str(tmp_path / "full-layout-gate.json"),
+        "full_layout_gate_sha256": "b" * 64,
+        "run_dir": str(run_dir),
+        "acceptance_manifest": str(tmp_path / "fault-plan.json"),
+        "seed_cache": str(tmp_path / f"sha256-{SEED_SHA256}.pt"),
+        "seed_attestation": str(tmp_path / "seed-attestation.json"),
+        "seed_attestation_sha256": "6" * 64,
+        "train_args": str(
+            repo / "configs/frontier/e97_resilient_split_role_flat.json"),
+        "train_args_sha256": "c" * 64,
+        "data": str(tmp_path / "commapile.txt"),
+        "data_identity_digest": "7" * 64,
+        "tokenizer": str(tmp_path / "p50k"),
+        "tokenizer_sha256": TOKENIZER_SHA256,
+    }
+
+
+def _passing_clean_terminal(
+    tmp_path: Path, *, identities: dict[str, str] = IDENTITIES,
+) -> Path:
+    payload_input = tmp_path / "clean-payload-input.json"
+    payload_input.write_text(json.dumps({
+        "schema": "emender-async-v21-collector-input-v1",
+        "payload_digest": "d" * 64,
+        "payload": {
+            "schema": PAYLOAD_SCHEMA,
+            "gate": "clean",
+            "nodes": 2,
+            "identities": identities,
+        },
+        "scheduler": {
+            "Nodes": 2, "Partition": "batch", "QOS": "debug",
+            "TimeLimit": "02:00:00",
+        },
+        "model_command": ["sbatch", "--nodes=2"],
+    }, sort_keys=True))
+    terminal = {
+        "schema": "emender-async-v21-terminal-verdict-v1",
+        "payload_digest": "d" * 64,
+        "payload_job_id": "5100201",
+        "scheduler": {
+            "job_id": "5100201",
+            "state": "COMPLETED",
+            "exit_code": "0:0",
+            "derived_exit_code": "0:0",
+            "partition": "batch",
+            "qos": "debug",
+            "nodes": 2,
+        },
+        "validator_inputs": {
+            "payload": {
+                "path": str(payload_input),
+                "bytes": payload_input.stat().st_size,
+                "sha256": hashlib.sha256(payload_input.read_bytes()).hexdigest(),
+            },
+            "semantic_verdict": {"required": True, "passed": True},
+        },
+        "passed": True,
+        "verdict": "passed",
+    }
+    terminal["manifest_digest"] = canonical_digest(terminal)
+    path = tmp_path / "clean-terminal-verdict.json"
+    path.write_text(json.dumps(terminal, sort_keys=True))
+    return path
+
+
+def test_prescribed_fault_cli_accepts_prior_gate_and_renders_serial_phases(
+    tmp_path: Path,
+):
+    parsed = _arguments([
+        "--gate", "faults", "--nodes", "2",
+        "--repo", str(tmp_path / "snapshot"),
+        "--seed-config", "configs/frontier/e97_async_256.yaml",
+        "--native-build-manifest", str(tmp_path / "native.json"),
+        "--full-layout-gate", str(tmp_path / "g2-fault.json"),
+        "--prior-gate", str(tmp_path / "clean-terminal.json"),
+        "--run-root", str(tmp_path / "runs"),
+        "--state", str(tmp_path / "state.json"),
+        "--output", str(tmp_path / "fault-manifest.json"),
+        "--submit",
+    ])
+    assert parsed.prior_gate == str(tmp_path / "clean-terminal.json")
+    assert [phase["name"] for phase in FAULT_PHASE_SPECS] == [
+        "fault-baseline", "fault-rejoin", "fresh-recovery"]
+    assert [phase["initial_generation"] for phase in FAULT_PHASE_SPECS] == [
+        0, 2, 6]
+    assert [phase["generations"] for phase in FAULT_PHASE_SPECS] == [2, 4, 5]
+
+
+def test_fault_controller_requests_fault_specific_native_attestation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    repo = tmp_path / "snapshot"
+    (repo / "configs/frontier").mkdir(parents=True)
+    (repo / "scripts/frontier").mkdir(parents=True)
+    seed_config = repo / "configs/frontier/e97_async_256.yaml"
+    seed_config.write_text("{}\n")
+    (repo / "scripts/frontier/resilient_e97_true_2n.sbatch").write_text(
+        "#!/bin/bash\n")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.name", "Test"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-q", "-m", "fixture"],
+        check=True,
+    )
+    native_manifest = tmp_path / "native.json"
+    fault_gate = tmp_path / "g2-fault.json"
+    native_manifest.write_text("{}\n")
+    fault_gate.write_text("{}\n")
+
+    def observe_attestation_request(**kwargs):
+        assert kwargs["required_gate"] == "G2-fault-rejoin-replay"
+        raise RuntimeError("observed fault-specific attestation")
+
+    monkeypatch.setattr(
+        "scripts.frontier.run_async_v21_qualification._clean_launch_context",
+        observe_attestation_request,
+    )
+    with pytest.raises(
+        RuntimeError, match="observed fault-specific attestation",
+    ):
+        qualification_main([
+            "--gate", "faults",
+            "--nodes", "2",
+            "--repo", str(repo),
+            "--seed-config", str(seed_config),
+            "--native-build-manifest", str(native_manifest),
+            "--full-layout-gate", str(fault_gate),
+            "--run-root", str(tmp_path / "runs"),
+            "--state", str(tmp_path / "state.json"),
+            "--output", str(tmp_path / "fault-manifest.json"),
+            "--dry-run",
+        ])
+
+
+def test_fault_gate_binds_passing_clean_and_executable_injections(
+    tmp_path: Path,
+):
+    prior_path = _passing_clean_terminal(tmp_path)
+    prior = _verify_prior_clean_gate(prior_path, expected_identities=IDENTITIES)
+    phase = _next_fault_phase(
+        tmp_path / "state.json",
+        campaign_digest="e" * 64,
+        prior_gate=prior,
+    )
+    launch = _production_launch(tmp_path)
+    launch.update({
+        "fault_campaign_digest": "e" * 64,
+        "fault_phase": phase["name"],
+        "fault_phase_index": "0",
+        "initial_generation": str(phase["initial_generation"]),
+        "generations": str(phase["generations"]),
+        "coordinator_epoch": "1",
+        "resume_handoff": "",
+        "prior_gate": str(prior_path),
+        "prior_gate_sha256": prior["sha256"],
+        "prior_payload_digest": prior["payload_digest"],
+    })
+    plan = build_plan(
+        gate="faults",
+        nodes=2,
+        state_path=tmp_path / "state.json",
+        evidence_root=tmp_path,
+        parameters={},
+        fault_launch=launch,
+        **IDENTITIES,
+    )
+
+    assert plan["payload"]["parameters"]["fault_phase"] == "fault-baseline"
+    assert plan["payload"]["prior_gate"] == {
+        "path": str(prior_path.resolve()),
+        "sha256": prior["sha256"],
+        "payload_digest": "d" * 64,
+    }
+    exports = next(
+        item.removeprefix("--export=")
+        for item in plan["command"]
+        if item.startswith("--export=")
+    ).split(",")
+    assert "RESILIENT_E97_ACCEPTANCE_PHASE=fault-baseline" in exports
+    assert "RESILIENT_E97_GENERATIONS=2" in exports
+    assert "RESILIENT_E97_INITIAL_GENERATION=0" in exports
+    assert "RESILIENT_E97_MAX_RESTARTS=0" in exports
+    assert "RESILIENT_E97_INJECT_TRAINER=" in exports
+    assert "RESILIENT_E97_INJECT_MANAGER=" in exports
+    assert "RESILIENT_E97_INJECT_NATIVE_SERVICE=" in exports
+    assert "NDP_REQUIRED_GATE=G2-fault-rejoin-replay" in exports
+    assert plan["collector"]["semantic_verdict"].endswith(
+        "fault-baseline-verdict.json")
+
+    injection_phase = FAULT_PHASE_SPECS[1]
+    assert injection_phase["injections"] == {
+        "RESILIENT_E97_DELAY_READY": "1:2:45",
+        "RESILIENT_E97_INJECT_TRAINER": "0:3:2",
+        "RESILIENT_E97_INJECT_MANAGER":
+            "1:-1:4:published_node_applied",
+        "RESILIENT_E97_INJECT_NATIVE_SERVICE": "0:-1:4:owner_transport",
+    }
+    recovery = FAULT_PHASE_SPECS[2]
+    assert recovery["generations"] >= 5
+    assert recovery["minimum_commits"] >= 3
+    assert recovery["fresh_allocation"] is True
+
+
+def test_fault_campaign_stops_on_failed_phase_and_never_advances(
+    tmp_path: Path,
+):
+    prior = _verify_prior_clean_gate(
+        _passing_clean_terminal(tmp_path),
+        expected_identities=IDENTITIES,
+    )
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({
+        "schema": "emender-async-v21-qualification-state-v2",
+        "payloads": {
+            "a" * 64: {
+                "status": "retired",
+                "verdict": "failed",
+                "payload_digest": "a" * 64,
+                "campaign_digest": "e" * 64,
+                "fault_phase": "fault-baseline",
+                "fault_phase_index": 0,
+                "prior_payload_digest": "d" * 64,
+            },
+        },
+        "active_job": None,
+    }))
+    with pytest.raises(ValueError, match="fault-baseline.*failed"):
+        _next_fault_phase(
+            state,
+            campaign_digest="e" * 64,
+            prior_gate=prior,
+        )
 
 
 def test_v21_scale_rejects_missing_authorization_and_wrong_predecessor(
@@ -831,6 +1126,87 @@ def test_fake_frontier_rejects_second_submitted_debug_qos_job(
     held = next(iter(state["jobs"].values()))
     assert held["released"] is False
     assert held["qos"] == "debug"
+
+
+def test_terminal_collector_retains_missing_semantic_verdict_as_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    payload_digest = "a" * 64
+    payload_job_id = "5102376"
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({
+        "schema": "emender-async-v21-qualification-state-v2",
+        "payloads": {
+            payload_digest: {
+                "job_id": payload_job_id,
+                "status": "released",
+                "collector": {"job_id": "5102377", "status": "registered"},
+            },
+        },
+        "active_job": {
+            "job_id": payload_job_id,
+            "payload_digest": payload_digest,
+        },
+    }))
+    payload_input = tmp_path / "payload-input.json"
+    payload_input.write_text("{}\n")
+    stdout = tmp_path / f"slurm-{payload_job_id}.out"
+    stderr = tmp_path / f"slurm-{payload_job_id}.err"
+    stdout.write_text("fabric_ready\n")
+    stderr.write_text("local RPC setup failed\n")
+    missing_semantic = tmp_path / "pipelined-performance.json"
+    sacct = (
+        "5102376|em-v21-clean|FAILED|1:0|1:0|batch|debug|2|"
+        "frontier[1-2]|submit|eligible|start|end|494|\n"
+    )
+    scheduler = {
+        "job_id": payload_job_id,
+        "job_name": "em-v21-clean",
+        "state": "FAILED",
+        "exit_code": "1:0",
+        "derived_exit_code": "1:0",
+        "partition": "batch",
+        "qos": "debug",
+        "nodes": 2,
+        "node_list": "frontier[1-2]",
+        "submit": "submit",
+        "eligible": "eligible",
+        "start": "start",
+        "end": "end",
+        "elapsed_raw_seconds": 494,
+    }
+    monkeypatch.setattr(
+        terminal_collector,
+        "_terminal_accounting",
+        lambda _job_id: (sacct, scheduler),
+    )
+
+    verdict = terminal_collector.collect_terminal_evidence(
+        state_path=state_path,
+        payload_digest=payload_digest,
+        payload_job_id=payload_job_id,
+        evidence_dir=tmp_path / "evidence",
+        payload_input=payload_input,
+        stdout_pattern=str(tmp_path / "slurm-%j.out"),
+        stderr_pattern=str(tmp_path / "slurm-%j.err"),
+        semantic_verdict=missing_semantic,
+    )
+
+    assert verdict["passed"] is False
+    assert verdict["verdict"] == "failed"
+    assert verdict["validator_inputs"]["semantic_verdict"] == {
+        "required": True,
+        "present": False,
+        "source_path": str(missing_semantic.resolve()),
+        "reason": "missing",
+    }
+    durable_state = json.loads(state_path.read_text())
+    assert durable_state["active_job"] is None
+    assert durable_state["payloads"][payload_digest]["status"] == "retired"
+    assert (
+        durable_state["payloads"][payload_digest]["collector"]["status"]
+        == "completed"
+    )
 
 
 def test_fake_scheduler_collector_survives_worker_death_and_is_exactly_once(

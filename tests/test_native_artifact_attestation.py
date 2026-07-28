@@ -4,9 +4,11 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import sys
 
 import pytest
 
+from ndm import native_pool_runtime
 from ndm.native_artifacts import (
     BUILD_SCHEMA,
     GATE_SCHEMA,
@@ -18,6 +20,8 @@ from ndm.native_artifacts import (
     validate_build_manifest,
     validate_g2_gate,
 )
+from ndm.native_pool_runtime import NativeManagerSession
+from scripts.frontier import attest_native_dataplane as attestation_cli
 
 
 def _canonical(value):
@@ -74,6 +78,23 @@ def _gate(tmp_path: Path, manifest: dict[str, object]) -> Path:
     return path
 
 
+def _fault_gate(tmp_path: Path, manifest: dict[str, object]) -> Path:
+    path = _gate(tmp_path, manifest)
+    value = json.loads(path.read_text())
+    value["gate"] = "G2-fault-rejoin-replay"
+    value["fault"] = {
+        "peer_loss": True,
+        "new_incarnation": True,
+        "old_epoch_rejected": True,
+        "partial_commit": False,
+        "reassignment_count": 1,
+        "replay_bytes": 134_217_728,
+    }
+    path = tmp_path / "failure-injection-gate.json"
+    path.write_bytes(_canonical(value) + b"\n")
+    return path
+
+
 def test_production_attestation_binds_source_binaries_provider_and_full_layout(tmp_path):
     manifest_path, manifest = _manifest(tmp_path)
     gate_path = _gate(tmp_path, manifest)
@@ -85,6 +106,107 @@ def test_production_attestation_binds_source_binaries_provider_and_full_layout(t
     assert result["bundle_sha256"] == manifest["bundle_sha256"]
     assert result["artifacts"] == {
         name: record["sha256"] for name, record in manifest["artifacts"].items()}
+
+
+def test_fault_attestation_accepts_only_exact_passing_fault_gate(tmp_path):
+    manifest_path, manifest = _manifest(tmp_path)
+    gate_path = _fault_gate(tmp_path, manifest)
+
+    result = attest_launch(
+        backend=NATIVE_CXI,
+        production=True,
+        full_layout=True,
+        build_manifest=manifest_path,
+        gate_json=gate_path,
+        required_gate="G2-fault-rejoin-replay",
+    )
+    assert result["status"] == "attested"
+
+    with pytest.raises(ValueError, match="gate identity"):
+        attest_launch(
+            backend=NATIVE_CXI,
+            production=True,
+            full_layout=True,
+            build_manifest=manifest_path,
+            gate_json=gate_path,
+        )
+
+    value = json.loads(gate_path.read_text())
+    value["fault"]["old_epoch_rejected"] = False
+    gate_path.write_bytes(_canonical(value) + b"\n")
+    with pytest.raises(ValueError, match="fault identity"):
+        attest_launch(
+            backend=NATIVE_CXI,
+            production=True,
+            full_layout=True,
+            build_manifest=manifest_path,
+            gate_json=gate_path,
+            required_gate="G2-fault-rejoin-replay",
+        )
+
+
+def test_fault_attestation_cli_forwards_required_gate_kind(monkeypatch, capsys):
+    captured: dict[str, object] = {}
+
+    def fake_attest_launch(**kwargs):
+        captured.update(kwargs)
+        return {"status": "attested"}
+
+    monkeypatch.setattr(attestation_cli, "attest_launch", fake_attest_launch)
+    monkeypatch.setattr(sys, "argv", [
+        "attest_native_dataplane.py",
+        "verify",
+        "--backend",
+        NATIVE_CXI,
+        "--production",
+        "--full-layout",
+        "--build-manifest",
+        "/immutable/native-artifacts.json",
+        "--gate-json",
+        "/immutable/failure-injection-gate.json",
+        "--required-gate",
+        "G2-fault-rejoin-replay",
+        "--source-root",
+        "/immutable/source",
+    ])
+
+    assert attestation_cli.main() == 0
+    assert captured["required_gate"] == "G2-fault-rejoin-replay"
+    assert json.loads(capsys.readouterr().out) == {"status": "attested"}
+
+
+@pytest.mark.parametrize(
+    "required_gate", ["G2", "G2-fault-rejoin-replay"])
+def test_native_manager_session_forwards_required_gate_kind(
+        monkeypatch, required_gate):
+    """The manager's second native attestation must retain the launch kind.
+
+    Frontier fault-baseline job 5105003 passed the per-role fault-G2
+    attestation, then failed before READY because ``NativeManagerSession``
+    silently repeated the check against the clean-G2 default.
+    """
+    captured = {}
+
+    def fake_attest_launch(**kwargs):
+        captured.update(kwargs)
+        return {"bundle_sha256": "unused"}
+
+    monkeypatch.setattr(native_pool_runtime, "attest_launch", fake_attest_launch)
+    monkeypatch.setattr(
+        native_pool_runtime, "_artifact_paths",
+        lambda _manifest: (_ for _ in ()).throw(RuntimeError("stop after attest")))
+
+    with pytest.raises(RuntimeError, match="stop after attest"):
+        NativeManagerSession.start(
+            backend=NATIVE_TEST, run_id="run", fence_epoch=1,
+            worker_id="node-0", incarnation="boot", host="127.0.0.1",
+            build_manifest="/immutable/native-artifacts.json",
+            gate_json="/immutable/native-gate.json", source_root=Path(__file__).parent,
+            production=False, full_layout=True, deadline_s=1,
+            required_gate=required_gate,
+        )
+
+    assert captured["required_gate"] == required_gate
 
 
 def test_historical_component_manifest_is_valid_but_cannot_claim_g2(tmp_path):

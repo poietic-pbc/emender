@@ -302,6 +302,7 @@ def test_launcher_omits_empty_resume_argument(tmp_path):
         "RESILIENT_E97_TIKTOKEN_SHA256": hashlib.sha256(tokenizer_cache.read_bytes()).hexdigest(),
         "NDP_BUILD_MANIFEST": str(native_manifest),
         "NDP_FULL_LAYOUT_GATE_JSON": str(tmp_path / "full-layout-gate.json"),
+        "NDP_REQUIRED_GATE": "G2",
         **_canonical_seed_env(seed_config, seed, "pytest-empty-resume"),
     }
     result = subprocess.run(
@@ -333,6 +334,8 @@ def test_full_layout_launcher_requires_native_cxi_and_exact_artifact_gate_before
     assert "--production --full-layout" in text
     assert "NDP_BUILD_MANIFEST" in text
     assert "NDP_FULL_LAYOUT_GATE_JSON" in text
+    assert ': "${NDP_REQUIRED_GATE:?set exact native G2 gate kind}"' in text
+    assert '--required-gate "$NDP_REQUIRED_GATE"' in text
     assert attestation < roles
     assert "python-tcp-debug" not in text
 
@@ -460,6 +463,7 @@ def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tm
         "RESILIENT_E97_TIKTOKEN_SHA256": hashlib.sha256(tokenizer_cache.read_bytes()).hexdigest(),
         "NDP_BUILD_MANIFEST": str(native_manifest),
         "NDP_FULL_LAYOUT_GATE_JSON": str(tmp_path / "full-layout-gate.json"),
+        "NDP_REQUIRED_GATE": "G2",
         **_canonical_seed_env(seed_config, seed, "pytest-startup-smoke"),
     }
     subprocess.run(["bash", str(ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch")],
@@ -1136,6 +1140,37 @@ def test_fresh_allocation_manager_syncs_older_authoritative_handoff(
     }
 
 
+def test_fresh_trainer_accepts_stable_execution_code_id_not_git_commit():
+    from types import SimpleNamespace
+
+    from scripts.frontier import resilient_e97_role as role
+
+    args = SimpleNamespace(
+        run_id="run",
+        payload_id="payload",
+        source_id="seed",
+        code_id="execution-sha256-" + "a" * 64,
+        coordinator_epoch=8,
+    )
+    handoff = {
+        "run_id": "run",
+        "payload_id": "payload",
+        "source_id": "seed",
+        "code_id": args.code_id,
+        "fence": {"coordinator_epoch": 7},
+        "finalized": True,
+    }
+    runtime = {"source_commit": "b" * 40}
+    assert role._resume_handoff_identity_matches(
+        handoff, args, recorded_runtime=runtime, native=True)
+    assert not role._resume_handoff_identity_matches(
+        {**handoff, "code_id": "execution-sha256-" + "c" * 64},
+        args,
+        recorded_runtime=runtime,
+        native=True,
+    )
+
+
 def test_native_restart_runtime_compatibility_rejects_substantive_digest_change():
     from scripts.frontier import resilient_e97_role as role
 
@@ -1191,9 +1226,9 @@ def test_rejoining_manager_delays_ready_before_advertising(tmp_path, monkeypatch
 
     source = (ROOT / "scripts/frontier/resilient_e97_role.py").read_text()
     manager = source[source.index("def _native_manager(args)"):]
-    initial_ready = manager.index(
-        "pool_client.ready(session.owner_endpoint, start_generation")
-    assert manager.rfind("_wait_native_ready_delay(", 0, initial_ready) >= 0
+    initial_delay = manager.index("_wait_native_ready_delay(")
+    initial_ready = manager.index("_ready_recovered_peer(")
+    assert initial_delay < initial_ready
 
 
 def test_child_without_first_heartbeat_hits_startup_deadline(tmp_path):
@@ -1458,6 +1493,78 @@ def test_native_manager_uses_the_production_compiled_coordination_authority():
     assert "GenerationAdmission.open(" not in native_server
     assert "self.committed_generation =" not in native_server
     assert "self.node_applies" not in native_server
+
+
+
+def test_native_manager_rejoins_equal_generation_reconstructed_control():
+    from scripts.frontier import resilient_e97_role as role
+
+    sync = {
+        "commit_receipt_digest": "11" * 32,
+        "manifest_sha256": "22" * 32,
+        "result_root": "33" * 32,
+        "accepted_tokens": 200,
+        "apply_receipts": [
+            {"worker_id": "node-0", "receipt_digest": "44" * 32},
+            {"worker_id": "node-1", "receipt_digest": "55" * 32},
+        ],
+    }
+    instruction = {
+        "status": "rejoin",
+        "generation": 3,
+        "attempt": 1,
+        "authoritative_generation": 3,
+        "receipt_digest": "11" * 32,
+        "manifest_digest": "22" * 32,
+        "result_root": "33" * 32,
+        "accepted_tokens": 200,
+        "apply_receipts": sync["apply_receipts"],
+        "requires_rejoin": True,
+        "requires_reload": False,
+    }
+    recovery = {
+        "status": "recover",
+        "generation": 3,
+        "receipt_digest": "11" * 32,
+        "manifest_digest": "22" * 32,
+        "result_root": "33" * 32,
+        "accepted_tokens": 200,
+        "apply_receipts": sync["apply_receipts"],
+        "requires_node_apply": False,
+    }
+    role._validate_native_rejoin_instruction(
+        instruction, sync, generation=3)
+    role._validate_native_recovery_handshake(
+        recovery, sync, generation=3)
+    assert role._node_apply_receipt_digest(
+        sync, worker_id="node-1") == "55" * 32
+
+    bad = dict(instruction)
+    bad["authoritative_generation"] = 4
+    with pytest.raises(ValueError, match="rejoin instruction"):
+        role._validate_native_rejoin_instruction(
+            bad, sync, generation=3)
+
+    source = (
+        ROOT / "scripts/frontier/resilient_e97_role.py"
+    ).read_text(encoding="utf-8")
+    manager = source[
+        source.index("def _native_manager(args) -> int:"):
+        source.index("def manager(args) -> int:")
+    ]
+    rejoin = manager[
+        manager.index('if close.get("status") != "rejoin":'):
+        manager.index('if close.get("status") == "catch_up":')
+    ]
+    assert "_native_manager_resume_point(" in rejoin
+    assert "_validate_native_rejoin_instruction(" in rejoin
+    assert "_validate_native_recovery_handshake(" in rejoin
+    assert "_ready_recovered_peer(" in rejoin
+    assert "snapshot = pool_client.open_generation(" in rejoin
+    assert "while True:" in manager[
+        manager.index("final_operation, final_result"):
+        manager.index('if close.get("status") == "catch_up":')
+    ]
 
 
 def test_local_and_owner_transport_use_separate_bounded_frontier_chunks():

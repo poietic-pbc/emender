@@ -206,14 +206,21 @@ def validate_backend(backend: str, *, production: bool, full_layout: bool) -> st
     return backend
 
 
-def validate_g2_gate(path: str | Path, build: BuildAttestation) -> Mapping[str, object]:
+def validate_g2_gate(
+    path: str | Path,
+    build: BuildAttestation,
+    *,
+    required_gate: str = "G2",
+) -> Mapping[str, object]:
+    if required_gate not in {"G2", "G2-fault-rejoin-replay"}:
+        raise ValueError(f"unsupported native G2 gate kind: {required_gate}")
     path = Path(path).resolve()
     try:
         gate = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise ValueError(f"native G2 gate cannot be read: {path}") from error
     required = {
-        "schema": GATE_SCHEMA, "gate": "G2", "status": "passed",
+        "schema": GATE_SCHEMA, "gate": required_gate, "status": "passed",
         "source_commit": build.source_commit,
         "bundle_sha256": build.bundle_sha256,
         "provider": "cxi", "endpoint_type": "FI_EP_RDM",
@@ -229,6 +236,27 @@ def validate_g2_gate(path: str | Path, build: BuildAttestation) -> Mapping[str, 
                   if gate.get(name) != expected}
     if mismatches:
         raise ValueError(f"native G2 gate identity/metrics mismatch: {mismatches}")
+    if required_gate == "G2-fault-rejoin-replay":
+        fault = gate.get("fault")
+        required_fault = {
+            "peer_loss": True,
+            "new_incarnation": True,
+            "old_epoch_rejected": True,
+            "partial_commit": False,
+            "reassignment_count": 1,
+            "replay_bytes": 134_217_728,
+        }
+        if not isinstance(fault, Mapping):
+            raise ValueError("native G2 fault identity is missing")
+        fault_mismatches = {
+            name: (fault.get(name), expected)
+            for name, expected in required_fault.items()
+            if fault.get(name) != expected
+        }
+        if fault_mismatches:
+            raise ValueError(
+                f"native G2 fault identity/metrics mismatch: "
+                f"{fault_mismatches}")
     if set(build.artifacts) != set(_ARTIFACT_NAMES):
         raise ValueError("native G2 build does not attest the synthetic gate executable")
     artifacts = gate.get("artifacts")
@@ -242,7 +270,8 @@ def validate_g2_gate(path: str | Path, build: BuildAttestation) -> Mapping[str, 
 def attest_launch(*, backend: str, production: bool, full_layout: bool,
                   build_manifest: str | Path | None,
                   gate_json: str | Path | None,
-                  source_root: str | Path | None = None) -> dict[str, object]:
+                  source_root: str | Path | None = None,
+                  required_gate: str = "G2") -> dict[str, object]:
     backend = validate_backend(backend, production=production, full_layout=full_layout)
     if backend == PYTHON_TCP_DEBUG:
         if build_manifest or gate_json:
@@ -259,9 +288,11 @@ def attest_launch(*, backend: str, production: bool, full_layout: bool,
     if production or full_layout:
         if gate_json is None:
             raise ValueError("production/full-layout native backend requires the exact G2 gate")
-        gate = validate_g2_gate(gate_json, build)
+        gate = validate_g2_gate(
+            gate_json, build, required_gate=required_gate)
     elif gate_json is not None:
-        gate = validate_g2_gate(gate_json, build)
+        gate = validate_g2_gate(
+            gate_json, build, required_gate=required_gate)
     return {
         "backend": backend, "production": production,
         "full_layout": full_layout, "status": "attested",

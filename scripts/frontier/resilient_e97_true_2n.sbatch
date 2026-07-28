@@ -128,14 +128,23 @@ FI_PROVIDER=${FI_PROVIDER:-cxi}
 }
 : "${NDP_BUILD_MANIFEST:?set exact installed native build manifest}"
 : "${NDP_FULL_LAYOUT_GATE_JSON:?set retained exact-code G2 full-layout gate}"
+: "${NDP_REQUIRED_GATE:?set exact native G2 gate kind}"
+case "$NDP_REQUIRED_GATE" in
+  G2|G2-fault-rejoin-replay) ;;
+  *)
+    echo "NDP_REQUIRED_GATE must be G2 or G2-fault-rejoin-replay" >&2
+    exit 64
+    ;;
+esac
 NDP_LAUNCH_ATTESTATION="$RUN_DIR/native-dataplane-launch-attestation.json"
 "$TRAIN_PYTHON_BIN" "$REPO/scripts/frontier/attest_native_dataplane.py" verify \
   --backend "$DILOCO_DATAPLANE" --production --full-layout \
   --build-manifest "$NDP_BUILD_MANIFEST" \
-  --gate-json "$NDP_FULL_LAYOUT_GATE_JSON" --source-root "$REPO" \
+  --gate-json "$NDP_FULL_LAYOUT_GATE_JSON" \
+  --required-gate "$NDP_REQUIRED_GATE" --source-root "$REPO" \
   --output "$NDP_LAUNCH_ATTESTATION"
 export DILOCO_DATAPLANE FI_PROVIDER NDP_BUILD_MANIFEST \
-  NDP_FULL_LAYOUT_GATE_JSON NDP_LAUNCH_ATTESTATION
+  NDP_FULL_LAYOUT_GATE_JSON NDP_REQUIRED_GATE NDP_LAUNCH_ATTESTATION
 readarray -t NDP_ARTIFACT_PATHS < <("$TRAIN_PYTHON_BIN" - "$NDP_BUILD_MANIFEST" <<'PY'
 import json
 from pathlib import Path
@@ -361,4 +370,20 @@ if [[ ${RESILIENT_E97_ACCEPTANCE_PHASE:-} == clean-overlap ]]; then
   "$TRAIN_PYTHON_BIN" "$REPO/scripts/frontier/validate_pipelined_e97_performance.py" \
     --telemetry-root "$RUN_DIR/retained-evidence" \
     --output "$RUN_DIR/pipelined-performance.json"
+elif [[ ${ASYNC_V21_GATE:-} == faults ]]; then
+  : "${ASYNC_V21_PRIOR_CLEAN_GATE:?fault phase requires the exact clean pass}"
+  : "${ASYNC_V21_PRIOR_CLEAN_GATE_SHA256:?fault phase requires the clean pass digest}"
+  : "${ASYNC_V21_FAULT_CAMPAIGN_DIGEST:?fault phase requires a campaign digest}"
+  [[ $(sha256sum "$ASYNC_V21_PRIOR_CLEAN_GATE" | awk '{print $1}') == \
+     "$ASYNC_V21_PRIOR_CLEAN_GATE_SHA256" ]] || {
+    echo "prior clean terminal verdict changed after submission" >&2
+    exit 64
+  }
+  "$TRAIN_PYTHON_BIN" \
+    "$REPO/scripts/frontier/validate_async_v21_fault_phase.py" \
+    --run-dir "$RUN_DIR" \
+    --phase "$RESILIENT_E97_ACCEPTANCE_PHASE" \
+    --full-layout-gate "$NDP_FULL_LAYOUT_GATE_JSON" \
+    --prior-gate "$ASYNC_V21_PRIOR_CLEAN_GATE" \
+    --output "$RUN_DIR/$RESILIENT_E97_ACCEPTANCE_PHASE-verdict.json"
 fi

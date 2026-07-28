@@ -62,6 +62,251 @@ def test_owner_rpc_large_frame_budget_applies_to_established_stream():
         server.server_close()
 
 
+def test_reconstructed_control_rejoins_equal_generation_before_contribution(tmp_path):
+    """A live peer rejoins rebuilt control without discarding current K40 work.
+
+    Job 5108175 rebuilt node-0 peer control at committed generation 3 while
+    node 1 still held a generation-3 snapshot opened by the previous control
+    incarnation.  The equal-generation contribution must receive immutable
+    rejoin authority, restore the two-node READY floor, and then participate
+    under the rebuilt admission instead of escaping as ``generation is not
+    open``.
+    """
+    receipt = "11" * 32
+    manifest = "22" * 32
+    result = "33" * 32
+    apply_receipts = (("node-0", "44" * 32), ("node-1", "55" * 32))
+    server = PoolControlServer(
+        ("127.0.0.1", _port()),
+        PoolControlConfig(
+            "run-equal-rejoin", 17, q_min=2, t_min=2,
+            ready_fraction=None, base_digest="base", policy_digest="policy",
+            layout_digest="layout", code_digest="code",
+            slo=PoolStageSLO(1, 3, 1, 1, 1, 1, 1, 1),
+            committed_generation=3,
+            committed_receipt_digest=receipt,
+            committed_accepted_tokens=200,
+            committed_result_root=result,
+            committed_manifest_digest=manifest,
+            committed_apply_receipts=apply_receipts,
+        ),
+        evidence_root=tmp_path / "evidence",
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    clients = [
+        PoolControlClient(server.server_address, timeout_s=1).bind(
+            "run-equal-rejoin", 17)
+        for _ in range(2)
+    ]
+    before = {
+        "admissions": dict(server.admissions),
+        "membership": dict(server.membership.records),
+        "node_applies": dict(server.node_applies),
+    }
+    try:
+        rejoin = clients[1].contribute_and_freeze(
+            generation=3, attempt=1, worker_id="node-1",
+            incarnation="node-1-live", contribution_seq=3,
+            accepted_tokens=1, payload_digest="node-1-root",
+            deadline=time.monotonic() + 1,
+        )
+        assert rejoin == {
+            "status": "rejoin",
+            "generation": 3,
+            "attempt": 1,
+            "authoritative_generation": 3,
+            "receipt_digest": receipt,
+            "manifest_digest": manifest,
+            "result_root": result,
+            "accepted_tokens": 200,
+            "apply_receipts": [
+                {"worker_id": "node-0", "receipt_digest": "44" * 32},
+                {"worker_id": "node-1", "receipt_digest": "55" * 32},
+            ],
+            "requires_rejoin": True,
+            "requires_reload": False,
+        }
+        assert {
+            "admissions": dict(server.admissions),
+            "membership": dict(server.membership.records),
+            "node_applies": dict(server.node_applies),
+        } == before
+
+        for index, client in enumerate(clients):
+            worker = f"node-{index}"
+            incarnation = f"{worker}-live"
+            recovered = client.recover(
+                worker_id=worker,
+                incarnation=incarnation,
+                known_generation=3,
+                known_receipt_digest=receipt,
+            )
+            assert recovered["apply_receipts"] == rejoin["apply_receipts"]
+            assert recovered["requires_node_apply"] is False
+            client.ready(
+                OwnerEndpoint(
+                    worker, incarnation, "127.0.0.1", 32000 + index),
+                generation=3,
+                apply_receipt_digest=dict(apply_receipts)[worker],
+            )
+
+        opened = clients[0].open_generation(
+            3, attempt=1, deadline=time.monotonic() + 1)
+        assert {
+            (item["worker_id"], item["incarnation"])
+            for item in opened["peers"]
+        } == {
+            ("node-0", "node-0-live"),
+            ("node-1", "node-1-live"),
+        }
+        assert clients[0].contribute(
+            3, 1, "node-0", "node-0-live", 3, 1,
+            "node-0-root")["status"] == "accepted"
+        assert clients[1].contribute(
+            3, 1, "node-1", "node-1-live", 3, 1,
+            "node-1-root")["status"] == "accepted"
+        close = clients[0]._rpc("close", generation=3, attempt=1)
+        assert close["status"] == "commit_ready"
+        assert close["required_contributions"] == 2
+        assert {
+            item["worker_id"] for item in close["frozen_identities"]
+        } == {"node-0", "node-1"}
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_recovery_tracks_current_applies_and_supersedes_abandoned_incarnation(
+        tmp_path):
+    """Recovery follows the newest commit and one unfinished rejoin may advance."""
+    old_receipt = "10" * 32
+    server = PoolControlServer(
+        ("127.0.0.1", _port()),
+        PoolControlConfig(
+            "run-current-recovery", 19, q_min=2, t_min=2,
+            ready_fraction=None, base_digest="base", policy_digest="policy",
+            layout_digest="layout", code_digest="code",
+            slo=PoolStageSLO(1, 3, 1, 1, 1, 1, 1, 1),
+            committed_generation=2,
+            committed_receipt_digest=old_receipt,
+            committed_accepted_tokens=100,
+            committed_result_root="20" * 32,
+            committed_manifest_digest="30" * 32,
+            committed_apply_receipts=(
+                ("node-0", "40" * 32), ("node-1", "50" * 32)),
+        ),
+        evidence_root=tmp_path / "evidence",
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    clients = [
+        PoolControlClient(server.server_address, timeout_s=1).bind(
+            "run-current-recovery", 19)
+        for _ in range(2)
+    ]
+    try:
+        for index, client in enumerate(clients):
+            worker = f"node-{index}"
+            incarnation = f"old-inc-{index}"
+            client.recover(
+                worker_id=worker,
+                incarnation=incarnation,
+                known_generation=2,
+                known_receipt_digest=old_receipt,
+            )
+            client.ready(
+                OwnerEndpoint(
+                    worker, incarnation, "127.0.0.1", 33000 + index),
+                generation=2,
+            )
+        clients[0].open_generation(
+            2, attempt=1, deadline=time.monotonic() + 1)
+        for index, client in enumerate(clients):
+            assert client.contribute(
+                2, 1, f"node-{index}", f"old-inc-{index}", 2, 1,
+                f"payload-{index}")["status"] == "accepted"
+        assert clients[0]._rpc(
+            "close", generation=2, attempt=1)["status"] == "commit_ready"
+        assert clients[0]._rpc(
+            "result_root", generation=2, attempt=1, worker_id="node-0",
+            incarnation="old-inc-0", result_root="60" * 32,
+            global_weight=2, result_bytes=64,
+        ) == {"status": "waiting", "reported": 1, "required": 2}
+        roots = clients[1].validate_result_root(
+            generation=2, attempt=1, worker_id="node-1",
+            incarnation="old-inc-1", result_root="60" * 32,
+            global_weight=2, result_bytes=64,
+            deadline=time.monotonic() + 1,
+        )
+        assert roots["status"] == "validated"
+
+        new_receipt = "70" * 32
+        clients[0].commit_authority(
+            result_generation=3,
+            attempt=1,
+            receipt_digest=new_receipt,
+            previous_receipt_digest=old_receipt,
+            manifest_digest="80" * 32,
+            result_root="60" * 32,
+            accepted_tokens=102,
+        )
+        for index, client in enumerate(clients):
+            client.node_applied(
+                generation=3,
+                worker_id=f"node-{index}",
+                incarnation=f"old-inc-{index}",
+                receipt_digest=f"{90 + index:02x}" * 32,
+                commit_receipt_digest=new_receipt,
+            )
+
+        first = clients[1].recover(
+            worker_id="node-1",
+            incarnation="replacement-abandoned",
+            known_generation=3,
+            known_receipt_digest=new_receipt,
+        )
+        assert first["apply_receipts"] == [
+            {"worker_id": "node-0", "receipt_digest": "5a" * 32},
+            {"worker_id": "node-1", "receipt_digest": "5b" * 32},
+        ]
+        assert first["requires_node_apply"] is False
+
+        with pytest.raises(
+                RuntimeError, match="recovery state differs"):
+            clients[1].recover(
+                worker_id="node-1",
+                incarnation="replacement-corrupt",
+                known_generation=3,
+                known_receipt_digest="ff" * 32,
+            )
+        assert server.pending_recoveries["node-1"] == "replacement-abandoned"
+        assert "replacement-abandoned" not in server.seen_incarnations["node-1"]
+        assert "replacement-corrupt" not in server.seen_incarnations["node-1"]
+
+        replacement = clients[1].recover(
+            worker_id="node-1",
+            incarnation="replacement-current",
+            known_generation=3,
+            known_receipt_digest=new_receipt,
+        )
+        assert replacement == first
+        clients[1].ready(
+            OwnerEndpoint(
+                "node-1", "replacement-current", "127.0.0.1", 33003),
+            generation=3,
+        )
+        with pytest.raises(
+                RuntimeError, match="stale incarnation recovery"):
+            clients[1].recover(
+                worker_id="node-1",
+                incarnation="replacement-abandoned",
+                known_generation=3,
+                known_receipt_digest=new_receipt,
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_stage_slos_are_derived_from_measured_k40_baseline():
     slo = PoolStageSLO.production()
     assert slo.generation_expected_s == 215

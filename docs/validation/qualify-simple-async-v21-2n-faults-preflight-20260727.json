@@ -1,0 +1,140 @@
+{
+  "blocker": {
+    "dependency": "requalify-v21-durable-collector-2n-clean",
+    "dependency_status_at_capture": "open",
+    "prerequisite": "fix-v21-durable-collector-source-identity",
+    "prerequisite_status_at_capture": "in-progress",
+    "reason": "The exact 46c80437 execution source lacks the mandatory durable held-job/afterany terminal collector and corrected execution-source identity.",
+    "stop_message_from": "scale-v21-8n-clean",
+    "stop_message_received_at": "2026-07-27T23:50:10.059327681Z"
+  },
+  "downstream": {
+    "authorize_simple_async_v21_scale_blocked": true,
+    "convergence_blocked": true,
+    "scale_blocked": true
+  },
+  "jobs": {
+    "convergence": [],
+    "fault_model": [],
+    "fresh_allocation_recovery": [],
+    "native_fault_g2": [],
+    "scale": []
+  },
+  "passed": false,
+  "payload_digests_submitted": [],
+  "preflight": {
+    "activated_python": "3.12.13",
+    "canonical_activation_sourced": true,
+    "clean_manifest_passed": true,
+    "final_sha256sums_verified": true,
+    "native_attestation_status": "attested",
+    "queue_empty_before_stop": true,
+    "stopped_before_sbatch": true
+  },
+  "requirements": {
+    "compute_pool": {
+      "ids": [
+        "R01",
+        "R02",
+        "R03",
+        "R04",
+        "R05",
+        "R06",
+        "R07",
+        "R08",
+        "R09",
+        "R10",
+        "R11",
+        "R12",
+        "R13",
+        "R14",
+        "R15",
+        "R16"
+      ],
+      "status": "blocked_not_exercised_on_corrected_source"
+    },
+    "immutable_snapshot_pipeline": {
+      "ids": [
+        "ISP01",
+        "ISP02",
+        "ISP03",
+        "ISP04",
+        "ISP05",
+        "ISP06",
+        "ISP07"
+      ],
+      "status": "blocked_not_exercised_on_corrected_source"
+    },
+    "native_data_plane": {
+      "ids": [
+        "NDP01",
+        "NDP02",
+        "NDP03",
+        "NDP04",
+        "NDP05",
+        "NDP06",
+        "NDP07",
+        "NDP08",
+        "NDP09",
+        "NDP10",
+        "NDP11",
+        "NDP12",
+        "NDP13",
+        "NDP14",
+        "NDP15",
+        "NDP16",
+        "NDP17"
+      ],
+      "status": "blocked_not_exercised_on_corrected_source"
+    },
+    "v21_semantics": {
+      "explicit_fault_restart_anchors": [
+        "V21S02",
+        "V21S05",
+        "V21S07",
+        "V21S08",
+        "V21S09",
+        "V21S10",
+        "V21S11",
+        "V21S12",
+        "V21S13",
+        "V21S14"
+      ],
+      "ids": [
+        "V21S01",
+        "V21S02",
+        "V21S03",
+        "V21S04",
+        "V21S05",
+        "V21S06",
+        "V21S07",
+        "V21S08",
+        "V21S09",
+        "V21S10",
+        "V21S11",
+        "V21S12",
+        "V21S13",
+        "V21S14",
+        "V21S15",
+        "V21S16",
+        "V21S17"
+      ],
+      "status": "blocked_not_exercised_on_corrected_source"
+    }
+  },
+  "resume_after": "requalify-v21-durable-collector-2n-clean=done",
+  "schema": "emender-async-v21-two-node-fault-preflight-nonpass-v1",
+  "superseded_clean": {
+    "clean_g2_job_id": 5099135,
+    "clean_g2_sha256": "bc67ed30791c46892aa1d787f50a99b25b9f97bdead69e95a5678ad7cacfe660",
+    "clean_job_id": 5099195,
+    "clean_manifest_sha256": "aaaf19a80f85d6d783267fa430966f5ae589b42be693d2fa9df098b70e32ab10",
+    "clean_payload_digest": "46f0ad69d07dffdf277f25d321051b765befa7f034d0462f4bbdae1082b454cf",
+    "native_build_manifest_sha256": "d0f05e6ea15f38e72950680d710d70229b94eee1dfbc8b3468f33431318b82e3",
+    "native_bundle_sha256": "f19e10be9987cfdb551a8dd75c5c88145c3cf35b73c54d3898fe562ce4182441",
+    "source_commit": "46c8043791e9b14c4cb3376c1fb03ebe7fe6932f",
+    "source_digest": "553bc996723bc1698a37f847c981b1b3864d260d5d2d0cc70cb314f5c46e0184",
+    "source_tree": "660f817c0419943d33d07f91573a6abc933bab7a"
+  },
+  "task": "qualify-simple-async-v21-2n-faults"
+}

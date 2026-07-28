@@ -409,11 +409,13 @@ def _dataplane_policy(args) -> tuple[str, bool, bool]:
 
 def _attest_dataplane(args) -> dict[str, object]:
     backend, production, full_layout = _dataplane_policy(args)
+    required_gate = os.environ.get("NDP_REQUIRED_GATE", "G2")
     attestation = attest_launch(
         backend=backend, production=production, full_layout=full_layout,
         build_manifest=getattr(args, "native_build_manifest", "") or None,
         gate_json=getattr(args, "native_gate_json", "") or None,
         source_root=ROOT if backend != PYTHON_TCP_DEBUG else None,
+        required_gate=required_gate,
     )
     _require_wired_dense_runtime(backend)
     return attestation
@@ -452,6 +454,29 @@ def _native_runtime_resume_compatible(
              if key not in provenance}
             == {key: value for key, value in current.items()
                 if key not in provenance})
+
+
+def _resume_handoff_identity_matches(
+        handoff: object, args, *,
+        recorded_runtime: object, native: bool) -> bool:
+    """Bind a fresh trainer to the stable execution identity and newer fence."""
+    if not isinstance(handoff, dict):
+        return False
+    fence = handoff.get("fence")
+    return bool(
+        isinstance(fence, dict)
+        and handoff.get("run_id") == args.run_id
+        and handoff.get("payload_id") == args.payload_id
+        and handoff.get("source_id") == args.source_id
+        and (not native or handoff.get("code_id") == args.code_id)
+        and (
+            not native
+            or isinstance(recorded_runtime, dict)
+            and len(str(recorded_runtime.get("source_commit", ""))) == 40
+        )
+        and int(fence.get("coordinator_epoch", -1)) <= _fence_epoch(args)
+        and handoff.get("finalized") is True
+    )
 
 
 def _peer_authority(
@@ -621,6 +646,126 @@ def _native_manager_resume_point(
     if source_code_id != args.code_id:
         evidence["source_code_id"] = source_code_id
     return generation, evidence
+
+
+def _normalized_apply_receipts(
+        value: Mapping[str, object]) -> list[dict[str, str]]:
+    receipts = []
+    seen: set[str] = set()
+    for item in value.get("apply_receipts", []):
+        if not isinstance(item, Mapping):
+            raise ValueError("native recovery apply receipt is not a mapping")
+        worker_id = str(item.get("worker_id", ""))
+        receipt_digest = str(item.get("receipt_digest", ""))
+        if (
+            not worker_id
+            or worker_id in seen
+            or len(receipt_digest) != 64
+        ):
+            raise ValueError("native recovery apply receipt identity is invalid")
+        seen.add(worker_id)
+        receipts.append({
+            "worker_id": worker_id,
+            "receipt_digest": receipt_digest,
+        })
+    return sorted(receipts, key=lambda item: item["worker_id"])
+
+
+def _validate_native_recovery_handshake(
+        handshake: Mapping[str, object],
+        sync_evidence: Mapping[str, object], *, generation: int) -> None:
+    expected_receipts = _normalized_apply_receipts(sync_evidence)
+    observed_receipts = _normalized_apply_receipts(handshake)
+    if (
+        handshake.get("status") != "recover"
+        or int(handshake.get("generation", -1)) != generation
+        or str(handshake.get("receipt_digest", ""))
+        != str(sync_evidence.get("commit_receipt_digest", ""))
+        or not isinstance(handshake.get("requires_node_apply"), bool)
+        or (
+            generation > 0
+            and (
+                handshake.get("manifest_digest")
+                != sync_evidence.get("manifest_sha256")
+                or handshake.get("result_root")
+                != sync_evidence.get("result_root")
+                or int(handshake.get("accepted_tokens", -1))
+                != int(sync_evidence.get("accepted_tokens", -2))
+                or observed_receipts != expected_receipts
+            )
+        )
+    ):
+        raise ValueError("native peer recovery handshake disagrees with manifest")
+
+
+def _validate_native_rejoin_instruction(
+        instruction: Mapping[str, object],
+        sync_evidence: Mapping[str, object], *, generation: int) -> None:
+    if (
+        instruction.get("status") != "rejoin"
+        or int(instruction.get("generation", -1)) != generation
+        or int(instruction.get("authoritative_generation", -1)) != generation
+        or instruction.get("requires_rejoin") is not True
+        or instruction.get("requires_reload") is not False
+        or str(instruction.get("receipt_digest", ""))
+        != str(sync_evidence.get("commit_receipt_digest", ""))
+        or instruction.get("manifest_digest")
+        != sync_evidence.get("manifest_sha256")
+        or instruction.get("result_root")
+        != sync_evidence.get("result_root")
+        or int(instruction.get("accepted_tokens", -1))
+        != int(sync_evidence.get("accepted_tokens", -2))
+        or _normalized_apply_receipts(instruction)
+        != _normalized_apply_receipts(sync_evidence)
+    ):
+        raise ValueError(
+            "native peer-control rejoin instruction disagrees with authority")
+
+
+def _node_apply_receipt_digest(
+        sync_evidence: Mapping[str, object], *, worker_id: str) -> str:
+    matches = [
+        item["receipt_digest"]
+        for item in _normalized_apply_receipts(sync_evidence)
+        if item["worker_id"] == worker_id
+    ]
+    if not matches:
+        return ""
+    if len(matches) != 1:
+        raise ValueError("native recovery has duplicate node-apply authority")
+    return matches[0]
+
+
+def _ready_recovered_peer(
+        pool_client: PoolControlClient, endpoint: OwnerEndpoint, *,
+        generation: int, run_id: str, fence: int,
+        apply_receipt_digest: str, deadline: float,
+        incarnation_sequence: int = 1,
+        ) -> dict[str, object]:
+    """Advertise one recovered peer after any in-flight node apply closes.
+
+    A manager can restart after its own node applied but before the other
+    frozen node published its all-eight receipt.  Peer control retains the
+    global atomic-apply gate until every frozen worker receipt is present.
+    Waiting here is a bounded recovery lifecycle state; no trainer foreground
+    work or one-node generation authority is admitted during the wait.
+    """
+    last: BaseException | None = None
+    while time.monotonic() < deadline:
+        try:
+            return pool_client.ready(
+                endpoint, generation,
+                run_id=run_id, fence=fence,
+                apply_receipt_digest=apply_receipt_digest,
+                incarnation_sequence=incarnation_sequence)
+        except RuntimeError as error:
+            last = error
+            if "READY requires this incarnation's atomic node-apply receipt" \
+                    not in str(error):
+                raise
+            time.sleep(min(.02, max(0.0, deadline - time.monotonic())))
+    raise TimeoutError(
+        f"recovered peer READY deadline expired: {last}")
 
 
 def _authoritative_trainer_resume_handoff(
@@ -2066,6 +2211,7 @@ def _native_manager(args) -> int:
         host=_pool_hosts(args)[node], build_manifest=args.native_build_manifest,
         gate_json=args.native_gate_json or None, source_root=ROOT,
         production=production, full_layout=full_layout,
+        required_gate=os.environ.get("NDP_REQUIRED_GATE", "G2"),
         deadline_s=_native_manager_session_lifetime_s(args),
         telemetry_path=bulk / "telemetry" / f"{identity}-native.jsonl",
         payload_max=args.bulk_chunk_bytes, resident_limit_bytes=args.max_spool_bytes)
@@ -2148,39 +2294,20 @@ def _native_manager(args) -> int:
                 sync_evidence.get("commit_receipt_digest", "")),
             incarnation_sequence=coordination_sequence,
         )
-        if (
-            recovery_handshake.get("status") != "recover"
-            or int(recovery_handshake.get("generation", -1))
-            != start_generation
-            or str(recovery_handshake.get("receipt_digest", ""))
-            != str(sync_evidence.get("commit_receipt_digest", ""))
-            or (
-                start_generation > 0
-                and (
-                    recovery_handshake.get("manifest_digest")
-                    != sync_evidence.get("manifest_sha256")
-                    or recovery_handshake.get("result_root")
-                    != sync_evidence.get("result_root")
-                    or int(recovery_handshake.get("accepted_tokens", -1))
-                    != int(sync_evidence.get("accepted_tokens", -2))
-                    or recovery_handshake.get("apply_receipts", [])
-                    != sync_evidence.get("apply_receipts", [])
-                )
-            )
-        ):
-            raise ValueError("native peer recovery handshake disagrees with manifest")
+        _validate_native_recovery_handshake(
+            recovery_handshake, sync_evidence,
+            generation=start_generation)
         if _wait_native_ready_delay(
                 control, args, node=node, generation=start_generation,
                 incarnation=incarnation, term_requested=term_requested):
-            recovered_apply_receipt = next((
-                str(item["receipt_digest"])
-                for item in recovery_handshake.get("apply_receipts", [])
-                if str(item["worker_id"]) == f"node-{node}"
-            ), "")
-            pool_client.ready(session.owner_endpoint, start_generation,
-                              run_id=args.run_id, fence=_fence_epoch(args),
-                              apply_receipt_digest=recovered_apply_receipt,
-                              incarnation_sequence=coordination_sequence)
+            _ready_recovered_peer(
+                pool_client, session.owner_endpoint,
+                generation=start_generation,
+                run_id=args.run_id, fence=_fence_epoch(args),
+                apply_receipt_digest=_node_apply_receipt_digest(
+                    sync_evidence, worker_id=f"node-{node}"),
+                deadline=time.monotonic() + pool_config.slo.sync_s,
+                incarnation_sequence=coordination_sequence)
     liveness_stop, liveness_thread = _liveness_heartbeat(bulk, identity)
     terminal_published = False
     try:
@@ -2308,17 +2435,80 @@ def _native_manager(args) -> int:
                 **local_semantic_identity)
             final_operation, final_result = local_operation, local_result
             if pool_client is not None:
-                close = pool_client.contribute_and_freeze(
-                    generation=generation, attempt=1, worker_id=f"node-{node}",
-                    incarnation=incarnation,
-                    contribution_seq=generation + 1,
-                    accepted_tokens=local_weight,
-                    payload_digest=local_result.result_root.hex(),
-                    # ADR-002 gives the complete open-group-to-freeze phase
-                    # one absolute 420-second generation clock.  The 15-second
-                    # native freeze SLO cannot replace that Q/T close window:
-                    # harmless K40 skew can make one node contribute later.
-                    deadline=native_deadline)
+                while True:
+                    close = pool_client.contribute_and_freeze(
+                        generation=generation, attempt=1,
+                        worker_id=f"node-{node}",
+                        incarnation=incarnation,
+                        contribution_seq=generation + 1,
+                        accepted_tokens=local_weight,
+                        payload_digest=local_result.result_root.hex(),
+                        # ADR-002 gives the complete open-group-to-freeze phase
+                        # one absolute 420-second generation clock. The
+                        # 15-second native freeze SLO cannot replace that Q/T
+                        # close window: harmless K40 skew can make one node
+                        # contribute later.
+                        deadline=native_deadline)
+                    if close.get("status") != "rejoin":
+                        break
+                    rejoin_generation, rejoin_evidence = (
+                        _native_manager_resume_point(
+                            run, args, fenced, native_runtime=digests))
+                    if rejoin_generation != generation:
+                        raise ValueError(
+                            "peer-control rejoin advanced beyond local generation")
+                    _validate_native_rejoin_instruction(
+                        close, rejoin_evidence, generation=generation)
+                    rejoin_handshake = pool_client.recover(
+                        worker_id=f"node-{node}",
+                        incarnation=incarnation,
+                        known_generation=rejoin_generation,
+                        known_receipt_digest=str(
+                            rejoin_evidence.get(
+                                "commit_receipt_digest", "")),
+                        incarnation_sequence=coordination_sequence,
+                    )
+                    _validate_native_recovery_handshake(
+                        rejoin_handshake, rejoin_evidence,
+                        generation=rejoin_generation)
+                    _ready_recovered_peer(
+                        pool_client, session.owner_endpoint,
+                        generation=rejoin_generation,
+                        run_id=args.run_id, fence=_fence_epoch(args),
+                        apply_receipt_digest=_node_apply_receipt_digest(
+                            rejoin_evidence,
+                            worker_id=f"node-{node}"),
+                        deadline=native_deadline,
+                        incarnation_sequence=coordination_sequence)
+                    snapshot = pool_client.open_generation(
+                        generation, 1, deadline=native_deadline)
+                    atomic_metadata(
+                        control
+                        / f"native-peer-control-rejoin-{generation:08d}.json", {
+                            "schema":
+                                "emender-native-peer-control-rejoin-v1",
+                            "run_id": args.run_id,
+                            "fence_epoch": _fence_epoch(args),
+                            "worker_id": f"node-{node}",
+                            "incarnation": incarnation,
+                            "generation": generation,
+                            "commit_receipt_digest":
+                                rejoin_evidence[
+                                    "commit_receipt_digest"],
+                            "manifest_sha256":
+                                rejoin_evidence["manifest_sha256"],
+                            "result_root": rejoin_evidence["result_root"],
+                            "accepted_tokens":
+                                rejoin_evidence["accepted_tokens"],
+                            "apply_receipts":
+                                rejoin_evidence["apply_receipts"],
+                        })
+                    heartbeat(
+                        bulk, identity, generation=generation,
+                        step=generation * args.local_steps,
+                        loss=None, stage="peer_control_rejoined",
+                        commit_receipt_digest=
+                            rejoin_evidence["commit_receipt_digest"])
                 if close.get("status") == "catch_up":
                     authoritative_generation = int(
                         close.get("authoritative_generation", -1))
@@ -3262,12 +3452,10 @@ def trainer(args) -> int:
                      "policy": "new-harness-handoff"}
         accepted_token_clock = int(handoff.get("accepted_tokens", 0))
         async_chain = list(handoff.get("async_chain", ())) + [str(resume_handoff)]
-        if (handoff.get("run_id") != args.run_id or handoff.get("payload_id") != args.payload_id
-                or handoff.get("source_id") != args.source_id
-                or (native and handoff.get("code_id")
-                    != recorded_runtime.get("source_commit"))
-                or int(handoff["fence"]["coordinator_epoch"]) > _fence_epoch(args)
-                or not handoff.get("finalized")):
+        if not _resume_handoff_identity_matches(
+                handoff, args,
+                recorded_runtime=recorded_runtime,
+                native=native):
             raise ValueError("resume handoff membership/identity/fence mismatch")
     recovery_manifest = control / "recovery" / f"{identity}.json"
     recovery = (

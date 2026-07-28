@@ -268,6 +268,7 @@ class NativeManagerSession:
               worker_id: str, incarnation: str, host: str,
               build_manifest: str | Path, gate_json: str | Path | None,
               source_root: str | Path, production: bool, full_layout: bool,
+              required_gate: str = "G2",
               deadline_s: float, telemetry_path: str | Path | None = None,
               payload_max: int = 64 << 20,
               resident_limit_bytes: int = 16 << 30) -> "NativeManagerSession":
@@ -276,7 +277,7 @@ class NativeManagerSession:
         attestation = attest_launch(
             backend=backend, production=production, full_layout=full_layout,
             build_manifest=build_manifest, gate_json=gate_json,
-            source_root=source_root,
+            source_root=source_root, required_gate=required_gate,
         )
         artifacts = _artifact_paths(build_manifest)
         telemetry = Path(telemetry_path) if telemetry_path else None
