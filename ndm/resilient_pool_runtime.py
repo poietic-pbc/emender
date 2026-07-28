@@ -1,10 +1,11 @@
 """Live control and distributed shard-owner plane for Compute Pool v1.
 
-The control server carries only leases, READY membership, contribution
-identities, receipts, and frozen-set metadata. Dense E97 bytes travel directly
-from model-free node managers to deterministic shard owners and back; the
-allocation holder is never a model broker. All socket waits and retained byte
-windows are explicit and bounded.
+The production control server carries endpoint leases and effect metadata
+around a pure transition kernel owned by the persistent compiled service.  The
+separate Python control implementation is an explicit debug/reference backend.
+Dense E97 bytes travel directly from model-free node managers to deterministic
+shard owners and back; the allocation holder is never a model broker. All
+socket waits and retained byte windows are explicit and bounded.
 """
 
 from __future__ import annotations
@@ -23,6 +24,10 @@ from typing import Mapping, Sequence
 from ndm.native_artifacts import (
     NATIVE_CXI, NATIVE_TEST, PYTHON_TCP_DEBUG, validate_backend,
 )
+from ndm.native_coordination import (
+    DEADLINE_EXPIRED, FINITE_CLOSE, NativeCoordinationAuthority,
+)
+from ndm.native_dataplane import CoordinationEventKind
 from ndm.native_transport import decode_endpoint_record
 from ndm.resilient_e97_reducer import (
     ExactWeightedShardReducer, ShardChunk, TensorLayout,
@@ -178,7 +183,7 @@ class PoolControlConfig:
     committed_accepted_tokens: int = 0
     committed_manifest_digest: str = ""
     committed_result_root: str = ""
-    committed_apply_receipts: tuple[tuple[str, str], ...] = ()
+    committed_apply_receipts: tuple[tuple[str, ...], ...] = ()
 
     def __post_init__(self) -> None:
         GenerationClosePolicy(self.q_min, self.t_min, self.ready_fraction)
@@ -196,6 +201,11 @@ class PoolControlConfig:
         if (
             self.committed_generation < 0
             or self.committed_accepted_tokens < 0
+            or (
+                self.dataplane_backend != PYTHON_TCP_DEBUG
+                and self.committed_generation > 0
+                and self.committed_accepted_tokens == 0
+            )
             or (
                 self.committed_generation > 0
                 and any((
@@ -220,11 +230,19 @@ class PoolControlConfig:
                 ))
             )
             or any(
-                not node_id or len(receipt_digest) != 64
-                for node_id, receipt_digest in self.committed_apply_receipts
+                len(item) not in {2, 3}
+                or not item[0]
+                or (len(item) == 3 and not item[1])
+                or len(item[-1]) != 64
+                for item in self.committed_apply_receipts
+            )
+            or (
+                self.dataplane_backend != PYTHON_TCP_DEBUG
+                and any(len(item) != 3
+                        for item in self.committed_apply_receipts)
             )
             or len({
-                node_id for node_id, _ in self.committed_apply_receipts
+                item[0] for item in self.committed_apply_receipts
             }) != len(self.committed_apply_receipts)
         ):
             raise ValueError("initial peer commit authority is invalid")
@@ -259,7 +277,12 @@ class _ControlHandler(socketserver.StreamRequestHandler):
 
 
 class PoolControlServer(socketserver.ThreadingTCPServer):
-    """Model-free READY membership and generation-freeze coordinator."""
+    """Explicit Python-TCP debug/reference coordinator.
+
+    Production native managers use :class:`NativePoolControlServer`; keeping
+    this deterministic reference path is useful for local fixtures but it is
+    never the authoritative native service.
+    """
 
     allow_reuse_address = True
     daemon_threads = True
@@ -293,7 +316,9 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
         self.committed_manifest_digest = config.committed_manifest_digest
         self.commit_history: dict[int, dict[str, object]] = {}
         self.node_applies: dict[tuple[int, str], dict[str, object]] = {}
-        self.recovered_apply_receipts = dict(config.committed_apply_receipts)
+        self.recovered_apply_receipts = {
+            item[0]: item[-1] for item in config.committed_apply_receipts
+        }
         self.pending_recoveries: dict[str, str] = {}
         self.apply_required_generation: int | None = None
         self._lock = threading.RLock()
@@ -898,6 +923,774 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
                 } for worker in sorted(values)}}
 
 
+class NativePoolControlServer(socketserver.ThreadingTCPServer):
+    """Effect executor for the live service's pure coordination kernel.
+
+    This class intentionally retains only external data: endpoint records,
+    clocks, payload presentation, and pairwise transport rendezvous.  It has no
+    independently mutable membership, generation, commit, apply, or recovery
+    authority.  Every such decision is a serialized typed event applied by
+    ``NativeCoordinationAuthority`` in the persistent compiled service.
+    """
+
+    allow_reuse_address = True
+    daemon_threads = True
+
+    def __init__(self, address: tuple[str, int], config: PoolControlConfig, *,
+                 authority: NativeCoordinationAuthority,
+                 evidence_root: str | Path):
+        if config.dataplane_backend == PYTHON_TCP_DEBUG:
+            raise ValueError("native control server requires a compiled backend")
+        if (authority.run_id != config.run_id
+                or authority.fence != config.fence):
+            raise ValueError("native control authority/config identity mismatch")
+        self.config = config
+        self.authority = authority
+        self.evidence_root = Path(evidence_root)
+        self.endpoints: dict[tuple[str, str], OwnerEndpoint] = {}
+        self.endpoint_leases: dict[tuple[str, str], float] = {}
+        self.endpoint_sequences: dict[tuple[str, str], int] = {}
+        self.snapshots: dict[tuple[int, int], dict[str, object]] = {}
+        self.opened: dict[tuple[int, int], tuple[float, float, float | None]] = {}
+        self.accepted_payloads: dict[
+            tuple[int, int, str], dict[str, object]
+        ] = {}
+        self.owner_results: dict[
+            tuple[int, int], dict[str, dict[str, object]]
+        ] = {}
+        self.route_readiness: dict[
+            tuple[int, int, tuple[str, str]], dict[str, tuple[str, str]]
+        ] = {}
+        self.commit_records: dict[int, dict[str, object]] = {}
+        self.apply_receipts = {
+            item[0]: {
+                "incarnation": item[1] if len(item) == 3 else "",
+                "receipt_digest": item[-1],
+            }
+            for item in config.committed_apply_receipts
+        }
+        self._lock = threading.RLock()
+        super().__init__(address, _ControlHandler)
+
+    @staticmethod
+    def _member(result: Mapping[str, object], worker_id: str
+                ) -> Mapping[str, object] | None:
+        return next((
+            item for item in result["members"]  # type: ignore[index]
+            if item["worker_id"] == worker_id  # type: ignore[index]
+        ), None)
+
+    @staticmethod
+    def _fatal(result: Mapping[str, object]) -> None:
+        if result["disposition"] == "fatal-invariant":
+            raise RuntimeError(
+                "native coordination authority invariant violation")
+
+    def _step(self, request: Mapping[str, object],
+              kind: CoordinationEventKind, **fields: object
+              ) -> dict[str, object]:
+        result = self.authority.step(
+            kind,
+            run_id=str(request.get("run_id", "")),
+            fence=int(request.get("fence", 0)),
+            **fields,
+        )
+        self._fatal(result)
+        return result
+
+    def dispatch(self, request: Mapping[str, object],
+                 payload: bytes) -> dict[str, object]:
+        op = str(request.get("op"))
+        with self._lock:
+            if op == "ready":
+                return self._ready(request)
+            if op == "open":
+                return self._open(request)
+            if op == "contribute":
+                return self._contribute(request, payload)
+            if op == "close":
+                return self._close(request)
+            if op == "route_ready":
+                return self._route_ready(request)
+            if op == "owner_result":
+                return self._owner_result(request)
+            if op == "result_root":
+                return self._result_root(request)
+            if op == "commit":
+                return self._commit(request)
+            if op == "commit_state":
+                return self._commit_state(request)
+            if op == "recover":
+                return self._recover(request)
+            if op == "node_apply":
+                return self._node_apply(request)
+            if op == "expire":
+                return self._expire(request)
+            if op == "owner_lost":
+                return self._owner_lost(request)
+            raise ValueError("unsupported native pool control operation")
+
+    def _ready(self, request: Mapping[str, object]) -> dict[str, object]:
+        endpoint = OwnerEndpoint(
+            str(request["worker_id"]), str(request["incarnation"]),
+            str(request["host"]), int(request["port"]),
+            str(request.get("backend", PYTHON_TCP_DEBUG)),
+            str(request.get("endpoint_record", "")),
+            str(request.get("provider", "")),
+            int(request.get("endpoint_epoch", 0)),
+            int(request.get("expires_unix_ns", 0)),
+            str(request.get("artifact_bundle_sha256", "")))
+        if endpoint.backend != self.config.dataplane_backend:
+            raise ValueError("READY endpoint backend differs from pool policy")
+        decoded = decode_endpoint_record(bytes.fromhex(endpoint.endpoint_record))
+        expected_run = hashlib.sha256(self.config.run_id.encode()).digest()[:16]
+        if (decoded.run_key != expected_run
+                or decoded.fence_epoch != self.config.fence
+                or endpoint.artifact_bundle_sha256
+                != self.config.artifact_bundle_sha256):
+            raise ValueError("READY native endpoint run/fence/artifact mismatch")
+        remaining_endpoint_s = (
+            endpoint.expires_unix_ns - time.time_ns()) / 1e9
+        if remaining_endpoint_s <= 0:
+            raise ValueError("READY native endpoint expired before admission")
+        lease_expiry = time.monotonic() + min(
+            self.config.slo.ready_lease_s, remaining_endpoint_s)
+        generation = int(request["generation"])
+        sequence = int(request.get("incarnation_sequence", 0))
+        result = self._step(
+            request, CoordinationEventKind.READY,
+            generation=generation,
+            node_id=endpoint.worker_id,
+            incarnation=endpoint.incarnation,
+            sequence=sequence,
+            receipt_digest=str(request.get("apply_receipt_digest", "")),
+        )
+        disposition = str(result["disposition"])
+        if disposition in {"accepted", "identical-duplicate"}:
+            identity = (endpoint.worker_id, endpoint.incarnation)
+            self.endpoints[identity] = endpoint
+            self.endpoint_leases[identity] = lease_expiry
+            self.endpoint_sequences[identity] = sequence
+            frozen_incarnations = {
+                str(item["cohort_incarnation"])
+                for item in result["members"]  # type: ignore[index]
+                if (item["worker_id"] == endpoint.worker_id  # type: ignore[index]
+                    and item["cohort"])  # type: ignore[index]
+            }
+            for identity in tuple(self.endpoints):
+                if (identity[0] == endpoint.worker_id
+                        and identity[1] != endpoint.incarnation
+                        and identity[1] not in frozen_incarnations):
+                    self.endpoints.pop(identity, None)
+                    self.endpoint_leases.pop(identity, None)
+                    self.endpoint_sequences.pop(identity, None)
+            return {
+                "status": "READY", "disposition": disposition,
+                "worker_id": endpoint.worker_id,
+                "incarnation": endpoint.incarnation,
+                "generation": generation,
+            }
+        return {
+            "status": disposition, "disposition": disposition,
+            "worker_id": endpoint.worker_id,
+            "incarnation": endpoint.incarnation,
+            "generation": generation,
+            "authoritative_generation": result["committed_generation"],
+        }
+
+    def _open(self, request: Mapping[str, object]) -> dict[str, object]:
+        generation, attempt = int(request["generation"]), int(request["attempt"])
+        key = (generation, attempt)
+        prior = self.snapshots.get(key)
+        now = time.monotonic()
+        if prior is None:
+            # The clock is external to the pure kernel.  Convert every elapsed
+            # lease into a typed, serialized event before the kernel snapshots
+            # READY; never discover expiry after authoritative open mutation.
+            expired = sorted(
+                identity for identity, expiry
+                in self.endpoint_leases.items() if expiry <= now)
+            for worker_id, incarnation in expired:
+                expired_result = self._step(
+                    request, CoordinationEventKind.EXPIRE_PEER,
+                    generation=generation, node_id=worker_id,
+                    incarnation=incarnation,
+                    sequence=self.endpoint_sequences.get(
+                        (worker_id, incarnation), 0),
+                )
+                if expired_result["disposition"] in {
+                    "accepted", "identical-duplicate",
+                }:
+                    identity = (worker_id, incarnation)
+                    self.endpoints.pop(identity, None)
+                    self.endpoint_leases.pop(identity, None)
+                    self.endpoint_sequences.pop(identity, None)
+        result = self._step(
+            request, CoordinationEventKind.OPEN_GENERATION,
+            generation=generation, attempt=attempt)
+        disposition = str(result["disposition"])
+        if disposition not in {"accepted", "identical-duplicate"}:
+            return {
+                "status": disposition,
+                "generation": generation,
+                "attempt": attempt,
+                "authoritative_generation": result["committed_generation"],
+            }
+        if prior is not None:
+            return prior
+        members = [
+            item for item in result["members"]  # type: ignore[index]
+            if item["cohort"]  # type: ignore[index]
+        ]
+        peers = []
+        for member in members:
+            identity = (str(member["worker_id"]), str(member["incarnation"]))
+            endpoint = self.endpoints.get(identity)
+            lease_expiry = self.endpoint_leases.get(identity, 0.0)
+            if endpoint is None or lease_expiry <= now:
+                raise RuntimeError(
+                    "native cohort endpoint effect is absent or lease-expired")
+            peers.append({**asdict(endpoint), "lease_expiry": lease_expiry})
+        peers.sort(key=lambda item: str(item["worker_id"]))
+        deadline = now + self.config.slo.training_hard_s
+        close_not_before = (
+            None if self.config.scale_close_offset_s is None
+            else now + self.config.scale_close_offset_s)
+        value: dict[str, object] = {
+            "run_id": self.config.run_id,
+            "fence": self.config.fence,
+            "generation": generation,
+            "attempt": attempt,
+            "observed_at": now,
+            "peers": peers,
+            "deadline_after_s": self.config.slo.training_hard_s,
+        }
+        if close_not_before is not None:
+            value["scale_closure"] = {
+                "schema": "emender-v21s17-runtime-close-v1",
+                "close_after_s": self.config.scale_close_offset_s,
+                "stable_diversity_floor":
+                    self.config.scale_stable_diversity_floor,
+                "per_ready_worker_token_floor":
+                    self.config.scale_per_ready_worker_token_floor,
+                "closure_digest": self.config.scale_closure_digest,
+                "close_on_q_min": False,
+                "uses_launched_ranks": False,
+                "wait_for_all_ready": False,
+            }
+        self.opened[key] = (now, deadline, close_not_before)
+        self.snapshots[key] = value
+        return value
+
+    def _contribute(self, request: Mapping[str, object],
+                    payload: bytes) -> dict[str, object]:
+        generation, attempt = int(request["generation"]), int(request["attempt"])
+        worker_id = str(request["worker_id"])
+        incarnation = str(request["incarnation"])
+        sequence = int(request["contribution_seq"])
+        if "aggregation_weight" in request:
+            raise ValueError(
+                "v2.1 contributions forbid aggregation_weight; "
+                "accepted_tokens is exact")
+        try:
+            payload_digest = bytes.fromhex(payload.decode("ascii"))
+        except (UnicodeError, ValueError) as error:
+            raise ValueError(
+                "native contribution payload must be one SHA-256 digest") from error
+        if len(payload_digest) != 32:
+            raise ValueError(
+                "native contribution payload must be one SHA-256 digest")
+        result = self._step(
+            request, CoordinationEventKind.CONTRIBUTION,
+            generation=generation, attempt=attempt,
+            node_id=worker_id, incarnation=incarnation,
+            sequence=sequence,
+            exact_tokens=int(request["accepted_tokens"]),
+            payload_digest=payload_digest,
+            policy_digest=str(request.get(
+                "policy_digest", self.config.policy_digest)),
+        )
+        disposition = str(result["disposition"])
+        if disposition == "generation-closed":
+            return {
+                "status": "catch_up",
+                "disposition": disposition,
+                "generation": generation,
+                "attempt": attempt,
+                "authoritative_generation": result["committed_generation"],
+                "receipt_digest": result["commit_receipt"],
+                "manifest_digest": result["commit_manifest"],
+                "result_root": result["committed_result"],
+                "accepted_tokens": result["accepted_token_clock"],
+                "requires_reload": True,
+            }
+        if disposition in {"accepted", "identical-duplicate"}:
+            member = self._member(result, worker_id)
+            if member is None:
+                raise RuntimeError(
+                    "native accepted contribution lacks member evidence")
+            self.accepted_payloads[(generation, attempt, worker_id)] = {
+                "incarnation": incarnation,
+                "sequence": sequence,
+                "exact_tokens": int(request["accepted_tokens"]),
+                "payload_digest": payload.decode("ascii"),
+            }
+            return {
+                "identity": {
+                    "run_id": self.config.run_id,
+                    "coordinator_epoch": self.config.fence,
+                    "generation": generation,
+                    "attempt": attempt,
+                    "worker_id": worker_id,
+                    "incarnation": incarnation,
+                    "contribution_seq": sequence,
+                },
+                # A byte-identical replay remains an accepted receipt so a
+                # lost RPC response can continue into close.
+                "status": "accepted",
+                "disposition": disposition,
+                "content_digest": member["contribution_receipt"],
+            }
+        return {
+            "status": disposition,
+            "disposition": disposition,
+            "generation": generation,
+            "attempt": attempt,
+        }
+
+    def _close(self, request: Mapping[str, object]) -> dict[str, object]:
+        generation, attempt = int(request["generation"]), int(request["attempt"])
+        opened = self.opened.get((generation, attempt))
+        now = time.monotonic()
+        flags = 0
+        if opened is not None:
+            _started, deadline, close_not_before = opened
+            if close_not_before is None or now >= close_not_before:
+                flags |= FINITE_CLOSE
+            if now >= deadline:
+                flags |= DEADLINE_EXPIRED
+        result = self._step(
+            request, CoordinationEventKind.CLOSE_GENERATION,
+            generation=generation, attempt=attempt, flags=flags)
+        disposition = str(result["disposition"])
+        if disposition in {"deferred", "insufficient-cohort"}:
+            return {
+                "status": "open", "disposition": disposition,
+                "accepted_tokens": sum(
+                    int(item["exact_tokens"])
+                    for item in result["members"]  # type: ignore[index]
+                    if item["contributed"]),  # type: ignore[index]
+            }
+        if disposition == "retry-next-generation":
+            return {
+                "status": "aborted", "disposition": disposition,
+                "authoritative_generation": result["committed_generation"],
+            }
+        if (disposition not in {"accepted", "identical-duplicate"}
+                or result["phase"] not in {"closed", "committed", "applied"}):
+            return {"status": disposition, "disposition": disposition}
+        cohort = [
+            item for item in result["members"]  # type: ignore[index]
+            if item["cohort"]  # type: ignore[index]
+        ]
+        accepted = [
+            item for item in cohort if item["contributed"]  # type: ignore[index]
+        ]
+        frozen_identities = []
+        payloads = {}
+        exact_tokens = {}
+        for member in accepted:
+            worker_id = str(member["worker_id"])
+            cached = self.accepted_payloads.get(
+                (generation, attempt, worker_id))
+            if cached is None:
+                raise RuntimeError(
+                    "native frozen contribution lacks payload effect cache")
+            frozen_identities.append({
+                "run_id": self.config.run_id,
+                "coordinator_epoch": self.config.fence,
+                "generation": generation,
+                "attempt": attempt,
+                "worker_id": worker_id,
+                "incarnation": member["cohort_incarnation"],
+                "contribution_seq": int(cached["sequence"]),
+            })
+            payloads[worker_id] = str(cached["payload_digest"])
+            exact_tokens[worker_id] = int(member["exact_tokens"])
+        return {
+            "status": "commit_ready",
+            "disposition": disposition,
+            "reason": "finite_native_close",
+            "accepted_tokens": sum(exact_tokens.values()),
+            "required_contributions": self.config.q_min,
+            "ready_snapshot": [
+                [str(item["worker_id"]), str(item["cohort_incarnation"])]
+                for item in cohort
+            ],
+            "frozen_identities": frozen_identities,
+            "accepted_payloads": payloads,
+            "exact_tokens_by_worker": exact_tokens,
+        }
+
+    def _accepted(self, result: Mapping[str, object]
+                  ) -> dict[str, Mapping[str, object]]:
+        return {
+            str(item["worker_id"]): item
+            for item in result["members"]  # type: ignore[index]
+            if item["contributed"]  # type: ignore[index]
+        }
+
+    def _route_ready(self, request: Mapping[str, object]) -> dict[str, object]:
+        generation, attempt = int(request["generation"]), int(request["attempt"])
+        state = self._step(
+            request, CoordinationEventKind.CLOSE_GENERATION,
+            generation=generation, attempt=attempt, flags=0)
+        if state["phase"] not in {"closed", "committed", "applied"}:
+            raise RuntimeError(
+                "route readiness cannot precede the frozen accepted set")
+        accepted = self._accepted(state)
+        worker_id, incarnation = (
+            str(request["worker_id"]), str(request["incarnation"]))
+        peer_worker_id, peer_incarnation = (
+            str(request["peer_worker_id"]),
+            str(request["peer_incarnation"]))
+        if worker_id == peer_worker_id:
+            raise ValueError("native route readiness requires a remote peer")
+        if (worker_id not in accepted or peer_worker_id not in accepted
+                or accepted[worker_id]["cohort_incarnation"] != incarnation
+                or accepted[peer_worker_id]["cohort_incarnation"]
+                != peer_incarnation):
+            raise ValueError(
+                "route readiness reporter is outside the frozen accepted set")
+        pair = tuple(sorted((worker_id, peer_worker_id)))
+        reports = self.route_readiness.setdefault(
+            (generation, attempt, pair), {})
+        report = (incarnation, peer_incarnation)
+        prior = reports.get(worker_id)
+        if prior is not None and prior != report:
+            raise ValueError("conflicting native route readiness replay")
+        reports[worker_id] = report
+        if set(reports) != set(pair):
+            return {
+                "status": "waiting", "workers": sorted(reports),
+                "required": list(pair),
+            }
+        left, right = pair
+        if (reports[left] != (
+                str(accepted[left]["cohort_incarnation"]),
+                str(accepted[right]["cohort_incarnation"]))
+                or reports[right] != (
+                    str(accepted[right]["cohort_incarnation"]),
+                    str(accepted[left]["cohort_incarnation"]))):
+            raise ValueError("native route readiness incarnation mismatch")
+        return {"status": "ready", "workers": list(pair)}
+
+    def _owner_result(self, request: Mapping[str, object]) -> dict[str, object]:
+        generation, attempt = int(request["generation"]), int(request["attempt"])
+        state = self._step(
+            request, CoordinationEventKind.CLOSE_GENERATION,
+            generation=generation, attempt=attempt, flags=0)
+        accepted = self._accepted(state)
+        worker_id, incarnation = (
+            str(request["worker_id"]), str(request["incarnation"]))
+        if (worker_id not in accepted
+                or accepted[worker_id]["cohort_incarnation"] != incarnation):
+            raise ValueError(
+                "owner result reporter is outside the frozen accepted set")
+        exact_tokens = sum(
+            int(item["exact_tokens"]) for item in accepted.values())
+        root = str(request["result_root"])
+        layout_digest = str(request["layout_digest"])
+        weight, result_bytes = (
+            int(request["global_weight"]), int(request["result_bytes"]))
+        if (len(root) != 64 or root == "00" * 32
+                or len(layout_digest) != 64
+                or layout_digest == "00" * 32
+                or weight != exact_tokens or result_bytes <= 0):
+            raise ValueError("owner result metadata is invalid")
+        values = self.owner_results.setdefault((generation, attempt), {})
+        record = {
+            "incarnation": incarnation, "result_root": root,
+            "layout_digest": layout_digest, "global_weight": weight,
+            "result_bytes": result_bytes,
+        }
+        prior = values.get(worker_id)
+        if prior is not None and prior != record:
+            raise ValueError("conflicting owner result replay")
+        values[worker_id] = record
+        if set(values) != set(accepted):
+            return {
+                "status": "waiting", "reported": len(values),
+                "required": len(accepted),
+            }
+        return {
+            "status": "ready", "global_weight": exact_tokens,
+            "roots": {
+                worker: str(values[worker]["result_root"])
+                for worker in sorted(values)
+            },
+            "owners": {
+                worker: {
+                    "result_root": str(values[worker]["result_root"]),
+                    "layout_digest": str(values[worker]["layout_digest"]),
+                    "result_bytes": int(values[worker]["result_bytes"]),
+                } for worker in sorted(values)
+            },
+        }
+
+    def _result_root(self, request: Mapping[str, object]) -> dict[str, object]:
+        generation, attempt = int(request["generation"]), int(request["attempt"])
+        worker_id, incarnation = (
+            str(request["worker_id"]), str(request["incarnation"]))
+        cached = self.accepted_payloads.get((generation, attempt, worker_id))
+        if cached is None:
+            raise ValueError(
+                "result root reporter is outside the frozen accepted set")
+        result = self._step(
+            request, CoordinationEventKind.RESULT_RECEIPT,
+            generation=generation, attempt=attempt,
+            node_id=worker_id, incarnation=incarnation,
+            sequence=int(cached["sequence"]),
+            exact_tokens=int(request["global_weight"]),
+            result_digest=str(request["result_root"]),
+        )
+        disposition = str(result["disposition"])
+        if disposition not in {"accepted", "identical-duplicate"}:
+            return {"status": disposition, "disposition": disposition}
+        if int(result["result_receipt_count"]) != int(
+                result["contribution_count"]):
+            return {
+                "status": "waiting",
+                "disposition": disposition,
+                "reported": result["result_receipt_count"],
+                "required": result["contribution_count"],
+            }
+        return {
+            "status": "validated", "disposition": disposition,
+            "result_root": str(request["result_root"]),
+            "global_weight": int(request["global_weight"]),
+            "result_bytes": int(request["result_bytes"]),
+            "workers": sorted(self._accepted(result)),
+        }
+
+    def _commit(self, request: Mapping[str, object]) -> dict[str, object]:
+        result_generation = int(request["result_generation"])
+        record = {
+            "result_generation": result_generation,
+            "source_generation": result_generation - 1,
+            "attempt": int(request["attempt"]),
+            "receipt_digest": str(request["receipt_digest"]),
+            "previous_receipt_digest":
+                str(request.get("previous_receipt_digest", "")),
+            "manifest_digest": str(request["manifest_digest"]),
+            "result_root": str(request["result_root"]),
+            "accepted_tokens": int(request["accepted_tokens"]),
+        }
+        result = self._step(
+            request, CoordinationEventKind.COMMIT,
+            generation=result_generation,
+            attempt=int(record["attempt"]),
+            exact_tokens=int(record["accepted_tokens"]),
+            receipt_digest=str(record["receipt_digest"]),
+            previous_receipt_digest=
+                str(record["previous_receipt_digest"]),
+            manifest_digest=str(record["manifest_digest"]),
+            result_digest=str(record["result_root"]),
+        )
+        disposition = str(result["disposition"])
+        if disposition in {"accepted", "identical-duplicate"}:
+            prior = self.commit_records.get(result_generation)
+            if prior is not None and prior != record:
+                raise RuntimeError(
+                    "native accepted commit cache conflicts with authority")
+            self.commit_records[result_generation] = record
+            # The compiled state retains only the one active generation.  Its
+            # effect-side Python caches mirror that fixed bound: once commit is
+            # authoritative, no prior payload, timer, or route record can be
+            # consulted by a legal next event.
+            self.commit_records = {
+                key: value for key, value in self.commit_records.items()
+                if key == result_generation
+            }
+            self.snapshots = {
+                key: value for key, value in self.snapshots.items()
+                if key[0] >= result_generation
+            }
+            self.opened = {
+                key: value for key, value in self.opened.items()
+                if key[0] >= result_generation
+            }
+            self.accepted_payloads = {
+                key: value for key, value in self.accepted_payloads.items()
+                if key[0] >= result_generation
+            }
+            self.owner_results = {
+                key: value for key, value in self.owner_results.items()
+                if key[0] >= result_generation
+            }
+            self.route_readiness = {
+                key: value for key, value in self.route_readiness.items()
+                if key[0] >= result_generation
+            }
+            return {
+                "status": "committed", "disposition": disposition, **record,
+            }
+        return {
+            "status": disposition, "disposition": disposition,
+            "result_generation": result_generation,
+            "current_generation": result["committed_generation"],
+        }
+
+    def _commit_state(self, request: Mapping[str, object]) -> dict[str, object]:
+        generation = int(request["result_generation"])
+        result = self._step(
+            request, CoordinationEventKind.QUERY_COMMIT,
+            generation=generation)
+        disposition = str(result["disposition"])
+        if (disposition == "accepted"
+                and generation == int(result["committed_generation"])):
+            record = self.commit_records.get(generation, {
+                "result_generation": generation,
+                "source_generation": generation - 1,
+                "attempt": int(result["active_attempt"]),
+                "receipt_digest": result["commit_receipt"],
+                "manifest_digest": result["commit_manifest"],
+                "result_root": result["committed_result"],
+                "accepted_tokens": result["accepted_token_clock"],
+            })
+            return {
+                "status": "committed", "disposition": disposition, **record,
+            }
+        if disposition == "deferred":
+            return {
+                "status": "pending", "disposition": disposition,
+                "result_generation": generation,
+                "current_generation": result["committed_generation"],
+            }
+        return {
+            "status": disposition, "disposition": disposition,
+            "result_generation": generation,
+            "current_generation": result["committed_generation"],
+        }
+
+    def _recover(self, request: Mapping[str, object]) -> dict[str, object]:
+        worker_id, incarnation = (
+            str(request.get("worker_id", "")),
+            str(request.get("incarnation", "")))
+        result = self._step(
+            request, CoordinationEventKind.RECOVER_PEER,
+            generation=int(request.get("known_generation", 0)),
+            node_id=worker_id, incarnation=incarnation,
+            sequence=int(request.get("incarnation_sequence", 0)),
+            receipt_digest=str(request.get("known_receipt_digest", "")),
+        )
+        disposition = str(result["disposition"])
+        if disposition not in {"accepted", "identical-duplicate"}:
+            return {
+                "status": disposition, "disposition": disposition,
+                "generation": result["committed_generation"],
+            }
+        member = self._member(result, worker_id)
+        requires_apply = bool(
+            int(result["committed_generation"]) > 0
+            and (member is None or not member["node_applied"]))
+        return {
+            "status": "recover",
+            "disposition": disposition,
+            "generation": result["committed_generation"],
+            "receipt_digest": result["commit_receipt"],
+            "manifest_digest": result["commit_manifest"],
+            "result_root": result["committed_result"],
+            "accepted_tokens": result["accepted_token_clock"],
+            "apply_receipts": [
+                {
+                    "worker_id": node_id,
+                    "incarnation": str(record["incarnation"]),
+                    "receipt_digest": str(record["receipt_digest"]),
+                }
+                for node_id, record in sorted(self.apply_receipts.items())
+            ],
+            "requires_node_apply": requires_apply,
+        }
+
+    def _node_apply(self, request: Mapping[str, object]) -> dict[str, object]:
+        worker_id, incarnation = (
+            str(request["worker_id"]), str(request["incarnation"]))
+        result = self._step(
+            request, CoordinationEventKind.NODE_APPLY,
+            generation=int(request["generation"]),
+            node_id=worker_id, incarnation=incarnation,
+            sequence=int(request.get("incarnation_sequence", 0)),
+            trainer_count=int(request["trainer_count"]),
+            receipt_digest=str(request["receipt_digest"]),
+            previous_receipt_digest=str(request["commit_receipt_digest"]),
+        )
+        disposition = str(result["disposition"])
+        if disposition in {"accepted", "identical-duplicate"}:
+            self.apply_receipts[worker_id] = {
+                "incarnation": incarnation,
+                "receipt_digest": str(request["receipt_digest"]),
+            }
+            return {
+                "status": "node_applied", "disposition": disposition,
+                "generation": int(request["generation"]),
+                "worker_id": worker_id, "incarnation": incarnation,
+                "receipt_digest": str(request["receipt_digest"]),
+            }
+        return {"status": disposition, "disposition": disposition}
+
+    def _expire(self, request: Mapping[str, object]) -> dict[str, object]:
+        worker_id, incarnation = (
+            str(request["worker_id"]), str(request["incarnation"]))
+        result = self._step(
+            request, CoordinationEventKind.EXPIRE_PEER,
+            generation=int(request.get(
+                "generation", self.config.committed_generation)),
+            node_id=worker_id, incarnation=incarnation,
+            sequence=int(request.get("incarnation_sequence", 0)),
+        )
+        if result["disposition"] in {
+            "accepted", "identical-duplicate",
+        }:
+            identity = (worker_id, incarnation)
+            self.endpoints.pop(identity, None)
+            self.endpoint_leases.pop(identity, None)
+            self.endpoint_sequences.pop(identity, None)
+        return {
+            "status": (
+                "DRAINING" if result["disposition"] in {
+                    "accepted", "identical-duplicate",
+                } else result["disposition"]),
+            "disposition": result["disposition"],
+            "worker_id": worker_id,
+        }
+
+    def _owner_lost(self, request: Mapping[str, object]) -> dict[str, object]:
+        """Feed one transport/supervisor loss observation into authority."""
+        result = self._step(
+            request, CoordinationEventKind.OWNER_LOST,
+            generation=int(request["generation"]),
+            attempt=int(request["attempt"]),
+            node_id=str(request["worker_id"]),
+            incarnation=str(request["incarnation"]),
+            sequence=int(request.get("incarnation_sequence", 0)),
+        )
+        return {
+            "status": result["disposition"],
+            "disposition": result["disposition"],
+            "generation": int(request["generation"]),
+            "owner_epoch": result["owner_epoch"],
+            "owner_reassignments": result["owner_reassignments"],
+            "effects": result["effects"],
+        }
+
+    def server_close(self) -> None:
+        try:
+            super().server_close()
+        finally:
+            self.authority.close()
+
+
 class PoolControlClient:
     def __init__(self, address: tuple[str, int], *, timeout_s: float):
         self.address, self.timeout_s = address, float(timeout_s)
@@ -934,7 +1727,8 @@ class PoolControlClient:
     def ready(self, endpoint: OwnerEndpoint, generation: int, *,
               run_id: str | None = None,
               fence: int | None = None,
-              apply_receipt_digest: str = "") -> dict[str, object]:
+              apply_receipt_digest: str = "",
+              incarnation_sequence: int = 1) -> dict[str, object]:
         if run_id is not None:
             self.run_id = run_id
         elif self.run_id is None:
@@ -945,17 +1739,20 @@ class PoolControlClient:
             raise ValueError("pool control client must bind the allocation fence")
         return self._rpc(
             "ready", **asdict(endpoint), generation=generation,
-            apply_receipt_digest=apply_receipt_digest)
+            apply_receipt_digest=apply_receipt_digest,
+            incarnation_sequence=incarnation_sequence)
 
     def recover(self, *, worker_id: str, incarnation: str,
                 known_generation: int,
-                known_receipt_digest: str) -> dict[str, object]:
+                known_receipt_digest: str,
+                incarnation_sequence: int = 1) -> dict[str, object]:
         return self._rpc(
             "recover",
             worker_id=worker_id,
             incarnation=incarnation,
             known_generation=known_generation,
             known_receipt_digest=known_receipt_digest,
+            incarnation_sequence=incarnation_sequence,
         )
 
     def commit_authority(
@@ -997,7 +1794,8 @@ class PoolControlClient:
     def node_applied(
             self, *, generation: int, worker_id: str, incarnation: str,
             receipt_digest: str, commit_receipt_digest: str,
-            trainer_count: int = 8) -> dict[str, object]:
+            trainer_count: int = 8,
+            incarnation_sequence: int = 1) -> dict[str, object]:
         return self._rpc(
             "node_apply",
             generation=generation,
@@ -1006,6 +1804,7 @@ class PoolControlClient:
             receipt_digest=receipt_digest,
             commit_receipt_digest=commit_receipt_digest,
             trainer_count=trainer_count,
+            incarnation_sequence=incarnation_sequence,
         )
 
     def open_generation(self, generation: int, attempt: int, *,
@@ -1013,7 +1812,14 @@ class PoolControlClient:
         last: BaseException | None = None
         while time.monotonic() < deadline:
             try:
-                return self._rpc("open", generation=generation, attempt=attempt)
+                result = self._rpc(
+                    "open", generation=generation, attempt=attempt)
+                if result.get("status") in {
+                    "deferred", "insufficient-cohort",
+                }:
+                    time.sleep(.01)
+                    continue
+                return result
             except RuntimeError as error:
                 last = error
                 if "READY floor" not in str(error):
@@ -1062,8 +1868,22 @@ class PoolControlClient:
             time.sleep(.01)
         raise TimeoutError(f"native peer route-readiness deadline expired: {last}")
 
-    def drain(self, worker_id: str, incarnation: str) -> dict[str, object]:
-        return self._rpc("expire", worker_id=worker_id, incarnation=incarnation)
+    def drain(self, worker_id: str, incarnation: str, *,
+              generation: int = 0,
+              incarnation_sequence: int = 1) -> dict[str, object]:
+        return self._rpc(
+            "expire", worker_id=worker_id, incarnation=incarnation,
+            generation=generation,
+            incarnation_sequence=incarnation_sequence)
+
+    def owner_lost(self, *, generation: int, attempt: int,
+                   worker_id: str, incarnation: str,
+                   incarnation_sequence: int = 1) -> dict[str, object]:
+        """Report transport/process loss and receive explicit kernel effects."""
+        return self._rpc(
+            "owner_lost", generation=generation, attempt=attempt,
+            worker_id=worker_id, incarnation=incarnation,
+            incarnation_sequence=incarnation_sequence)
 
     def validate_result_root(self, *, generation: int, attempt: int,
                              worker_id: str, incarnation: str, result_root: str,

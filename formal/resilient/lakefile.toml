@@ -1,0 +1,30 @@
+name = "resilient-protocol"
+version = "1.0.0"
+defaultTargets = ["ResilientProtocol", "resilient-trace", "resilient-examples", "resilient-conformance", "resilient-conformance-corpus"]
+testDriver = "resilientTests"
+
+[leanOptions]
+relaxedAutoImplicit = false
+
+[[lean_lib]]
+name = "ResilientProtocol"
+
+[[lean_exe]]
+name = "resilient-trace"
+root = "TraceMain"
+
+[[lean_exe]]
+name = "resilient-examples"
+root = "ExamplesMain"
+
+[[lean_exe]]
+name = "resilient-conformance"
+root = "ConformanceMain"
+
+[[lean_exe]]
+name = "resilient-conformance-corpus"
+root = "ConformanceCorpusMain"
+
+[[lean_exe]]
+name = "resilientTests"
+root = "TestsMain"

@@ -342,22 +342,26 @@ next rung.
 
 The production elastic dense path is bound to
 [`NATIVE_RESILIENT_DILOCO_DATAPLANE.md`](NATIVE_RESILIENT_DILOCO_DATAPLANE.md),
-version 1 (requirements NDP01–NDP17). The model-free native peer-control
-protocol owns the allocation fence/incarnations, READY membership, generation
-admission/closure/commit state, and recovery handshakes. Python remains
-responsible for scheduler adaptation, outer/checkpoint policy and publication,
-and Slurm supervision. A persistent model-free C++17 service on every node owns local
-XPMEM/memfd handoff, exact native reduction, libfabric `FI_EP_RDM`/Frontier
-`cxi` payload movement, bounded replay, and redistribution. Python TCP and
-Python object serialization MUST NOT carry production dense contributions or
-aggregates.
+version 1 (requirements NDP01–NDP17). One pure deterministic transition kernel
+in the persistent model-free native service owns the allocation
+fence/incarnations, READY membership, generation admission/closure/commit/apply
+state, and recovery handshakes. Python remains responsible for scheduler
+adaptation, authenticated endpoint exchange, clocks/timers, outer/checkpoint
+policy and publication, explicit effect execution, and Slurm supervision. A
+persistent model-free C++17 service on every node also owns local XPMEM/memfd
+handoff, exact native reduction, libfabric `FI_EP_RDM`/Frontier `cxi` payload
+movement, bounded replay, and redistribution. Python TCP and Python object
+serialization MUST NOT carry production dense contributions or aggregates.
 
-The native service is not a second committer and cannot infer membership or
-closure from transport reachability. Python freezes only locally complete,
-checksummed, retained contributions; native owners execute that immutable set.
-All fabric operations are bounded point-to-point operations. The elastic
-backend MUST NOT initialize MPI or require an all-rank collective, including
-during endpoint exchange, failure handling, redistribution, or shutdown.
+The native service is the sole peer-coordination committer, but it cannot
+infer membership, closure, expiry, or recovery from transport reachability.
+Those external observations re-enter only as fenced typed events; the kernel
+returns typed dispositions and explicit effects. Python supplies only locally
+complete, checksummed, retained contribution metadata; native owners execute
+the resulting immutable frozen set. All fabric operations are bounded
+point-to-point operations. The elastic backend MUST NOT initialize MPI or
+require an all-rank collective, including during endpoint exchange, failure
+handling, redistribution, or shutdown.
 
 The compiled Cray-MPICH helper remains a numerical/performance reference and an
 explicit fixed-world fallback. Its launched-rank collectives do not satisfy the

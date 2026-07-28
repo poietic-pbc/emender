@@ -6,9 +6,10 @@ packs per-shard scalars, or carries dense bytes over a socket.  The native
 library validates, reduces, projects, and owns every retained dense buffer.
 
 This module implements the local half of R04/R05/R08-R10/R14/R15 and
-NDP01/NDP04-NDP06/NDP08-NDP10/NDP12/NDP14-NDP16.  Lease acquisition,
-membership, generation closure, and durable commit policy remain Python
-control-plane responsibilities outside this bridge.
+NDP01/NDP04-NDP06/NDP08-NDP10/NDP12/NDP14-NDP16.  The production service also
+owns the pure peer-coordination transition kernel.  Python supplies typed
+events and executes returned effects; it does not make membership, closure,
+commit, apply, or recovery-authority decisions.
 """
 
 from __future__ import annotations
@@ -117,6 +118,63 @@ class EventKind(IntEnum):
     COMMITTED = 7
     ABORTED = 8
     DRAINED = 9
+
+
+class CoordinationEventKind(IntEnum):
+    RECOVER_AUTHORITY = 1
+    RECOVER_NODE_APPLY = 2
+    RECOVER_PEER = 3
+    READY = 4
+    OPEN_GENERATION = 5
+    CONTRIBUTION = 6
+    CLOSE_GENERATION = 7
+    RESULT_RECEIPT = 8
+    COMMIT = 9
+    NODE_APPLY = 10
+    EXPIRE_PEER = 11
+    OWNER_LOST = 12
+    QUERY_COMMIT = 13
+
+
+class CoordinationDisposition(IntEnum):
+    ACCEPTED = 1
+    IDENTICAL_DUPLICATE = 2
+    CONFLICTING_DUPLICATE = 3
+    STALE_FENCE = 4
+    STALE_INCARNATION = 5
+    STALE_GENERATION = 6
+    GENERATION_CLOSED = 7
+    DEFERRED = 8
+    RETRY_NEXT_GENERATION = 9
+    INSUFFICIENT_COHORT = 10
+    CORRUPT = 11
+    INVALID_EVENT = 12
+    FATAL_INVARIANT = 13
+
+
+class CoordinationEffectKind(IntEnum):
+    BIND_FENCE = 1
+    SYNC_AUTHORITY = 2
+    ADVERTISE_READY = 3
+    START_GENERATION = 4
+    ACK_RECEIPT = 5
+    FREEZE_COHORT = 6
+    REASSIGN_OWNER = 7
+    COMMIT_ELIGIBLE = 8
+    PUBLISH_COMMIT = 9
+    RECORD_NODE_APPLY = 10
+    EXPIRE_PEER = 11
+    RETRY_NEXT_GENERATION = 12
+    EMIT_TRACE = 13
+
+
+class CoordinationPhase(IntEnum):
+    NONE = 0
+    OPEN = 1
+    CLOSED = 2
+    ABORTED = 3
+    COMMITTED = 4
+    APPLIED = 5
 
 
 class NativeDataplaneError(RuntimeError):
@@ -311,11 +369,79 @@ class MetricsV1(ctypes.Structure):
     ]
 
 
+class CoordinationEventV1(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32), ("abi_version", ctypes.c_uint32),
+        ("kind", ctypes.c_uint32), ("flags", ctypes.c_uint32),
+        ("run_key", ctypes.c_uint8 * 16),
+        ("fence_epoch", ctypes.c_uint64), ("generation", ctypes.c_uint64),
+        ("attempt", ctypes.c_uint32), ("trainer_count", ctypes.c_uint32),
+        ("node_key", ctypes.c_uint8 * 16), ("incarnation", ctypes.c_uint8 * 16),
+        ("sequence", ctypes.c_uint64), ("exact_tokens", ctypes.c_uint64),
+        ("minimum_nodes", ctypes.c_uint32), ("reserved0", ctypes.c_uint32),
+        ("minimum_tokens", ctypes.c_uint64),
+        ("policy_digest", ctypes.c_uint8 * 32),
+        ("payload_digest", ctypes.c_uint8 * 32),
+        ("result_digest", ctypes.c_uint8 * 32),
+        ("receipt_digest", ctypes.c_uint8 * 32),
+        ("previous_receipt_digest", ctypes.c_uint8 * 32),
+        ("manifest_digest", ctypes.c_uint8 * 32),
+    ]
+
+
+class CoordinationEffectV1(ctypes.Structure):
+    _fields_ = [
+        ("kind", ctypes.c_uint32), ("reserved0", ctypes.c_uint32),
+        ("generation", ctypes.c_uint64),
+        ("node_key", ctypes.c_uint8 * 16), ("digest", ctypes.c_uint8 * 32),
+    ]
+
+
+class CoordinationMemberV1(ctypes.Structure):
+    _fields_ = [
+        ("node_key", ctypes.c_uint8 * 16),
+        ("current_incarnation", ctypes.c_uint8 * 16),
+        ("cohort_incarnation", ctypes.c_uint8 * 16),
+        ("control_sequence", ctypes.c_uint64), ("exact_tokens", ctypes.c_uint64),
+        ("flags", ctypes.c_uint32), ("reserved0", ctypes.c_uint32),
+        ("payload_digest", ctypes.c_uint8 * 32),
+        ("result_digest", ctypes.c_uint8 * 32),
+        ("contribution_receipt", ctypes.c_uint8 * 32),
+        ("apply_receipt", ctypes.c_uint8 * 32),
+    ]
+
+
+class CoordinationResultV1(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32), ("abi_version", ctypes.c_uint32),
+        ("disposition", ctypes.c_uint32), ("phase", ctypes.c_uint32),
+        ("effect_count", ctypes.c_uint32), ("member_count", ctypes.c_uint32),
+        ("live_count", ctypes.c_uint32), ("ready_count", ctypes.c_uint32),
+        ("cohort_count", ctypes.c_uint32), ("contribution_count", ctypes.c_uint32),
+        ("result_receipt_count", ctypes.c_uint32), ("reserved0", ctypes.c_uint32),
+        ("run_key", ctypes.c_uint8 * 16),
+        ("fence_epoch", ctypes.c_uint64),
+        ("committed_generation", ctypes.c_uint64),
+        ("accepted_token_clock", ctypes.c_uint64),
+        ("active_generation", ctypes.c_uint64), ("owner_epoch", ctypes.c_uint64),
+        ("active_attempt", ctypes.c_uint32), ("owner_reassignments", ctypes.c_uint32),
+        ("policy_digest", ctypes.c_uint8 * 32),
+        ("commit_receipt", ctypes.c_uint8 * 32),
+        ("commit_manifest", ctypes.c_uint8 * 32),
+        ("committed_result", ctypes.c_uint8 * 32),
+        ("pre_state_digest", ctypes.c_uint8 * 32),
+        ("post_state_digest", ctypes.c_uint8 * 32),
+        ("effects", CoordinationEffectV1 * 8),
+        ("members", CoordinationMemberV1 * 256),
+    ]
+
+
 _EXPECTED_SIZES = {
     OpenV1: 224, LayoutV1: 56, BufferV1: 88, AllocV1: 32,
     SubmitV1: 128, SubmitV21: 528, ControlV1: 216,
     EventV1: 96, ResultV1: 168,
-    MetricsV1: 184,
+    MetricsV1: 184, CoordinationEventV1: 312, CoordinationEffectV1: 64,
+    CoordinationMemberV1: 200, CoordinationResultV1: 52016,
 }
 for _structure, _expected in _EXPECTED_SIZES.items():
     if ctypes.sizeof(_structure) != _expected:  # pragma: no cover - platform gate
@@ -552,6 +678,12 @@ class NativeLibrary:
         lib.ndp_op_release_v1.restype = ctypes.c_int
         lib.ndp_client_metrics_v1.argtypes = [ctypes.c_uint64, ctypes.POINTER(MetricsV1)]
         lib.ndp_client_metrics_v1.restype = ctypes.c_int
+        lib.ndp_coord_step_v1.argtypes = [
+            ctypes.c_uint64, ctypes.POINTER(CoordinationEventV1),
+            ctypes.POINTER(CoordinationResultV1), ctypes.POINTER(ctypes.c_char),
+            ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32),
+        ]
+        lib.ndp_coord_step_v1.restype = ctypes.c_int
         if lib.ndp_abi_version() != ABI_V1:
             raise RuntimeError(f"native data-plane ABI mismatch in {selected}")
         if lib.ndp_abi_version_v21() != ABI_V21:
@@ -1130,6 +1262,30 @@ class Client:
             int(item.owner_epoch), int(item.logical_bytes), bytes(item.detail_digest),
         ) for item in storage[:count.value])
 
+    def coordination_step(
+        self, event: CoordinationEventV1
+    ) -> tuple[CoordinationResultV1, str]:
+        """Apply one typed event to this controller's native authority.
+
+        The service serializes all calls for the fenced authority.  The
+        returned JSON line is produced by the same pure transition that
+        produced ``result`` and is therefore suitable for deterministic replay.
+        """
+        if self.role is not Role.CONTROLLER:
+            raise RuntimeError("only a controller may own coordination authority")
+        if self.closed:
+            raise RuntimeError("native client is closed")
+        if not isinstance(event, CoordinationEventV1):
+            raise TypeError("coordination event must be CoordinationEventV1")
+        trace = ctypes.create_string_buffer(4096)
+        trace_bytes = ctypes.c_uint32()
+        result = _versioned(CoordinationResultV1())
+        self.native.check(self.native.library.ndp_coord_step_v1(
+            self.handle, ctypes.byref(event), ctypes.byref(result), trace,
+            ctypes.sizeof(trace), ctypes.byref(trace_bytes)),
+            "ndp_coord_step_v1")
+        return result, bytes(trace[:trace_bytes.value]).decode("utf-8")
+
     @property
     def metrics(self) -> Metrics:
         wire = _versioned(MetricsV1())
@@ -1165,8 +1321,10 @@ class Client:
 
 __all__ = [
     "ABI_V1", "BoundsError", "Buffer", "ChecksumError", "Client", "Command",
-    "ConflictError", "DType", "Event", "EventKind", "Metrics", "NativeDataplaneError",
-    "NativeLibrary", "NonfiniteError", "Operation", "ResultCode", "ResultView",
-    "Role", "StaleFenceError", "State", "copy_fd_range", "create_memfd",
-    "encode_flat_layout", "seal_memfd",
+    "ConflictError", "CoordinationDisposition", "CoordinationEffectKind",
+    "CoordinationEventKind", "CoordinationEventV1", "CoordinationMemberV1",
+    "CoordinationPhase", "CoordinationResultV1", "DType", "Event", "EventKind",
+    "Metrics", "NativeDataplaneError", "NativeLibrary", "NonfiniteError",
+    "Operation", "ResultCode", "ResultView", "Role", "StaleFenceError", "State",
+    "copy_fd_range", "create_memfd", "encode_flat_layout", "seal_memfd",
 ]

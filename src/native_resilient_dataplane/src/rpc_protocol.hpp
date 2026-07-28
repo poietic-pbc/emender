@@ -40,6 +40,7 @@ enum class Opcode : std::uint16_t {
     ResultView = 12,
     OpRelease = 13,
     Metrics = 14,
+    CoordinationStep = 15,
 };
 
 struct Header {
@@ -173,7 +174,8 @@ inline bool decode_header(const std::uint8_t* bytes, std::size_t size,
     if (take_u16(cursor) != kMajor || take_u16(cursor) > kMinor) return false;
     const std::uint16_t opcode = take_u16(cursor);
     if (opcode < static_cast<std::uint16_t>(Opcode::Open)
-        || opcode > static_cast<std::uint16_t>(Opcode::Metrics)) return false;
+        || opcode > static_cast<std::uint16_t>(Opcode::CoordinationStep))
+        return false;
     output.opcode = static_cast<Opcode>(opcode);
     output.flags = take_u16(cursor);
     if ((output.flags & ~kResponse) != 0) return false;
