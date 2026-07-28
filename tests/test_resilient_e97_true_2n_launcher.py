@@ -302,6 +302,7 @@ def test_launcher_omits_empty_resume_argument(tmp_path):
         "RESILIENT_E97_TIKTOKEN_SHA256": hashlib.sha256(tokenizer_cache.read_bytes()).hexdigest(),
         "NDP_BUILD_MANIFEST": str(native_manifest),
         "NDP_FULL_LAYOUT_GATE_JSON": str(tmp_path / "full-layout-gate.json"),
+        "NDP_REQUIRED_GATE": "G2",
         **_canonical_seed_env(seed_config, seed, "pytest-empty-resume"),
     }
     result = subprocess.run(
@@ -333,6 +334,8 @@ def test_full_layout_launcher_requires_native_cxi_and_exact_artifact_gate_before
     assert "--production --full-layout" in text
     assert "NDP_BUILD_MANIFEST" in text
     assert "NDP_FULL_LAYOUT_GATE_JSON" in text
+    assert ': "${NDP_REQUIRED_GATE:?set exact native G2 gate kind}"' in text
+    assert '--required-gate "$NDP_REQUIRED_GATE"' in text
     assert attestation < roles
     assert "python-tcp-debug" not in text
 
@@ -460,6 +463,7 @@ def test_startup_smoke_accepts_explicit_walltime_when_slurm_omits_environment(tm
         "RESILIENT_E97_TIKTOKEN_SHA256": hashlib.sha256(tokenizer_cache.read_bytes()).hexdigest(),
         "NDP_BUILD_MANIFEST": str(native_manifest),
         "NDP_FULL_LAYOUT_GATE_JSON": str(tmp_path / "full-layout-gate.json"),
+        "NDP_REQUIRED_GATE": "G2",
         **_canonical_seed_env(seed_config, seed, "pytest-startup-smoke"),
     }
     subprocess.run(["bash", str(ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch")],

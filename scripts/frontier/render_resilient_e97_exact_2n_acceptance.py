@@ -442,6 +442,7 @@ def advance(plan: dict[str, Any], output: Path, state_path: Path, repo: Path) ->
         "RESILIENT_E97_ACCEPTANCE_PHASE": phase["name"], "RUN_DIR": str(run_dir),
         "NDP_BUILD_MANIFEST": plan["authoritative_stage"]["build_manifest"],
         "NDP_FULL_LAYOUT_GATE_JSON": phase["full_layout_gate"],
+        "NDP_REQUIRED_GATE": "G2",
         "EMENDER_CONDA_ENV": APPROVED_ENV,
         "DILOCO_DATAPLANE": "native-cxi", "FI_PROVIDER": "cxi",
         "RESILIENT_E97_RUN_ID": f"exact-2n-{phase['name']}-{plan['source_commit'][:12]}",
