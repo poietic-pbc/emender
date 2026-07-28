@@ -472,16 +472,41 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
     def _contribute(self, request: Mapping[str, object], payload: bytes) -> dict[str, object]:
         generation, attempt = int(request["generation"]), int(request["attempt"])
         # Generation admissions are deliberately volatile.  After peer-control
-        # reconstruction, a still-live cohort may replay work for the
-        # generation immediately preceding the authoritative commit even
-        # though this server no longer has that generation's admission object.
-        # This is a fenced catch-up outcome, not a manager failure: returning
-        # only immutable commit authority makes the replay idempotent without
-        # recreating accumulators, membership, or apply state.
-        if (
-            generation < self.committed_generation
-            and (generation, attempt) not in self.admissions
-        ):
+        # reconstruction, a still-live cohort may hold either the generation
+        # immediately preceding authoritative commit or a current-generation
+        # snapshot opened by the lost control incarnation.  Older work catches
+        # up from immutable authority.  Equal-generation work first rejoins
+        # rebuilt READY membership and then retries under a newly opened
+        # admission; its already sealed local bytes remain immutable.  Neither
+        # response recreates an accumulator or mutates membership/apply state.
+        if (generation, attempt) not in self.admissions and (
+                generation <= self.committed_generation):
+            if (
+                generation == self.committed_generation
+                and not any(
+                    open_generation == generation
+                    for open_generation, _ in self.admissions
+                )
+            ):
+                return {
+                    "status": "rejoin",
+                    "generation": generation,
+                    "attempt": attempt,
+                    "authoritative_generation": self.committed_generation,
+                    "receipt_digest": self.committed_receipt_digest,
+                    "manifest_digest": self.committed_manifest_digest,
+                    "result_root": self.committed_result_root,
+                    "accepted_tokens": self.committed_accepted_tokens,
+                    "apply_receipts": [
+                        {"worker_id": node_id, "receipt_digest": digest}
+                        for node_id, digest in sorted(
+                            self.recovered_apply_receipts.items())
+                    ],
+                    "requires_rejoin": True,
+                    "requires_reload": False,
+                }
+            if generation == self.committed_generation:
+                return {"status": "rejected_stale_fence"}
             return {
                 "status": "catch_up",
                 "generation": generation,
@@ -603,6 +628,10 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
         self.committed_result_root = str(record["result_root"])
         self.committed_accepted_tokens = int(record["accepted_tokens"])
         self.commit_history[result_generation] = record
+        # The configured receipts describe only the allocation's restored base
+        # commit.  Once this live authority advances, recovery must expose
+        # receipts for the new commit rather than silently retaining that base.
+        self.recovered_apply_receipts.clear()
         self.apply_required_generation = result_generation
         return {"status": "committed", **record}
 
@@ -630,16 +659,6 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
         incarnation = str(request.get("incarnation", ""))
         if not worker_id or not incarnation:
             raise ValueError("recovery handshake requires a peer incarnation")
-        current = self.membership.records.get(worker_id)
-        if (
-            incarnation in self.seen_incarnations.get(worker_id, set())
-            and (current is None or current.incarnation != incarnation)
-        ):
-            raise ValueError("stale incarnation recovery handshake rejected")
-        pending = self.pending_recoveries.get(worker_id)
-        if pending is not None and pending != incarnation:
-            raise ValueError("conflicting recovery incarnation rejected")
-        self.pending_recoveries[worker_id] = incarnation
         known_generation = int(
             request.get("known_generation", self.committed_generation))
         known_receipt = str(
@@ -650,6 +669,22 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
         ):
             raise ValueError(
                 "peer recovery state differs from commit authority")
+        current = self.membership.records.get(worker_id)
+        if (
+            incarnation in self.seen_incarnations.get(worker_id, set())
+            and (current is None or current.incarnation != incarnation)
+        ):
+            raise ValueError("stale incarnation recovery handshake rejected")
+        pending = self.pending_recoveries.get(worker_id)
+        if pending is not None and pending != incarnation:
+            # A recovery incarnation has no authority before READY.  If its
+            # local manager dies during the bounded handshake, the supervisor
+            # must be able to advance to one replacement without leaving the
+            # stable worker permanently fenced.  Superseding the pending token
+            # makes every later command from it stale; it never entered READY,
+            # an accepted set, an apply transaction, or a commit.
+            self.seen_incarnations.setdefault(worker_id, set()).add(pending)
+        self.pending_recoveries[worker_id] = incarnation
         return {
             "status": "recover",
             "generation": self.committed_generation,
@@ -698,6 +733,30 @@ class PoolControlServer(socketserver.ThreadingTCPServer):
         if prior is not None and prior != record:
             raise ValueError("conflicting atomic node-apply peer receipt")
         self.node_applies[key] = record
+        self.recovered_apply_receipts[worker_id] = receipt_digest
+        commit = self.commit_history.get(generation)
+        admission = (
+            None
+            if commit is None
+            else self.admissions.get(
+                (int(commit["source_generation"]), int(commit["attempt"])))
+        )
+        if (
+            admission is not None
+            and admission.close_result is not None
+            and admission.close_result.status == "commit_ready"
+        ):
+            required_workers = {
+                item.worker_id
+                for item in admission.close_result.frozen_identities
+            }
+            applied_workers = {
+                item_worker
+                for item_generation, item_worker in self.node_applies
+                if item_generation == generation
+            }
+            if required_workers and required_workers <= applied_workers:
+                self.apply_required_generation = None
         return {
             "status": "node_applied",
             "generation": generation,
