@@ -1,0 +1,5 @@
+# Minimized causal mutation witness: a stale fence must be non-mutating.
+schema|emender-native-coordination-schedule-v1
+name|known-bad-stale-fence
+expected|mutant:stale-noninterference
+fixture|known-bad-stale-fence-v1
