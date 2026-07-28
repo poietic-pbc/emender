@@ -133,6 +133,13 @@ does **not** claim that fixed-width nonlinear delta memories exceed NC1. The
 formal boundary is checked in CI and rejects `sorry`, `admit`, explicit
 `axiom`, `opaque`, and `native_decide` in the trusted import closure.
 
+The independent Std-only resilient coordination workspace lives in
+`formal/resilient`. It pins its own exact Lean/Lake toolchain and dependency
+lock, implements the pure resilient DiLoCo transition oracle, and replays the
+shared canonical JSON trace without requiring Python, Slurm, a GPU, model
+bytes, or a network peer. Its scope and native/runtime boundary are documented
+in `formal/resilient/README.md`.
+
 ## Repository Layout
 
 - `ndm/`: model code, Emender/E88 Triton kernels, and comparison baselines.
@@ -142,6 +149,8 @@ formal boundary is checked in CI and rejects `sorry`, `admit`, explicit
 - `scripts/`: checkpoint evaluation, sampling, dataset-stream preparation, and
   knowledge/reasoning probe builders.
 - `formal/lean/`: trusted Lean proof surface.
+- `formal/resilient/`: pure resilient DiLoCo coordination kernel and trace
+  oracle.
 - `docs/`: architecture, stability, systems, distributed training, and M2RNN
   comparison notes.
 - `paper/`: working paper design and result notes.
@@ -168,6 +177,13 @@ Lean trusted-core check:
 cd formal/lean
 scripts/check_paper_core.sh
 scripts/check_trusted_no_placeholders.sh ElmanProofs.lean
+```
+
+Lean resilient-coordination smoke:
+
+```bash
+cd formal/resilient
+scripts/smoke.sh
 ```
 
 The public CI runs the CPU Python and Lean trusted-core checks. The Triton test

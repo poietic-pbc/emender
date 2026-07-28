@@ -1,0 +1,1685 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://spinozans.org/emender/schemas/emender-resilient-coordination-trace-v1.json",
+  "title": "Emender resilient DiLoCo pure coordination trace v1",
+  "description": "Canonical complete trace consumed and emitted by the Lean pure coordination oracle and the production differential adapter. Dense bytes and physical runtime effects are forbidden.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "schemaDigest",
+    "policyName",
+    "policySchema",
+    "policyDigest",
+    "toolchain",
+    "sourceSchema",
+    "sourceDigest",
+    "initialState",
+    "steps"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "emender-resilient-coordination-trace-v1"
+    },
+    "schemaDigest": {
+      "$ref": "#/$defs/digest"
+    },
+    "policyName": {
+      "enum": [
+        "resilient-diloco-strict-v1",
+        "async-decoupled-v2.1-simple"
+      ]
+    },
+    "policySchema": {
+      "enum": [
+        "emender-resilient-policy-v1",
+        "emender-async-policy-v2.1"
+      ]
+    },
+    "policyDigest": {
+      "$ref": "#/$defs/digest"
+    },
+    "toolchain": {
+      "const": "leanprover/lean4:v4.26.0@d8204c9fd894f91bbb2cdfec5912ec8196fd8562"
+    },
+    "sourceSchema": {
+      "const": "emender-async-v21-execution-source-v1"
+    },
+    "sourceDigest": {
+      "$ref": "#/$defs/digest"
+    },
+    "initialState": {
+      "$ref": "#/$defs/initialState"
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/traceStep"
+      }
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "opaque": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[!-~]+$"
+        }
+      }
+    },
+    "natIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "nullableOpaque": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/opaque"
+        }
+      ]
+    },
+    "nullableDigest": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/digest"
+        }
+      ]
+    },
+    "authorityIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run",
+        "allocation",
+        "fence",
+        "policyName",
+        "policySchema",
+        "policyDigest",
+        "traceSchema",
+        "traceSchemaDigest",
+        "toolchain",
+        "sourceSchema",
+        "sourceDigest",
+        "layoutDigest",
+        "codeDigest"
+      ],
+      "properties": {
+        "run": {
+          "$ref": "#/$defs/opaque"
+        },
+        "allocation": {
+          "$ref": "#/$defs/opaque"
+        },
+        "fence": {
+          "$ref": "#/$defs/natIdentity"
+        },
+        "policyName": {
+          "type": "string"
+        },
+        "policySchema": {
+          "type": "string"
+        },
+        "policyDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "traceSchema": {
+          "const": "emender-resilient-coordination-trace-v1"
+        },
+        "traceSchemaDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "toolchain": {
+          "const": "leanprover/lean4:v4.26.0@d8204c9fd894f91bbb2cdfec5912ec8196fd8562"
+        },
+        "sourceSchema": {
+          "const": "emender-async-v21-execution-source-v1"
+        },
+        "sourceDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "layoutDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "codeDigest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name",
+        "schema",
+        "digest",
+        "qMin",
+        "tMin",
+        "maxCommitLag",
+        "maxAnchorLag",
+        "maxResultLag",
+        "maxSpeculativeLag",
+        "maxOwnerReassignments",
+        "attemptRetries",
+        "kSteps",
+        "closureMode",
+        "closureEvidence"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "strictV1",
+            "asyncV21"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "schema": {
+          "type": "string"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "qMin": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "tMin": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxCommitLag": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxAnchorLag": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxResultLag": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxSpeculativeLag": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxOwnerReassignments": {
+          "const": 2
+        },
+        "attemptRetries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "kSteps": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "closureMode": {
+          "enum": [
+            "floorOrDeadline",
+            "fixedSnapshotDeadline"
+          ]
+        },
+        "closureEvidence": {
+          "$ref": "#/$defs/opaque"
+        }
+      }
+    },
+    "initialState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority",
+        "policy",
+        "baseGeneration",
+        "baseDigest",
+        "baseReceipt",
+        "baseReceiptDigest",
+        "acceptedTokenClock",
+        "lastResult"
+      ],
+      "properties": {
+        "authority": {
+          "$ref": "#/$defs/authorityIdentity"
+        },
+        "policy": {
+          "$ref": "#/$defs/policy"
+        },
+        "baseGeneration": {
+          "$ref": "#/$defs/natIdentity"
+        },
+        "baseDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "baseReceipt": {
+          "$ref": "#/$defs/opaque"
+        },
+        "baseReceiptDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "acceptedTokenClock": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lastResult": {
+          "$ref": "#/$defs/nullableOpaque"
+        }
+      }
+    },
+    "eventContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run",
+        "allocation",
+        "fence",
+        "policyName",
+        "policySchema",
+        "policyDigest",
+        "traceSchema",
+        "traceSchemaDigest",
+        "toolchain",
+        "sourceSchema",
+        "sourceDigest",
+        "layoutDigest",
+        "codeDigest",
+        "generation",
+        "attempt",
+        "ownerEpoch"
+      ],
+      "properties": {
+        "run": {
+          "$ref": "#/$defs/opaque"
+        },
+        "allocation": {
+          "$ref": "#/$defs/opaque"
+        },
+        "fence": {
+          "$ref": "#/$defs/natIdentity"
+        },
+        "policyName": {
+          "type": "string"
+        },
+        "policySchema": {
+          "type": "string"
+        },
+        "policyDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "traceSchema": {
+          "type": "string"
+        },
+        "traceSchemaDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "toolchain": {
+          "type": "string"
+        },
+        "sourceSchema": {
+          "type": "string"
+        },
+        "sourceDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "layoutDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "codeDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "generation": {
+          "$ref": "#/$defs/natIdentity"
+        },
+        "attempt": {
+          "$ref": "#/$defs/natIdentity"
+        },
+        "ownerEpoch": {
+          "$ref": "#/$defs/natIdentity"
+        }
+      }
+    },
+    "authorityView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run",
+        "allocation",
+        "fence",
+        "policyName",
+        "policySchema",
+        "policyDigest",
+        "traceSchema",
+        "traceSchemaDigest",
+        "toolchain",
+        "sourceSchema",
+        "sourceDigest",
+        "layoutDigest",
+        "codeDigest",
+        "generation",
+        "attempt",
+        "generationStatus",
+        "ownerEpoch",
+        "ownerReassignments",
+        "acceptedTokenClock",
+        "acceptedCount",
+        "acceptedTokens",
+        "cohortDigest",
+        "commitReceipt",
+        "result",
+        "mailboxResult",
+        "nodeApplyCount"
+      ],
+      "properties": {
+        "run": {
+          "$ref": "#/$defs/opaque"
+        },
+        "allocation": {
+          "$ref": "#/$defs/opaque"
+        },
+        "fence": {
+          "$ref": "#/$defs/natIdentity"
+        },
+        "policyName": {
+          "type": "string"
+        },
+        "policySchema": {
+          "type": "string"
+        },
+        "policyDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "traceSchema": {
+          "type": "string"
+        },
+        "traceSchemaDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "toolchain": {
+          "type": "string"
+        },
+        "sourceSchema": {
+          "type": "string"
+        },
+        "sourceDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "layoutDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "codeDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "generation": {
+          "$ref": "#/$defs/natIdentity"
+        },
+        "attempt": {
+          "$ref": "#/$defs/natIdentity"
+        },
+        "generationStatus": {
+          "enum": [
+            "open",
+            "closed",
+            "aborted",
+            "committed",
+            "applied"
+          ]
+        },
+        "ownerEpoch": {
+          "$ref": "#/$defs/natIdentity"
+        },
+        "ownerReassignments": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "acceptedTokenClock": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "acceptedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "acceptedTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cohortDigest": {
+          "$ref": "#/$defs/nullableDigest"
+        },
+        "commitReceipt": {
+          "$ref": "#/$defs/nullableOpaque"
+        },
+        "result": {
+          "$ref": "#/$defs/nullableOpaque"
+        },
+        "mailboxResult": {
+          "$ref": "#/$defs/nullableOpaque"
+        },
+        "nodeApplyCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "peerTransitionEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context",
+        "worker",
+        "node",
+        "incarnation",
+        "fromPhase",
+        "toPhase",
+        "syncedGeneration",
+        "leaseUntil",
+        "managerEvidence",
+        "serviceEvidence"
+      ],
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/eventContext"
+        },
+        "worker": {
+          "$ref": "#/$defs/opaque"
+        },
+        "node": {
+          "$ref": "#/$defs/opaque"
+        },
+        "incarnation": {
+          "$ref": "#/$defs/opaque"
+        },
+        "fromPhase": {
+          "$ref": "#/$defs/peerPhase"
+        },
+        "toPhase": {
+          "$ref": "#/$defs/peerPhase"
+        },
+        "syncedGeneration": {
+          "$ref": "#/$defs/natIdentity"
+        },
+        "leaseUntil": {
+          "$ref": "#/$defs/natIdentity"
+        },
+        "managerEvidence": {
+          "$ref": "#/$defs/opaque"
+        },
+        "serviceEvidence": {
+          "$ref": "#/$defs/opaque"
+        }
+      }
+    },
+    "peerPhase": {
+      "enum": [
+        "discover",
+        "boot",
+        "sync",
+        "ready",
+        "drain",
+        "expire"
+      ]
+    },
+    "registerTrainerEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context",
+        "worker",
+        "node",
+        "peerIncarnation",
+        "trainer",
+        "trainerIncarnation"
+      ],
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/eventContext"
+        },
+        "worker": {
+          "$ref": "#/$defs/opaque"
+        },
+        "node": {
+          "$ref": "#/$defs/opaque"
+        },
+        "peerIncarnation": {
+          "$ref": "#/$defs/opaque"
+        },
+        "trainer": {
+          "$ref": "#/$defs/opaque"
+        },
+        "trainerIncarnation": {
+          "$ref": "#/$defs/opaque"
+        }
+      }
+    },
+    "expirePeerEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context",
+        "worker",
+        "node",
+        "incarnation",
+        "observedAt"
+      ],
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/eventContext"
+        },
+        "worker": {
+          "$ref": "#/$defs/opaque"
+        },
+        "node": {
+          "$ref": "#/$defs/opaque"
+        },
+        "incarnation": {
+          "$ref": "#/$defs/opaque"
+        },
+        "observedAt": {
+          "$ref": "#/$defs/natIdentity"
+        }
+      }
+    },
+    "openGenerationEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context",
+        "baseDigest",
+        "openedAt",
+        "closeTick",
+        "closeEvidence"
+      ],
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/eventContext"
+        },
+        "baseDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "openedAt": {
+          "$ref": "#/$defs/natIdentity"
+        },
+        "closeTick": {
+          "$ref": "#/$defs/natIdentity"
+        },
+        "closeEvidence": {
+          "$ref": "#/$defs/opaque"
+        }
+      }
+    },
+    "contributionEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context",
+        "worker",
+        "node",
+        "incarnation",
+        "sequence",
+        "baseGeneration",
+        "baseDigest",
+        "exactTokens",
+        "envelopeDigest",
+        "payloadDigest",
+        "trainerSetDigest",
+        "receipt",
+        "receiptDigest",
+        "localWindowStart",
+        "localWindowEnd",
+        "commitLag",
+        "anchorLag",
+        "resultLag",
+        "speculativeLag",
+        "finite",
+        "checksumValid",
+        "layoutValid",
+        "observedAt"
+      ],
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/eventContext"
+        },
+        "worker": {
+          "$ref": "#/$defs/opaque"
+        },
+        "node": {
+          "$ref": "#/$defs/opaque"
+        },
+        "incarnation": {
+          "$ref": "#/$defs/opaque"
+        },
+        "sequence": {
+          "$ref": "#/$defs/natIdentity"
+        },
+        "baseGeneration": {
+          "$ref": "#/$defs/natIdentity"
+        },
+        "baseDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "exactTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "envelopeDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "payloadDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "trainerSetDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "receipt": {
+          "$ref": "#/$defs/opaque"
+        },
+        "receiptDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "localWindowStart": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "localWindowEnd": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "commitLag": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "anchorLag": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resultLag": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "speculativeLag": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "finite": {
+          "type": "boolean"
+        },
+        "checksumValid": {
+          "type": "boolean"
+        },
+        "layoutValid": {
+          "type": "boolean"
+        },
+        "observedAt": {
+          "$ref": "#/$defs/natIdentity"
+        }
+      }
+    },
+    "closeGenerationEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context",
+        "observedAt",
+        "cohortDigest"
+      ],
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/eventContext"
+        },
+        "observedAt": {
+          "$ref": "#/$defs/natIdentity"
+        },
+        "cohortDigest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "ownerLossEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context",
+        "owner",
+        "ownerIncarnation",
+        "replayEvidence",
+        "observedAt"
+      ],
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/eventContext"
+        },
+        "owner": {
+          "$ref": "#/$defs/opaque"
+        },
+        "ownerIncarnation": {
+          "$ref": "#/$defs/opaque"
+        },
+        "replayEvidence": {
+          "$ref": "#/$defs/opaque"
+        },
+        "observedAt": {
+          "$ref": "#/$defs/natIdentity"
+        }
+      }
+    },
+    "commitGenerationEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context",
+        "cohortDigest",
+        "result",
+        "resultDigest",
+        "receipt",
+        "receiptDigest",
+        "priorReceipt"
+      ],
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/eventContext"
+        },
+        "cohortDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "result": {
+          "$ref": "#/$defs/opaque"
+        },
+        "resultDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "receipt": {
+          "$ref": "#/$defs/opaque"
+        },
+        "receiptDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "priorReceipt": {
+          "$ref": "#/$defs/opaque"
+        }
+      }
+    },
+    "publishResultEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context",
+        "result",
+        "resultDigest",
+        "commitReceipt",
+        "publicationReceipt",
+        "publicationDigest",
+        "verified",
+        "finite"
+      ],
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/eventContext"
+        },
+        "result": {
+          "$ref": "#/$defs/opaque"
+        },
+        "resultDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "commitReceipt": {
+          "$ref": "#/$defs/opaque"
+        },
+        "publicationReceipt": {
+          "$ref": "#/$defs/opaque"
+        },
+        "publicationDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "verified": {
+          "type": "boolean"
+        },
+        "finite": {
+          "type": "boolean"
+        }
+      }
+    },
+    "trainerApplyEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context",
+        "node",
+        "worker",
+        "peerIncarnation",
+        "trainer",
+        "trainerIncarnation",
+        "result",
+        "resultDigest",
+        "receipt",
+        "receiptDigest"
+      ],
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/eventContext"
+        },
+        "node": {
+          "$ref": "#/$defs/opaque"
+        },
+        "worker": {
+          "$ref": "#/$defs/opaque"
+        },
+        "peerIncarnation": {
+          "$ref": "#/$defs/opaque"
+        },
+        "trainer": {
+          "$ref": "#/$defs/opaque"
+        },
+        "trainerIncarnation": {
+          "$ref": "#/$defs/opaque"
+        },
+        "result": {
+          "$ref": "#/$defs/opaque"
+        },
+        "resultDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "receipt": {
+          "$ref": "#/$defs/opaque"
+        },
+        "receiptDigest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "reduceNodeApplyEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context",
+        "node",
+        "worker",
+        "peerIncarnation",
+        "result",
+        "resultDigest",
+        "trainerReceiptDigest",
+        "receipt",
+        "receiptDigest"
+      ],
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/eventContext"
+        },
+        "node": {
+          "$ref": "#/$defs/opaque"
+        },
+        "worker": {
+          "$ref": "#/$defs/opaque"
+        },
+        "peerIncarnation": {
+          "$ref": "#/$defs/opaque"
+        },
+        "result": {
+          "$ref": "#/$defs/opaque"
+        },
+        "resultDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "trainerReceiptDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "receipt": {
+          "$ref": "#/$defs/opaque"
+        },
+        "receiptDigest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "lossEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context",
+        "role",
+        "worker",
+        "node",
+        "peerIncarnation",
+        "trainer",
+        "trainerIncarnation",
+        "evidence"
+      ],
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/eventContext"
+        },
+        "role": {
+          "enum": [
+            "participant",
+            "service",
+            "manager",
+            "trainer"
+          ]
+        },
+        "worker": {
+          "$ref": "#/$defs/opaque"
+        },
+        "node": {
+          "$ref": "#/$defs/opaque"
+        },
+        "peerIncarnation": {
+          "$ref": "#/$defs/opaque"
+        },
+        "trainer": {
+          "$ref": "#/$defs/nullableOpaque"
+        },
+        "trainerIncarnation": {
+          "$ref": "#/$defs/nullableOpaque"
+        },
+        "evidence": {
+          "$ref": "#/$defs/opaque"
+        }
+      }
+    },
+    "restartPeerEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context",
+        "worker",
+        "node",
+        "oldIncarnation",
+        "newIncarnation",
+        "managerEvidence",
+        "serviceEvidence",
+        "syncedGeneration",
+        "leaseUntil"
+      ],
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/eventContext"
+        },
+        "worker": {
+          "$ref": "#/$defs/opaque"
+        },
+        "node": {
+          "$ref": "#/$defs/opaque"
+        },
+        "oldIncarnation": {
+          "$ref": "#/$defs/opaque"
+        },
+        "newIncarnation": {
+          "$ref": "#/$defs/opaque"
+        },
+        "managerEvidence": {
+          "$ref": "#/$defs/opaque"
+        },
+        "serviceEvidence": {
+          "$ref": "#/$defs/opaque"
+        },
+        "syncedGeneration": {
+          "$ref": "#/$defs/natIdentity"
+        },
+        "leaseUntil": {
+          "$ref": "#/$defs/natIdentity"
+        }
+      }
+    },
+    "abortGenerationEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context",
+        "reasonEvidence"
+      ],
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/eventContext"
+        },
+        "reasonEvidence": {
+          "$ref": "#/$defs/opaque"
+        }
+      }
+    },
+    "claimFenceEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority",
+        "policy",
+        "baseGeneration",
+        "baseDigest",
+        "baseReceipt",
+        "baseReceiptDigest",
+        "acceptedTokenClock",
+        "lastResult"
+      ],
+      "properties": {
+        "authority": {
+          "$ref": "#/$defs/authorityIdentity"
+        },
+        "policy": {
+          "$ref": "#/$defs/policy"
+        },
+        "baseGeneration": {
+          "$ref": "#/$defs/natIdentity"
+        },
+        "baseDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "baseReceipt": {
+          "$ref": "#/$defs/opaque"
+        },
+        "baseReceiptDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "acceptedTokenClock": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lastResult": {
+          "$ref": "#/$defs/nullableOpaque"
+        }
+      }
+    },
+    "event": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/claimFenceTag"
+        },
+        {
+          "$ref": "#/$defs/peerTransitionTag"
+        },
+        {
+          "$ref": "#/$defs/registerTrainerTag"
+        },
+        {
+          "$ref": "#/$defs/expirePeerTag"
+        },
+        {
+          "$ref": "#/$defs/openGenerationTag"
+        },
+        {
+          "$ref": "#/$defs/contributionTag"
+        },
+        {
+          "$ref": "#/$defs/closeGenerationTag"
+        },
+        {
+          "$ref": "#/$defs/ownerLossTag"
+        },
+        {
+          "$ref": "#/$defs/commitGenerationTag"
+        },
+        {
+          "$ref": "#/$defs/publishResultTag"
+        },
+        {
+          "$ref": "#/$defs/trainerApplyTag"
+        },
+        {
+          "$ref": "#/$defs/reduceNodeApplyTag"
+        },
+        {
+          "$ref": "#/$defs/lossTag"
+        },
+        {
+          "$ref": "#/$defs/restartPeerTag"
+        },
+        {
+          "$ref": "#/$defs/abortGenerationTag"
+        }
+      ]
+    },
+    "tagValueClaimFence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/claimFenceEvent"
+        }
+      }
+    },
+    "tagValuePeerTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/peerTransitionEvent"
+        }
+      }
+    },
+    "tagValueRegisterTrainer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/registerTrainerEvent"
+        }
+      }
+    },
+    "tagValueExpirePeer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/expirePeerEvent"
+        }
+      }
+    },
+    "tagValueOpenGeneration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/openGenerationEvent"
+        }
+      }
+    },
+    "tagValueContribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/contributionEvent"
+        }
+      }
+    },
+    "tagValueCloseGeneration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/closeGenerationEvent"
+        }
+      }
+    },
+    "tagValueOwnerLoss": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/ownerLossEvent"
+        }
+      }
+    },
+    "tagValueCommitGeneration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/commitGenerationEvent"
+        }
+      }
+    },
+    "tagValuePublishResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/publishResultEvent"
+        }
+      }
+    },
+    "tagValueTrainerApply": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/trainerApplyEvent"
+        }
+      }
+    },
+    "tagValueReduceNodeApply": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/reduceNodeApplyEvent"
+        }
+      }
+    },
+    "tagValueLoss": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/lossEvent"
+        }
+      }
+    },
+    "tagValueRestartPeer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/restartPeerEvent"
+        }
+      }
+    },
+    "tagValueAbortGeneration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/abortGenerationEvent"
+        }
+      }
+    },
+    "claimFenceTag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claimFence"
+      ],
+      "properties": {
+        "claimFence": {
+          "$ref": "#/$defs/tagValueClaimFence"
+        }
+      }
+    },
+    "peerTransitionTag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "peerTransition"
+      ],
+      "properties": {
+        "peerTransition": {
+          "$ref": "#/$defs/tagValuePeerTransition"
+        }
+      }
+    },
+    "registerTrainerTag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "registerTrainer"
+      ],
+      "properties": {
+        "registerTrainer": {
+          "$ref": "#/$defs/tagValueRegisterTrainer"
+        }
+      }
+    },
+    "expirePeerTag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expirePeer"
+      ],
+      "properties": {
+        "expirePeer": {
+          "$ref": "#/$defs/tagValueExpirePeer"
+        }
+      }
+    },
+    "openGenerationTag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "openGeneration"
+      ],
+      "properties": {
+        "openGeneration": {
+          "$ref": "#/$defs/tagValueOpenGeneration"
+        }
+      }
+    },
+    "contributionTag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contribution"
+      ],
+      "properties": {
+        "contribution": {
+          "$ref": "#/$defs/tagValueContribution"
+        }
+      }
+    },
+    "closeGenerationTag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "closeGeneration"
+      ],
+      "properties": {
+        "closeGeneration": {
+          "$ref": "#/$defs/tagValueCloseGeneration"
+        }
+      }
+    },
+    "ownerLossTag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ownerLoss"
+      ],
+      "properties": {
+        "ownerLoss": {
+          "$ref": "#/$defs/tagValueOwnerLoss"
+        }
+      }
+    },
+    "commitGenerationTag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commitGeneration"
+      ],
+      "properties": {
+        "commitGeneration": {
+          "$ref": "#/$defs/tagValueCommitGeneration"
+        }
+      }
+    },
+    "publishResultTag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "publishResult"
+      ],
+      "properties": {
+        "publishResult": {
+          "$ref": "#/$defs/tagValuePublishResult"
+        }
+      }
+    },
+    "trainerApplyTag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trainerApply"
+      ],
+      "properties": {
+        "trainerApply": {
+          "$ref": "#/$defs/tagValueTrainerApply"
+        }
+      }
+    },
+    "reduceNodeApplyTag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reduceNodeApply"
+      ],
+      "properties": {
+        "reduceNodeApply": {
+          "$ref": "#/$defs/tagValueReduceNodeApply"
+        }
+      }
+    },
+    "lossTag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "loss"
+      ],
+      "properties": {
+        "loss": {
+          "$ref": "#/$defs/tagValueLoss"
+        }
+      }
+    },
+    "restartPeerTag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "restartPeer"
+      ],
+      "properties": {
+        "restartPeer": {
+          "$ref": "#/$defs/tagValueRestartPeer"
+        }
+      }
+    },
+    "abortGenerationTag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "abortGeneration"
+      ],
+      "properties": {
+        "abortGeneration": {
+          "$ref": "#/$defs/tagValueAbortGeneration"
+        }
+      }
+    },
+    "causality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "traceId",
+        "eventId",
+        "eventIndex",
+        "sourceEventIndex",
+        "predecessorStepDigest",
+        "causalParents",
+        "replayOf"
+      ],
+      "properties": {
+        "traceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "eventId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "eventIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sourceEventIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "predecessorStepDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "causalParents": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "replayOf": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          ]
+        }
+      }
+    },
+    "traceStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "schemaDigest",
+        "policyName",
+        "policySchema",
+        "policyDigest",
+        "toolchain",
+        "sourceSchema",
+        "sourceDigest",
+        "preStateDigest",
+        "preAuthority",
+        "event",
+        "disposition",
+        "postStateDigest",
+        "postAuthority",
+        "invariantVerdict",
+        "invariantViolations",
+        "causality",
+        "stepDigest"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "emender-resilient-coordination-trace-v1"
+        },
+        "schemaDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "policyName": {
+          "type": "string"
+        },
+        "policySchema": {
+          "type": "string"
+        },
+        "policyDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "toolchain": {
+          "const": "leanprover/lean4:v4.26.0@d8204c9fd894f91bbb2cdfec5912ec8196fd8562"
+        },
+        "sourceSchema": {
+          "const": "emender-async-v21-execution-source-v1"
+        },
+        "sourceDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "preStateDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "preAuthority": {
+          "$ref": "#/$defs/authorityView"
+        },
+        "event": {
+          "$ref": "#/$defs/event"
+        },
+        "disposition": {
+          "enum": [
+            "accepted",
+            "identical_duplicate",
+            "conflicting_duplicate",
+            "stale_fence",
+            "stale_incarnation",
+            "corrupt_nonfinite",
+            "generation_closed",
+            "late",
+            "deferred",
+            "insufficient_cohort",
+            "aborted",
+            "catch_up",
+            "retry_next_generation",
+            "unknown_identity",
+            "malformed_trace",
+            "forbidden_reorder"
+          ]
+        },
+        "postStateDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "postAuthority": {
+          "$ref": "#/$defs/authorityView"
+        },
+        "invariantVerdict": {
+          "type": "boolean"
+        },
+        "invariantViolations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "causality": {
+          "$ref": "#/$defs/causality"
+        },
+        "stepDigest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    }
+  }
+}

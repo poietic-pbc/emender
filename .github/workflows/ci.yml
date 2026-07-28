@@ -58,3 +58,17 @@ jobs:
         run: |
           scripts/check_paper_core.sh
           scripts/check_trusted_no_placeholders.sh ElmanProofs.lean
+
+  resilient-lean:
+    name: Lean resilient coordination
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Cache exact project-local Lean toolchain
+        uses: actions/cache@v4
+        with:
+          path: formal/resilient/.cache/resilient-lean
+          key: lean-4.26.0-linux-873c252b1c6b1392e5720ad8d5a137aabbe72c9f96a930fdb5a1dd1ddc5da454
+      - name: Build, test, examples, and canonical trace replay
+        working-directory: formal/resilient
+        run: scripts/smoke.sh

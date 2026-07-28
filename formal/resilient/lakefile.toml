@@ -1,0 +1,22 @@
+name = "resilient-protocol"
+version = "1.0.0"
+defaultTargets = ["ResilientProtocol", "resilient-trace", "resilient-examples"]
+testDriver = "resilientTests"
+
+[leanOptions]
+relaxedAutoImplicit = false
+
+[[lean_lib]]
+name = "ResilientProtocol"
+
+[[lean_exe]]
+name = "resilient-trace"
+root = "TraceMain"
+
+[[lean_exe]]
+name = "resilient-examples"
+root = "ExamplesMain"
+
+[[lean_exe]]
+name = "resilientTests"
+root = "TestsMain"
