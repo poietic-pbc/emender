@@ -282,6 +282,37 @@ snapshot; it never closes at the two-node floor merely because two nodes
 arrived. Convergence and model quality remain a separate study and neither
 authorize nor block this systems ladder.
 
+### Formal/native coordination gate at 32 nodes
+
+The 8-node rung is authorized by the native hardening and deterministic
+schedule-stress lineage, not by Lean. Promotion from the exact passed 8-node
+rung to 32 nodes additionally requires one immutable
+`emender-formal-native-coordination-scale-gate-v1` manifest. The manifest MUST
+bind the signed 32-node scale authorization, the exact collector-backed passed
+8-node machine verdict, and the same native hardening/stress digests consumed
+by that verdict. It MUST also bind the pinned Lean toolchain and Lake lock, the
+executable coordination kernel, safety and explicitly conditional-progress
+theorems, proof coverage/assumptions, the canonical trace schema, the
+grow-only permanent corpus including job 5105811, the actual compiled
+production source/binary/ABI/trace-adapter identity, and a complete
+zero-divergence differential manifest.
+
+Lean specifies and proves only the pure deterministic coordination transition.
+The persistent compiled native service remains the production mutation and
+runtime authority. It owns networking, libfabric, physical timers, bounded
+buffers, process supervision, and runtime effects; production traces link its
+coordination-visible state to the Lean oracle. No test result may be relabeled
+as a proof, no Lean theorem may be relabeled as runtime evidence, and compute
+nodes MUST NOT build or execute Lean. The compute-side launcher only hashes
+and validates the prebuilt immutable manifest.
+
+Formal agreement does not replace numerical/reference, coherent immutable
+snapshot, foreground timing/tail, transport-byte/provider, G2, exact-source
+two-node, scheduler `Partition`/`QOS`, native stress, passed 8-node, or
+scale-policy evidence. Missing, stale, evaluator-only, partial, failed,
+wrong-source, or digest-mismatched formal/native evidence independently
+rejects the 32-node render, preflight, and launch.
+
 ### Conformance checklist (required in every implementation/runner/scale task Validation)
 
 - Cite this document/version and name the requirement IDs from the companion matrix.
@@ -292,6 +323,11 @@ authorize nor block this systems ladder.
 - Show bounded non-Lustre hot-path transport, backpressure/release, and no central full-model broker.
 - Exercise the applicable failure/deadline and recovery path; state the minimum progress floor.
 - Report exact validation commands and committed-generation/checkpoint artifacts; scale tasks must pass every prior rung.
+- A 32-node v2.1 scale task must additionally bind the exact passed 8-node
+  native hardening/stress lineage and the immutable formal/native coordination
+  gate above. It must state the Lean/native trust boundary, reject
+  test-as-proof and theorem-as-runtime substitutions, and show that the
+  compute closure only validates prebuilt digests and never runs Lean.
 - A bounded asynchronous task must additionally cite ADR-002 and
   V21S01–V21S17 and ISP01–ISP07, report commit/applied-anchor/result/speculative
   clocks honestly, and provide causally matched per-phase timing for

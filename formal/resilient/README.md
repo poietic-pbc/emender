@@ -66,23 +66,27 @@ It also follows ADR-002, the native boundary, and execution-source identity:
 Pure-kernel obligations represented by executable state and dispositions are:
 
 - R01–R08 and R11–R16;
-- NDP01, NDP02, NDP06–NDP13, and NDP15–NDP17;
-- V21S01–V21S05, V21S07–V21S11, and V21S13–V21S17;
-- ISP02 and ISP04–ISP07.
+- NDP01, NDP06, NDP10–NDP13, NDP15, and NDP16;
+- V21S01–V21S05, V21S07–V21S11, V21S13, V21S14, and V21S17;
+- ISP04–ISP07 only where represented by a pure coordination transition,
+  finite checked bound, typed disposition, or evidence identity.
 
 Runtime-boundary-only obligations are represented only by typed evidence
 identities and fail-closed boundaries, and are discharged by native
 conformance/stress/gate work rather than claimed as Lean proofs:
 
-- R09, R10, and the physical backend part of R13;
-- NDP03–NDP05, the physical capacity/credit parts of NDP08–NDP09, and NDP14;
-- V21S06 and V21S12;
-- ISP01 and ISP03.
+- R09, R10, and R13;
+- NDP02–NDP05, NDP07–NDP09, NDP14, and NDP17;
+- V21S06, V21S12, V21S15, and V21S16;
+- ISP01–ISP03.
 
-The intersections are intentional: for example, Lean decides the typed
-capacity-exhaustion disposition for NDP08/NDP09, while native evidence proves
-the real byte pool/credit behavior; Lean is backend-neutral for R13, while
-native evidence proves the point-to-point runtime.
+The ISP04–ISP07 intersection is intentionally narrow. Lean decides represented
+skip/defer/recovery outcomes and checks finite structural bounds and evidence
+identities. Native/controller evidence must still prove physical byte
+capacity, foreground nonblocking time, atomic model/optimizer visibility,
+causal telemetry completeness, tail latency, and live qualification behavior.
+The transition-by-transition crosswalk is
+[`PROOF_COVERAGE.md`](PROOF_COVERAGE.md).
 
 ## Model surface
 
@@ -121,6 +125,82 @@ Generation state covers open, closed, aborted, committed, and applied.
 catch-up/defer, zero attempt retry, and exact-token-only coordination
 accounting. Historical v2.0 or unknown policy/schema/source identities return
 `unknown_identity` without mutation.
+
+## Machine-checked safety
+
+[`Safety.lean`](ResilientProtocol/Safety.lean) proves propositions about the
+same `transition` called by traces and executables. It does not introduce a
+simplified proof transition and does not promote `invariantHolds` or another
+runtime Boolean to a theorem. `WellFormedState` contains only structural
+authority, valid policy/schema, finite owner/floor bounds, frozen-cohort
+consistency, commit ancestry, and all-eight node-apply consistency. It has no
+delivery, scheduling, failure, or fairness field.
+
+The checked results include:
+
+- independent monotonic fence, generation, accepted-token, and receipt
+  authority for all 15 event constructors;
+- exact noninterference for stale fence/incarnation, identical/conflicting
+  duplicate, corrupt, deferred, closed, late, catch-up, retry, and unknown
+  identity outcomes;
+- typed recovery actions for closed/late/catch-up/retry responses;
+- one immutable accepted cohort and one authoritative commit/result over any
+  in-frame trace;
+- contribution admission only from the leased READY snapshot and exact
+  event-bound identity;
+- commit only for the declared frozen cohort, quorum, exact-token floor, and
+  prior receipt;
+- owner loss, peer restart, and abort cannot manufacture a commit or mailbox
+  publication;
+- node authority only after eight distinct matching trainer receipts, with a
+  deferred/partial reduction preserving the exact state;
+- restart/fresh-fence recovery cannot roll generation/token/receipt authority
+  backward or resurrect historical work.
+
+[`Regression.lean`](ResilientProtocol/Regression.lean) fixes the job-5105811
+ordering at generation 3: close and commit; node-0 service/trainer loss and
+new incarnation; concurrent node-1 submission to the committed generation;
+typed catch-up with the literal pre-state preserved; no node-1 termination,
+unrelated owner budget charge, second commit, partial apply, or rollback.
+The canonical executable scenario contains that exact event after its full
+peer bootstrap and then continues to generation 4.
+
+[`Mutations.lean`](ResilientProtocol/Mutations.lean) contains deliberately
+invalid double-commit, stale-write, conflicting-duplicate-write,
+mutable-closed-cohort, partial-publication, and partial-node-apply variants.
+Each adjacent theorem proves the mutant violates its corresponding safety
+obligation.
+
+## Conditional bounded progress
+
+[`Progress.lean`](ResilientProtocol/Progress.lean) deliberately exposes no
+unconditional liveness result. `BoundedProgressAssumptions` requires all of:
+
+- finite close and stage deadlines;
+- a surviving eligible stable-worker quorum;
+- the surviving exact-token floor;
+- bounded permitted failures and owner reassignments;
+- eventual delivery and processing at a finite schedule index; and
+- fair scheduling of the enabled executable transition.
+
+Only under that complete package does
+`bounded_next_generation_participation_under_exact_assumptions` establish a
+bounded accepted next-generation contribution. Separate exclusion theorems
+show that the package cannot be used under total participant loss, permanent
+quorum loss, an expired deadline without the floor, over-budget/unbounded
+faults, or unfair scheduling. The job-5105811 continuation theorem takes the
+same package explicitly; its name and statement make no unconditional
+progress claim.
+
+## Proof manifest and trust boundary
+
+[`proof-manifest-v1.json`](proof-manifest-v1.json) binds the pinned Lean
+toolchain, authoritative transition/model identity, trace schema, proof
+modules, coverage matrix, and their SHA-256 digests.
+`scripts/verify-proof-manifest.sh` recomputes every digest and rejects a
+missing, duplicate, absolute, or escaping artifact path. The smoke suite also
+rejects `sorry`, `admit`, `native_decide`, axioms, opaque declarations, and
+unsafe declarations throughout the proof and executable roots.
 
 ## Canonical trace and replay
 
@@ -166,9 +246,10 @@ scripts/lake.sh exe resilient-conformance \
 The executable corpus covers normal commit/apply, duplicate and conflicting
 receipts, stale fence/incarnation, corrupt and lag-three input, peer and owner
 loss, bounded replay/abort, all four runtime role-loss classes, fresh-fence
-restart, late contribution after close, the permanent job-5105811
-generation-closed catch-up, and new-incarnation admission into the next
-generation.
+restart, late contribution after close, the permanent job-5105811 generation-3
+close/commit → node-0 service loss/reincarnation → node-1 typed non-mutating
+catch-up ordering, and new-incarnation admission into generation 4 under the
+concrete finite executable schedule.
 
 ## Production native differential boundary
 
@@ -195,3 +276,30 @@ It starts the actual compiled persistent service and reaches
 `coordination::step` through the public C ABI and service RPC. Agreement is
 limited to pure coordination. It is not ISP timing, dense byte-path,
 floating-point, Frontier provider, or scale evidence.
+
+## Formal/native scale-gate workflow
+
+From the repository root,
+`scripts/conformance/smoke_native_lean.sh` rebuilds the pinned Lean package,
+checks theorem hygiene and the proof manifest, regenerates/replays the
+permanent corpus, builds the actual compiled native service, proves deliberate
+divergence detection, and writes the complete zero-divergence aggregate. The
+bounded deterministic native schedule test runs in the unified native CTest
+suite; the longer 50,000-schedule campaign remains seeded, directly
+replayable, causality-preserving, and shrinkable.
+
+The local non-submitting evidence is recorded with:
+
+```bash
+"$EMENDER_PYTHON" \
+  scripts/frontier/build_formal_coordination_scale_gate.py local \
+  --execution-source-digest "$EXECUTION_SOURCE_DIGEST" \
+  --source-commit "$(git rev-parse HEAD)" \
+  --output reports/frontier/formal-coordination-scale-gate-v1.json
+```
+
+That local manifest deliberately authorizes no node count. After the exact
+collector-backed 8-node pass exists, `join` binds it and its native
+hardening/stress lineage to the signed 32-node authorization. The joined
+candidate still requires Ed25519 review before the controller accepts it.
+Compute nodes validate only the prebuilt hashes/signature and do not run Lean.

@@ -86,4 +86,31 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror=return-type)
     add_test(NAME ndp_coordination_kernel_test
         COMMAND ndp_coordination_kernel_test)
+
+    # Deterministic property/stress explorer for the same production
+    # coordination::step implementation linked into the live service core.
+    # It is intentionally local and model-free; no transport, GPU, scheduler,
+    # or external peer is constructed by this target.
+    add_executable(ndp_coordination_schedule_stress
+        tests/coordination_schedule_stress.cpp)
+    target_include_directories(ndp_coordination_schedule_stress PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(ndp_coordination_schedule_stress PRIVATE
+        emender_ndp_service_core)
+    target_compile_definitions(ndp_coordination_schedule_stress PRIVATE
+        NDP_STRESS_DEFAULT_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/../..")
+    target_compile_options(ndp_coordination_schedule_stress PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror=return-type)
+    add_test(NAME ndp_coordination_schedule_stress_test
+        COMMAND ndp_coordination_schedule_stress
+            --source-root ${CMAKE_CURRENT_SOURCE_DIR}/../..
+            --corpus-dir
+                ${CMAKE_CURRENT_SOURCE_DIR}/../../tests/corpus/native_coordination
+            --random-schedules 12000
+            --maximum-events 32
+            --determinism-repeats 1
+            --no-output)
+    set_tests_properties(ndp_coordination_schedule_stress_test PROPERTIES
+        TIMEOUT 900
+        LABELS "native;coordination;stress;no-slurm")
 endif()

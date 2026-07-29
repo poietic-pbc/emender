@@ -431,6 +431,25 @@ Unknown, partial, wrongly scheduled, failed, skipped, wrong-identity, or
 digest-inconsistent records fail closed. These records are machine
 authorization, not evaluator prose.
 
+The 8-node predecessor MUST additionally name the exact native coordination
+hardening and deterministic schedule-stress manifest SHA-256s it consumed.
+At 32 nodes, one signed
+`emender-formal-native-coordination-scale-gate-v1` MUST join that exact passed
+8-node lineage with the pinned Lean toolchain/Lake lock, executable kernel,
+safety and explicitly assumed bounded-progress proofs, proof-coverage
+manifest, actual production-native source/binary/ABI/trace adapter, canonical
+trace schema, grow-only corpus including job 5105811, and a complete
+zero-divergence differential verdict. Missing, stale, evaluator-only, partial,
+failed, wrong-source, or mismatched evidence independently rejects preflight.
+
+This gate does not change the runtime boundary. Lean specifies and proves pure
+coordination; the compiled service owns networking, libfabric, timers, bounded
+buffers, process supervision, and physical effects. Production traces link
+the two. Formal agreement cannot replace numerical, immutable-snapshot,
+timing/tail, transport-byte/provider, G2, two-node, scheduler, native stress,
+passed 8-node, closure, or scale-policy evidence. Compute nodes validate
+prebuilt digests and do not run Lean.
+
 The two-node `Q_min=2` close rule is never promotable as a scale early-close
 rule. Before any scale rung, the authorization MUST pin a deterministic finite
 closure function over the leased READY snapshot `R_g` taken at group open:

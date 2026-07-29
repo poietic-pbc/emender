@@ -51,6 +51,16 @@ def exampleInitialFor (policy : PolicyConfig) : RunState :=
 
 def exampleInitial : RunState := exampleInitialFor examplePolicy
 
+/--
+The permanent job-5105811 regression starts from the last applied authority
+at generation 3.  It uses the same transition function and example trace
+runner as every other executable scenario.
+-/
+def job5105811Initial : RunState :=
+  initialState (exampleAuthorityFor examplePolicy) examplePolicy ⟨3⟩
+    (repeatedHex 'e') (rid "base-receipt-0") (repeatedHex 'f')
+    150793748480 none
+
 def contextFor
     (state : RunState)
     (generation : Nat := 0)
@@ -166,11 +176,12 @@ def openGenerationAction
     (state : RunState)
     (generation : Nat := 0)
     (baseDigest : Digest := repeatedHex 'e')
-    (closeTick : Nat := 20) : ExampleAction :=
+    (closeTick : Nat := 20)
+    (openedAt : Nat := 1) : ExampleAction :=
   accept s!"generation-{generation}:open" <| .openGeneration
     { context := contextFor state generation
       baseDigest
-      openedAt := ⟨1⟩
+      openedAt := ⟨openedAt⟩
       closeTick := ⟨closeTick⟩
       closeEvidence := state.policy.closureEvidence }
 
@@ -209,6 +220,19 @@ def contributionEvent
     layoutValid := true
     observedAt := ⟨observedAt⟩ }
 
+def job5105811LateContribution : ContributionEvent :=
+  contributionEvent job5105811Initial "worker-1" "node-1" "peer-inc-1"
+    5105811 1968000 13 '9' '6' '7' '8'
+    (generation := 3) (baseGeneration := 3)
+    (receipt := "job-5105811-late-generation-closed")
+
+def job5105811NextContribution : ContributionEvent :=
+  contributionEvent job5105811Initial "worker-0" "node-0"
+    "peer-inc-0-restarted" 1 1966080 30 '9' '8' '7' '6'
+    (generation := 4) (baseGeneration := 4)
+    (baseDigest := repeatedHex 'a')
+    (receipt := "rejoined-next-generation")
+
 def node0Contribution (state : RunState) : ContributionEvent :=
   contributionEvent state "worker-0" "node-0" "peer-inc-0" 0
     1966080 10 '1' '2' '3' '4' (receipt := "contribution-receipt-0")
@@ -220,17 +244,19 @@ def node1Contribution (state : RunState) : ContributionEvent :=
 def closeAction
     (state : RunState)
     (observedAt : Nat := 12)
-    (ownerEpoch : Nat := 0) : ExampleAction :=
-  accept "generation-0:finite-close" <| .closeGeneration
-    { context := contextFor state 0 0 ownerEpoch
+    (ownerEpoch : Nat := 0)
+    (generation : Nat := 0) : ExampleAction :=
+  accept s!"generation-{generation}:finite-close" <| .closeGeneration
+    { context := contextFor state generation 0 ownerEpoch
       observedAt := ⟨observedAt⟩
       cohortDigest := repeatedHex '0' }
 
 def commitAction
     (state : RunState)
-    (ownerEpoch : Nat := 0) : ExampleAction :=
-  accept "generation-0:exact-once-commit" <| .commitGeneration
-    { context := contextFor state 0 0 ownerEpoch
+    (ownerEpoch : Nat := 0)
+    (generation : Nat := 0) : ExampleAction :=
+  accept s!"generation-{generation}:exact-once-commit" <| .commitGeneration
+    { context := contextFor state generation 0 ownerEpoch
       cohortDigest := repeatedHex '0'
       result := resultId "result-1"
       resultDigest := repeatedHex 'a'
@@ -240,9 +266,10 @@ def commitAction
 
 def publishAction
     (state : RunState)
-    (ownerEpoch : Nat := 0) : ExampleAction :=
-  accept "generation-0:mailbox-publish" <| .publishResult
-    { context := contextFor state 0 0 ownerEpoch
+    (ownerEpoch : Nat := 0)
+    (generation : Nat := 0) : ExampleAction :=
+  accept s!"generation-{generation}:mailbox-publish" <| .publishResult
+    { context := contextFor state generation 0 ownerEpoch
       result := resultId "result-1"
       resultDigest := repeatedHex 'a'
       commitReceipt := rid "commit-receipt-1"
@@ -256,8 +283,9 @@ def trainerApplyEvent
     (node worker peerInc : String)
     (lane : Nat)
     (ownerEpoch : Nat := 0)
-    (receiptSuffix : String := "") : TrainerApplyEvent :=
-  { context := contextFor state 0 0 ownerEpoch
+    (receiptSuffix : String := "")
+    (generation : Nat := 0) : TrainerApplyEvent :=
+  { context := contextFor state generation 0 ownerEpoch
     node := nodeId node
     worker := workerId worker
     peerIncarnation := incarnation peerInc
@@ -272,18 +300,21 @@ def trainerApplyEvent
 def trainerApplyActions
     (state : RunState)
     (node worker peerInc : String)
-    (ownerEpoch : Nat := 0) : List ExampleAction :=
+    (ownerEpoch : Nat := 0)
+    (generation : Nat := 0) : List ExampleAction :=
   (List.range 8).map fun lane =>
     accept s!"{node}:apply-{lane}" <|
       .trainerApply
-        (trainerApplyEvent state node worker peerInc lane ownerEpoch)
+        (trainerApplyEvent state node worker peerInc lane ownerEpoch ""
+          generation)
 
 def reduceAction
     (state : RunState)
     (node worker peerInc : String)
-    (ownerEpoch : Nat := 0) : ExampleAction :=
+    (ownerEpoch : Nat := 0)
+    (generation : Nat := 0) : ExampleAction :=
   accept s!"{node}:eight-to-one-node-apply" <| .reduceNodeApply
-    { context := contextFor state 0 0 ownerEpoch
+    { context := contextFor state generation 0 ownerEpoch
       node := nodeId node
       worker := workerId worker
       peerIncarnation := incarnation peerInc
@@ -484,26 +515,40 @@ def roleLossScenario (role : LossRole) : ExampleScenario :=
       [accept s!"{roleName}-loss" (.loss loss)] }
 
 def restartRejoinScenario : ExampleScenario :=
+  let initial := job5105811Initial
+  let node0 :=
+    contributionEvent initial "worker-0" "node-0" "peer-inc-0" 0
+      1966080 10 '1' '2' '3' '4'
+      (generation := 3) (baseGeneration := 3)
+      (receipt := "job-5105811-contribution-receipt-0")
+  let node1 :=
+    contributionEvent initial "worker-1" "node-1" "peer-inc-1" 0
+      1968000 11 '5' '6' '7' '8'
+      (generation := 3) (baseGeneration := 3)
+      (receipt := "job-5105811-contribution-receipt-1")
+  let serviceLoss : LossEvent :=
+    { context := contextFor initial 3
+      role := .service
+      worker := workerId "worker-0"
+      node := nodeId "node-0"
+      peerIncarnation := incarnation "peer-inc-0"
+      trainer := none
+      trainerIncarnation := none
+      evidence := ev "job-5105811-node-0-service-state-loss" }
   let restart : RestartPeerEvent :=
-    { context := contextFor exampleInitial
+    { context := contextFor initial 3
       worker := workerId "worker-0"
       node := nodeId "node-0"
       oldIncarnation := incarnation "peer-inc-0"
       newIncarnation := incarnation "peer-inc-0-restarted"
       managerEvidence := ev "manager-node-0-restarted"
       serviceEvidence := ev "service-node-0-restarted"
-      syncedGeneration := ⟨1⟩
+      syncedGeneration := ⟨4⟩
       leaseUntil := ⟨1000⟩ }
-  let lateClosed :=
-    { node1Contribution exampleInitial with
-      incarnation := incarnation "historical-node-1-incarnation"
-      sequence := ⟨5105811⟩
-      envelopeDigest := repeatedHex '9'
-      receipt := rid "job-5105811-late-generation-closed" }
   let restartedTrainerActions :=
     (List.range 8).map fun lane =>
       accept s!"node-0:restarted-trainer-{lane}" <| .registerTrainer
-        { context := contextFor exampleInitial
+        { context := contextFor initial 3
           worker := workerId "worker-0"
           node := nodeId "node-0"
           peerIncarnation := incarnation "peer-inc-0-restarted"
@@ -513,7 +558,7 @@ def restartRejoinScenario : ExampleScenario :=
   let restartedApplyActions :=
     (List.range 8).map fun lane =>
       accept s!"node-0:restarted-apply-{lane}" <| .trainerApply
-        { context := contextFor exampleInitial
+        { context := contextFor initial 3
           node := nodeId "node-0"
           worker := workerId "worker-0"
           peerIncarnation := incarnation "peer-inc-0-restarted"
@@ -526,7 +571,7 @@ def restartRejoinScenario : ExampleScenario :=
           receiptDigest := repeatedHex 'd' }
   let restartedReduce : ExampleAction :=
     accept "node-0:restarted-eight-to-one" <| .reduceNodeApply
-      { context := contextFor exampleInitial
+      { context := contextFor initial 3
         node := nodeId "node-0"
         worker := workerId "worker-0"
         peerIncarnation := incarnation "peer-inc-0-restarted"
@@ -536,60 +581,58 @@ def restartRejoinScenario : ExampleScenario :=
         receipt := rid "node-apply-node-0-restarted"
         receiptDigest := repeatedHex '3' }
   let readyRestarted : ExampleAction :=
-    accept "node-0:rejoin-ready-generation-1" <| .peerTransition
-      { context := contextFor exampleInitial
+    accept "node-0:rejoin-ready-generation-4" <| .peerTransition
+      { context := contextFor initial 3
         worker := workerId "worker-0"
         node := nodeId "node-0"
         incarnation := incarnation "peer-inc-0-restarted"
         fromPhase := .sync
         toPhase := .ready
-        syncedGeneration := ⟨1⟩
+        syncedGeneration := ⟨4⟩
         leaseUntil := ⟨1000⟩
         managerEvidence := ev "manager-node-0-restarted"
         serviceEvidence := ev "service-node-0-restarted" }
   let readyNode1 : ExampleAction :=
-    accept "node-1:ready-generation-1" <| .peerTransition
-      { context := contextFor exampleInitial
+    accept "node-1:ready-generation-4" <| .peerTransition
+      { context := contextFor initial 3
         worker := workerId "worker-1"
         node := nodeId "node-1"
         incarnation := incarnation "peer-inc-1"
         fromPhase := .ready
         toPhase := .ready
-        syncedGeneration := ⟨1⟩
+        syncedGeneration := ⟨4⟩
         leaseUntil := ⟨1000⟩
         managerEvidence := ev "manager-node-1-next"
         serviceEvidence := ev "service-node-1-next" }
   let openNext : ExampleAction :=
-    openGenerationAction exampleInitial 1 (repeatedHex 'a') 40
-  let rejoinContribution :=
-    contributionEvent exampleInitial "worker-0" "node-0"
-      "peer-inc-0-restarted" 1 1966080 30 '9' '8' '7' '6'
-      (generation := 1) (baseGeneration := 1)
-      (baseDigest := repeatedHex 'a')
-      (receipt := "rejoined-next-generation")
+    openGenerationAction initial 4 (repeatedHex 'a') 40 21
   { name := "job-5105811-generation-closed-restart-rejoin"
-    initial := exampleInitial
+    initial
     actions :=
-      commonBootstrap exampleInitial ++
+      bootstrapPeerActions initial "worker-0" "node-0" "peer-inc-0" 3 ++
+      bootstrapPeerActions initial "worker-1" "node-1" "peer-inc-1" 3 ++
+      [openGenerationAction initial 3] ++
       [ accept "contribution-node-0"
-          (.contribution (node0Contribution exampleInitial))
+          (.contribution node0)
       , accept "contribution-node-1"
-          (.contribution (node1Contribution exampleInitial))
-      , closeAction exampleInitial
-      , commitAction exampleInitial
-      , publishAction exampleInitial
+          (.contribution node1)
+      , closeAction initial 12 0 3
+      , commitAction initial 0 3
+      , publishAction initial 0 3
+      , accept "node-0:service-and-trainer-state-loss"
+          (.loss serviceLoss)
       , accept "node-0:restart-new-incarnation" (.restartPeer restart)
       , expect "job-5105811-generation-closed-catch-up" .catchUp
-          (.contribution lateClosed) ] ++
+          (.contribution job5105811LateContribution) ] ++
       restartedTrainerActions ++ restartedApplyActions ++
       [restartedReduce] ++
-      trainerApplyActions exampleInitial "node-1" "worker-1" "peer-inc-1" ++
-      [ reduceAction exampleInitial "node-1" "worker-1" "peer-inc-1"
+      trainerApplyActions initial "node-1" "worker-1" "peer-inc-1" 0 3 ++
+      [ reduceAction initial "node-1" "worker-1" "peer-inc-1" 0 3
       , readyRestarted
       , readyNode1
       , openNext
       , accept "new-incarnation-next-generation-contribution"
-          (.contribution rejoinContribution) ] }
+          (.contribution job5105811NextContribution) ] }
 
 def freshFenceScenario : ExampleScenario :=
   let authority2 :=

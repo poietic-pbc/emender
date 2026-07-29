@@ -55,6 +55,12 @@ this boundary:
   `0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2`;
 - the canonical training arguments, v2.1 policy digest, launcher digest,
   scale authorization, immediate predecessor, and V21S17 closure evidence.
+- for a 32-node render, the reviewed
+  `emender-formal-native-coordination-scale-gate-v1` digest and file SHA-256.
+  That gate joins the exact passed 8-node native hardening/stress lineage to
+  the pinned proofs and production-native zero-divergence corpus; it is
+  independently validated and cannot replace any execution-source or systems
+  identity above.
 
 A native build or G2 gate may name an earlier Git commit only when that
 commit's recomputed execution-source digest is byte-identical to current clean
@@ -104,3 +110,6 @@ no runner under this policy. Convergence/model quality remains separate. Every
 live scale rung still requires its exact immediate predecessor, exact
 policy/schema/native/seed/launcher identities, complete collector-backed
 machine evidence, and the reviewed leased-READY V21S17 finite closure.
+At 32 nodes the controller and launcher additionally require the prebuilt
+formal/native coordination gate. Compute nodes validate its immutable hashes
+and signed identity but do not run Lean.

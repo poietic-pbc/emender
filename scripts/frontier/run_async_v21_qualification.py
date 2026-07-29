@@ -33,6 +33,12 @@ from typing import Mapping, Sequence
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from ndm.formal_coordination_gate import (  # noqa: E402
+    FORMAL_COORDINATION_GATE_SCHEMA,
+    file_sha256 as formal_file_sha256,
+    validate_formal_coordination_gate,
+)
+
 POLICY_ID = "async-decoupled-v2.1-simple"
 POLICY_SCHEMA = "emender-async-policy-v2.1"
 PAYLOAD_SCHEMA = "emender-async-v21-qualification-payload-v1"
@@ -864,6 +870,7 @@ def build_plan(
     parameters: Mapping[str, object],
     authorization_path: str | Path | None = None,
     predecessor_path: str | Path | None = None,
+    formal_coordination_path: str | Path | None = None,
     trusted_reviewer_key: str | Path | None = None,
     allow_test_signatures: bool = False,
     clean_launch: Mapping[str, object] | None = None,
@@ -1076,6 +1083,7 @@ def build_plan(
         raise ValueError("at most one active job is permitted")
 
     scale_evidence = None
+    formal_coordination_gate = None
     if gate == "scale":
         if authorization_path is None or predecessor_path is None:
             raise ValueError(
@@ -1111,6 +1119,32 @@ def build_plan(
             trusted_reviewer_key=trusted_reviewer_key,
             allow_test_signatures=allow_test_signatures,
         )
+        if nodes == 32:
+            if formal_coordination_path is None:
+                raise ValueError(
+                    "32-node preflight requires the immutable formal "
+                    "coordination scale gate"
+                )
+            formal_coordination_gate = validate_formal_coordination_gate(
+                formal_coordination_path,
+                repository=ROOT,
+                evidence_root=evidence_root,
+                expected_nodes=nodes,
+                expected_identities=identities,
+                expected_identity_contract=scale_identity_contract(),
+                scale_authorization_digest=str(
+                    authorization["manifest_digest"]
+                ),
+                passed_8_node_manifest=predecessor,
+                passed_8_node_sha256=formal_file_sha256(
+                    Path(predecessor_path).resolve()
+                ),
+            )
+            _verify_review_signature(
+                formal_coordination_gate,
+                trusted_reviewer_key=trusted_reviewer_key,
+                allow_test_signatures=allow_test_signatures,
+            )
         reviewed_ready_count = int(
             authorization.get("reviewed_ready_snapshot_size", 0))
         scale_evidence = validate_scale_evidence(
@@ -1122,6 +1156,17 @@ def build_plan(
         payload["predecessor_pass_digest"] = predecessor["manifest_digest"]
         payload["scale_closure"] = scale_evidence
         payload["scale_identity_digest"] = scale_identity_digest(identities)
+        if formal_coordination_gate is not None:
+            payload["formal_coordination_gate"] = {
+                "schema": FORMAL_COORDINATION_GATE_SCHEMA,
+                "path": str(Path(formal_coordination_path).resolve()),
+                "manifest_digest": formal_coordination_gate[
+                    "manifest_digest"
+                ],
+                "sha256": formal_file_sha256(
+                    Path(formal_coordination_path).resolve()
+                ),
+            }
         payload["scale_policy"] = {
             "systems_scale_ladder": list(SYSTEMS_SCALE_LADDER),
             "review_only_nodes": list(REVIEW_ONLY_NODES),
@@ -1286,6 +1331,17 @@ def build_plan(
             "ASYNC_V21_SCALE_PER_READY_WORKER_TOKEN_FLOOR="
             + str(scale_evidence["per_ready_worker_token_floor"]),
         ])
+        if formal_coordination_gate is not None:
+            exports.extend([
+                "ASYNC_V21_FORMAL_COORDINATION_GATE="
+                + str(Path(formal_coordination_path).resolve()),
+                "ASYNC_V21_FORMAL_COORDINATION_GATE_DIGEST="
+                + str(formal_coordination_gate["manifest_digest"]),
+                "ASYNC_V21_FORMAL_COORDINATION_GATE_SHA256="
+                + formal_file_sha256(
+                    Path(formal_coordination_path).resolve()
+                ),
+            ])
         if trusted_reviewer_key is not None:
             exports.append(
                 "ASYNC_V21_TRUSTED_REVIEWER_KEY="
@@ -2126,6 +2182,7 @@ def _arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--evidence-root")
     parser.add_argument("--authorization")
     parser.add_argument("--prior-rung")
+    parser.add_argument("--formal-coordination-gate")
     parser.add_argument("--prior-gate")
     parser.add_argument("--trusted-reviewer-key")
     parser.add_argument("--source-digest")
@@ -2322,6 +2379,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parameters=parameters,
         authorization_path=args.authorization,
         predecessor_path=args.prior_rung,
+        formal_coordination_path=args.formal_coordination_gate,
         trusted_reviewer_key=args.trusted_reviewer_key,
         clean_launch=clean_launch,
         fault_launch=fault_launch,

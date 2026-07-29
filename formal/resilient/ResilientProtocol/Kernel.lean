@@ -138,6 +138,26 @@ def contributionKeyMatches
   record.key.incarnation == event.incarnation &&
   record.key.sequence == event.sequence
 
+def contributionReplayMatches
+    (event : ContributionEvent) (record : ContributionRecord) : Bool :=
+  contributionKeyMatches event record &&
+  record.node == event.node &&
+  record.baseGeneration == event.baseGeneration &&
+  record.baseDigest == event.baseDigest &&
+  record.exactTokens == event.exactTokens &&
+  record.envelopeDigest == event.envelopeDigest &&
+  record.payloadDigest == event.payloadDigest &&
+  record.trainerSetDigest == event.trainerSetDigest &&
+  record.receipt == event.receipt &&
+  record.receiptDigest == event.receiptDigest &&
+  record.localWindowStart == event.localWindowStart &&
+  record.localWindowEnd == event.localWindowEnd &&
+  record.commitLag == event.commitLag &&
+  record.anchorLag == event.anchorLag &&
+  record.resultLag == event.resultLag &&
+  record.speculativeLag == event.speculativeLag &&
+  event.finite && event.checksumValid && event.layoutValid
+
 def insertContribution
     (record : ContributionRecord) :
     List ContributionRecord → List ContributionRecord
@@ -407,6 +427,7 @@ def transitionClaimFence
     else
       noChange state .conflictingDuplicate
   else if event.policy != state.policy ||
+      event.baseGeneration.value < state.generation.generation.value ||
       event.baseReceipt != state.baseReceipt ||
       event.baseReceiptDigest != state.baseReceiptDigest ||
       event.acceptedTokenClock != state.acceptedTokenClock ||
@@ -418,6 +439,26 @@ def transitionClaimFence
         event.baseDigest event.baseReceipt event.baseReceiptDigest
         event.acceptedTokenClock event.lastResult
     acceptedState { restarted with restartCount := state.restartCount + 1 }
+
+def peerReadyTransitionAllowed
+    (state : RunState) (event : PeerTransitionEvent)
+    (peer : PeerRecord) : Bool :=
+  let targetGeneration :=
+    match state.generation.commit with
+    | none => state.generation.generation
+    | some _ => ⟨state.generation.generation.value + 1⟩
+  if event.toPhase != .ready then
+    true
+  else
+    event.syncedGeneration == targetGeneration &&
+    event.leaseUntil.value > state.now.value &&
+    peer.trainers.length == 8 &&
+    uniqueBy (peer.trainers.map (·.trainer)) &&
+    match state.generation.commit with
+    | none => true
+    | some _ =>
+        peerHasNodeApplyAuthority
+          state peer state.generation.generation
 
 def transitionPeer
     (state : RunState) (event : PeerTransitionEvent) : StepResult :=
@@ -457,23 +498,7 @@ def transitionPeer
             else if peer.phase != event.fromPhase then
               noChange state .conflictingDuplicate
             else
-              let targetGeneration :=
-                match state.generation.commit with
-                | none => state.generation.generation
-                | some _ => ⟨state.generation.generation.value + 1⟩
-              let readyAllowed :=
-                if event.toPhase != .ready then true
-                else
-                  event.syncedGeneration == targetGeneration &&
-                  event.leaseUntil.value > state.now.value &&
-                  peer.trainers.length == 8 &&
-                  uniqueBy (peer.trainers.map (·.trainer)) &&
-                  match state.generation.commit with
-                  | none => true
-                  | some _ =>
-                      peerHasNodeApplyAuthority
-                        state peer state.generation.generation
-              if !readyAllowed then
+              if !peerReadyTransitionAllowed state event peer then
                 noChange state .deferred
               else
                 let updated : PeerRecord :=
@@ -591,143 +616,194 @@ def transitionOpen
             applyReceipts := []
             nodeApplyReceipts := [] }
 
-def transitionContribution
-    (state : RunState) (event : ContributionEvent) : StepResult :=
+inductive ContributionDecision where
+  | reject (disposition : Disposition)
+  | acceptContribution
+  deriving Repr, BEq, DecidableEq
+
+inductive ContributionReadyDecision where
+  | reject (disposition : Disposition)
+  | ready (peer : PeerRecord)
+  deriving Repr, BEq, DecidableEq
+
+inductive ContributionPrefixDecision where
+  | reject (disposition : Disposition)
+  | checkPeer
+  deriving Repr, BEq, DecidableEq
+
+def leasedReadyAdmissionGate
+    (state : RunState) (event : ContributionEvent)
+    (peer : PeerRecord) : Bool :=
+  peer.phase == .ready &&
+  peer.leaseUntil.value > event.observedAt.value &&
+  isReadySnapshotMember state.generation event.worker
+    event.node event.incarnation
+
+def contributionRecord (event : ContributionEvent) : ContributionRecord :=
+  { key :=
+      { generation := event.context.generation
+        attempt := event.context.attempt
+        worker := event.worker
+        incarnation := event.incarnation
+        sequence := event.sequence }
+    node := event.node
+    baseGeneration := event.baseGeneration
+    baseDigest := event.baseDigest
+    exactTokens := event.exactTokens
+    envelopeDigest := event.envelopeDigest
+    payloadDigest := event.payloadDigest
+    trainerSetDigest := event.trainerSetDigest
+    receipt := event.receipt
+    receiptDigest := event.receiptDigest
+    localWindowStart := event.localWindowStart
+    localWindowEnd := event.localWindowEnd
+    commitLag := event.commitLag
+    anchorLag := event.anchorLag
+    resultLag := event.resultLag
+    speculativeLag := event.speculativeLag
+    admittedAt := event.observedAt }
+
+/-- Fenced generation/replay prefix shared by executable contribution admission. -/
+def decideContributionPrefix
+    (state : RunState)
+    (event : ContributionEvent) : ContributionPrefixDecision :=
   match contextAuthorityDisposition? state event.context with
-  | some disposition => noChange state disposition
+  | some disposition => .reject disposition
   | none =>
       if event.context.generation.value < state.generation.generation.value then
-        if state.lastResult.isSome then noChange state .catchUp
-        else noChange state .generationClosed
+        if state.lastResult.isSome then .reject .catchUp
+        else .reject .generationClosed
       else if event.context.generation.value >
           state.generation.generation.value then
-        noChange state .unknownIdentity
+        .reject .unknownIdentity
       else if event.context.attempt != state.generation.attempt then
-        noChange state .generationClosed
+        .reject .generationClosed
       else if event.context.ownerEpoch.value <
           state.generation.ownerEpoch.value then
-        noChange state .late
+        .reject .late
       else if event.context.ownerEpoch.value >
           state.generation.ownerEpoch.value then
-        noChange state .unknownIdentity
+        .reject .unknownIdentity
       else
         match state.generation.seen.find? (contributionKeyMatches event) with
         | some prior =>
-            if prior.envelopeDigest == event.envelopeDigest &&
-                prior.payloadDigest == event.payloadDigest &&
-                prior.exactTokens == event.exactTokens &&
-                prior.receipt == event.receipt &&
-                prior.receiptDigest == event.receiptDigest then
-              noChange state .identicalDuplicate
+            if contributionReplayMatches event prior then
+              .reject .identicalDuplicate
             else
-              noChange state .conflictingDuplicate
+              .reject .conflictingDuplicate
         | none =>
             if state.generation.status != .open then
               if (state.generation.status == .committed ||
                   state.generation.status == .applied) &&
                   state.lastResult.isSome then
-                noChange state .catchUp
+                .reject .catchUp
               else
-                noChange state .generationClosed
+                .reject .generationClosed
             else
-              match findPeer? state event.worker with
-              | none => noChange state .staleIncarnation
-              | some peer =>
-                if peer.node != event.node ||
-                    peer.incarnation != event.incarnation then
-                  noChange state .staleIncarnation
-                else if event.observedAt.value >
-                    state.generation.closeTick.value then
-                  noChange state .late
-                else if peer.phase != .ready ||
-                    peer.leaseUntil.value ≤ event.observedAt.value ||
-                    !isReadySnapshotMember state.generation event.worker
-                      event.node event.incarnation then
-                  noChange state .retryNextGeneration
-                else if state.generation.accepted.any
-                    (fun prior => prior.key.worker == event.worker) then
-                  noChange state .retryNextGeneration
-                else if event.exactTokens == 0 ||
-                    event.exactTokens > 9007199254740991 ||
-                    !event.finite || !event.checksumValid ||
-                    !event.layoutValid ||
-                    !validDigest event.envelopeDigest ||
-                    !validDigest event.payloadDigest ||
-                    !validDigest event.trainerSetDigest ||
-                    !validDigest event.receiptDigest ||
-                    !validOpaque event.receipt.value then
-                  noChange state .corruptNonfinite
-                else
-                  let baseLagValid :=
-                    event.context.generation.value ≥
-                        event.baseGeneration.value &&
-                    event.commitLag ==
-                      event.context.generation.value -
-                        event.baseGeneration.value
-                  let lagValid :=
-                    baseLagValid &&
-                    event.commitLag ≤ state.policy.maxCommitLag &&
-                    event.anchorLag ≤ state.policy.maxAnchorLag &&
-                    event.resultLag ≤ state.policy.maxResultLag &&
-                    event.speculativeLag ≤ state.policy.maxSpeculativeLag
-                  let v1Valid :=
-                    event.baseGeneration == event.context.generation &&
-                    event.baseDigest == state.generation.baseDigest &&
-                    event.commitLag == 0 &&
-                    event.anchorLag == 0 &&
-                    event.resultLag == 0 &&
-                    event.speculativeLag == 0
-                  let v21Valid :=
-                    event.localWindowEnd > event.localWindowStart &&
-                    (event.localWindowEnd - event.localWindowStart) %
-                        state.policy.kSteps == 0
-                  let policyValid :=
-                    match state.policy.kind with
-                    | .strictV1 => v1Valid
-                    | .asyncV21 => lagValid && v21Valid
-                  if !policyValid then
-                    if event.commitLag > state.policy.maxCommitLag ||
-                        event.anchorLag > state.policy.maxAnchorLag ||
-                        event.resultLag > state.policy.maxResultLag ||
-                        event.speculativeLag >
-                          state.policy.maxSpeculativeLag then
-                      noChange state .catchUp
-                    else
-                      noChange state .unknownIdentity
-                  else
-                    let record : ContributionRecord :=
-                      { key :=
-                          { generation := event.context.generation
-                            attempt := event.context.attempt
-                            worker := event.worker
-                            incarnation := event.incarnation
-                            sequence := event.sequence }
-                        node := event.node
-                        baseGeneration := event.baseGeneration
-                        baseDigest := event.baseDigest
-                        exactTokens := event.exactTokens
-                        envelopeDigest := event.envelopeDigest
-                        payloadDigest := event.payloadDigest
-                        trainerSetDigest := event.trainerSetDigest
-                        receipt := event.receipt
-                        receiptDigest := event.receiptDigest
-                        localWindowStart := event.localWindowStart
-                        localWindowEnd := event.localWindowEnd
-                        commitLag := event.commitLag
-                        anchorLag := event.anchorLag
-                        resultLag := event.resultLag
-                        speculativeLag := event.speculativeLag
-                        admittedAt := event.observedAt }
-                    let accepted :=
-                      insertContribution record state.generation.accepted
-                    let seen :=
-                      insertContribution record state.generation.seen
-                    acceptedState
-                      { state with
-                        generation :=
-                          { state.generation with accepted, seen }
-                        now :=
-                          ⟨max state.now.value event.observedAt.value⟩ }
+              .checkPeer
+
+/--
+The identity, generation, replay, close-time, and leased-READY admission
+decision.  It is a stage of the one executable transition, not a proof-only
+model.
+-/
+def decideContributionReady
+    (state : RunState)
+    (event : ContributionEvent) : ContributionReadyDecision :=
+  match decideContributionPrefix state event with
+  | .reject disposition => .reject disposition
+  | .checkPeer =>
+      match findPeer? state event.worker with
+      | none => .reject .staleIncarnation
+      | some peer =>
+          if peer.node != event.node ||
+              peer.incarnation != event.incarnation then
+            .reject .staleIncarnation
+          else if event.observedAt.value >
+              state.generation.closeTick.value then
+            .reject .late
+          else if !leasedReadyAdmissionGate state event peer then
+            .reject .retryNextGeneration
+          else if state.generation.accepted.any
+              (fun prior => prior.key.worker == event.worker) then
+            .reject .retryNextGeneration
+          else
+            .ready peer
+
+def decideContribution
+    (state : RunState) (event : ContributionEvent) : ContributionDecision :=
+  match decideContributionReady state event with
+  | .reject disposition => .reject disposition
+  | .ready _ =>
+      if event.exactTokens == 0 ||
+          event.exactTokens > 9007199254740991 ||
+          !event.finite || !event.checksumValid ||
+          !event.layoutValid ||
+          !validDigest event.envelopeDigest ||
+          !validDigest event.payloadDigest ||
+          !validDigest event.trainerSetDigest ||
+          !validDigest event.receiptDigest ||
+          !validOpaque event.receipt.value then
+        .reject .corruptNonfinite
+      else
+        let baseLagValid :=
+          event.context.generation.value ≥ event.baseGeneration.value &&
+          event.commitLag ==
+            event.context.generation.value - event.baseGeneration.value
+        let lagValid :=
+          baseLagValid &&
+          event.commitLag ≤ state.policy.maxCommitLag &&
+          event.anchorLag ≤ state.policy.maxAnchorLag &&
+          event.resultLag ≤ state.policy.maxResultLag &&
+          event.speculativeLag ≤ state.policy.maxSpeculativeLag
+        let v1Valid :=
+          event.baseGeneration == event.context.generation &&
+          event.baseDigest == state.generation.baseDigest &&
+          event.commitLag == 0 &&
+          event.anchorLag == 0 &&
+          event.resultLag == 0 &&
+          event.speculativeLag == 0
+        let v21Valid :=
+          event.localWindowEnd > event.localWindowStart &&
+          (event.localWindowEnd - event.localWindowStart) %
+              state.policy.kSteps == 0
+        let policyValid :=
+          match state.policy.kind with
+          | .strictV1 => v1Valid
+          | .asyncV21 => lagValid && v21Valid
+        if !policyValid then
+          if event.commitLag > state.policy.maxCommitLag ||
+              event.anchorLag > state.policy.maxAnchorLag ||
+              event.resultLag > state.policy.maxResultLag ||
+              event.speculativeLag >
+                state.policy.maxSpeculativeLag then
+            .reject .catchUp
+          else
+            .reject .unknownIdentity
+        else
+          .acceptContribution
+
+def applyContributionDecision
+    (state : RunState) (event : ContributionEvent) :
+    ContributionDecision → StepResult
+  | .reject .accepted => noChange state .unknownIdentity
+  | .reject .insufficientCohort => noChange state .unknownIdentity
+  | .reject .aborted => noChange state .unknownIdentity
+  | .reject disposition => noChange state disposition
+  | .acceptContribution =>
+      let record := contributionRecord event
+      let accepted :=
+        insertContribution record state.generation.accepted
+      let seen :=
+        insertContribution record state.generation.seen
+      acceptedState
+        { state with
+          generation := { state.generation with accepted, seen }
+          now := ⟨max state.now.value event.observedAt.value⟩ }
+
+def transitionContribution
+    (state : RunState) (event : ContributionEvent) : StepResult :=
+  applyContributionDecision state event (decideContribution state event)
 
 def floorSatisfied (state : RunState) : Bool :=
   uniqueBy (contributionWorkers state.generation.accepted) &&
@@ -820,10 +896,31 @@ def transitionOwnerLoss
                         state.generation.ownerReassignments + 1 }
                   now := ⟨max state.now.value event.observedAt.value⟩ }
 
-def transitionCommit
-    (state : RunState) (event : CommitGenerationEvent) : StepResult :=
+inductive CommitDecision where
+  | reject (disposition : Disposition)
+  | commit
+  deriving Repr, BEq, DecidableEq
+
+def commitRecord
+    (state : RunState) (event : CommitGenerationEvent)
+    (cohort : FrozenCohort) : CommitRecord :=
+  { generation := state.generation.generation
+    attempt := state.generation.attempt
+    ownerEpoch := state.generation.ownerEpoch
+    cohortDigest := cohort.cohortDigest
+    result := event.result
+    resultDigest := event.resultDigest
+    receipt := event.receipt
+    receiptDigest := event.receiptDigest
+    priorReceipt := event.priorReceipt
+    exactTokens := cohort.exactTokens
+    acceptedTokenClock :=
+      state.acceptedTokenClock + cohort.exactTokens }
+
+def decideCommit
+    (state : RunState) (event : CommitGenerationEvent) : CommitDecision :=
   match currentGenerationDisposition? state event.context with
-  | some disposition => noChange state disposition
+  | some disposition => .reject disposition
   | none =>
       match state.generation.commit with
       | some commit =>
@@ -833,48 +930,50 @@ def transitionCommit
               commit.receipt == event.receipt &&
               commit.receiptDigest == event.receiptDigest &&
               commit.priorReceipt == event.priorReceipt then
-            noChange state .identicalDuplicate
+            .reject .identicalDuplicate
           else
-            noChange state .conflictingDuplicate
+            .reject .conflictingDuplicate
       | none =>
           match state.generation.cohort with
-          | none => noChange state .insufficientCohort
+          | none => .reject .insufficientCohort
           | some cohort =>
               if state.generation.status != .closed then
-                noChange state .generationClosed
+                .reject .generationClosed
               else if cohort.cohortDigest != event.cohortDigest ||
                   event.priorReceipt != state.baseReceipt then
-                noChange state .conflictingDuplicate
+                .reject .conflictingDuplicate
               else if !validOpaque event.result.value ||
                   !validOpaque event.receipt.value ||
                   !validDigest event.resultDigest ||
                   !validDigest event.receiptDigest then
-                noChange state .corruptNonfinite
+                .reject .corruptNonfinite
               else
-                let newClock :=
-                  state.acceptedTokenClock + cohort.exactTokens
-                let commit : CommitRecord :=
-                  { generation := state.generation.generation
-                    attempt := state.generation.attempt
-                    ownerEpoch := state.generation.ownerEpoch
-                    cohortDigest := cohort.cohortDigest
-                    result := event.result
-                    resultDigest := event.resultDigest
-                    receipt := event.receipt
-                    receiptDigest := event.receiptDigest
-                    priorReceipt := event.priorReceipt
-                    exactTokens := cohort.exactTokens
-                    acceptedTokenClock := newClock }
-                acceptedState
-                  { state with
-                    generation :=
-                      { state.generation with
-                        status := .committed
-                        commit := some commit }
-                    acceptedTokenClock := newClock
-                    baseReceipt := event.receipt
-                    baseReceiptDigest := event.receiptDigest
-                    lastResult := some event.result }
+                .commit
+
+def applyCommitDecision
+    (state : RunState) (event : CommitGenerationEvent) :
+    CommitDecision → StepResult
+  | .reject .accepted => noChange state .unknownIdentity
+  | .reject disposition => noChange state disposition
+  | .commit =>
+      match state.generation.cohort with
+      | none => noChange state .unknownIdentity
+      | some cohort =>
+          let commit := commitRecord state event cohort
+          acceptedState
+            { state with
+              generation :=
+                { state.generation with
+                  status := .committed
+                  commit := some commit }
+              acceptedTokenClock := commit.acceptedTokenClock
+              baseReceipt := commit.receipt
+              baseReceiptDigest := commit.receiptDigest
+              lastResult := some commit.result }
+
+def transitionCommit
+    (state : RunState) (event : CommitGenerationEvent) : StepResult :=
+  applyCommitDecision state event (decideCommit state event)
 
 def transitionPublish
     (state : RunState) (event : PublishResultEvent) : StepResult :=
@@ -968,10 +1067,38 @@ def transitionTrainerApply
                           applyReceipts :=
                             state.applyReceipts ++ [receipt] }
 
-def transitionReduceNodeApply
-    (state : RunState) (event : ReduceNodeApplyEvent) : StepResult :=
+def matchingApplyReceipts
+    (state : RunState) (event : ReduceNodeApplyEvent) :
+    List ApplyReceipt :=
+  state.applyReceipts.filter fun receipt =>
+    receipt.generation == event.context.generation &&
+    receipt.node == event.node &&
+    receipt.worker == event.worker &&
+    receipt.peerIncarnation == event.peerIncarnation &&
+    receipt.result == event.result &&
+    receipt.resultDigest == event.resultDigest
+
+def nodeApplyAdmissionGate
+    (state : RunState) (event : ReduceNodeApplyEvent)
+    (peer : PeerRecord) : Bool :=
+  let matching := matchingApplyReceipts state event
+  peer.trainers.length == 8 &&
+  matching.length == 8 &&
+  uniqueBy (matching.map (·.trainer)) &&
+  (peer.trainers.map (·.trainer)).all
+    (fun trainer =>
+      matching.any (fun receipt => receipt.trainer == trainer))
+
+inductive NodeApplyDecision where
+  | reject (disposition : Disposition)
+  | reduce
+  deriving Repr, BEq, DecidableEq
+
+def decideNodeApply
+    (state : RunState) (event : ReduceNodeApplyEvent) :
+    NodeApplyDecision :=
   match currentGenerationDisposition? state event.context with
-  | some disposition => noChange state disposition
+  | some disposition => .reject disposition
   | none =>
       match state.nodeApplyReceipts.find? (fun receipt =>
           receipt.generation == event.context.generation &&
@@ -985,22 +1112,14 @@ def transitionReduceNodeApply
                 event.trainerReceiptDigest &&
               receipt.receipt == event.receipt &&
               receipt.receiptDigest == event.receiptDigest then
-            noChange state .identicalDuplicate
+            .reject .identicalDuplicate
           else
-            noChange state .conflictingDuplicate
+            .reject .conflictingDuplicate
       | none =>
           match state.mailbox, findPeer? state event.worker with
-          | none, _ => noChange state .deferred
-          | _, none => noChange state .staleIncarnation
+          | none, _ => .reject .deferred
+          | _, none => .reject .staleIncarnation
           | some mailbox, some peer =>
-              let matching :=
-                state.applyReceipts.filter fun receipt =>
-                  receipt.generation == event.context.generation &&
-                  receipt.node == event.node &&
-                  receipt.worker == event.worker &&
-                  receipt.peerIncarnation == event.peerIncarnation &&
-                  receipt.result == event.result &&
-                  receipt.resultDigest == event.resultDigest
               let cohortIncludesNode :=
                 match state.generation.cohort with
                 | none => false
@@ -1008,43 +1127,50 @@ def transitionReduceNodeApply
                     (cohortNodes cohort).any (· == event.node)
               if peer.node != event.node ||
                   peer.incarnation != event.peerIncarnation then
-                noChange state .staleIncarnation
+                .reject .staleIncarnation
               else if mailbox.result != event.result ||
                   mailbox.resultDigest != event.resultDigest ||
                   !cohortIncludesNode then
-                noChange state .conflictingDuplicate
-              else if peer.trainers.length != 8 ||
-                  matching.length != 8 ||
-                  !uniqueBy (matching.map (·.trainer)) ||
-                  !(peer.trainers.map (·.trainer)).all
-                    (fun trainer =>
-                      matching.any (fun receipt =>
-                        receipt.trainer == trainer)) then
-                noChange state .deferred
+                .reject .conflictingDuplicate
+              else if !nodeApplyAdmissionGate state event peer then
+                .reject .deferred
               else if !validDigest event.trainerReceiptDigest ||
                   !validDigest event.receiptDigest then
-                noChange state .corruptNonfinite
+                .reject .corruptNonfinite
               else
-                let nodeReceipt : NodeApplyReceipt :=
-                  { generation := event.context.generation
-                    node := event.node
-                    worker := event.worker
-                    peerIncarnation := event.peerIncarnation
-                    result := event.result
-                    resultDigest := event.resultDigest
-                    trainerReceiptDigest := event.trainerReceiptDigest
-                    receipt := event.receipt
-                    receiptDigest := event.receiptDigest }
-                let updated :=
-                  { state with
-                    nodeApplyReceipts :=
-                      state.nodeApplyReceipts ++ [nodeReceipt] }
-                let status :=
-                  if allCohortNodesApplied updated then .applied
-                  else updated.generation.status
-                acceptedState
-                  { updated with
-                    generation := { updated.generation with status } }
+                .reduce
+
+def nodeApplyReceipt (event : ReduceNodeApplyEvent) : NodeApplyReceipt :=
+  { generation := event.context.generation
+    node := event.node
+    worker := event.worker
+    peerIncarnation := event.peerIncarnation
+    result := event.result
+    resultDigest := event.resultDigest
+    trainerReceiptDigest := event.trainerReceiptDigest
+    receipt := event.receipt
+    receiptDigest := event.receiptDigest }
+
+def applyNodeApplyDecision
+    (state : RunState) (event : ReduceNodeApplyEvent) :
+    NodeApplyDecision → StepResult
+  | .reject .accepted => noChange state .unknownIdentity
+  | .reject disposition => noChange state disposition
+  | .reduce =>
+      let updated :=
+        { state with
+          nodeApplyReceipts :=
+            state.nodeApplyReceipts ++ [nodeApplyReceipt event] }
+      let status :=
+        if allCohortNodesApplied updated then .applied
+        else updated.generation.status
+      acceptedState
+        { updated with
+          generation := { updated.generation with status } }
+
+def transitionReduceNodeApply
+    (state : RunState) (event : ReduceNodeApplyEvent) : StepResult :=
+  applyNodeApplyDecision state event (decideNodeApply state event)
 
 def transitionLoss
     (state : RunState) (event : LossEvent) : StepResult :=
@@ -1185,26 +1311,156 @@ def transitionAbort
             generation := { state.generation with status := .aborted } }
           .aborted
 
+/-!
+The dispatcher seals authority fields that an event class is not permitted to
+change.  This is part of the executable kernel, not a proof-only projection:
+trace execution and theorem checking use the same wrappers.  The specialized
+wrappers make the independent fence, generation, and token namespaces
+explicit.
+-/
+def sealStableAuthority
+    (before : RunState) (result : StepResult) : StepResult :=
+  { result with
+    state :=
+      { result.state with
+        authority := before.authority
+        generation :=
+          { result.state.generation with
+            generation := before.generation.generation
+            cohort := before.generation.cohort
+            commit := before.generation.commit }
+        acceptedTokenClock := before.acceptedTokenClock
+        baseReceipt := before.baseReceipt
+        baseReceiptDigest := before.baseReceiptDigest
+        lastResult := before.lastResult
+        mailbox := before.mailbox } }
+
+def sealPublicationAuthority
+    (before : RunState) (result : StepResult) : StepResult :=
+  let sealed := sealStableAuthority before result
+  { sealed with
+    state := { sealed.state with mailbox := result.state.mailbox } }
+
+def sealCloseAuthority
+    (before : RunState) (result : StepResult) : StepResult :=
+  { result with
+    state :=
+      { result.state with
+        authority := before.authority
+        generation :=
+          { result.state.generation with
+            generation := before.generation.generation
+            cohort :=
+              match before.generation.cohort with
+              | some cohort => some cohort
+              | none => result.state.generation.cohort
+            commit := before.generation.commit }
+        acceptedTokenClock := before.acceptedTokenClock
+        baseReceipt := before.baseReceipt
+        baseReceiptDigest := before.baseReceiptDigest
+        lastResult := before.lastResult
+        mailbox := before.mailbox } }
+
+def sealCommitAuthority
+    (before : RunState) (result : StepResult) : StepResult :=
+  { result with
+    state :=
+      { result.state with
+        authority := before.authority
+        generation :=
+          { result.state.generation with
+            generation := before.generation.generation
+            cohort := before.generation.cohort
+            commit :=
+              match before.generation.commit with
+              | some commit => some commit
+              | none => result.state.generation.commit }
+        acceptedTokenClock :=
+          max before.acceptedTokenClock result.state.acceptedTokenClock
+        mailbox := before.mailbox } }
+
+def sealOpenAuthority
+    (before : RunState) (result : StepResult) : StepResult :=
+  { result with
+    state :=
+      { result.state with
+        authority := before.authority
+        generation :=
+          { result.state.generation with
+            generation :=
+              ⟨max before.generation.generation.value
+                result.state.generation.generation.value⟩ }
+        acceptedTokenClock := before.acceptedTokenClock
+        baseReceipt := before.baseReceipt
+        baseReceiptDigest := before.baseReceiptDigest
+        lastResult := before.lastResult } }
+
+def sealClaimAuthority
+    (before : RunState) (result : StepResult) : StepResult :=
+  { result with
+    state :=
+      { result.state with
+        authority :=
+          { result.state.authority with
+            fence :=
+              ⟨max before.authority.fence.value
+                result.state.authority.fence.value⟩ }
+        generation :=
+          { result.state.generation with
+            generation :=
+              ⟨max before.generation.generation.value
+                result.state.generation.generation.value⟩ }
+        acceptedTokenClock :=
+          max before.acceptedTokenClock result.state.acceptedTokenClock
+        baseReceipt := before.baseReceipt
+        baseReceiptDigest := before.baseReceiptDigest
+        lastResult := before.lastResult } }
+
+def enforceNonMutatingDisposition
+    (before : RunState) (result : StepResult) : StepResult :=
+  match result.disposition with
+  | .accepted | .insufficientCohort | .aborted => result
+  | disposition => noChange before disposition
+
+def transitionRaw (state : RunState) : Event → StepResult
+  | .claimFence event =>
+      sealClaimAuthority state (transitionClaimFence state event)
+  | .peerTransition event =>
+      sealStableAuthority state (transitionPeer state event)
+  | .registerTrainer event =>
+      sealStableAuthority state (transitionRegisterTrainer state event)
+  | .expirePeer event =>
+      sealStableAuthority state (transitionExpirePeer state event)
+  | .openGeneration event =>
+      sealOpenAuthority state (transitionOpen state event)
+  | .contribution event =>
+      sealStableAuthority state (transitionContribution state event)
+  | .closeGeneration event =>
+      sealCloseAuthority state (transitionClose state event)
+  | .ownerLoss event =>
+      sealStableAuthority state (transitionOwnerLoss state event)
+  | .commitGeneration event =>
+      sealCommitAuthority state (transitionCommit state event)
+  | .publishResult event =>
+      sealPublicationAuthority state (transitionPublish state event)
+  | .trainerApply event =>
+      sealStableAuthority state (transitionTrainerApply state event)
+  | .reduceNodeApply event =>
+      sealStableAuthority state (transitionReduceNodeApply state event)
+  | .loss event =>
+      sealStableAuthority state (transitionLoss state event)
+  | .restartPeer event =>
+      sealStableAuthority state (transitionRestartPeer state event)
+  | .abortGeneration event =>
+      sealStableAuthority state (transitionAbort state event)
+
 /--
 The single authoritative pure transition.  It is structurally total: every
 typed event produces a state and disposition, including stale, corrupt,
 duplicate, closed, late, insufficient, catch-up, and bounded-abort outcomes.
+Typed rejection/recovery dispositions are normalized to the exact pre-state.
 -/
-def transition (state : RunState) : Event → StepResult
-  | .claimFence event => transitionClaimFence state event
-  | .peerTransition event => transitionPeer state event
-  | .registerTrainer event => transitionRegisterTrainer state event
-  | .expirePeer event => transitionExpirePeer state event
-  | .openGeneration event => transitionOpen state event
-  | .contribution event => transitionContribution state event
-  | .closeGeneration event => transitionClose state event
-  | .ownerLoss event => transitionOwnerLoss state event
-  | .commitGeneration event => transitionCommit state event
-  | .publishResult event => transitionPublish state event
-  | .trainerApply event => transitionTrainerApply state event
-  | .reduceNodeApply event => transitionReduceNodeApply state event
-  | .loss event => transitionLoss state event
-  | .restartPeer event => transitionRestartPeer state event
-  | .abortGeneration event => transitionAbort state event
+def transition (state : RunState) (event : Event) : StepResult :=
+  enforceNonMutatingDisposition state (transitionRaw state event)
 
 end ResilientProtocol
