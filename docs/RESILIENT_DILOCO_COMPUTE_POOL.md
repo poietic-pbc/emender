@@ -262,16 +262,25 @@ Median-only cadence, checkpoint count, or foreground-idle fraction cannot hide
 tail stalls: bursty alternating K windows with approximately 200-second gaps
 fail the overlap gate even when their medians and checkpoints look healthy.
 
-Scale admission is sequential: deterministic simulation/unit/reference math;
-then a 2-node scripted gate covering delayed boot, late join, disappearance,
-new-incarnation rejoin, stale/duplicate rejection, owner failure, and
-continuation by a fresh allocation/fence; then the strict
-`4 -> 8 -> 16 -> 32 -> 64 -> 256` ladder. Each rung proves bounded
-memory/backpressure, deadlines, committed-token accounting, restart, and
-numerical tolerance before the next. The v2.1 scale path additionally requires
-ADR-002's reviewed finite close over its leased READY snapshot; it never closes
-at the two-node floor merely because two nodes arrived. A future enormous
-Frontier allocation uses this identical protocol.
+Scale admission is sequential. Deterministic simulation/unit/reference math
+must pass first. The current execution source is then physically qualified at
+exactly two nodes with a clean systems/overlap pass followed by the complete
+fault campaign, including successful newer-fence fresh-allocation recovery.
+Only that exact-source machine pass may authorize the short direct systems
+ladder `2 -> 8 -> 32 -> 128`; every live rung requires the immutable pass from
+its immediate predecessor. After 128, 256 nodes is an explicit evidence review
+only: there is no automatically authorized 256-node runner or submission.
+Four-, 16-, and 64-node rungs are not part of this policy.
+
+Each live rung proves bounded memory/backpressure, deadlines,
+committed-token accounting, restart, numerical tolerance, coherent immutable
+snapshot admission, immediate trainer resume, background compiled-CXI
+exchange/aggregation/checkpointing, later atomic apply, causal phase telemetry,
+and bounded foreground interruption before the next. The v2.1 scale path
+additionally requires ADR-002's reviewed finite close over its leased READY
+snapshot; it never closes at the two-node floor merely because two nodes
+arrived. Convergence and model quality remain a separate study and neither
+authorize nor block this systems ladder.
 
 ### Conformance checklist (required in every implementation/runner/scale task Validation)
 
@@ -333,10 +342,13 @@ V2.1 preserves the v1 scheduler claim/fence, READY membership, model-free compil
 point-to-point transport, no-all-rank-wait, no-Lustre/Python-dense-hot-path,
 no-central-full-model-broker, and atomic checkpoint requirements. It requires
 the v2.1 policy/schema/digest and native ABI/protocol boundary; v1 and v2.0
-records cannot be renamed. Qualification is exactly two nodes until numerical,
-failure/restart, clean performance, deterministic replay, and predeclared
-three-seed convergence gates pass and a separate review authorizes only the
-next rung.
+records cannot be renamed. Systems qualification is exactly two nodes until
+current-source clean, fault/restart, and newer-fence fresh-recovery machine
+verdicts pass and a separate authorization binds the exact source,
+policy/schema, native bundle/ABI/wire, launcher, seed, durable collector,
+causal telemetry, and V21S17 closure. That authorizes only the 8-node rung.
+Convergence/model quality is evaluated separately and is not a systems-scale
+prerequisite.
 
 ## Native data-plane binding
 
@@ -365,7 +377,7 @@ handling, redistribution, or shutdown.
 
 The compiled Cray-MPICH helper remains a numerical/performance reference and an
 explicit fixed-world fallback. Its launched-rank collectives do not satisfy the
-elastic failure-domain requirements. No real model or 4+ node native job is
+elastic failure-domain requirements. No real model or scale native job is
 admissible until the exact-code full-layout two-node synthetic CXI artifact
 required by NDP17 has passed and been retained. This adds a gate; it does not
 replace the sequential lifecycle/failure/restart ladder above.
@@ -394,7 +406,8 @@ Unresolved decisions are intentionally explicit: v1 production `Q_min`,
 `T_min`, optional
 fraction and retry deadlines per model size; v1 outer optimizer and checkpoint
 cadence; production shard placement/reassignment; and whether trainer inner
-state is ever checkpointed. ADR-002 fixes asynchronous math only for its exact
-two-node v2.1 profile; broader promotion remains gated by its acceptance
-criteria and scale-closure review. Until resolved by a reviewed ADR/config,
+state is ever checkpointed. ADR-002 fixes asynchronous math for v2.1 and
+authorizes scale only through the exact direct systems policy above; broader
+promotion remains gated by its acceptance criteria, immediate-predecessor
+machine pass, and scale-closure review. Until resolved by a reviewed ADR/config,
 implementations fail closed or use test-only values.

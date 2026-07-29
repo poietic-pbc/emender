@@ -13,12 +13,17 @@ import pytest
 
 from scripts.frontier import async_v21_terminal_collector as terminal_collector
 from scripts.frontier.run_async_v21_qualification import (
+    AUTHORIZATION_SCHEMA,
     EVIDENCE_ONLY_PATH_PREFIXES,
     EXECUTION_SOURCE_SCHEMA,
     FAULT_PHASE_SPECS,
     LINUX_SUN_PATH_BYTES,
     PAYLOAD_SCHEMA,
+    RUNG_PASS_SCHEMA,
+    SCALE_IDENTITY_SCHEMA,
+    SCALE_RUNGS,
     SEED_SHA256,
+    SYSTEMS_SCALE_LADDER,
     TOKENIZER_SHA256,
     V21ScaleClosure,
     _arguments,
@@ -46,6 +51,81 @@ SCALE_PARAMETERS = {
     "uses_launched_ranks": False,
     "wait_for_all_ready": False,
 }
+
+
+def _scale_identity_contract() -> dict[str, object]:
+    return {
+        "schema": SCALE_IDENTITY_SCHEMA,
+        "policy_id": "async-decoupled-v2.1-simple",
+        "policy_schema": "emender-async-policy-v2.1",
+        "payload_schema": PAYLOAD_SCHEMA,
+        "contribution_schema": "emender-native-e97-submission-v2.1",
+        "generation_schema": "emender-native-e97-generation-v2.1",
+        "native_abi": 0x00020001,
+        "native_wire": {"major": 2, "minor": 1},
+        "seed": {
+            "step": 2_300_930,
+            "accepted_tokens": 150_793_748_480,
+            "bytes": 7_719_680_116,
+            "sha256": SEED_SHA256,
+        },
+    }
+
+
+def _passing_systems_evidence() -> dict[str, object]:
+    return {
+        "qualification_phases": [
+            "clean",
+            "fault",
+            "fresh-recovery",
+        ],
+        "evidence_digests": {
+            "clean_terminal_verdict": "6" * 64,
+            "fault_campaign_verdict": "7" * 64,
+            "fresh_recovery_terminal_verdict": "8" * 64,
+            "causal_telemetry": "9" * 64,
+            "publication_receipt": "a" * 64,
+            "checkpoint_manifest": "b" * 64,
+        },
+        "durable_afterany_collector": True,
+        "collector_terminal_verdict": "passed",
+        "causal_telemetry_complete": True,
+        "publication_complete": True,
+        "snapshot_admission_seconds_max": 1,
+        "apply_swap_seconds_max": 60,
+        "foreground_result_wait_seconds_max": 0,
+        "forbidden_data_paths": [],
+        "leased_ready_finite_closure": True,
+        "immutable_safe_boundary_snapshots": True,
+        "immediate_trainer_resume": True,
+        "background_compiled_cxi": True,
+        "later_atomic_apply": True,
+        "checkpoint_recovery": True,
+        "fencing_idempotency": True,
+        "exact_token_eta_outer_one": True,
+        "changed_payload_only_retry": True,
+        "convergence_claim": False,
+    }
+
+
+def _scale_manifest_fields(nodes: int) -> dict[str, object]:
+    identity_contract = _scale_identity_contract()
+    identities = dict(IDENTITIES)
+    return {
+        "nodes": nodes,
+        "identities": identities,
+        "identity_contract": identity_contract,
+        "identity_digest": canonical_digest({
+            "identities": identities,
+            "identity_contract": identity_contract,
+        }),
+        "scheduler": {
+            "Nodes": nodes,
+            "Partition": "batch",
+            "QOS": "debug",
+        },
+        "systems_evidence": _passing_systems_evidence(),
+    }
 
 
 def _write(path: Path, value: dict) -> Path:
@@ -539,7 +619,7 @@ def test_v21_scale_rejects_missing_authorization_and_wrong_predecessor(
     with pytest.raises(ValueError, match="authorization"):
         build_plan(
             gate="scale",
-            nodes=4,
+            nodes=8,
             state_path=tmp_path / "state.json",
             evidence_root=tmp_path,
             parameters=SCALE_PARAMETERS,
@@ -547,24 +627,26 @@ def test_v21_scale_rejects_missing_authorization_and_wrong_predecessor(
         )
 
     authorization = _write(tmp_path / "authorization.json", {
-        "schema": "emender-async-v21-scale-authorization-v1",
+        "schema": AUTHORIZATION_SCHEMA,
         "status": "passed",
-        "authorized_nodes": 8,
-        "identities": IDENTITIES,
+        "authorized_nodes": 32,
+        "systems_scale_ladder": list(SYSTEMS_SCALE_LADDER),
+        "review_only_nodes": [256],
+        "convergence_required": False,
+        **_scale_manifest_fields(32),
         "review_signature": "signed-for-test",
         "closure": {"schema": "emender-v21s17-scale-closure-v1"},
     })
     predecessor = _write(tmp_path / "prior.json", {
-        "schema": "emender-async-v21-rung-pass-v1",
+        "schema": RUNG_PASS_SCHEMA,
         "status": "passed",
-        "nodes": 2,
-        "identities": IDENTITIES,
+        **_scale_manifest_fields(2),
         "review_signature": "signed-for-test",
     })
-    with pytest.raises(ValueError, match="predecessor.*4"):
+    with pytest.raises(ValueError, match="predecessor.*8"):
         build_plan(
             gate="scale",
-            nodes=8,
+            nodes=32,
             state_path=tmp_path / "state.json",
             evidence_root=tmp_path,
             parameters=SCALE_PARAMETERS,
@@ -690,7 +772,7 @@ def test_v21_scale_closure_rejects_launched_rank_and_unexplained_constant(
 
 @pytest.mark.parametrize(
     ("nodes", "predecessor_nodes"),
-    ((4, 2), (8, 4), (16, 8), (32, 16), (64, 32), (256, 64)),
+    ((8, 2), (32, 8), (128, 32)),
 )
 def test_v21_each_scale_rung_accepts_only_its_exact_predecessor(
     tmp_path: Path, nodes: int, predecessor_nodes: int,
@@ -729,19 +811,21 @@ def test_v21_each_scale_rung_accepts_only_its_exact_predecessor(
         "per_ready_worker_token_floor": 1,
     }
     authorization = _write(tmp_path / "authorization.json", {
-        "schema": "emender-async-v21-scale-authorization-v1",
+        "schema": AUTHORIZATION_SCHEMA,
         "status": "passed",
         "authorized_nodes": nodes,
+        "systems_scale_ladder": list(SYSTEMS_SCALE_LADDER),
+        "review_only_nodes": [256],
+        "convergence_required": False,
         "reviewed_ready_snapshot_size": nodes,
-        "identities": IDENTITIES,
+        **_scale_manifest_fields(nodes),
         "review_signature": "signed-for-test",
         "closure": closure,
     })
     predecessor = _write(tmp_path / "predecessor.json", {
-        "schema": "emender-async-v21-rung-pass-v1",
+        "schema": RUNG_PASS_SCHEMA,
         "status": "passed",
-        "nodes": predecessor_nodes,
-        "identities": IDENTITIES,
+        **_scale_manifest_fields(predecessor_nodes),
         "review_signature": "signed-for-test",
     })
     plan = build_plan(
@@ -761,13 +845,19 @@ def test_v21_each_scale_rung_accepts_only_its_exact_predecessor(
     assert "ASYNC_V21_SCALE_AUTHORIZATION_DIGEST=" in exported
     assert "ASYNC_V21_PRIOR_RUNG_PASS_DIGEST=" in exported
     assert "ASYNC_V21_SCALE_CLOSE_OFFSET_NS=" in exported
+    assert "ASYNC_V21_SCALE_IDENTITY_DIGEST=" in exported
+    assert plan["payload"]["scale_policy"] == {
+        "systems_scale_ladder": [2, 8, 32, 128],
+        "review_only_nodes": [256],
+        "convergence_required": False,
+    }
 
 
 def test_v21_scale_rejects_two_node_early_close_parameters(tmp_path: Path):
     with pytest.raises(ValueError, match="Q_min early close"):
         build_plan(
             gate="scale",
-            nodes=4,
+            nodes=8,
             state_path=tmp_path / "state.json",
             evidence_root=tmp_path,
             parameters={
@@ -776,6 +866,217 @@ def test_v21_scale_rejects_two_node_early_close_parameters(tmp_path: Path):
                 "wait_for_all_ready": False,
             },
             **IDENTITIES,
+        )
+
+
+def test_v21_direct_ladder_rejects_removed_rungs_and_review_only_256(
+    tmp_path: Path,
+):
+    assert SCALE_RUNGS == (8, 32, 128)
+    assert SYSTEMS_SCALE_LADDER == (2, 8, 32, 128)
+    for nodes in (4, 16, 64, 256):
+        with pytest.raises(ValueError, match=(
+            "review-only" if nodes == 256 else "2->8->32->128"
+        )):
+            build_plan(
+                gate="scale",
+                nodes=nodes,
+                state_path=tmp_path / f"state-{nodes}.json",
+                evidence_root=tmp_path,
+                parameters=SCALE_PARAMETERS,
+                **IDENTITIES,
+            )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        (lambda value: value["identities"].update(
+            source_digest="f" * 64), "identity"),
+        (lambda value: value["identities"].update(
+            policy_digest="f" * 64), "identity"),
+        (lambda value: value["identities"].update(
+            bundle_digest="f" * 64), "identity"),
+        (lambda value: value["identities"].update(
+            seed_digest="f" * 64), "identity"),
+        (lambda value: value["identity_contract"].update(
+            policy_schema="emender-async-policy-v2.0"), "identity contract"),
+        (lambda value: value["identity_contract"].update(
+            native_abi=1), "identity contract"),
+        (lambda value: value["identity_contract"]["native_wire"].update(
+            major=1), "identity contract"),
+        (lambda value: value["identity_contract"]["seed"].update(
+            step=2_300_929), "identity contract"),
+    ),
+)
+def test_v21_scale_rejects_wrong_exact_identity(
+    tmp_path: Path, mutation, message: str,
+):
+    authorization_fields = _scale_manifest_fields(8)
+    mutation(authorization_fields)
+    authorization = _write(tmp_path / "authorization.json", {
+        "schema": AUTHORIZATION_SCHEMA,
+        "status": "passed",
+        "authorized_nodes": 8,
+        "systems_scale_ladder": list(SYSTEMS_SCALE_LADDER),
+        "review_only_nodes": [256],
+        "convergence_required": False,
+        "reviewed_ready_snapshot_size": 8,
+        **authorization_fields,
+        "review_signature": "signed-for-test",
+        "closure": {},
+    })
+    predecessor = _write(tmp_path / "predecessor.json", {
+        "schema": RUNG_PASS_SCHEMA,
+        "status": "passed",
+        **_scale_manifest_fields(2),
+        "review_signature": "signed-for-test",
+    })
+    with pytest.raises(ValueError, match=message):
+        build_plan(
+            gate="scale",
+            nodes=8,
+            state_path=tmp_path / "state.json",
+            evidence_root=tmp_path,
+            parameters=SCALE_PARAMETERS,
+            authorization_path=authorization,
+            predecessor_path=predecessor,
+            allow_test_signatures=True,
+            **IDENTITIES,
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        (lambda value: value["evidence_digests"].pop(
+            "causal_telemetry"), "evidence digests"),
+        (lambda value: value.pop("durable_afterany_collector"), "collector"),
+        (lambda value: value.update(
+            collector_terminal_verdict="failed"), "collector"),
+        (lambda value: value.update(
+            causal_telemetry_complete=False), "causal telemetry"),
+        (lambda value: value.update(
+            publication_complete=False), "publication"),
+        (lambda value: value.update(
+            snapshot_admission_seconds_max=None), "foreground"),
+        (lambda value: value.update(
+            apply_swap_seconds_max=61), "foreground"),
+        (lambda value: value.update(
+            foreground_result_wait_seconds_max=1), "foreground"),
+        (lambda value: value.update(
+            forbidden_data_paths=["lustre-dense"]), "forbidden data"),
+        (lambda value: value.update(
+            checkpoint_recovery=False), "checkpoint recovery"),
+        (lambda value: value.update(
+            fencing_idempotency=False), "fencing/idempotency"),
+        (lambda value: value.update(
+            exact_token_eta_outer_one=False), "exact-token"),
+        (lambda value: value.update(
+            changed_payload_only_retry=False), "changed-payload"),
+        (lambda value: value.update(
+            convergence_claim=True), "convergence"),
+    ),
+)
+def test_v21_scale_rejects_incomplete_predecessor_systems_evidence(
+    tmp_path: Path, mutation, message: str,
+):
+    arrival = _write(tmp_path / "arrival.json", {
+        "schema": "emender-async-v21-two-node-arrivals-v1",
+        "status": "passed",
+        "nodes": 2,
+        "samples_ns": [10, 20, 30],
+    })
+    stage = _write(tmp_path / "stage.json", {
+        "schema": "emender-async-v21-two-node-stages-v1",
+        "status": "passed",
+        "nodes": 2,
+        "close_to_latest_ns": [40, 50, 60],
+        "cadence_ns": [15, 20, 25],
+    })
+    closure = {
+        "schema": "emender-v21s17-scale-closure-v1",
+        "ready_snapshot_source": "leased-ready-at-group-open",
+        "arrival_evidence": {
+            "path": arrival.name,
+            "digest": json.loads(arrival.read_text())["manifest_digest"],
+        },
+        "stage_evidence": {
+            "path": stage.name,
+            "digest": json.loads(stage.read_text())["manifest_digest"],
+        },
+        "quantile": {"numerator": 1, "denominator": 1},
+        "margin": {"numerator": 3, "denominator": 2},
+        "include_all_complete_admissible_preclose": True,
+        "close_on_q_min": False,
+        "uses_launched_ranks": False,
+        "wait_for_all_ready": False,
+        "stable_diversity_floor": 2,
+        "per_ready_worker_token_floor": 1,
+    }
+    authorization = _write(tmp_path / "authorization.json", {
+        "schema": AUTHORIZATION_SCHEMA,
+        "status": "passed",
+        "authorized_nodes": 8,
+        "systems_scale_ladder": list(SYSTEMS_SCALE_LADDER),
+        "review_only_nodes": [256],
+        "convergence_required": False,
+        "reviewed_ready_snapshot_size": 8,
+        **_scale_manifest_fields(8),
+        "review_signature": "signed-for-test",
+        "closure": closure,
+    })
+    predecessor_fields = _scale_manifest_fields(2)
+    mutation(predecessor_fields["systems_evidence"])
+    predecessor = _write(tmp_path / "predecessor.json", {
+        "schema": RUNG_PASS_SCHEMA,
+        "status": "passed",
+        **predecessor_fields,
+        "review_signature": "signed-for-test",
+    })
+    with pytest.raises(ValueError, match=message):
+        build_plan(
+            gate="scale",
+            nodes=8,
+            state_path=tmp_path / "state.json",
+            evidence_root=tmp_path,
+            parameters=SCALE_PARAMETERS,
+            authorization_path=authorization,
+            predecessor_path=predecessor,
+            allow_test_signatures=True,
+            **IDENTITIES,
+        )
+
+
+@pytest.mark.parametrize(
+    ("scheduler", "message"),
+    (
+        ({"Nodes": 4, "Partition": "batch", "QOS": "debug"}, "node"),
+        ({"Nodes": 2, "Partition": "killable", "QOS": "debug"}, "Partition"),
+        ({"Nodes": 2, "Partition": "batch", "QOS": "normal"}, "QOS"),
+    ),
+)
+def test_v21_scale_rejects_wrong_predecessor_scheduler(
+    tmp_path: Path, scheduler: dict[str, object], message: str,
+):
+    fields = _scale_manifest_fields(2)
+    fields["scheduler"] = scheduler
+    predecessor = _write(tmp_path / "predecessor.json", {
+        "schema": RUNG_PASS_SCHEMA,
+        "status": "passed",
+        **fields,
+        "review_signature": "signed-for-test",
+    })
+    with pytest.raises(ValueError, match=message):
+        # The predecessor is validated before closure evidence is consumed.
+        from scripts.frontier.run_async_v21_qualification import (
+            validate_rung_pass,
+        )
+        validate_rung_pass(
+            predecessor,
+            expected_nodes=2,
+            expected_identities=IDENTITIES,
+            allow_test_signatures=True,
         )
 
 

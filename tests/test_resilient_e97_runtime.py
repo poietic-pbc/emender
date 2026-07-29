@@ -568,7 +568,7 @@ def test_native_four_node_peer_schedule_is_bounded_and_deterministic():
     manager = ROLE.read_text()[ROLE.read_text().index("def _native_manager(args)"):]
     assert "native E97 v1 owner exchange currently requires exactly two nodes" not in manager
     assert "async-decoupled-v2 qualification permits exactly two nodes" not in manager
-    assert "args.node_count not in (2, 4, 8, 16, 32, 64, 256)" in manager
+    assert "args.node_count not in (2, 8, 32, 128)" in manager
     assert "for peer_endpoint in remote_endpoints" in manager
     assert "_native_sharded_owner_reduce(" in manager
 

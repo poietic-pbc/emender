@@ -1,9 +1,10 @@
 # ADR-002: simple asynchronous DiLoCo v2.1
 
 **Status:** Normative implementation authority for
-`async-decoupled-v2.1-simple`, accepted for implementation and exact two-node
-qualification only (2026-07-25). It does not authorize a Slurm submission,
-production use, or a 4+ node run.
+`async-decoupled-v2.1-simple`, accepted for implementation and amended with the
+direct systems-scale policy on 2026-07-29. This document does not itself
+authorize a Slurm submission: current-source physical qualification and every
+immutable authorization/predecessor gate below remain mandatory.
 
 **Authority:** This ADR specializes
 [Resilient DiLoCo Compute Pool](RESILIENT_DILOCO_COMPUTE_POOL.md). That
@@ -337,10 +338,14 @@ snapshot admission through reload-verified fenced `latest`) has a separate
 pass/fail result; it is not foreground idle and cannot be hidden from its own
 deadline.
 
-Every live gate is exactly two nodes with `Partition=batch` and `QOS=debug`.
-Both fields are retained separately while queued/running and in terminal
-accounting. All five gates below must pass on the same reviewed policy,
-source, native bundle, seed, and configuration:
+Every two-node live systems gate uses exactly `Partition=batch` and
+`QOS=debug`. Both fields are retained separately while queued/running and in
+terminal accounting. The current-source systems qualification consists of a
+clean gate followed by fault/rejoin and newer-fence fresh-recovery phases on
+the same reviewed policy, source, native bundle, seed, and configuration.
+Focused numerical and deterministic replay checks remain source preflight and
+live semantic requirements. Convergence is listed separately because it is a
+model-quality study, not a systems-scale prerequisite:
 
 1. **Numerical:** lag 0/1/2 admission and lag-3 drop/defer, unequal exact
    tokens, digest-order binary64 agreement, `eta_outer=1.0`, cumulative
@@ -363,7 +368,8 @@ source, native bundle, seed, and configuration:
 4. **Deterministic replay:** two executions of the same frozen contribution
    schedule produce byte-identical result, outer state, token clock, and
    manifest roots after removing timestamps and allocation identities.
-5. **Convergence:** three predeclared seeds compare v2.1 with strict fresh
+5. **Separate convergence/model-quality study:** three predeclared seeds
+   compare v2.1 with strict fresh
    stateless `eta_outer=1.0` from the same checkpoint, data order, exact-token
    budget, and K40 count for at least 100 commits. The paired 95% confidence
    interval upper bound for v2.1 minus baseline held-out BPB is at most
@@ -378,18 +384,55 @@ node-1 apply markers; they do not qualify v2.1.
 ## Promotion and scale-only closure
 
 Two-node success creates no scale authorization. A separate review must verify
-all five gates and explicitly issue a pass for the exact policy/source/bundle/
-seed digest. Promotion is strictly ordered:
+the current-source clean, fault/rejoin, and fresh-recovery machine passes,
+including durable scheduler-owned afterany collectors, complete atomic
+publication, causal phase/tail telemetry, bounded foreground interruptions,
+and absence of forbidden data paths. It explicitly binds the exact
+policy/schema, source, native bundle/ABI/wire, launcher, seed, and closure
+identities. The convergence study above is separate and cannot substitute for,
+authorize, or block this systems decision. Promotion is strictly ordered:
 
 ```text
-two-node gates -> review -> 4 -> 8 -> 16 -> 32 -> 64 -> 256
+current-source 2-node clean + fault/rejoin + fresh-recovery
+  -> authorize 8 -> 32 -> 128 -> explicit 256 review
 ```
 
 Every rung requires an immutable pass from its immediate predecessor. Failure,
 missing evidence, or an unchanged failed payload does not advance the ladder.
+Four-, 16-, and 64-node rungs are not part of this policy. The 256 review is a
+go/no-go evidence review only and cannot submit or auto-create a runner.
+
+The signed authorization schema is
+`emender-async-v21-direct-scale-authorization-v2`; the signed predecessor
+machine-pass schema is `emender-async-v21-direct-rung-pass-v2`. Both carry:
+
+- the exact node identity and scheduler tuple (`Nodes=<bound rung>`,
+  `Partition=batch`, `QOS=debug`);
+- the exact source, v2.1 policy digest, native bundle, final seed, and launcher
+  digests plus `emender-async-v21-direct-scale-identity-v1`, which pins the
+  policy/schema, contribution/manifest schema, `NDP_ABI_V21 = 0x00020001`,
+  wire `2.1`, and final E97 step/token/size/SHA identity;
+- ordered `clean`, `fault`, and `fresh-recovery` phase identities and SHA-256
+  references for their terminal verdicts, causal telemetry, complete
+  publication receipt, and recoverable checkpoint manifest;
+- a passed scheduler-owned durable `afterany` collector verdict, complete
+  causal telemetry and publication, `snapshot_admission <= 1 s`,
+  `apply_swap <= 60 s`, zero foreground result wait, and an empty forbidden
+  data-path list;
+- affirmative leased-READY finite closure, coherent immutable snapshot,
+  immediate trainer resume, compiled-CXI background work, later atomic apply,
+  checkpoint recovery, fencing/idempotency, exact-token `eta_outer=1`, and
+  changed-payload-only retry facts; and
+- `convergence_claim=false`. The authorization additionally binds
+  `systems_scale_ladder=[2,8,32,128]`, `review_only_nodes=[256]`, and
+  `convergence_required=false`.
+
+Unknown, partial, wrongly scheduled, failed, skipped, wrong-identity, or
+digest-inconsistent records fail closed. These records are machine
+authorization, not evaluator prose.
 
 The two-node `Q_min=2` close rule is never promotable as a scale early-close
-rule. Before 4+ nodes, the promotion manifest MUST pin a deterministic finite
+rule. Before any scale rung, the authorization MUST pin a deterministic finite
 closure function over the leased READY snapshot `R_g` taken at group open:
 
 ```text
@@ -409,7 +452,7 @@ Missing or expired peers do not extend `C_g`.
 
 This is neither a wait for launched ranks nor an all-READY barrier. Launched
 rank count never appears in the formula, membership, floor, or evidence.
-Without a reviewed, evidence-derived finite formula, every 4+ render,
+Without a reviewed, evidence-derived finite formula, every scale render,
 preflight, or submission fails closed.
 
 ## Historical v2.0 disposition
@@ -429,7 +472,8 @@ conformance checklist, all R01–R16, all NDP01–NDP17, all V21S01–V21S17, an
 ISP01–ISP07. It must name the applicable failure/deadline path, exact
 minimum-progress floor, policy/schema/digests, committed checkpoint evidence,
 phase-timing/foreground-idle evidence, and exact validation commands. A scale
-task must additionally cite the passed promotion and predecessor manifests
+task must additionally cite the passed systems authorization and predecessor
+manifests
 plus the reviewed scale-closure calculation. No task may claim conformance by
 satisfying only the v2.1 rows; the mapped R and NDP requirements remain
 independently normative.

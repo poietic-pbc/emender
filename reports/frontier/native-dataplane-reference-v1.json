@@ -307,7 +307,7 @@
     "python_dense_tcp_allowed": false,
     "production_provider_required": "cxi",
     "minimum_progress_floor": "configured Q_min complete READY node peers and T_min > 0 accepted tokens before the generation deadline",
-    "scale_gate": "G0 local, G1 two-node CXI probe, G2 full-layout two-node synthetic, G3 real two-node, G4 failure/rejoin, G5 fresh-allocation restart, then ordered G6 4/8/32/64/256 scale"
+    "scale_gate": "G0 local, G1 two-node CXI probe, G2 full-layout two-node synthetic, current-source G3 clean, G4 failure/rejoin, G5 fresh-allocation restart, then direct G6 8/32/128 systems scale and explicit 256 review"
   },
   "evidence": {
     "repository": [
@@ -325,15 +325,15 @@
       },
       {
         "path": "docs/RESILIENT_DILOCO_COMPUTE_POOL.md",
-      "sha256": "8cc55c995a481989fe4606bea947bde913739ca9c372a48753bbb3d1aea479de"
+      "sha256": "967a6b4d6c21f23e7e028eab06f46da75bf2d289fe3bff05b527efe91ccf9dd9"
       },
       {
         "path": "docs/RESILIENT_DILOCO_GAP_MATRIX.md",
-      "sha256": "f31db54adea35335f1bdfdabe3ae27a6496b006447bc1162dc389f22a62adec2"
+      "sha256": "95cbfe89bfabc45d7df759ae8bbbefd337fb46f1d4c3d75868a6708daa50fc00"
       },
       {
         "path": "docs/NATIVE_RESILIENT_DILOCO_DATAPLANE.md",
-      "sha256": "62c3d4200cba7098070e8c78d10eb5de36baafed1a4c6027e0454d1c5bc72da9"
+      "sha256": "ced4d7f9b091d5895b67ecb0b76d40a1a2749ecd97921c510e482dd524c13d90"
       },
       {
         "path": "reports/resilient-e97-deterministic-reducer-numerics-20260717.json",

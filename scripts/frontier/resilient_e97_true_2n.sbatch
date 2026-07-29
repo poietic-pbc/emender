@@ -27,21 +27,24 @@ APPROVED_EMENDER_CONDA_ENV=/lustre/orion/bif148/scratch/erikgarrison/emender/.en
 }
 RESILIENT_E97_NODE_COUNT=${RESILIENT_E97_NODE_COUNT:-2}
 case "$RESILIENT_E97_NODE_COUNT" in
-  2|4|8|16|32|64|256) ;;
-  *) echo "async-decoupled-v2.1 node count is outside the serial ladder" >&2; exit 64 ;;
+  2|8|32|128) ;;
+  256) echo "async-decoupled-v2.1 256 is review-only; no runner is authorized" >&2; exit 64 ;;
+  *) echo "async-decoupled-v2.1 node count is outside the direct systems ladder" >&2; exit 64 ;;
 esac
-if ((RESILIENT_E97_NODE_COUNT >= 4)); then
+if ((RESILIENT_E97_NODE_COUNT > 2)); then
   [[ ${ASYNC_V21_GATE:-} == scale ]] || {
-    echo "4+ nodes require the canonical v2.1 scale controller" >&2; exit 64;
+    echo "direct scale nodes require the canonical v2.1 scale controller" >&2; exit 64;
   }
   : "${ASYNC_V21_SCALE_AUTHORIZATION:?missing immutable scale authorization}"
   : "${ASYNC_V21_SCALE_AUTHORIZATION_DIGEST:?missing scale authorization digest}"
   : "${ASYNC_V21_PRIOR_RUNG_PASS:?missing immediately preceding passed rung}"
   : "${ASYNC_V21_PRIOR_RUNG_PASS_DIGEST:?missing prior-rung manifest digest}"
   : "${ASYNC_V21_SCALE_CLOSURE_DIGEST:?missing reviewed V21S17 closure}"
+  : "${ASYNC_V21_SCALE_IDENTITY_DIGEST:?missing exact scale identity digest}"
   : "${ASYNC_V21_SCALE_CLOSE_OFFSET_NS:?missing empirical V21S17 close}"
   : "${ASYNC_V21_SCALE_STABLE_DIVERSITY_FLOOR:?missing stable diversity floor}"
   : "${ASYNC_V21_SCALE_PER_READY_WORKER_TOKEN_FLOOR:?missing exact-token floor}"
+  : "${ASYNC_V21_TRUSTED_REVIEWER_KEY:?missing trusted scale reviewer key}"
 fi
 export EMENDER_CONDA_ENV
 source "$REPO/scripts/frontier/frontier_runtime_env.sh"
@@ -53,20 +56,26 @@ TRAIN_PYTHON_BIN=$(command -v python || command -v python3)
 [[ $(realpath "$TRAIN_PYTHON_BIN") == $(realpath "$APPROVED_EMENDER_CONDA_ENV/bin/python") ]] || {
   echo "activated Python is not the approved immutable runtime" >&2; exit 64;
 }
-if ((RESILIENT_E97_NODE_COUNT >= 4)); then
+if ((RESILIENT_E97_NODE_COUNT > 2)); then
   "$TRAIN_PYTHON_BIN" - \
     "$ASYNC_V21_SCALE_AUTHORIZATION" \
     "$ASYNC_V21_SCALE_AUTHORIZATION_DIGEST" \
     "$ASYNC_V21_PRIOR_RUNG_PASS" \
     "$ASYNC_V21_PRIOR_RUNG_PASS_DIGEST" \
+    "$ASYNC_V21_SCALE_IDENTITY_DIGEST" \
+    "$ASYNC_V21_TRUSTED_REVIEWER_KEY" \
     "$RESILIENT_E97_NODE_COUNT" <<'PY'
+import base64
 import hashlib
 import json
+from pathlib import Path
 import sys
 
-authorization_path, authorization_digest, prior_path, prior_digest = sys.argv[1:5]
-nodes = int(sys.argv[5])
-predecessor = {4: 2, 8: 4, 16: 8, 32: 16, 64: 32, 256: 64}[nodes]
+from cryptography.hazmat.primitives.serialization import load_pem_public_key
+
+authorization_path, authorization_digest, prior_path, prior_digest, identity_digest, reviewer_key_path = sys.argv[1:7]
+nodes = int(sys.argv[7])
+predecessor = {8: 2, 32: 8, 128: 32}[nodes]
 
 def verified(path, digest, schema):
     value = json.load(open(path, encoding="utf-8"))
@@ -80,12 +89,149 @@ def verified(path, digest, schema):
         raise SystemExit("immutable v2.1 scale manifest verification failed")
     return value
 
+def review_verified(value):
+    signature = value.get("review_signature")
+    public_bytes = Path(reviewer_key_path).resolve().read_bytes()
+    if (
+        not isinstance(signature, dict)
+        or signature.get("algorithm") != "ed25519"
+        or signature.get("public_key_sha256")
+        != hashlib.sha256(public_bytes).hexdigest()
+    ):
+        return False
+    signed = {
+        key: item for key, item in value.items()
+        if key not in {"manifest_digest", "review_signature"}
+    }
+    try:
+        load_pem_public_key(public_bytes).verify(
+            base64.b64decode(signature["signature_base64"], validate=True),
+            b"emender-async-v21-review-v1\0" + json.dumps(
+                signed,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode(),
+        )
+    except Exception:
+        return False
+    return True
+
 authorization = verified(
     authorization_path, authorization_digest,
-    "emender-async-v21-scale-authorization-v1")
+    "emender-async-v21-direct-scale-authorization-v2")
 prior = verified(
-    prior_path, prior_digest, "emender-async-v21-rung-pass-v1")
-if authorization.get("authorized_nodes") != nodes or prior.get("nodes") != predecessor:
+    prior_path, prior_digest, "emender-async-v21-direct-rung-pass-v2")
+expected_contract = {
+    "schema": "emender-async-v21-direct-scale-identity-v1",
+    "policy_id": "async-decoupled-v2.1-simple",
+    "policy_schema": "emender-async-policy-v2.1",
+    "payload_schema": "emender-async-v21-qualification-payload-v1",
+    "contribution_schema": "emender-native-e97-submission-v2.1",
+    "generation_schema": "emender-native-e97-generation-v2.1",
+    "native_abi": 0x00020001,
+    "native_wire": {"major": 2, "minor": 1},
+    "seed": {
+        "step": 2300930,
+        "accepted_tokens": 150793748480,
+        "bytes": 7719680116,
+        "sha256":
+        "0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2",
+    },
+}
+expected_identity_names = {
+    "source_digest",
+    "policy_digest",
+    "bundle_digest",
+    "seed_digest",
+    "launcher_digest",
+}
+def exact_identity(value):
+    identities = value.get("identities")
+    if (
+        value.get("identity_contract") != expected_contract
+        or not isinstance(identities, dict)
+        or set(identities) != expected_identity_names
+        or identities.get("seed_digest") != expected_contract["seed"]["sha256"]
+        or any(
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+            for digest in identities.values()
+        )
+    ):
+        return False
+    actual = hashlib.sha256(json.dumps(
+        {
+            "identities": identities,
+            "identity_contract": expected_contract,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode()).hexdigest()
+    return actual == identity_digest == value.get("identity_digest")
+expected_scheduler = {"Nodes": nodes, "Partition": "batch", "QOS": "debug"}
+expected_prior_scheduler = {
+    "Nodes": predecessor, "Partition": "batch", "QOS": "debug"}
+required_true = {
+    "durable_afterany_collector",
+    "causal_telemetry_complete",
+    "publication_complete",
+    "leased_ready_finite_closure",
+    "immutable_safe_boundary_snapshots",
+    "immediate_trainer_resume",
+    "background_compiled_cxi",
+    "later_atomic_apply",
+    "checkpoint_recovery",
+    "fencing_idempotency",
+    "exact_token_eta_outer_one",
+    "changed_payload_only_retry",
+}
+def complete_systems_evidence(value):
+    return (
+        isinstance(value, dict)
+        and value.get("qualification_phases")
+        == ["clean", "fault", "fresh-recovery"]
+        and set(value.get("evidence_digests", {})) == {
+            "clean_terminal_verdict",
+            "fault_campaign_verdict",
+            "fresh_recovery_terminal_verdict",
+            "causal_telemetry",
+            "publication_receipt",
+            "checkpoint_manifest",
+        }
+        and all(
+            isinstance(digest, str)
+            and len(digest) == 64
+            and all(character in "0123456789abcdef" for character in digest)
+            for digest in value.get("evidence_digests", {}).values()
+        )
+        and value.get("collector_terminal_verdict") == "passed"
+        and all(value.get(field) is True for field in required_true)
+        and value.get("snapshot_admission_seconds_max", 2) <= 1
+        and value.get("apply_swap_seconds_max", 61) <= 60
+        and value.get("foreground_result_wait_seconds_max") == 0
+        and value.get("forbidden_data_paths") == []
+        and value.get("convergence_claim") is False
+    )
+if (
+    authorization.get("authorized_nodes") != nodes
+    or authorization.get("nodes") != nodes
+    or authorization.get("systems_scale_ladder") != [2, 8, 32, 128]
+    or authorization.get("review_only_nodes") != [256]
+    or authorization.get("convergence_required") is not False
+    or not review_verified(authorization)
+    or not review_verified(prior)
+    or not exact_identity(authorization)
+    or not exact_identity(prior)
+    or authorization.get("identities") != prior.get("identities")
+    or authorization.get("scheduler") != expected_scheduler
+    or prior.get("scheduler") != expected_prior_scheduler
+    or not complete_systems_evidence(authorization.get("systems_evidence"))
+    or not complete_systems_evidence(prior.get("systems_evidence"))
+    or prior.get("nodes") != predecessor
+):
     raise SystemExit("v2.1 scale authorization/predecessor rung mismatch")
 PY
 fi

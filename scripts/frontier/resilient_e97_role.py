@@ -1285,7 +1285,7 @@ def _pool_config(
     scale = int(args.node_count) >= 4
     if scale and os.environ.get("ASYNC_V21_GATE") != "scale":
         raise ValueError(
-            "4+ nodes require the authorized v2.1 scale controller")
+            "direct scale nodes require the authorized v2.1 scale controller")
     scale_values = {}
     if scale:
         required = (
@@ -1296,7 +1296,7 @@ def _pool_config(
         )
         if any(not os.environ.get(name) for name in required):
             raise ValueError(
-                "4+ nodes reject the two-node Q_min early-close path; "
+                "direct scale nodes reject the two-node Q_min early-close path; "
                 "a complete V21S17 closure is required")
         close_offset_ns = int(
             os.environ["ASYNC_V21_SCALE_CLOSE_OFFSET_NS"])
@@ -2265,7 +2265,7 @@ def _native_manager(args) -> int:
     pool_client = None
     coordination_sequence = _cohort_restart_sequence() + 1
     if args.node_count > 1:
-        if args.node_count not in (2, 4, 8, 16, 32, 64, 256):
+        if args.node_count not in (2, 8, 32, 128):
             raise ValueError(
                 "async-decoupled-v2.1 qualification requires an exact "
                 "serial-ladder node count")

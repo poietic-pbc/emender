@@ -224,10 +224,18 @@ def test_v21_launcher_defaults_two_nodes_and_scale_requires_serial_ladder():
     ).read_text()
 
     assert "RESILIENT_E97_NODE_COUNT=${RESILIENT_E97_NODE_COUNT:-2}" in launcher
-    assert "2|4|8|16|32|64|256" in launcher
+    assert "2|8|32|128" in launcher
+    assert "4|16|64|256" not in launcher
+    assert "256 is review-only" in launcher
     assert '[[ ${ASYNC_V21_GATE:-} == scale ]]' in launcher
     assert "ASYNC_V21_SCALE_AUTHORIZATION" in launcher
     assert "ASYNC_V21_PRIOR_RUNG_PASS" in launcher
+    assert "ASYNC_V21_SCALE_IDENTITY_DIGEST" in launcher
+    assert "ASYNC_V21_TRUSTED_REVIEWER_KEY" in launcher
+    assert "review_verified(authorization)" in launcher
+    assert "review_verified(prior)" in launcher
+    assert '"native_abi": 0x00020001' in launcher
+    assert '"native_wire": {"major": 2, "minor": 1}' in launcher
     assert '[[ ${SLURM_JOB_NUM_NODES:?} == "$RESILIENT_E97_NODE_COUNT" ]]' in launcher
     assert "--nodes=$RESILIENT_E97_NODE_COUNT --ntasks=$RESILIENT_E97_NODE_COUNT" in launcher
     assert "--node-count $RESILIENT_E97_NODE_COUNT" in launcher
