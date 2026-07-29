@@ -1,0 +1,356 @@
+{
+  "schema": "emender-async-v21-two-node-terminal-recovery-v1",
+  "task_id": "complete-v21-current-rc-2n",
+  "generated_at_utc": "2026-07-29T11:44:40Z",
+  "full_pass": false,
+  "passed": false,
+  "terminal_disposition": "failed_at_clean_cold_start",
+  "stop_rule_applied": true,
+  "resubmission_performed": false,
+  "later_phase_submission_performed": false,
+  "authorities": {
+    "compute_pool": "docs/RESILIENT_DILOCO_COMPUTE_POOL.md (Version 1, including the bounded-async conformance checklist)",
+    "gap_matrix": "docs/RESILIENT_DILOCO_GAP_MATRIX.md (R01-R16, NDP01-NDP17, V21S01-V21S17, ISP01-ISP07)",
+    "async_policy": "docs/ASYNC_DECOUPLED_DILOCO_V2.md (ADR-002, async-decoupled-v2.1-simple)",
+    "native_dataplane": "docs/NATIVE_RESILIENT_DILOCO_DATAPLANE.md (Version 1)",
+    "execution_source": "docs/ASYNC_V21_EXECUTION_SOURCE_IDENTITY.md"
+  },
+  "frozen_identity": {
+    "source_commit": "76385074da8e22bfef0044c99fe0063d2f346edf",
+    "source_repository_head_verified": true,
+    "execution_source_schema": "emender-async-v21-execution-source-v1",
+    "execution_source_digest": "09e9e970afd39a227c774a81be217b38ce57a083bbd074f65a9c55133becbd35",
+    "payload_digest": "bff64be952becfab405badcc67283631454c7be08145546101a427237d2dc646",
+    "policy_id": "async-decoupled-v2.1-simple",
+    "policy_digest": "fa9def95daf7bce25f1b962ca5437e7a76317b94ccfb9a710fbf126a344e7d98",
+    "native_bundle_sha256": "6e962075594cf2db36280b55e05a35fde1965e67d8beefb40a3fec776b26d908",
+    "launcher_sha256": "1f2f1027e0dcc3e7e0940a20f6f0d0c469b670429e1928a94be6c51f3542fb55",
+    "seed": {
+      "step": 2300930,
+      "tokens": 150793748480,
+      "size": 7719680116,
+      "sha256": "0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2",
+      "compute_node_network_fetches": 0,
+      "job_scoped_path": "/tmp/emender-e97-seed-5111908/checkpoint-step-2300930.pt",
+      "nodes_offline_verified": [
+        "frontier08065",
+        "frontier08077"
+      ]
+    }
+  },
+  "immutable_g2_reconciliation": {
+    "clean": {
+      "job_id": "5111221",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed": "00:03:01",
+      "nodes": 2,
+      "node_list": "frontier[06928,07050]",
+      "partition": "batch",
+      "qos": "debug",
+      "semantic_status": "passed",
+      "semantic_sha256": "1b285872efe83338d115bc5fd3ac8e59f440621254bfd8f6e60976b9083104bd",
+      "sha256sums_verified": true,
+      "resubmitted": false
+    },
+    "fault": {
+      "job_id": "5111243",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed": "00:02:02",
+      "nodes": 2,
+      "node_list": "frontier[00015,00017]",
+      "partition": "batch",
+      "qos": "debug",
+      "semantic_status": "passed",
+      "semantic_sha256": "25a44ee8d1714eff107dda4a4aceb378c3224f7db3c7d1c2c2c7899de187fe83",
+      "clean_predecessor_sha256": "1b285872efe83338d115bc5fd3ac8e59f440621254bfd8f6e60976b9083104bd",
+      "new_incarnation": true,
+      "old_epoch_rejected": true,
+      "owner_reassignment_count": 1,
+      "replay_bytes": 134217728,
+      "partial_commit": false,
+      "sha256sums_verified": true,
+      "resubmitted": false
+    }
+  },
+  "clean_training_phase": {
+    "model_job": {
+      "job_id": "5111908",
+      "job_name": "em-v21-clean-bff64be952be",
+      "state": "FAILED",
+      "exit_code": "1:0",
+      "derived_exit_code": "1:0",
+      "elapsed": "00:05:38",
+      "elapsed_raw_seconds": 338,
+      "nodes": 2,
+      "node_list": "frontier[08065,08077]",
+      "partition": "batch",
+      "qos": "debug",
+      "submit": "2026-07-29T07:33:32",
+      "start": "2026-07-29T07:33:33",
+      "end": "2026-07-29T07:39:11",
+      "payload_digest": "bff64be952becfab405badcc67283631454c7be08145546101a427237d2dc646",
+      "scheduler_comment": "emender-v21-payload:bff64be952becfab405badcc67283631454c7be08145546101a427237d2dc646:emender-async-v21-execution-source-v1"
+    },
+    "collector_job": {
+      "job_id": "5111909",
+      "job_name": "em-v21-collector-bff64be952be",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "derived_exit_code": "0:0",
+      "elapsed": "00:00:03",
+      "nodes": 1,
+      "node_list": "frontier05638",
+      "partition": "batch",
+      "qos": "normal",
+      "dependency": "afterany:5111908",
+      "scheduler_owned": true,
+      "requires_wg_or_codex": false,
+      "script_sha256": "56bb6a0ebf94221b178da6a989f4439d35194a4a5a6a5a26c276943bd9ae55d1",
+      "wrap_digest": "1dffba9e39063a898e02ded06fb2821005637c54a4473575b800631dcf46085f"
+    },
+    "collector_verdict": {
+      "passed": false,
+      "verdict": "failed",
+      "terminal_verdict_sha256": "0204a8834449aa519de3d9a763b4437fe02289a5f6d4a7db6001c56188c32a69",
+      "terminal_manifest_digest": "e4b19d7e3d0d93d430aac50eadf2b4e03f6c992cb95d17ceb4ca366befd501e9",
+      "semantic_verdict_required": true,
+      "semantic_verdict_present": false,
+      "semantic_verdict_reason": "missing"
+    },
+    "startup_facts": {
+      "node_local_seed_verifications": 2,
+      "compiled_cxi_services_started": 2,
+      "provider": "cxi",
+      "endpoint_type": "FI_EP_RDM",
+      "python_dense_socket_bytes": 0,
+      "trainer_processes_started": 8,
+      "trainer_processes_required": 16,
+      "k40_windows_completed": 0,
+      "atomic_commits_completed": 0,
+      "performance_verdict_emitted": false
+    },
+    "first_terminal_semantic_failure": {
+      "exception": "ValueError: native peer recovery handshake disagrees with manifest",
+      "location": "scripts/frontier/resilient_e97_role.py:_validate_native_recovery_handshake",
+      "failing_node": "node-0",
+      "generation": 0,
+      "manifest_commit_receipt_digest": "",
+      "native_handshake_commit_receipt_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+      "diagnosis": "Cold start has no prior commit. The immutable manifest represents that state with an empty receipt, while the compiled coordination response exposes its fixed-width zero sentinel. The fail-closed recovery validator compares the two representations literally and rejects the manager before READY or the first K40 window.",
+      "no_partial_publication": true,
+      "no_commit_receipt_created": true,
+      "no_checkpoint_created": true
+    }
+  },
+  "phase_disposition": {
+    "clean_training_baseline": "failed_terminally",
+    "injected_delayed_ready_and_losses": "not_submitted_due_to_stop_rule",
+    "fresh_allocation_restart": "not_submitted_due_to_stop_rule",
+    "scale_authorization": "denied"
+  },
+  "artifact_catalog": {
+    "g2_clean_gate": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/g2/.batch-storage/5111221.9d3stfes.owned/full-layout-gate.json",
+      "sha256": "1b285872efe83338d115bc5fd3ac8e59f440621254bfd8f6e60976b9083104bd"
+    },
+    "g2_clean_sha256sums": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/g2/.batch-storage/5111221.9d3stfes.owned/SHA256SUMS",
+      "verified": true
+    },
+    "g2_clean_terminal_accounting": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/g2/controller/5111221/scheduler-evidence/terminal-accounting-2c4fd325b709710955961115a40265b2a9491b620d7af25de9616efacab385df.json",
+      "sha256": "2c4fd325b709710955961115a40265b2a9491b620d7af25de9616efacab385df"
+    },
+    "g2_fault_gate": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/g2/.batch-storage/5111243.f3ot8ubb.owned/failure-injection-gate.json",
+      "sha256": "25a44ee8d1714eff107dda4a4aceb378c3224f7db3c7d1c2c2c7899de187fe83"
+    },
+    "g2_fault_sha256sums": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/g2/.batch-storage/5111243.f3ot8ubb.owned/SHA256SUMS",
+      "verified": true
+    },
+    "g2_fault_terminal_accounting": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/g2/controller/5111243/scheduler-evidence/terminal-accounting-eb3a408e8e8edbb1cf30ed5d12be86c306f870b3664921f26cefd7d5d6301f7c.json",
+      "sha256": "eb3a408e8e8edbb1cf30ed5d12be86c306f870b3664921f26cefd7d5d6301f7c"
+    },
+    "clean_plan": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/complete-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/controller/clean-plan.json",
+      "sha256": "21d3789f438e0bcd2846500cce0e325de917702536f89fb3d2efc982aa7c39d8"
+    },
+    "qualification_state": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/complete-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/controller/qualification-state.json",
+      "sha256": "3be70e67ec30c4fec02dbafcfe42b57800e5f7f64791a7d4c332fc60945cf457"
+    },
+    "payload_input": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/complete-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/terminal-collector/bff64be952becfab405badcc67283631454c7be08145546101a427237d2dc646/payload-input.json",
+      "sha256": "0012b099c29c1e4f046fd869e9d0dfcf72b7929dea16991982b8ece16de854fd"
+    },
+    "model_terminal_accounting": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/complete-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/terminal-collector/bff64be952becfab405badcc67283631454c7be08145546101a427237d2dc646/payload-sacct.psv",
+      "sha256": "d14f606370d841e046b3e75733297725db221580d115b0dba5734d152ce6e9e4"
+    },
+    "collector_terminal_verdict": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/complete-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/terminal-collector/bff64be952becfab405badcc67283631454c7be08145546101a427237d2dc646/terminal-verdict.json",
+      "sha256": "0204a8834449aa519de3d9a763b4437fe02289a5f6d4a7db6001c56188c32a69"
+    },
+    "payload_stdout": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/complete-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/terminal-collector/bff64be952becfab405badcc67283631454c7be08145546101a427237d2dc646/payload.stdout.log",
+      "sha256": "9211b60ba2b075170b3a31e47b3e3d1fc660677146234f608d092afb7956aa21"
+    },
+    "payload_stderr": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/complete-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/terminal-collector/bff64be952becfab405badcc67283631454c7be08145546101a427237d2dc646/payload.stderr.log",
+      "sha256": "e1f4bf5dbead465d0bd4369a81361c35a335ad087d66889fffaf4838a355b2cd"
+    },
+    "manager_failure": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/complete-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/clean-overlap/logs/node-0-manager.err",
+      "sha256": "aa1e9652e0afde4df7786ad88c2612133d5750bc1117e672549f0c488ef6ccc9"
+    },
+    "supervision_events": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/complete-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/clean-overlap/supervision/events.jsonl",
+      "sha256": "a0e6088568764152fe2159136823f272128df2a32acb31032e7513ab5c27871d"
+    },
+    "allocation_claim": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/complete-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/clean-overlap/handoff/authority/allocations/allocation-fence-00000000000005111908-d92f9e02ce50047f1deb.json",
+      "sha256": "bec9bae16b464380c4ee135590474b3f196f775bc4d1bb56bde48deb2d0cd156"
+    },
+    "allocation_fence": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/complete-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/clean-overlap/supervision/allocation-fence.json",
+      "sha256": "bf497b5169d22d5faa1a3e34733d83262dfa3b9255a66d9ccd96cdf2a2d6348b"
+    },
+    "native_coordination_trace": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/complete-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/clean-overlap/retained-evidence/pool-control/native-coordination-trace-v1.jsonl",
+      "sha256": "6b1f28bea6e71a4f505401318afa83cb610c76fdfbfd59e48ad4e27d82b01635"
+    },
+    "native_launch_attestation": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/complete-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/clean-overlap/native-dataplane-launch-attestation.json",
+      "sha256": "22ee9ab8b6a23e640dadec1a1cd833288fc8f934ad186d932581b65069c43543"
+    },
+    "node0_service_ready": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/complete-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/clean-overlap/retained-evidence/node-0/control/native-service-ready.json",
+      "sha256": "719424cdd4390785c2eaa4651267d0bc46a644c0439e20c3a1baac729b80f555"
+    },
+    "node1_service_ready": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/complete-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/clean-overlap/retained-evidence/node-1/control/native-service-ready.json",
+      "sha256": "34e35fbd3480b2b14688f62b080c021102863269c3ef17a3c696f762465e7ccd"
+    },
+    "node0_transport": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/complete-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/clean-overlap/logs/node-0-native-service-transport.jsonl",
+      "sha256": "84093d5eafb385e6e3b535c9230535f0785399acec1f3ee76db5f92b8a83f3df"
+    },
+    "node1_transport": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/complete-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/clean-overlap/logs/node-1-native-service-transport.jsonl",
+      "sha256": "d22ec91b85fe31c874c23ac53b3b09ee5eaa8a8e3f0897dfe1bc390715cbec2a"
+    },
+    "seed_attestation": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/complete-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/clean-overlap/seed-bootstrap-attestation.json",
+      "sha256": "27e234891df02b64b9db77fc784c341e5a3ae6e87418b8f1af167776d1d710bb"
+    },
+    "seed_node0": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/complete-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/clean-overlap/seed-materialization/frontier08065.json",
+      "sha256": "7af345230b4de82c6de782aa8224ea4e4b2a5146daa8a6e97861fc1e73a806e7"
+    },
+    "seed_node1": {
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/complete-v21-current-rc-2n/76385074da8e22bfef0044c99fe0063d2f346edf/clean-overlap/seed-materialization/frontier08077.json",
+      "sha256": "5a41cff6a6dc30cbb55bf7a60e587af124a3afee0505a133a0788f6fd0f77940"
+    }
+  },
+  "requirements": {
+    "R01_R16": {
+      "R01": {"qualification_claim": false, "disposition": "failed_at_cold_start_fence_recovery", "artifacts": ["allocation_claim", "allocation_fence", "native_coordination_trace", "manager_failure"]},
+      "R02": {"qualification_claim": false, "disposition": "recover_peer_observed_but_ready_not_reached", "artifacts": ["native_coordination_trace", "supervision_events", "manager_failure"]},
+      "R03": {"qualification_claim": false, "disposition": "leased_ready_snapshot_not_opened", "artifacts": ["native_coordination_trace", "supervision_events"]},
+      "R04": {"qualification_claim": false, "disposition": "synthetic_g2_passed_model_phase_blocked", "artifacts": ["g2_clean_gate", "g2_fault_gate", "native_coordination_trace", "manager_failure"]},
+      "R05": {"qualification_claim": false, "disposition": "synthetic_exact_math_passed_no_model_contribution", "artifacts": ["g2_clean_gate", "g2_fault_gate", "collector_terminal_verdict"]},
+      "R06": {"qualification_claim": false, "disposition": "qmin_tmin_bound_but_no_generation_close", "artifacts": ["clean_plan", "native_coordination_trace", "collector_terminal_verdict"]},
+      "R07": {"qualification_claim": false, "disposition": "no_commit_or_checkpoint_published", "artifacts": ["allocation_claim", "native_coordination_trace", "collector_terminal_verdict"]},
+      "R08": {"qualification_claim": false, "disposition": "g2_bounded_transport_passed_model_bytes_not_admitted", "artifacts": ["g2_clean_gate", "g2_fault_gate", "node0_service_ready", "node1_service_ready"]},
+      "R09": {"qualification_claim": false, "disposition": "trainer_cohort_incomplete_before_model_load", "artifacts": ["supervision_events", "manager_failure"]},
+      "R10": {"qualification_claim": false, "disposition": "native_node_local_startup_observed_no_dense_hot_path_exercised", "artifacts": ["native_launch_attestation", "node0_service_ready", "node1_service_ready", "node0_transport", "node1_transport"]},
+      "R11": {"qualification_claim": false, "disposition": "synthetic_rejoin_passed_real_fault_phase_not_submitted", "artifacts": ["g2_fault_gate", "collector_terminal_verdict"]},
+      "R12": {"qualification_claim": false, "disposition": "fresh_allocation_restart_not_submitted", "artifacts": ["allocation_claim", "collector_terminal_verdict"]},
+      "R13": {"qualification_claim": false, "disposition": "frontier_native_adapter_started_then_failed", "artifacts": ["native_launch_attestation", "node0_transport", "node1_transport", "manager_failure"]},
+      "R14": {"qualification_claim": false, "disposition": "startup_deadline_evidence_only_no_phase_timing_verdict", "artifacts": ["clean_plan", "supervision_events", "collector_terminal_verdict"]},
+      "R15": {"qualification_claim": false, "disposition": "g2_reference_math_passed_no_model_token_commit", "artifacts": ["g2_clean_gate", "g2_fault_gate", "collector_terminal_verdict"]},
+      "R16": {"qualification_claim": false, "disposition": "current_source_two_node_gate_failed_scale_denied", "artifacts": ["g2_clean_terminal_accounting", "g2_fault_terminal_accounting", "model_terminal_accounting", "collector_terminal_verdict"]}
+    },
+    "NDP01_NDP17": {
+      "NDP01": {"qualification_claim": false, "disposition": "native_authority_bound_then_cold_start_handshake_failed", "artifacts": ["native_coordination_trace", "manager_failure"]},
+      "NDP02": {"qualification_claim": false, "disposition": "synthetic_no_collective_pass_native_point_to_point_started", "artifacts": ["g2_clean_gate", "g2_fault_gate", "native_launch_attestation"]},
+      "NDP03": {"qualification_claim": false, "disposition": "two_persistent_cxi_services_started", "artifacts": ["native_launch_attestation", "node0_service_ready", "node1_service_ready", "node0_transport", "node1_transport"]},
+      "NDP04": {"qualification_claim": false, "disposition": "g2_handoff_passed_no_real_snapshot_admitted", "artifacts": ["g2_clean_gate", "g2_fault_gate", "node0_service_ready"]},
+      "NDP05": {"qualification_claim": false, "disposition": "g2_exact_reference_passed_no_real_reduction", "artifacts": ["g2_clean_gate", "g2_fault_gate"]},
+      "NDP06": {"qualification_claim": false, "disposition": "fenced_coordination_identity_observed_before_failure", "artifacts": ["native_coordination_trace", "allocation_claim", "manager_failure"]},
+      "NDP07": {"qualification_claim": false, "disposition": "cxi_endpoints_created_ready_routes_not_installed", "artifacts": ["node0_service_ready", "node1_service_ready", "native_coordination_trace"]},
+      "NDP08": {"qualification_claim": false, "disposition": "g2_bounds_passed_real_buffers_unused", "artifacts": ["g2_clean_gate", "g2_fault_gate", "node0_service_ready", "node1_service_ready"]},
+      "NDP09": {"qualification_claim": false, "disposition": "g2_credit_evidence_only_no_foreground_window", "artifacts": ["g2_clean_gate", "g2_fault_gate", "collector_terminal_verdict"]},
+      "NDP10": {"qualification_claim": false, "disposition": "g2_corrupt_stale_checks_passed_no_real_frame", "artifacts": ["g2_clean_gate", "g2_fault_gate", "native_coordination_trace"]},
+      "NDP11": {"qualification_claim": false, "disposition": "g2_reassignment_replay_passed_real_fault_not_submitted", "artifacts": ["g2_fault_gate", "collector_terminal_verdict"]},
+      "NDP12": {"qualification_claim": false, "disposition": "g2_redistribution_passed_no_real_result", "artifacts": ["g2_clean_gate", "g2_fault_gate", "node0_service_ready"]},
+      "NDP13": {"qualification_claim": false, "disposition": "startup_failure_contained_no_foreground_progress", "artifacts": ["supervision_events", "collector_terminal_verdict"]},
+      "NDP14": {"qualification_claim": false, "disposition": "attested_compiled_bundle_and_native_trace_observed", "artifacts": ["native_launch_attestation", "native_coordination_trace"]},
+      "NDP15": {"qualification_claim": false, "disposition": "no_checkpoint_or_atomic_apply_reached", "artifacts": ["native_coordination_trace", "collector_terminal_verdict"]},
+      "NDP16": {"qualification_claim": false, "disposition": "startup_transport_and_coordination_telemetry_only", "artifacts": ["native_coordination_trace", "node0_transport", "node1_transport", "collector_terminal_verdict"]},
+      "NDP17": {"qualification_claim": false, "disposition": "exact_source_g2_clean_and_fault_passed_g3_clean_failed", "artifacts": ["g2_clean_gate", "g2_fault_gate", "g2_clean_terminal_accounting", "g2_fault_terminal_accounting", "collector_terminal_verdict"]}
+    },
+    "V21S01_V21S17": {
+      "V21S01": {"qualification_claim": false, "disposition": "v21_policy_and_payload_bound_before_failure", "artifacts": ["clean_plan", "payload_input", "native_coordination_trace"]},
+      "V21S02": {"qualification_claim": false, "disposition": "lag_clocks_not_exercised", "artifacts": ["clean_plan", "collector_terminal_verdict"]},
+      "V21S03": {"qualification_claim": false, "disposition": "exact_token_floor_bound_no_contribution", "artifacts": ["clean_plan", "native_coordination_trace", "collector_terminal_verdict"]},
+      "V21S04": {"qualification_claim": false, "disposition": "k40_eta_one_bound_no_window_or_commit", "artifacts": ["clean_plan", "collector_terminal_verdict"]},
+      "V21S05": {"qualification_claim": false, "disposition": "two_node_floor_and_fence_bound_ready_not_reached", "artifacts": ["clean_plan", "allocation_claim", "native_coordination_trace", "manager_failure"]},
+      "V21S06": {"qualification_claim": false, "disposition": "immutable_snapshot_not_captured", "artifacts": ["supervision_events", "collector_terminal_verdict"]},
+      "V21S07": {"qualification_claim": false, "disposition": "atomic_apply_not_reached", "artifacts": ["clean_plan", "collector_terminal_verdict"]},
+      "V21S08": {"qualification_claim": false, "disposition": "result_mailbox_not_reached", "artifacts": ["collector_terminal_verdict"]},
+      "V21S09": {"qualification_claim": false, "disposition": "g2_bounds_passed_real_capacity_edges_not_exercised", "artifacts": ["g2_clean_gate", "g2_fault_gate", "node0_service_ready", "node1_service_ready"]},
+      "V21S10": {"qualification_claim": false, "disposition": "recover_peer_observed_ready_membership_not_established", "artifacts": ["native_coordination_trace", "manager_failure"]},
+      "V21S11": {"qualification_claim": false, "disposition": "atomic_eight_trainer_transaction_not_reached", "artifacts": ["supervision_events", "collector_terminal_verdict"]},
+      "V21S12": {"qualification_claim": false, "disposition": "compiled_cxi_services_attested_no_dense_exchange", "artifacts": ["native_launch_attestation", "node0_transport", "node1_transport"]},
+      "V21S13": {"qualification_claim": false, "disposition": "causal_performance_verdict_missing", "artifacts": ["clean_plan", "collector_terminal_verdict"]},
+      "V21S14": {"qualification_claim": false, "disposition": "exact_seed_offline_verified_no_checkpoint_publication_or_restore", "artifacts": ["seed_attestation", "seed_node0", "seed_node1", "allocation_claim", "collector_terminal_verdict"]},
+      "V21S15": {"qualification_claim": false, "disposition": "g2_passed_current_source_g3_clean_failed", "artifacts": ["g2_clean_gate", "g2_fault_gate", "model_terminal_accounting", "collector_terminal_verdict"]},
+      "V21S16": {"qualification_claim": false, "disposition": "scale_promotion_denied", "artifacts": ["qualification_state", "collector_terminal_verdict"]},
+      "V21S17": {"qualification_claim": false, "disposition": "scale_close_not_derivable_from_failed_clean_phase", "artifacts": ["clean_plan", "collector_terminal_verdict"]}
+    },
+    "ISP01_ISP07": {
+      "ISP01": {"qualification_claim": false, "disposition": "no_coherent_model_snapshot_captured", "artifacts": ["supervision_events", "collector_terminal_verdict"]},
+      "ISP02": {"qualification_claim": false, "disposition": "no_owned_event_or_next_k_window", "artifacts": ["supervision_events", "collector_terminal_verdict"]},
+      "ISP03": {"qualification_claim": false, "disposition": "background_snapshot_pipeline_not_entered", "artifacts": ["native_coordination_trace", "collector_terminal_verdict"]},
+      "ISP04": {"qualification_claim": false, "disposition": "g2_bounds_only_real_capacity_behavior_unmeasured", "artifacts": ["g2_clean_gate", "g2_fault_gate", "node0_service_ready", "node1_service_ready"]},
+      "ISP05": {"qualification_claim": false, "disposition": "no_result_or_atomic_apply_transaction", "artifacts": ["collector_terminal_verdict"]},
+      "ISP06": {"qualification_claim": false, "disposition": "required_semantic_performance_verdict_missing", "artifacts": ["clean_plan", "collector_terminal_verdict"]},
+      "ISP07": {"qualification_claim": false, "disposition": "no_every_event_tail_or_restart_evidence", "artifacts": ["collector_terminal_verdict"]}
+    }
+  },
+  "compute_pool_conformance_checklist": {
+    "authority_and_ids_cited": true,
+    "peer_owned_ready_membership": "not_proven_in_model_phase; cold-start recovery failed before READY",
+    "bounded_waits_and_no_launched_rank_invariant": "synthetic G2 passed; model phase did not reach generation admission",
+    "no_sqlite_or_shared_control_database": "rendered native path and allocation evidence cite native_peer_memory; no shared database artifact was created",
+    "fenced_identity_and_rejection": "allocation fence 5111908 and native trace retained; cold-start representation mismatch failed closed",
+    "deterministic_weighted_math": "synthetic G2 exact reference passed; no real-model contribution was produced",
+    "idempotence_stale_corrupt_rejection": "synthetic G2 passed; injected real-model campaign not submitted",
+    "atomic_committed_evidence": "none created, which is the correct no-partial-publication outcome",
+    "bounded_non_lustre_transport": "compiled cxi services started and G2 passed; no real dense bytes moved before failure",
+    "failure_deadline_recovery_and_floor": "Q_min=2 and T_min=3934080 were bound; first cold-start recovery failure stopped the sequence",
+    "exact_commands_and_artifacts": "clean-plan.json, payload-input.json, terminal collector state/verdict, G2 artifacts, and this report",
+    "async_clocks_and_phase_timing": "not demonstrated; required performance verdict absent",
+    "snapshot_pause_max_p99": "not demonstrated",
+    "apply_pause_max_p99": "not demonstrated",
+    "foreground_result_wait_zero": "not demonstrated because foreground training never began"
+  },
+  "acceptance_summary": {
+    "g2_clean_semantic_pass": true,
+    "g2_fault_semantic_pass": true,
+    "exact_rc_preserved": true,
+    "exact_seed_preserved_and_offline_verified": true,
+    "remaining_model_scheduler_identity_retained": true,
+    "clean_minimum_five_k40_windows": false,
+    "clean_minimum_three_atomic_commits": false,
+    "fault_campaign_pass": false,
+    "fresh_allocation_restart_pass": false,
+    "literal_full_pass": false,
+    "done_authorized": false
+  }
+}
