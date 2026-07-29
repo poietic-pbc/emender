@@ -16,13 +16,13 @@ The immutable local manifest is
 - status: `local_passed_pending_8_node_join`;
 - authorizes nodes: `[]`;
 - manifest digest:
-  `25d5b9a6e779449dd547500a0d59b693c20dd947f4125d76db515f3eacd8d7a5`;
+  `edb04f4179f866fe074e562118a17d450fc662687d2ac006c92492ca7c5181e6`;
 - file SHA-256:
-  `b425a48d01e9c33dd40a532c7b8fccf0f4d0e7689e8b2b18dd6c1ae1da13b695`;
+  `ad97203b8b9d06854ef9a0b24c25c8cc24ca83b4736c5afa62abcf122a78d2aa`;
 - exact-source commit:
-  `7b2e2510d08cb763d203bd2050c60140d738e26e`;
+  `1cd6c9e28a208d6f0f8feec726242961b4f9e63b`;
 - execution-source digest:
-  `6d86b935ecbbfd811767a2c9fc6c9fc227299b30ca7848ca39b899b11914b9eb`.
+  `e310f0b9c6d3ad66db42f6b6b586328d72006f716b0b4d43c4953acb1954315f`.
 
 The `join` command in
 `scripts/frontier/build_formal_coordination_scale_gate.py` will accept this
@@ -162,15 +162,15 @@ coordination agreement cannot close any ISP gap.
 | Artifact | Result | SHA-256 / digest |
 |---|---|---|
 | Native hardening validation | prerequisite passed | `ba5fb5052b7aa10840613d69b91f280e64ffa2a1a2f6c33beb0f4aa4d53a1f57` |
-| Integrated native schedule-stress manifest | 50,353 schedules; 1,979,412 transitions; two byte-identical repeats; zero safety failures | file `910c306c2878c9160451d82aa5490317df3db2878dce49d2617cfcfa34d890fd`; transcript `324f14d8f086a98c3de209e658dff089ab802d78747f76846577c24838fcd1b8` |
+| Integrated native schedule-stress manifest | 50,353 schedules; 1,979,412 transitions; two byte-identical repeats; zero safety failures | file `6a7a100518bd38d43e6430f32395024a31591704d121c8d22b5d0abddd0a03e6`; transcript `324f14d8f086a98c3de209e658dff089ab802d78747f76846577c24838fcd1b8` |
 | Lean proof manifest | 18 SHA-bound artifacts; pure safety separated from seven assumed progress conditions | `f44d535568e3efe96ed668889e9d1a3f53893c680b63b8df87b0652935e19079` |
 | Executable Lean kernel source | pinned theorem/executable transition | `fd23e1100bdd692b67a38bf8b853848bd924bb5119406861b63a250056bc31ea` |
 | Lean conformance executable | local built oracle | `c712211f1142a7a9366c22d420aa1c717cbed277dd03b8895941655d57e16ed7` |
 | Canonical trace schema | strict schema | `cf654525395e63b31b2d76e8109ee2bcc6a652f6273d1c6e4ca5bec9ecb776b4` |
 | Permanent native/Lean corpus manifest | 15 traces, including the exact 63-event job-5105811 trace | `028fdccc8619de3127f6241353f1b9420376b070d63956af5e7ac3bb9659d15d` |
-| Production-native/Lean differential manifest | 15/15 traces, 486/486 events, zero divergence | file `8eb32d64daf4f951a6eb66e5c55b53993f3a21809320f64214d893420ed56bb4`; manifest `f526415724e01a1267b7434f8aed7f23e1c538ccead723de1ba9fa4066a318cb` |
-| Refreshed job-5105811 agreement report | 63 events, agreement, clean source `7b2e2510…` | `583a3e8def80163933496e469ff926b98f9ec8e028d7be025c8cdb56fb1c3ca4` |
-| Local formal coordination manifest | complete local evidence, pending E8 join, authorizes `[]` | file `b425a48d01e9c33dd40a532c7b8fccf0f4d0e7689e8b2b18dd6c1ae1da13b695`; manifest `25d5b9a6e779449dd547500a0d59b693c20dd947f4125d76db515f3eacd8d7a5` |
+| Production-native/Lean differential manifest | 15/15 traces, 486/486 events, zero divergence | file `5b6f3f391f907a0e8b9e55d0f5c73cef5e06c5baef52b0094f5c52c90c17f4f0`; manifest `d1e9016fd362f9aa80ef80cea5a63e4dcdbbaf3dcb5d3936340d107fdd2ac1e6` |
+| Refreshed job-5105811 agreement report | 63 events, agreement, clean source `1cd6c9e2…` | `85fb85e86a50b0ef5c0220928f300fc4ad1ca1c90aeda39c5adba8d2f3f373fa` |
+| Local formal coordination manifest | complete local evidence, pending E8 join, authorizes `[]` | file `ad97203b8b9d06854ef9a0b24c25c8cc24ca83b4736c5afa62abcf122a78d2aa`; manifest `edb04f4179f866fe074e562118a17d450fc662687d2ac006c92492ca7c5181e6` |
 
 The native differential additionally binds the actual production bundle
 `6e962075594cf2db36280b55e05a35fde1965e67d8beefb40a3fec776b26d908`,
@@ -242,7 +242,8 @@ Focused controller, formal mutation, and launcher tests:
   tests/test_resilient_e97_true_2n_launcher.py
 ```
 
-Result: **161 passed**.
+Result: **162 passed**. The final consolidated run added the 7 native/Lean
+differential and deliberate-fault cases and passed **169/169**.
 
 Compiled production-native build/install and bounded schedules:
 
@@ -253,7 +254,7 @@ PYTHON_BIN="$EMENDER_PYTHON" \
 
 Result: **12/12 CTests passed**, including the direct kernel, persistent
 service/RPC, ABI/provider, and 12,000-schedule bounded deterministic stress
-test. The build manifest records clean source commit `7b2e2510…`.
+test. The build manifest records clean source commit `1cd6c9e2…`.
 
 Integrated long deterministic campaign:
 
@@ -292,8 +293,8 @@ Local non-authorizing manifest:
 "$EMENDER_PYTHON" \
   scripts/frontier/build_formal_coordination_scale_gate.py local \
   --execution-source-digest \
-    6d86b935ecbbfd811767a2c9fc6c9fc227299b30ca7848ca39b899b11914b9eb \
-  --source-commit 7b2e2510d08cb763d203bd2050c60140d738e26e \
+    e310f0b9c6d3ad66db42f6b6b586328d72006f716b0b4d43c4953acb1954315f \
+  --source-commit 1cd6c9e28a208d6f0f8feec726242961b4f9e63b \
   --output reports/frontier/formal-coordination-scale-gate-v1.json
 ```
 
