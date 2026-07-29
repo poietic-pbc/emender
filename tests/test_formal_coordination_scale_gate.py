@@ -74,6 +74,11 @@ def _conformance_manifest(tmp_path: Path) -> Path:
         relative: file_sha256(ROOT / relative)
         for relative in REQUIRED_NATIVE_SOURCE_PATHS
     }
+    stress = json.loads(
+        (
+            ROOT / "reports/frontier/native-coordination-stress-v1.json"
+        ).read_text(encoding="utf-8")
+    )
     value: dict[str, object] = {
         "schema": CONFORMANCE_MANIFEST_SCHEMA,
         "status": "passed",
@@ -87,6 +92,7 @@ def _conformance_manifest(tmp_path: Path) -> Path:
         ),
         "production_transition_path": True,
         "native": {
+            "source_commit": stress["identities"]["source_commit"],
             "source_tree_dirty": False,
             "bundle_sha256": IDENTITIES["bundle_digest"],
             "source_sha256": source_sha256,
@@ -134,6 +140,7 @@ def _passed_8() -> dict[str, object]:
         "schema": RUNG_PASS_SCHEMA,
         "status": "passed",
         "nodes": 8,
+        "identities": IDENTITIES,
         "manifest_digest": "8" * 64,
         "native_coordination_lineage": {
             "hardening_manifest_sha256": file_sha256(
@@ -144,7 +151,9 @@ def _passed_8() -> dict[str, object]:
             "schedule_stress_manifest_sha256": file_sha256(
                 ROOT / "reports/frontier/native-coordination-stress-v1.json"
             ),
-            "native_kernel_sha256":
+            "schedule_stress_source_commit":
+                stress["identities"]["source_commit"],
+            "schedule_stress_binary_sha256":
                 stress["identities"]["native_binary_sha256"],
         },
     }
@@ -189,6 +198,17 @@ def _scale_fields(nodes: int) -> dict[str, object]:
         "nodes": nodes,
         "identities": IDENTITIES,
         "identity_contract": contract,
+        "execution_source": {
+            "schema": "emender-async-v21-execution-source-v1",
+            "digest": IDENTITIES["source_digest"],
+            "commit": json.loads(
+                (
+                    ROOT
+                    / "reports/frontier/native-coordination-stress-v1.json"
+                ).read_text(encoding="utf-8")
+            )["identities"]["source_commit"],
+            "source_tree_dirty": False,
+        },
         "identity_digest": scale_identity_digest(IDENTITIES, contract),
         "scheduler": {
             "Nodes": nodes,
@@ -241,6 +261,17 @@ def _formal_gate(
         "authorizes_nodes": [32],
         "identities": IDENTITIES,
         "identity_contract": contract,
+        "execution_source": {
+            "schema": "emender-async-v21-execution-source-v1",
+            "digest": IDENTITIES["source_digest"],
+            "commit": json.loads(
+                (
+                    ROOT
+                    / "reports/frontier/native-coordination-stress-v1.json"
+                ).read_text(encoding="utf-8")
+            )["identities"]["source_commit"],
+            "source_tree_dirty": False,
+        },
         "identity_digest": scale_identity_digest(IDENTITIES, contract),
         "requirements": REQUIREMENTS,
         "trust_boundary": TRUST_BOUNDARY,
@@ -422,6 +453,12 @@ def test_exact_32_node_controller_render_consumes_joined_formal_gate(
             "exact payload",
         ),
         (
+            lambda value: value["execution_source"].update(
+                source_tree_dirty=True
+            ),
+            "evidence/lineage",
+        ),
+        (
             lambda value: value["artifacts"].pop("proof_manifest"),
             "artifact set",
         ),
@@ -468,9 +505,9 @@ def test_formal_gate_rejects_wrong_8_node_hardening_or_stress_lineage(
         tmp_path, _conformance_manifest(tmp_path), passed_8
     )
     passed_8["native_coordination_lineage"][
-        "schedule_stress_manifest_sha256"
+        "schedule_stress_binary_sha256"
     ] = "f" * 64
-    with pytest.raises(ValueError, match="8-node verdict"):
+    with pytest.raises(ValueError, match="stress lineage"):
         _validate(gate, tmp_path, passed_8)
 
 

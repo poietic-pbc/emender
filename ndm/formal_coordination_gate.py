@@ -274,6 +274,7 @@ def _validate_stress_manifest(
     path: Path,
     *,
     hardening_sha256: str,
+    expected_source_commit: str,
 ) -> dict[str, object]:
     stress = _load_json(
         path, schema=STRESS_MANIFEST_SCHEMA, label="schedule-stress manifest"
@@ -284,6 +285,7 @@ def _validate_stress_manifest(
     determinism = stress.get("determinism")
     execution = stress.get("execution")
     forbidden = stress.get("forbidden_facilities")
+    identities = stress.get("identities")
     if (
         stress.get("status") != "passed"
         or stress.get("authoritative_scope")
@@ -311,6 +313,16 @@ def _validate_stress_manifest(
         or not execution.get("replay_corpus_template")
         or not isinstance(forbidden, Mapping)
         or any(value != 0 for value in forbidden.values())
+        or not isinstance(identities, Mapping)
+        or identities.get("source_commit") != expected_source_commit
+        or not require_digest(
+            identities.get("source_bundle_sha256"),
+            "schedule-stress source bundle",
+        )
+        or not require_digest(
+            identities.get("native_binary_sha256"),
+            "schedule-stress explorer binary",
+        )
     ):
         raise ValueError(
             "schedule-stress evidence is failed, partial, or non-replayable"
@@ -355,6 +367,7 @@ def _validate_conformance_manifest(
     proof_kernel_sha256: str,
     trace_schema_sha256: str,
     expected_bundle_sha256: str,
+    expected_source_commit: str,
 ) -> dict[str, object]:
     conformance = _load_json(
         path,
@@ -387,6 +400,7 @@ def _validate_conformance_manifest(
         or int(conformance.get("events_compared", 0)) < 486
         or conformance.get("production_transition_path") is not True
         or not isinstance(native, Mapping)
+        or native.get("source_commit") != expected_source_commit
         or native.get("source_tree_dirty") is not False
         or native.get("bundle_sha256") != expected_bundle_sha256
         or not isinstance(source_digests, Mapping)
@@ -494,8 +508,27 @@ def validate_formal_coordination_gate(
     evidence_path = Path(evidence_root).resolve()
     references = gate.get("artifacts")
     lineage = gate.get("lineage")
-    if not isinstance(references, Mapping) or not isinstance(lineage, Mapping):
+    execution_source = gate.get("execution_source")
+    if (
+        not isinstance(references, Mapping)
+        or not isinstance(lineage, Mapping)
+        or not isinstance(execution_source, Mapping)
+        or execution_source.get("schema")
+        != "emender-async-v21-execution-source-v1"
+        or execution_source.get("digest")
+        != expected_identities.get("source_digest")
+        or execution_source.get("source_tree_dirty") is not False
+    ):
         raise ValueError("formal coordination evidence/lineage is incomplete")
+    source_commit = str(execution_source.get("commit", ""))
+    try:
+        if len(source_commit) != 40:
+            raise ValueError
+        bytes.fromhex(source_commit)
+    except ValueError as error:
+        raise ValueError(
+            "formal coordination execution-source commit is invalid"
+        ) from error
     expected_reference_names = {
         "native_hardening",
         "schedule_stress",
@@ -556,6 +589,8 @@ def validate_formal_coordination_gate(
         != "emender-async-v21-direct-rung-pass-v2"
         or passed_8_node_manifest.get("status") != "passed"
         or passed_8_node_manifest.get("nodes") != 8
+        or passed_8_node_manifest.get("identities")
+        != dict(expected_identities)
         or not isinstance(native_lineage, Mapping)
         or native_lineage.get("hardening_manifest_sha256") != hardening_sha
         or native_lineage.get("schedule_stress_manifest_sha256") != stress_sha
@@ -580,15 +615,21 @@ def validate_formal_coordination_gate(
     ):
         raise ValueError("canonical trace schema identity is stale")
     stress = _validate_stress_manifest(
-        resolved["schedule_stress"], hardening_sha256=hardening_sha
+        resolved["schedule_stress"],
+        hardening_sha256=hardening_sha,
+        expected_source_commit=source_commit,
     )
     stress_identities = stress.get("identities")
     if (
         not isinstance(stress_identities, Mapping)
-        or native_lineage.get("native_kernel_sha256")
+        or native_lineage.get("schedule_stress_source_commit")
+        != stress_identities.get("source_commit")
+        or native_lineage.get("schedule_stress_binary_sha256")
         != stress_identities.get("native_binary_sha256")
     ):
-        raise ValueError("passed 8-node native kernel differs from stress lineage")
+        raise ValueError(
+            "passed 8-node verdict differs from exact stress lineage"
+        )
 
     proof = _validate_proof_manifest(
         resolved["proof_manifest"],
@@ -620,5 +661,6 @@ def validate_formal_coordination_gate(
         ),
         trace_schema_sha256=trace_schema_sha,
         expected_bundle_sha256=str(expected_identities["bundle_digest"]),
+        expected_source_commit=source_commit,
     )
     return gate

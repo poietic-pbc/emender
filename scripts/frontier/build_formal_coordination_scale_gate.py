@@ -191,6 +191,7 @@ def _join(arguments: argparse.Namespace) -> int:
         "authorizes_nodes": [32],
         "identities": identities,
         "identity_contract": identity_contract,
+        "execution_source": dict(local["execution_source"]),
         "identity_digest": canonical_digest(
             {
                 "identities": identities,
