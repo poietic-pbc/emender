@@ -545,7 +545,7 @@ def build_report(summary: dict) -> str:
     t = summary["throughput_eta"]
     pub = summary["publication"]
     lines = [
-        "# GDN2 Ops Snapshot - 2026-07-28",
+        f"# GDN2 Ops Snapshot - {summary['task_date_formatted']}",
         "",
         f"- Snapshot UTC: `{summary['snapshot_utc']}`",
         f"- Run ID: `{summary['run_id']}`",
@@ -654,12 +654,19 @@ def main() -> None:
     ap.add_argument("--e97-root", type=Path, default=Path("/mnt/nvme1n1/erikg/diloco_8gpu/emender"))
     ap.add_argument("--e97-args", type=Path, default=Path("/mnt/nvme1n1/erikg/diloco_8gpu/emender/runs/emender_E97_1.3B_20260722_055730/args.json"))
     ap.add_argument("--remote", default="erik@hypervolu.me")
-    ap.add_argument("--report", type=Path, default=Path("docs/GDN2_OPS_SNAPSHOT_20260728.md"))
+    ap.add_argument("--task-date", default="20260729", help="YYYYMMDD date stamp for task-specific ops artifacts")
+    ap.add_argument("--report", type=Path)
     args = ap.parse_args()
 
     snapshot_time = utc_now()
     stamp = snapshot_time.strftime("%Y%m%dT%H%M%SZ")
-    ops_dir = args.run_root / "ops" / f"refresh-gdn2-ops_20260728_{stamp}"
+    task_date = args.task_date
+    if not re.fullmatch(r"\d{8}", task_date):
+        raise SystemExit(f"--task-date must be YYYYMMDD, got {task_date!r}")
+    task_date_formatted = f"{task_date[:4]}-{task_date[4:6]}-{task_date[6:]}"
+    if args.report is None:
+        args.report = Path(f"docs/GDN2_OPS_SNAPSHOT_{task_date}.md")
+    ops_dir = args.run_root / "ops" / f"refresh-gdn2-ops_{task_date}_{stamp}"
     snapshots_dir = ops_dir / "snapshots"
     ops_dir.mkdir(parents=True, exist_ok=False)
 
@@ -673,6 +680,7 @@ def main() -> None:
         "GDN2_standalone": ("www/emender/gdn2_mlp_diloco_loss_curve_20260722.png", "http://hypervolu.me/~erik/emender/gdn2_mlp_diloco_loss_curve_20260722.png"),
         "prior_5p118B_comparison": ("www/emender/gdn2_vs_e97_matched_5p118b_tokens_20260723.png", "http://hypervolu.me/~erik/emender/gdn2_vs_e97_matched_5p118b_tokens_20260723.png"),
         "prior_20260724_comparison": ("www/emender/gdn2_vs_e97_matched_tokens_20260724.png", "http://hypervolu.me/~erik/emender/gdn2_vs_e97_matched_tokens_20260724.png"),
+        "prior_20260728_comparison": ("www/emender/gdn2_vs_e97_matched_tokens_20260728.png", "http://hypervolu.me/~erik/emender/gdn2_vs_e97_matched_tokens_20260728.png"),
     }
     protected_before = {
         name: {"ssh_sha256": ssh_hash(args.remote, path), "http": http_artifact(url), "path": path, "url": url}
@@ -737,7 +745,7 @@ def main() -> None:
     gdn2_aligned = [gdn2_by_step[step] for step in common_steps]
     e97_smoothed = moving_average([p.loss for p in e97_aligned], window)
     gdn2_aligned_smoothed = moving_average([p.loss for p in gdn2_aligned], window)
-    overlay_plot = plot_overlay(aligned, e97_smoothed, gdn2_aligned_smoothed, window, ops_dir / "gdn2_vs_e97_matched_tokens_20260728.png")
+    overlay_plot = plot_overlay(aligned, e97_smoothed, gdn2_aligned_smoothed, window, ops_dir / f"gdn2_vs_e97_matched_tokens_{task_date}.png")
     comparison_intervals = {}
     for width in (100, 1000):
         e97_int = interval_summary(e97_aligned, cutoff_step, width)
@@ -797,7 +805,7 @@ def main() -> None:
         args.remote,
         "www/emender/gdn2_mlp_diloco_loss_curve_20260722.png",
         "http://hypervolu.me/~erik/emender/gdn2_mlp_diloco_loss_curve_20260722.png",
-        "refresh-gdn2-ops-20260728",
+        f"refresh-gdn2-ops-{task_date}",
     )
     protected_after_gdn2 = {
         name: {"ssh_sha256": ssh_hash(args.remote, path), "http": http_artifact(url), "path": path, "url": url}
@@ -806,9 +814,9 @@ def main() -> None:
     overlay_pub = publish_collision_safe(
         Path(overlay_plot["path"]),
         args.remote,
-        "www/emender/gdn2_vs_e97_matched_tokens_20260728.png",
-        "http://hypervolu.me/~erik/emender/gdn2_vs_e97_matched_tokens_20260728.png",
-        "refresh-gdn2-ops-20260728",
+        f"www/emender/gdn2_vs_e97_matched_tokens_{task_date}.png",
+        f"http://hypervolu.me/~erik/emender/gdn2_vs_e97_matched_tokens_{task_date}.png",
+        f"refresh-gdn2-ops-{task_date}",
     )
     protected_after_overlay = {
         name: {"ssh_sha256": ssh_hash(args.remote, path), "http": http_artifact(url), "path": path, "url": url}
@@ -838,6 +846,8 @@ def main() -> None:
 
     summary = {
         "snapshot_utc": iso_z(snapshot_time),
+        "task_date": task_date,
+        "task_date_formatted": task_date_formatted,
         "run_id": run_id,
         "source_policy": "rank-0/main stdout, finite complete records only, dedupe by optimizer step keeping latest timestamp/order, no interpolation",
         "token_semantics": token_semantics,
@@ -851,7 +861,7 @@ def main() -> None:
         "protected_artifacts": protected,
         "confirmations": {"no_training_control": True, "no_checkpoint_write_or_modification": True, "no_s3_command": True},
     }
-    summary_path = ops_dir / "refresh_gdn2_ops_20260728_summary.json"
+    summary_path = ops_dir / f"refresh_gdn2_ops_{task_date}_summary.json"
     summary["summary_json"] = str(summary_path)
     summary["report"] = str(args.report)
     summary["result_log"] = compact_result(summary)
