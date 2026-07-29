@@ -671,6 +671,27 @@ def _normalized_apply_receipts(
     return sorted(receipts, key=lambda item: item["worker_id"])
 
 
+def _native_commit_receipts_agree(
+        observed: object, expected: object, *, generation: int) -> bool:
+    """Compare manifest and fixed-width native commit receipt identities.
+
+    Generation zero has no prior commit.  The immutable manifest represents
+    that absence as an empty string, while the native 32-byte digest ABI
+    serializes its zero-initialized sentinel as 64 zero hex characters.  No
+    other spelling is a valid cold-start identity, and committed generations
+    retain exact receipt comparison.
+    """
+    observed_text = str(observed)
+    expected_text = str(expected)
+    if generation == 0:
+        no_prior_commit = {"", "0" * 64}
+        return (
+            observed_text in no_prior_commit
+            and expected_text in no_prior_commit
+        )
+    return observed_text == expected_text
+
+
 def _validate_native_recovery_handshake(
         handshake: Mapping[str, object],
         sync_evidence: Mapping[str, object], *, generation: int) -> None:
@@ -679,8 +700,10 @@ def _validate_native_recovery_handshake(
     if (
         handshake.get("status") != "recover"
         or int(handshake.get("generation", -1)) != generation
-        or str(handshake.get("receipt_digest", ""))
-        != str(sync_evidence.get("commit_receipt_digest", ""))
+        or not _native_commit_receipts_agree(
+            handshake.get("receipt_digest", ""),
+            sync_evidence.get("commit_receipt_digest", ""),
+            generation=generation)
         or not isinstance(handshake.get("requires_node_apply"), bool)
         or (
             generation > 0
