@@ -38,6 +38,16 @@ Every canonical event compares:
   result-receipt worker, and every atomic node-apply identity/digest; and
 - the deterministic normalized post-state digest.
 
+The checked aggregate
+`reports/conformance/native-lean-v1/manifest.json` binds every permanent trace
+to the proved `ResilientProtocol/Kernel.lean`, the pinned Lean executable, the
+actual compiled service/library bundle, `NDP_COORD_ABI_V1`, all production call
+path sources, and the versioned trace adapter. It is acceptable only with
+`zero_divergences=0`, a complete non-evaluator verdict, and the permanent
+63-event job-5105811 entry. A report produced from the older bootstrap kernel,
+a test-only transition, a dirty source tree, or a different binary/adapter is
+stale and cannot enter the 32-node formal gate.
+
 The report also retains the native kernel's independent pre/post state
 digests for every underlying call. A first mismatch stops execution and emits
 the valid canonical prefix through the divergent event plus a replay command.
@@ -199,4 +209,12 @@ scripts/conformance/smoke_native_lean.sh
 That wrapper sources the authoritative Frontier environment, builds the
 pinned Lean executables, regenerates the corpus, builds/tests/installs/attests
 the unified native bundle, replays all 486 events through fresh persistent
-services, and runs the deliberate fault proof. It does not invoke Slurm.
+services, runs the deliberate fault proof, and regenerates the immutable
+zero-divergence aggregate. It does not invoke Slurm.
+
+The 32-node controller consumes that prebuilt aggregate through
+`emender-formal-native-coordination-scale-gate-v1`. Compute nodes verify
+digests/signatures only and never run Lean. Agreement is limited to the pure
+coordination intersection and does not replace numerical, snapshot,
+timing/tail, transport/provider, G2, two-node, scheduler, native-stress,
+passed-8, or scale-policy evidence.

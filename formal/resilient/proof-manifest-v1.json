@@ -18,6 +18,8 @@
   },
   "proof_policy": {
     "runtime_boolean_is_not_a_theorem": true,
+    "theorems_are_propositions_over_transition": true,
+    "boolean_substitutes": [],
     "forbidden_lean_tokens": [
       "sorry",
       "admit",
@@ -135,7 +137,7 @@
     {
       "path": "lakefile.toml",
       "role": "build_definition",
-      "sha256": "03b87fd391b1bd68861fc663652a52eae1b3a4c3b948e5a53c6c15d9d846d133"
+      "sha256": "407b3a0f8ae5a093dc476b5d9ec90e1ff5148dc908709fe75614bb10e5daf4fb"
     },
     {
       "path": "lake-manifest.json",
@@ -150,7 +152,7 @@
     {
       "path": "ResilientProtocol.lean",
       "role": "authoritative_import_root",
-      "sha256": "71a5394f2850aa2b5b672fc185631f42d77e33158377c168e96ea348b26da51e"
+      "sha256": "a760e60934d301d1ab645d7b879f9360cabb4f70fbdb4b5e8a165d10591671f8"
     },
     {
       "path": "ResilientProtocol/Types.lean",
@@ -205,17 +207,17 @@
     {
       "path": "README.md",
       "role": "proof_scope_and_reproduction",
-      "sha256": "9893b5395ca6610efae90ecd5e420ab5fc8eb0fb41a970454a558bebd56827e9"
+      "sha256": "79928e2d3dd0e55e33b7bd60f0c96fd5894f66a000ee98f68a9537a5b9ebf5f3"
     },
     {
       "path": "scripts/smoke.sh",
       "role": "offline_smoke_gate",
-      "sha256": "89ae8620b0919b656585ad57c9e0b4df5990d5a642391cc5e05bd1a1a0779ae7"
+      "sha256": "c57bf0272f93cbe7715546bd6ca7d6936ced7f7989378cff1c4366435a396feb"
     },
     {
       "path": "scripts/verify-proof-manifest.sh",
       "role": "digest_verifier",
-      "sha256": "fb70aa8eeafff490488452095ebcc777f13aabe51050a9c0aa8a05adf924f728"
+      "sha256": "1793b6dca846436379d7b32ab2879482a6641f4171f2e52741fa570c43232ac5"
     }
   ]
 }

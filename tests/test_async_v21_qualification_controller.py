@@ -12,6 +12,7 @@ import time
 import pytest
 
 from scripts.frontier import async_v21_terminal_collector as terminal_collector
+from scripts.frontier import run_async_v21_qualification as qualification
 from scripts.frontier.run_async_v21_qualification import (
     AUTHORIZATION_SCHEMA,
     EVIDENCE_ONLY_PATH_PREFIXES,
@@ -775,7 +776,7 @@ def test_v21_scale_closure_rejects_launched_rank_and_unexplained_constant(
     ((8, 2), (32, 8), (128, 32)),
 )
 def test_v21_each_scale_rung_accepts_only_its_exact_predecessor(
-    tmp_path: Path, nodes: int, predecessor_nodes: int,
+    tmp_path: Path, nodes: int, predecessor_nodes: int, monkeypatch,
 ):
     arrival = _write(tmp_path / "arrival.json", {
         "schema": "emender-async-v21-two-node-arrivals-v1",
@@ -828,6 +829,19 @@ def test_v21_each_scale_rung_accepts_only_its_exact_predecessor(
         **_scale_manifest_fields(predecessor_nodes),
         "review_signature": "signed-for-test",
     })
+    formal = None
+    if nodes == 32:
+        formal = _write(tmp_path / "formal.json", {
+            "schema": "emender-formal-native-coordination-scale-gate-v1",
+            "status": "passed",
+            "review_signature": "signed-for-test",
+            "manifest_digest": "f" * 64,
+        })
+        monkeypatch.setattr(
+            qualification,
+            "validate_formal_coordination_gate",
+            lambda *args, **kwargs: json.loads(formal.read_text()),
+        )
     plan = build_plan(
         gate="scale",
         nodes=nodes,
@@ -836,6 +850,7 @@ def test_v21_each_scale_rung_accepts_only_its_exact_predecessor(
         parameters=SCALE_PARAMETERS,
         authorization_path=authorization,
         predecessor_path=predecessor,
+        formal_coordination_path=formal,
         allow_test_signatures=True,
         **IDENTITIES,
     )
@@ -851,6 +866,46 @@ def test_v21_each_scale_rung_accepts_only_its_exact_predecessor(
         "review_only_nodes": [256],
         "convergence_required": False,
     }
+    if nodes == 32:
+        assert plan["payload"]["formal_coordination_gate"][
+            "manifest_digest"
+        ] == json.loads(formal.read_text())["manifest_digest"]
+        assert "ASYNC_V21_FORMAL_COORDINATION_GATE_DIGEST=" in exported
+
+
+def test_v21_32_node_render_fails_without_formal_coordination_gate(
+    tmp_path: Path,
+):
+    authorization = _write(tmp_path / "authorization.json", {
+        "schema": AUTHORIZATION_SCHEMA,
+        "status": "passed",
+        "authorized_nodes": 32,
+        "systems_scale_ladder": list(SYSTEMS_SCALE_LADDER),
+        "review_only_nodes": [256],
+        "convergence_required": False,
+        "reviewed_ready_snapshot_size": 32,
+        **_scale_manifest_fields(32),
+        "review_signature": "signed-for-test",
+        "closure": {},
+    })
+    predecessor = _write(tmp_path / "predecessor.json", {
+        "schema": RUNG_PASS_SCHEMA,
+        "status": "passed",
+        **_scale_manifest_fields(8),
+        "review_signature": "signed-for-test",
+    })
+    with pytest.raises(ValueError, match="32-node.*formal coordination"):
+        build_plan(
+            gate="scale",
+            nodes=32,
+            state_path=tmp_path / "state.json",
+            evidence_root=tmp_path,
+            parameters=SCALE_PARAMETERS,
+            authorization_path=authorization,
+            predecessor_path=predecessor,
+            allow_test_signatures=True,
+            **IDENTITIES,
+        )
 
 
 def test_v21_scale_rejects_two_node_early_close_parameters(tmp_path: Path):

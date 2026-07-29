@@ -231,6 +231,9 @@ def test_v21_launcher_defaults_two_nodes_and_scale_requires_serial_ladder():
     assert "ASYNC_V21_SCALE_AUTHORIZATION" in launcher
     assert "ASYNC_V21_PRIOR_RUNG_PASS" in launcher
     assert "ASYNC_V21_SCALE_IDENTITY_DIGEST" in launcher
+    assert "ASYNC_V21_FORMAL_COORDINATION_GATE" in launcher
+    assert "validate_formal_coordination_gate" in launcher
+    assert "nodes == 32" in launcher
     assert "ASYNC_V21_TRUSTED_REVIEWER_KEY" in launcher
     assert "review_verified(authorization)" in launcher
     assert "review_verified(prior)" in launcher
@@ -245,6 +248,8 @@ def test_v21_launcher_defaults_two_nodes_and_scale_requires_serial_ladder():
     assert "ASYNC_V21_SCALE_AUTHORIZATION" in supervisor
     assert "ASYNC_V21_PRIOR_RUNG_PASS" in supervisor
     assert "ASYNC_V21_SCALE_CLOSURE_DIGEST" in supervisor
+    assert "ASYNC_V21_FORMAL_COORDINATION_GATE" in supervisor
+    assert "node_count == 32" in supervisor
     assert 'f"-N{node_count}", f"-n{node_count}"' in supervisor
     assert "requires exactly two physical nodes" not in supervisor
 

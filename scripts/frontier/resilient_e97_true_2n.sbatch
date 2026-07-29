@@ -44,7 +44,13 @@ if ((RESILIENT_E97_NODE_COUNT > 2)); then
   : "${ASYNC_V21_SCALE_CLOSE_OFFSET_NS:?missing empirical V21S17 close}"
   : "${ASYNC_V21_SCALE_STABLE_DIVERSITY_FLOOR:?missing stable diversity floor}"
   : "${ASYNC_V21_SCALE_PER_READY_WORKER_TOKEN_FLOOR:?missing exact-token floor}"
+  : "${ASYNC_V21_SCALE_EVIDENCE_ROOT:?missing immutable scale evidence root}"
   : "${ASYNC_V21_TRUSTED_REVIEWER_KEY:?missing trusted scale reviewer key}"
+  if ((RESILIENT_E97_NODE_COUNT == 32)); then
+    : "${ASYNC_V21_FORMAL_COORDINATION_GATE:?missing formal coordination scale gate}"
+    : "${ASYNC_V21_FORMAL_COORDINATION_GATE_DIGEST:?missing formal coordination gate digest}"
+    : "${ASYNC_V21_FORMAL_COORDINATION_GATE_SHA256:?missing formal coordination gate SHA-256}"
+  fi
 fi
 export EMENDER_CONDA_ENV
 source "$REPO/scripts/frontier/frontier_runtime_env.sh"
@@ -64,7 +70,12 @@ if ((RESILIENT_E97_NODE_COUNT > 2)); then
     "$ASYNC_V21_PRIOR_RUNG_PASS_DIGEST" \
     "$ASYNC_V21_SCALE_IDENTITY_DIGEST" \
     "$ASYNC_V21_TRUSTED_REVIEWER_KEY" \
-    "$RESILIENT_E97_NODE_COUNT" <<'PY'
+    "$RESILIENT_E97_NODE_COUNT" \
+    "${ASYNC_V21_FORMAL_COORDINATION_GATE:-}" \
+    "${ASYNC_V21_FORMAL_COORDINATION_GATE_DIGEST:-}" \
+    "${ASYNC_V21_FORMAL_COORDINATION_GATE_SHA256:-}" \
+    "$ASYNC_V21_SCALE_EVIDENCE_ROOT" \
+    "$REPO" <<'PY'
 import base64
 import hashlib
 import json
@@ -72,9 +83,14 @@ from pathlib import Path
 import sys
 
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
+from ndm.formal_coordination_gate import (
+    file_sha256,
+    validate_formal_coordination_gate,
+)
 
 authorization_path, authorization_digest, prior_path, prior_digest, identity_digest, reviewer_key_path = sys.argv[1:7]
 nodes = int(sys.argv[7])
+formal_path, formal_digest, formal_sha256, evidence_root, repository = sys.argv[8:13]
 predecessor = {8: 2, 32: 8, 128: 32}[nodes]
 
 def verified(path, digest, schema):
@@ -233,6 +249,24 @@ if (
     or prior.get("nodes") != predecessor
 ):
     raise SystemExit("v2.1 scale authorization/predecessor rung mismatch")
+if nodes == 32:
+    formal = validate_formal_coordination_gate(
+        formal_path,
+        repository=Path(repository).resolve(),
+        evidence_root=evidence_root,
+        expected_nodes=nodes,
+        expected_identities=authorization["identities"],
+        expected_identity_contract=expected_contract,
+        scale_authorization_digest=authorization_digest,
+        passed_8_node_manifest=prior,
+        passed_8_node_sha256=file_sha256(Path(prior_path).resolve()),
+    )
+    if (
+        formal.get("manifest_digest") != formal_digest
+        or file_sha256(Path(formal_path).resolve()) != formal_sha256
+        or not review_verified(formal)
+    ):
+        raise SystemExit("formal coordination gate digest/signature mismatch")
 PY
 fi
 RUNTIME_IDENTITY=$($TRAIN_PYTHON_BIN - <<'PY'

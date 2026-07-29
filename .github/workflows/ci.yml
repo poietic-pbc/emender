@@ -69,7 +69,7 @@ jobs:
         with:
           path: formal/resilient/.cache/resilient-lean
           key: lean-4.26.0-linux-873c252b1c6b1392e5720ad8d5a137aabbe72c9f96a930fdb5a1dd1ddc5da454
-      - name: Build, test, examples, and canonical trace replay
+      - name: Pinned build, theorem hygiene, proofs, and permanent corpus
         working-directory: formal/resilient
         run: scripts/smoke.sh
 
@@ -112,4 +112,16 @@ jobs:
         run: |
           EMENDER_NDP_BUILD_MANIFEST="$PWD/build/native-resilient-dataplane/native-artifacts.json" \
           EMENDER_LEAN_CONFORMANCE_RUNNER="$PWD/formal/resilient/.lake/build/bin/resilient-conformance" \
-            uv run python -m pytest -q tests/test_native_lean_conformance.py
+            uv run python -m pytest -q \
+              tests/test_native_lean_conformance.py \
+              tests/test_formal_coordination_scale_gate.py
+          uv run python scripts/conformance/generate_native_lean_manifest.py \
+            --build-manifest "$PWD/build/native-resilient-dataplane/native-artifacts.json" \
+            --lean-runner "$PWD/formal/resilient/.lake/build/bin/resilient-conformance" \
+            --output /tmp/emender-native-lean-manifest.json \
+            --job-5105811-output /tmp/emender-job-5105811-agreement.json
+      - name: Bounded deterministic native schedules
+        run: |
+          ctest --test-dir build/native-resilient-dataplane-build \
+            --output-on-failure \
+            -R '^ndp_coordination_schedule_stress_test$'

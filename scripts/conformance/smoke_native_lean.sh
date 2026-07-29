@@ -18,3 +18,9 @@ EMENDER_LEAN_CONFORMANCE_RUNNER=\
 "$repository_root/formal/resilient/.lake/build/bin/resilient-conformance" \
   "$EMENDER_PYTHON" -m pytest -q \
   "$repository_root/tests/test_native_lean_conformance.py"
+"$EMENDER_PYTHON" \
+  "$repository_root/scripts/conformance/generate_native_lean_manifest.py" \
+  --build-manifest \
+    "$repository_root/build/native-resilient-dataplane/native-artifacts.json" \
+  --lean-runner \
+    "$repository_root/formal/resilient/.lake/build/bin/resilient-conformance"

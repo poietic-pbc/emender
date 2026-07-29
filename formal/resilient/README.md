@@ -276,3 +276,30 @@ It starts the actual compiled persistent service and reaches
 `coordination::step` through the public C ABI and service RPC. Agreement is
 limited to pure coordination. It is not ISP timing, dense byte-path,
 floating-point, Frontier provider, or scale evidence.
+
+## Formal/native scale-gate workflow
+
+From the repository root,
+`scripts/conformance/smoke_native_lean.sh` rebuilds the pinned Lean package,
+checks theorem hygiene and the proof manifest, regenerates/replays the
+permanent corpus, builds the actual compiled native service, proves deliberate
+divergence detection, and writes the complete zero-divergence aggregate. The
+bounded deterministic native schedule test runs in the unified native CTest
+suite; the longer 50,000-schedule campaign remains seeded, directly
+replayable, causality-preserving, and shrinkable.
+
+The local non-submitting evidence is recorded with:
+
+```bash
+"$EMENDER_PYTHON" \
+  scripts/frontier/build_formal_coordination_scale_gate.py local \
+  --execution-source-digest "$EXECUTION_SOURCE_DIGEST" \
+  --source-commit "$(git rev-parse HEAD)" \
+  --output reports/frontier/formal-coordination-scale-gate-v1.json
+```
+
+That local manifest deliberately authorizes no node count. After the exact
+collector-backed 8-node pass exists, `join` binds it and its native
+hardening/stress lineage to the signed 32-node authorization. The joined
+candidate still requires Ed25519 review before the controller accepts it.
+Compute nodes validate only the prebuilt hashes/signature and do not run Lean.

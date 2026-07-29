@@ -1069,8 +1069,15 @@ def _allocation_main() -> int:
             "ASYNC_V21_SCALE_CLOSE_OFFSET_NS",
             "ASYNC_V21_SCALE_STABLE_DIVERSITY_FLOOR",
             "ASYNC_V21_SCALE_PER_READY_WORKER_TOKEN_FLOOR",
+            "ASYNC_V21_SCALE_EVIDENCE_ROOT",
             "ASYNC_V21_TRUSTED_REVIEWER_KEY",
         )
+        if node_count == 32:
+            required_scale_bindings += (
+                "ASYNC_V21_FORMAL_COORDINATION_GATE",
+                "ASYNC_V21_FORMAL_COORDINATION_GATE_DIGEST",
+                "ASYNC_V21_FORMAL_COORDINATION_GATE_SHA256",
+            )
         missing = tuple(
             name for name in required_scale_bindings if not os.environ.get(name))
         if missing:

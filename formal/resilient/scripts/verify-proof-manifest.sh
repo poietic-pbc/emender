@@ -17,6 +17,22 @@ jq -e '
     "ResilientProtocol.transition" and
   .model.executable_trace_fold ==
     "ResilientProtocol.executeEvents" and
+  .proof_policy.runtime_boolean_is_not_a_theorem == true and
+  .proof_policy.theorems_are_propositions_over_transition == true and
+  .proof_policy.boolean_substitutes == [] and
+  .proof_policy.safety_fairness_hypotheses == false and
+  (.proof_policy.forbidden_lean_tokens | sort) ==
+    (["admit", "axiom", "native_decide", "opaque", "sorry", "unsafe"] | sort) and
+  .progress.unconditional_claim == false and
+  .progress.required_assumptions == [
+    "finite_close_and_stage_deadlines",
+    "surviving_eligible_stable_worker_quorum",
+    "surviving_exact_token_floor",
+    "bounded_permitted_failures",
+    "bounded_owner_reassignments",
+    "eventual_delivery_and_processing",
+    "fair_scheduling_of_enabled_transitions"
+  ] and
   (.artifacts | type == "array" and length > 0) and
   ([.artifacts[].path] | length == (unique | length)) and
   all(.artifacts[];

@@ -1207,6 +1207,17 @@ performance target. Correctness without the 10.609-second cap leaves native
 CXI unpromoted and the compiled MPICH path as a fixed-world fallback only; it
 does not justify weakening resilience semantics.
 
+The 8-node v2.1 rung MUST bind the exact native hardening and deterministic
+schedule-stress manifests. The 32-node rung MUST additionally bind
+`emender-formal-native-coordination-scale-gate-v1`, which joins that exact
+passed 8-node lineage to pinned Lean proofs and zero-divergence
+production-native trace conformance. This adds a proof/conformance promotion
+check only. It does not move networking, libfabric, timers, buffers, process
+supervision, or runtime effects into Lean and does not replace G2, numerical,
+snapshot, timing/tail, provider, scheduler, two-node, stress, 8-node, or scale
+policy evidence. Compute nodes validate the prebuilt manifest and never run
+Lean.
+
 The retained compiled reference itself is requalified, without changing its
 role, by the downstream compiled-transport task using the existing build and
 2048-rank smoke launcher. Its artifact must still show 2,048/2,048 accepted,
