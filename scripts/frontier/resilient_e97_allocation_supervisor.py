@@ -38,7 +38,7 @@ from ndm.native_dataplane import create_memfd, seal_memfd
 
 
 TRAINERS_PER_NODE = 8
-QUALIFICATION_NODE_LADDER = (2, 4, 8, 16, 32, 64, 256)
+QUALIFICATION_NODE_LADDER = (2, 8, 32, 128)
 POOL_PROTOCOL_ID = "resilient-diloco-compute-pool-v1"
 GENERATION_BASELINE_S = (212.0, 215.0)
 READY_HARD_S = 180.0
@@ -1065,9 +1065,11 @@ def _allocation_main() -> int:
             "ASYNC_V21_PRIOR_RUNG_PASS",
             "ASYNC_V21_PRIOR_RUNG_PASS_DIGEST",
             "ASYNC_V21_SCALE_CLOSURE_DIGEST",
+            "ASYNC_V21_SCALE_IDENTITY_DIGEST",
             "ASYNC_V21_SCALE_CLOSE_OFFSET_NS",
             "ASYNC_V21_SCALE_STABLE_DIVERSITY_FLOOR",
             "ASYNC_V21_SCALE_PER_READY_WORKER_TOKEN_FLOOR",
+            "ASYNC_V21_TRUSTED_REVIEWER_KEY",
         )
         missing = tuple(
             name for name in required_scale_bindings if not os.environ.get(name))

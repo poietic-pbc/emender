@@ -7,7 +7,7 @@ WG task: `qualify-compiled-frontier-transport-v1`
 Machine-readable companion:
 [`native-dataplane-reference-v1.json`](native-dataplane-reference-v1.json),
 SHA-256
-`5c4d0590a41dc32c9b77a09860a27ec0503d8bfef8e68201eab76b0d820d551f`.
+`ec8636b8a8fb001f90c28c8590233b43b67e61e520d7f22a38ec40f0dab54ce7`.
 
 ## Result
 
@@ -86,8 +86,8 @@ The helper is deliberately outside the conforming live backend:
 - NDP05: the compiled result is a numerical reference; native v1 synthetic
   output must meet the stronger zero-tolerance, bitwise reference contract.
 - NDP16 and NDP17: the baseline records provider/build/payload/performance
-  facts and preserves the ordered G0–G6 gates, including hard G2 before any
-  real model or 4+ node native job.
+  facts and preserves the ordered G0–G6 gates, including hard G2 and
+  current-source G3–G5 before direct 8/32/128 systems scale.
 
 ## Active Frontier toolchain
 
@@ -312,7 +312,7 @@ redistribution bytes. After one warm-up, three timed generations must have:
   credit/resident high-water, full release, and zero Python dense bytes,
   trainer files, disk replay, rejects, replay, or leaks.
 
-No real model or 4+ native job is admissible before exact-code G2 passes. G3
+No real model or scale native job is admissible before exact-code G2 passes. G3
 then covers a real two-node generation; G4 covers failure/rejoin; G5 covers a
 fresh allocation/fence; only then does G6 proceed in strict 4, 8, 32, 64, 256
 order.
