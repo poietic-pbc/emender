@@ -1070,6 +1070,46 @@ source commit, binary SHA-256, provider facts, layout/plan digests, commands,
 metrics, and telemetry hashes. Model launchers reject a missing/mismatched
 artifact via `NDP_FULL_LAYOUT_GATE_JSON`.
 
+#### G2 retained-artifact ownership
+
+`NDP_ARTIFACT_ROOT` is a shared container, not an invitation for every actor
+to create `<job-id>`. Its immutable `ARTIFACT-OWNERSHIP.json` uses schema
+`emender-native-g2-artifact-ownership-v1` and assigns these exclusive
+namespaces:
+
+| Actor | Sole writable authoritative namespace | Permitted reads and publication rule |
+|---|---|---|
+| submit/controller monitor | `controller/<payload-job-id>/scheduler-evidence/` | May capture `squeue -o '%i|%T|%P|%q'`, `scontrol`, and reconciliation records. Complete records are published by content-addressed hard link without replacement. It MUST NOT create `<payload-job-id>/`. |
+| native G2 batch | `<payload-job-id>/` | Sole writer of job artifacts. On Frontier Lustre it atomically creates a no-replace relative symlink to a batch-owned directory under `.batch-storage/` that already contains `.artifact-owner.json`. Thus neither `mkdir` nor a directory rename can observe and replace an empty authoritative directory. Any existing path fails closed with exit 73 and is never overwritten. |
+| scheduler-owned `afterany` collector | `collectors/<collector-job-id>/payload-<payload-job-id>/` | May read the batch directory after dependency release and write only immutable content-addressed hard-link publications in its own directory. It MUST NOT create or mutate the batch or controller directory. |
+
+No actor may pre-create another actor's authoritative root. Legitimate
+controller evidence, including prior failed or repeated observations, is
+therefore never placed below the batch root and cannot trip its create-once
+guard. The canonical submit helper initializes the schema, durably records the
+numeric job identity returned by `sbatch`, then immediately captures both
+`Partition` and `QOS` outside the batch namespace. Repeated observation and
+collector reconciliation are idempotent because equal canonical records have
+one digest-derived filename; a new scheduler state creates a new immutable
+record rather than overwriting history.
+
+The only supported ownership operations are:
+
+```bash
+"$NDP_PYTHON_BIN" scripts/frontier/native_g2_artifact_namespace.py \
+  observe-scheduler --artifact-root "$NDP_ARTIFACT_ROOT" \
+  --job-id "$JOB_ID" --kind monitor
+
+"$NDP_PYTHON_BIN" scripts/frontier/native_g2_artifact_namespace.py \
+  record-collector --artifact-root "$NDP_ARTIFACT_ROOT" \
+  --collector-job-id "$SLURM_JOB_ID" --payload-job-id "$PAYLOAD_JOB_ID" \
+  --kind terminal --evidence-json '{"dependency":"afterany"}'
+```
+
+Callers provide identities and evidence, never destination paths. Direct
+operator writes under `NDP_ARTIFACT_ROOT/<job-id>` are conflicting
+authoritative artifacts and deliberately remain an exit-73 condition.
+
 ### G3: real two-node generation
 
 Only after G2:

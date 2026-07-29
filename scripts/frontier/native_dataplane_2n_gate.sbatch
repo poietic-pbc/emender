@@ -58,13 +58,20 @@ else
 fi
 
 mkdir -p "$REPO/logs/frontier/native-dataplane"
-ARTIFACT_DIR="$NDP_ARTIFACT_ROOT/$SLURM_JOB_ID"
-[[ ! -e $ARTIFACT_DIR ]] || { echo "refusing to overwrite retained job evidence" >&2; exit 73; }
-mkdir -p "$ARTIFACT_DIR"
-
 export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
 PYTHON_BIN=${NDP_PYTHON_BIN:-$REPO/.envs/olcf-rocm711-torch210-py312/bin/python}
 [[ -x $PYTHON_BIN ]] || { echo "bounded native gate Python is unavailable: $PYTHON_BIN" >&2; exit 66; }
+ARTIFACT_NAMESPACE_TOOL="$REPO/scripts/frontier/native_g2_artifact_namespace.py"
+[[ -r $ARTIFACT_NAMESPACE_TOOL ]] || {
+  echo "native G2 artifact namespace helper is unavailable" >&2; exit 66;
+}
+"$PYTHON_BIN" "$ARTIFACT_NAMESPACE_TOOL" publish-batch \
+  --artifact-root "$NDP_ARTIFACT_ROOT" \
+  --job-id "$SLURM_JOB_ID" \
+  --run-id "$NDP_RUN_ID" \
+  --payload-id "$NDP_PAYLOAD_ID"
+ARTIFACT_DIR="$NDP_ARTIFACT_ROOT/$SLURM_JOB_ID"
+
 "$PYTHON_BIN" - "$NDP_BUILD_MANIFEST" "$REPO" <<'PY'
 import sys
 from ndm.native_artifacts import validate_build_manifest
