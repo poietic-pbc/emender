@@ -1175,12 +1175,12 @@ bool disposition_must_not_mutate(coordination::Disposition value) {
         case coordination::Disposition::StaleGeneration:
         case coordination::Disposition::GenerationClosed:
         case coordination::Disposition::Deferred:
-        case coordination::Disposition::InsufficientCohort:
         case coordination::Disposition::Corrupt:
         case coordination::Disposition::InvalidEvent:
         case coordination::Disposition::FatalInvariant:
             return true;
         case coordination::Disposition::Accepted:
+        case coordination::Disposition::InsufficientCohort:
         case coordination::Disposition::RetryNextGeneration:
             return false;
     }
@@ -1340,6 +1340,21 @@ struct SafetyOracle {
                 return Failure{
                     "idempotence",
                     "accepted event replay changed authority or outcome",
+                    step_index};
+            }
+        }
+        if (transition.disposition
+                == coordination::Disposition::InsufficientCohort
+            && transition.pre_state_digest != transition.post_state_digest) {
+            const coordination::Transition replay =
+                coordination::step(state, event);
+            if (replay.disposition
+                    != coordination::Disposition::RetryNextGeneration
+                || replay.pre_state_digest != transition.post_state_digest
+                || replay.post_state_digest != transition.post_state_digest) {
+                return Failure{
+                    "idempotence",
+                    "deadline abort replay changed authority or did not retry",
                     step_index};
             }
         }
