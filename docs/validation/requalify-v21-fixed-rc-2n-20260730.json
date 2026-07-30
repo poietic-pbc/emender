@@ -1,0 +1,813 @@
+{
+  "artifact_catalog": {
+    "allocation_fence": {
+      "bytes": 675,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/batch/clean-overlap/supervision/allocation-fence.json",
+      "sha256": "ff2a5b643d6c31e72ec7951ec3df973ed98d5c9ba1f30f53cee036c9bcea2d82"
+    },
+    "clean_plan": {
+      "bytes": 12921,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/controller/clean-plan.json",
+      "sha256": "7dd291082e8f67844d5dd7e8b5eff3da611ffd67a22751f149860741c069979e"
+    },
+    "clean_terminal_scheduler": {
+      "bytes": 308,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/controller/clean-terminal-sacct.psv",
+      "sha256": "a961aff3f876e3d9c0475eb57dce86d39dbae91e2dcec36acf3d61338eafab10"
+    },
+    "collector_payload_input": {
+      "bytes": 8758,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/collector/terminal-collector/cf065a49813efd552a935221c2837cbeefc060c148787aa34ff0eefd8003c769/payload-input.json",
+      "sha256": "abde759ab52f3462debf394025104d828c318a306d37dc04c69f612b2ffa220d"
+    },
+    "collector_payload_sacct": {
+      "bytes": 169,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/collector/terminal-collector/cf065a49813efd552a935221c2837cbeefc060c148787aa34ff0eefd8003c769/payload-sacct.psv",
+      "sha256": "ef833858929358511e8654de5ef708a6704a9fefcfe738296d006d5023916056"
+    },
+    "collector_terminal_verdict": {
+      "bytes": 2817,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/collector/terminal-collector/cf065a49813efd552a935221c2837cbeefc060c148787aa34ff0eefd8003c769/terminal-verdict.json",
+      "sha256": "b6632e7ad4f91f99922f7311a939e506eec54e3ced72e310916183cd70de74bb"
+    },
+    "frozen_source": {
+      "bytes": 249,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/controller/frozen-source.txt",
+      "sha256": "f858bb11f0b0d6b277b30f6379beb02dde5b2e1953948a2f77cb2995d89fd359"
+    },
+    "g2_clean_gate": {
+      "bytes": 7869,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/g2/.batch-storage/5120760.prr402cm.owned/full-layout-gate.json",
+      "sha256": "7c66e80ce5df7b084e2c8c1a4952738152e3fd009d634f163927b9f386d9fc99"
+    },
+    "g2_clean_terminal_scheduler": {
+      "bytes": 151,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/controller/g2-clean-terminal-sacct.psv",
+      "sha256": "48b1e205290b8d34b14dc740254b5ed5bd381e9dece6216abbea5bfef98e8bed"
+    },
+    "g2_fault_gate": {
+      "bytes": 8322,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/g2/.batch-storage/5120892.kpu380vd.owned/failure-injection-gate.json",
+      "sha256": "62ad11747bf46c7195610d004e502c15673d52f985890d7bfb6a65a82c664136"
+    },
+    "g2_fault_terminal_scheduler": {
+      "bytes": 151,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/controller/g2-fault-terminal-sacct.psv",
+      "sha256": "b37033aa8a9c5f7cc0214c4588089db28f472837b7c3a85bd848d580f2522ffa"
+    },
+    "local_receipt_pytest": {
+      "bytes": 599,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/controller/generation-zero-focused-pytest.txt",
+      "sha256": "f74976937079b3cdd1758050676f4e07a6f06f9b06336e7fc9bec0f146576284"
+    },
+    "local_receipt_regression": {
+      "bytes": 307,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/controller/generation-zero-receipt-local.json",
+      "sha256": "997a758c69917ef7df24dbfb38f2f132b50673cc53ab7b659ddf2122de1eb3c3"
+    },
+    "native_build_log": {
+      "bytes": 20476,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/native-build/build.log",
+      "sha256": "994f924a24bf3e56945ef0face08433f790653ba4c0b0e848291f10fd35295d7"
+    },
+    "native_build_manifest": {
+      "bytes": 1111,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/native-build/install/native-artifacts.json",
+      "sha256": "a7a7bc7a600a76504ce405cb367144da5002245889448a16c9f4f70b6ad23f8e"
+    },
+    "native_coordination_trace": {
+      "bytes": 866529,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/batch/clean-overlap/retained-evidence/pool-control/native-coordination-trace-v1.jsonl",
+      "sha256": "9e5bcd4fa8844e36a467daf7af4bbeba479a0c4c2541678a99cf3fbee04ea42b"
+    },
+    "node0_secondary_failure": {
+      "bytes": 3682,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/batch/clean-overlap/logs/node-0-manager.err",
+      "sha256": "a3899b5cb277b7a3ec4ec7e2309714919190a4f31396c3d9da711f8ecc91f902"
+    },
+    "node1_primary_failure": {
+      "bytes": 1645,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/batch/clean-overlap/logs/node-1-manager.err",
+      "sha256": "c73485ea319a9a561904349c926541e03b7282cfe8aca10160b5b1998fb6e756"
+    },
+    "qualification_state": {
+      "bytes": 3652,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/controller/qualification-state.json",
+      "sha256": "416a9e00a5602c0ce35243c8816e0a973d89132447c95d75d0503e8d7d7093ec"
+    },
+    "seed_node0": {
+      "bytes": 1248,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/batch/clean-overlap/seed-materialization/frontier03362.json",
+      "sha256": "6abe57039f693972394df339aac66d84ff691ffa47b17f86494f8d09b17352ca"
+    },
+    "seed_node1": {
+      "bytes": 1248,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/batch/clean-overlap/seed-materialization/frontier03379.json",
+      "sha256": "93a890c7edc3cb158ccfa821d1f8b25c2d80bd70d68f86963f97b94d170b0501"
+    },
+    "supervision_events": {
+      "bytes": 221618,
+      "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/requalify-v21-fixed-rc-2n/7139cc5bf497e183d784bf276fb6bc55a4ff31bd/batch/clean-overlap/supervision/events.jsonl",
+      "sha256": "bf757e50a87484905429e28a677bbe340f7264de3d3e7a4400c783637e4b8015"
+    }
+  },
+  "conformance": {
+    "applicable_requirements": {
+      "ISP": [
+        "ISP01",
+        "ISP02",
+        "ISP03",
+        "ISP04",
+        "ISP05",
+        "ISP06",
+        "ISP07"
+      ],
+      "NDP": [
+        "NDP01",
+        "NDP02",
+        "NDP03",
+        "NDP04",
+        "NDP05",
+        "NDP06",
+        "NDP07",
+        "NDP08",
+        "NDP09",
+        "NDP10",
+        "NDP11",
+        "NDP12",
+        "NDP13",
+        "NDP14",
+        "NDP15",
+        "NDP16",
+        "NDP17"
+      ],
+      "R": [
+        "R01",
+        "R02",
+        "R03",
+        "R04",
+        "R05",
+        "R06",
+        "R07",
+        "R08",
+        "R09",
+        "R10",
+        "R11",
+        "R12",
+        "R13",
+        "R14",
+        "R15",
+        "R16"
+      ],
+      "V21S": [
+        "V21S01",
+        "V21S02",
+        "V21S03",
+        "V21S04",
+        "V21S05",
+        "V21S06",
+        "V21S07",
+        "V21S08",
+        "V21S09",
+        "V21S10",
+        "V21S11",
+        "V21S12",
+        "V21S13",
+        "V21S14",
+        "V21S15",
+        "V21S16",
+        "V21S17"
+      ]
+    },
+    "async_authority": "docs/ASYNC_DECOUPLED_DILOCO_V2.md, ADR-002",
+    "authority": "docs/RESILIENT_DILOCO_COMPUTE_POOL.md, Version 1, Conformance checklist",
+    "matrix": "docs/RESILIENT_DILOCO_GAP_MATRIX.md",
+    "native_authority": "docs/NATIVE_RESILIENT_DILOCO_DATAPLANE.md, Version 1",
+    "overall": "not_conformant_terminal_clean_failure",
+    "requirement_map": {
+      "ISP01": {
+        "evidence": [
+          "native_coordination_trace"
+        ],
+        "note": "Sixteen coherent snapshot/admission records reached OWNED with immediate mutable resume and bounded non-Lustre direct memfd publication, but only one window was available before failure.",
+        "result": "partial_physical_evidence"
+      },
+      "ISP02": {
+        "evidence": [
+          "native_coordination_trace"
+        ],
+        "note": "Sixteen coherent snapshot/admission records reached OWNED with immediate mutable resume and bounded non-Lustre direct memfd publication, but only one window was available before failure.",
+        "result": "partial_physical_evidence"
+      },
+      "ISP03": {
+        "evidence": [
+          "native_coordination_trace"
+        ],
+        "note": "Sixteen coherent snapshot/admission records reached OWNED with immediate mutable resume and bounded non-Lustre direct memfd publication, but only one window was available before failure.",
+        "result": "partial_physical_evidence"
+      },
+      "ISP04": {
+        "evidence": [
+          "native_coordination_trace"
+        ],
+        "note": "Sixteen coherent snapshot/admission records reached OWNED with immediate mutable resume and bounded non-Lustre direct memfd publication, but only one window was available before failure.",
+        "result": "partial_physical_evidence"
+      },
+      "ISP05": {
+        "evidence": [
+          "native_coordination_trace"
+        ],
+        "note": "No result apply began and no partial apply/READY publication occurred.",
+        "result": "not_reached_fail_closed"
+      },
+      "ISP06": {
+        "evidence": [
+          "collector_terminal_verdict"
+        ],
+        "note": "The required pipelined-performance verdict was absent; five-window/three-commit max/p99 and anti-200-second-stall evidence could not be produced.",
+        "result": "failed_incomplete_trace"
+      },
+      "ISP07": {
+        "evidence": [
+          "collector_terminal_verdict"
+        ],
+        "note": "The required pipelined-performance verdict was absent; five-window/three-commit max/p99 and anti-200-second-stall evidence could not be produced.",
+        "result": "failed_incomplete_trace"
+      },
+      "NDP01": {
+        "evidence": [
+          "native_build_manifest",
+          "g2_clean_gate",
+          "g2_fault_gate"
+        ],
+        "note": "The reproducible bundle and physical clean/fault G2 passed exact cxi/FI_EP_RDM, no MPI/all-rank operation, exact-token reduction, bounded buffers/replay, ABI, wire, release, and fault checks. Model startup used that same bundle but stopped at generation closure.",
+        "result": "passed_exact_code_g2_model_incomplete"
+      },
+      "NDP02": {
+        "evidence": [
+          "native_build_manifest",
+          "g2_clean_gate",
+          "g2_fault_gate"
+        ],
+        "note": "The reproducible bundle and physical clean/fault G2 passed exact cxi/FI_EP_RDM, no MPI/all-rank operation, exact-token reduction, bounded buffers/replay, ABI, wire, release, and fault checks. Model startup used that same bundle but stopped at generation closure.",
+        "result": "passed_exact_code_g2_model_incomplete"
+      },
+      "NDP03": {
+        "evidence": [
+          "native_build_manifest",
+          "g2_clean_gate",
+          "g2_fault_gate"
+        ],
+        "note": "The reproducible bundle and physical clean/fault G2 passed exact cxi/FI_EP_RDM, no MPI/all-rank operation, exact-token reduction, bounded buffers/replay, ABI, wire, release, and fault checks. Model startup used that same bundle but stopped at generation closure.",
+        "result": "passed_exact_code_g2_model_incomplete"
+      },
+      "NDP04": {
+        "evidence": [
+          "native_build_manifest",
+          "g2_clean_gate",
+          "g2_fault_gate"
+        ],
+        "note": "The reproducible bundle and physical clean/fault G2 passed exact cxi/FI_EP_RDM, no MPI/all-rank operation, exact-token reduction, bounded buffers/replay, ABI, wire, release, and fault checks. Model startup used that same bundle but stopped at generation closure.",
+        "result": "passed_exact_code_g2_model_incomplete"
+      },
+      "NDP05": {
+        "evidence": [
+          "native_build_manifest",
+          "g2_clean_gate",
+          "g2_fault_gate"
+        ],
+        "note": "The reproducible bundle and physical clean/fault G2 passed exact cxi/FI_EP_RDM, no MPI/all-rank operation, exact-token reduction, bounded buffers/replay, ABI, wire, release, and fault checks. Model startup used that same bundle but stopped at generation closure.",
+        "result": "passed_exact_code_g2_model_incomplete"
+      },
+      "NDP06": {
+        "evidence": [
+          "native_build_manifest",
+          "g2_clean_gate",
+          "g2_fault_gate"
+        ],
+        "note": "The reproducible bundle and physical clean/fault G2 passed exact cxi/FI_EP_RDM, no MPI/all-rank operation, exact-token reduction, bounded buffers/replay, ABI, wire, release, and fault checks. Model startup used that same bundle but stopped at generation closure.",
+        "result": "passed_exact_code_g2_model_incomplete"
+      },
+      "NDP07": {
+        "evidence": [
+          "native_build_manifest",
+          "g2_clean_gate",
+          "g2_fault_gate"
+        ],
+        "note": "The reproducible bundle and physical clean/fault G2 passed exact cxi/FI_EP_RDM, no MPI/all-rank operation, exact-token reduction, bounded buffers/replay, ABI, wire, release, and fault checks. Model startup used that same bundle but stopped at generation closure.",
+        "result": "passed_exact_code_g2_model_incomplete"
+      },
+      "NDP08": {
+        "evidence": [
+          "native_build_manifest",
+          "g2_clean_gate",
+          "g2_fault_gate"
+        ],
+        "note": "The reproducible bundle and physical clean/fault G2 passed exact cxi/FI_EP_RDM, no MPI/all-rank operation, exact-token reduction, bounded buffers/replay, ABI, wire, release, and fault checks. Model startup used that same bundle but stopped at generation closure.",
+        "result": "passed_exact_code_g2_model_incomplete"
+      },
+      "NDP09": {
+        "evidence": [
+          "native_build_manifest",
+          "g2_clean_gate",
+          "g2_fault_gate"
+        ],
+        "note": "The reproducible bundle and physical clean/fault G2 passed exact cxi/FI_EP_RDM, no MPI/all-rank operation, exact-token reduction, bounded buffers/replay, ABI, wire, release, and fault checks. Model startup used that same bundle but stopped at generation closure.",
+        "result": "passed_exact_code_g2_model_incomplete"
+      },
+      "NDP10": {
+        "evidence": [
+          "native_build_manifest",
+          "g2_clean_gate",
+          "g2_fault_gate"
+        ],
+        "note": "The reproducible bundle and physical clean/fault G2 passed exact cxi/FI_EP_RDM, no MPI/all-rank operation, exact-token reduction, bounded buffers/replay, ABI, wire, release, and fault checks. Model startup used that same bundle but stopped at generation closure.",
+        "result": "passed_exact_code_g2_model_incomplete"
+      },
+      "NDP11": {
+        "evidence": [
+          "native_build_manifest",
+          "g2_clean_gate",
+          "g2_fault_gate"
+        ],
+        "note": "The reproducible bundle and physical clean/fault G2 passed exact cxi/FI_EP_RDM, no MPI/all-rank operation, exact-token reduction, bounded buffers/replay, ABI, wire, release, and fault checks. Model startup used that same bundle but stopped at generation closure.",
+        "result": "passed_exact_code_g2_model_incomplete"
+      },
+      "NDP12": {
+        "evidence": [
+          "native_build_manifest",
+          "g2_clean_gate",
+          "g2_fault_gate"
+        ],
+        "note": "The reproducible bundle and physical clean/fault G2 passed exact cxi/FI_EP_RDM, no MPI/all-rank operation, exact-token reduction, bounded buffers/replay, ABI, wire, release, and fault checks. Model startup used that same bundle but stopped at generation closure.",
+        "result": "passed_exact_code_g2_model_incomplete"
+      },
+      "NDP13": {
+        "evidence": [
+          "node1_primary_failure",
+          "native_coordination_trace"
+        ],
+        "note": "A nonterminal deferred close disposition was promoted to a manager failure before the absolute 420-second generation deadline.",
+        "result": "failed"
+      },
+      "NDP14": {
+        "evidence": [
+          "native_build_manifest",
+          "g2_clean_gate",
+          "g2_fault_gate"
+        ],
+        "note": "The reproducible bundle and physical clean/fault G2 passed exact cxi/FI_EP_RDM, no MPI/all-rank operation, exact-token reduction, bounded buffers/replay, ABI, wire, release, and fault checks. Model startup used that same bundle but stopped at generation closure.",
+        "result": "passed_exact_code_g2_model_incomplete"
+      },
+      "NDP15": {
+        "evidence": [
+          "native_coordination_trace"
+        ],
+        "note": "No result/checkpoint/apply was published; no partial apply was authorized.",
+        "result": "not_reached_fail_closed"
+      },
+      "NDP16": {
+        "evidence": [
+          "native_build_manifest",
+          "g2_clean_gate",
+          "g2_fault_gate"
+        ],
+        "note": "The reproducible bundle and physical clean/fault G2 passed exact cxi/FI_EP_RDM, no MPI/all-rank operation, exact-token reduction, bounded buffers/replay, ABI, wire, release, and fault checks. Model startup used that same bundle but stopped at generation closure.",
+        "result": "passed_exact_code_g2_model_incomplete"
+      },
+      "NDP17": {
+        "evidence": [
+          "native_build_manifest",
+          "g2_clean_gate",
+          "g2_fault_gate"
+        ],
+        "note": "The reproducible bundle and physical clean/fault G2 passed exact cxi/FI_EP_RDM, no MPI/all-rank operation, exact-token reduction, bounded buffers/replay, ABI, wire, release, and fault checks. Model startup used that same bundle but stopped at generation closure.",
+        "result": "passed_exact_code_g2_model_incomplete"
+      },
+      "R01": {
+        "evidence": [
+          "clean_plan",
+          "allocation_fence",
+          "clean_terminal_scheduler"
+        ],
+        "note": "A create-once Slurm-fence 5120935 claim was admitted before model load; no database claim was used.",
+        "result": "observed"
+      },
+      "R02": {
+        "evidence": [
+          "native_coordination_trace"
+        ],
+        "note": "Two recover-peer and two READY transitions established leased membership; the trace used membership, not launched ranks. One peer later expired after the first terminal manager failure.",
+        "result": "observed_before_failure"
+      },
+      "R03": {
+        "evidence": [
+          "native_coordination_trace"
+        ],
+        "note": "Two recover-peer and two READY transitions established leased membership; the trace used membership, not launched ranks. One peer later expired after the first terminal manager failure.",
+        "result": "observed_before_failure"
+      },
+      "R04": {
+        "evidence": [
+          "g2_clean_gate",
+          "g2_fault_gate",
+          "native_coordination_trace"
+        ],
+        "note": "Exact-code clean/fault G2 passed fencing, deterministic exact-token math, checksums, point-to-point CXI, bounds, and rejection cases; the model phase stopped before an aggregate or commit.",
+        "result": "passed_g2_but_model_incomplete"
+      },
+      "R05": {
+        "evidence": [
+          "g2_clean_gate",
+          "g2_fault_gate",
+          "native_coordination_trace"
+        ],
+        "note": "Exact-code clean/fault G2 passed fencing, deterministic exact-token math, checksums, point-to-point CXI, bounds, and rejection cases; the model phase stopped before an aggregate or commit.",
+        "result": "passed_g2_but_model_incomplete"
+      },
+      "R06": {
+        "evidence": [
+          "node1_primary_failure",
+          "native_coordination_trace"
+        ],
+        "note": "The first valid contribution returned a finite deferred/insufficient-cohort disposition, but the manager treated it as terminal instead of waiting/polling within the immutable 420-second close deadline.",
+        "result": "failed"
+      },
+      "R07": {
+        "evidence": [
+          "native_coordination_trace",
+          "collector_terminal_verdict"
+        ],
+        "note": "The authority remained open at generation 0 with accepted_token_clock=0, result_receipt_count=0, and an all-zero commit receipt; one authoritative result or none resolved to none.",
+        "result": "fail_closed_no_partial_commit"
+      },
+      "R08": {
+        "evidence": [
+          "g2_clean_gate",
+          "g2_fault_gate",
+          "native_coordination_trace"
+        ],
+        "note": "Exact-code clean/fault G2 passed fencing, deterministic exact-token math, checksums, point-to-point CXI, bounds, and rejection cases; the model phase stopped before an aggregate or commit.",
+        "result": "passed_g2_but_model_incomplete"
+      },
+      "R09": {
+        "evidence": [
+          "native_coordination_trace",
+          "node1_primary_failure"
+        ],
+        "note": "All 16 trainers produced coherent OWNED snapshot telemetry and resumed foreground work, but only one window was observed and no complete causal commit/apply tail record existed.",
+        "result": "partial_before_failure"
+      },
+      "R10": {
+        "evidence": [
+          "g2_clean_gate",
+          "g2_fault_gate",
+          "native_coordination_trace"
+        ],
+        "note": "Exact-code clean/fault G2 passed fencing, deterministic exact-token math, checksums, point-to-point CXI, bounds, and rejection cases; the model phase stopped before an aggregate or commit.",
+        "result": "passed_g2_but_model_incomplete"
+      },
+      "R11": {
+        "evidence": [
+          "g2_fault_gate"
+        ],
+        "note": "G2 proved peer loss, owner reassignment/replay, old-epoch rejection, and new incarnation; the real-model fault campaign was not submitted after clean failed.",
+        "result": "passed_g2_physical_model_campaign_not_run"
+      },
+      "R12": {
+        "evidence": [
+          "collector_terminal_verdict"
+        ],
+        "note": "No committed checkpoint existed, so newer-fence fresh-allocation recovery was not submitted.",
+        "result": "not_run_after_first_failure"
+      },
+      "R13": {
+        "evidence": [
+          "g2_clean_gate",
+          "g2_fault_gate",
+          "native_coordination_trace"
+        ],
+        "note": "Exact-code clean/fault G2 passed fencing, deterministic exact-token math, checksums, point-to-point CXI, bounds, and rejection cases; the model phase stopped before an aggregate or commit.",
+        "result": "passed_g2_but_model_incomplete"
+      },
+      "R14": {
+        "evidence": [
+          "native_coordination_trace",
+          "node1_primary_failure"
+        ],
+        "note": "All 16 trainers produced coherent OWNED snapshot telemetry and resumed foreground work, but only one window was observed and no complete causal commit/apply tail record existed.",
+        "result": "partial_before_failure"
+      },
+      "R15": {
+        "evidence": [
+          "g2_clean_gate",
+          "g2_fault_gate",
+          "native_coordination_trace"
+        ],
+        "note": "Exact-code clean/fault G2 passed fencing, deterministic exact-token math, checksums, point-to-point CXI, bounds, and rejection cases; the model phase stopped before an aggregate or commit.",
+        "result": "passed_g2_but_model_incomplete"
+      },
+      "R16": {
+        "evidence": [
+          "collector_terminal_verdict"
+        ],
+        "note": "The current-source two-node clean phase failed; fault-model, fresh-recovery, and scale promotion remain unauthorized.",
+        "result": "failed"
+      },
+      "V21S01": {
+        "evidence": [
+          "clean_plan",
+          "native_build_manifest",
+          "g2_clean_gate",
+          "seed_node0",
+          "seed_node1"
+        ],
+        "note": "The exact v2.1 policy/schema, exact-token eta_outer=1 identities, two-node floor, compiled CXI bundle, and final offline seed were bound and verified; no model commit completed.",
+        "result": "identity_or_g2_pass_model_incomplete"
+      },
+      "V21S02": {
+        "evidence": [
+          "native_coordination_trace",
+          "node1_primary_failure"
+        ],
+        "note": "The first physical snapshot showed bounded OWNED and immediate resume, but the run ended before five windows, lag/apply tails, or complete causal phase coverage.",
+        "result": "partial_before_failure"
+      },
+      "V21S03": {
+        "evidence": [
+          "clean_plan",
+          "native_build_manifest",
+          "g2_clean_gate",
+          "seed_node0",
+          "seed_node1"
+        ],
+        "note": "The exact v2.1 policy/schema, exact-token eta_outer=1 identities, two-node floor, compiled CXI bundle, and final offline seed were bound and verified; no model commit completed.",
+        "result": "identity_or_g2_pass_model_incomplete"
+      },
+      "V21S04": {
+        "evidence": [
+          "clean_plan",
+          "native_build_manifest",
+          "g2_clean_gate",
+          "seed_node0",
+          "seed_node1"
+        ],
+        "note": "The exact v2.1 policy/schema, exact-token eta_outer=1 identities, two-node floor, compiled CXI bundle, and final offline seed were bound and verified; no model commit completed.",
+        "result": "identity_or_g2_pass_model_incomplete"
+      },
+      "V21S05": {
+        "evidence": [
+          "clean_plan",
+          "native_build_manifest",
+          "g2_clean_gate",
+          "seed_node0",
+          "seed_node1"
+        ],
+        "note": "The exact v2.1 policy/schema, exact-token eta_outer=1 identities, two-node floor, compiled CXI bundle, and final offline seed were bound and verified; no model commit completed.",
+        "result": "identity_or_g2_pass_model_incomplete"
+      },
+      "V21S06": {
+        "evidence": [
+          "native_coordination_trace",
+          "node1_primary_failure"
+        ],
+        "note": "The first physical snapshot showed bounded OWNED and immediate resume, but the run ended before five windows, lag/apply tails, or complete causal phase coverage.",
+        "result": "partial_before_failure"
+      },
+      "V21S07": {
+        "evidence": [
+          "native_coordination_trace"
+        ],
+        "note": "No verified result entered the mailbox and no node apply began; the zero-result outcome prevented partial visibility.",
+        "result": "not_reached_fail_closed"
+      },
+      "V21S08": {
+        "evidence": [
+          "native_coordination_trace"
+        ],
+        "note": "No verified result entered the mailbox and no node apply began; the zero-result outcome prevented partial visibility.",
+        "result": "not_reached_fail_closed"
+      },
+      "V21S09": {
+        "evidence": [
+          "native_coordination_trace",
+          "node1_primary_failure"
+        ],
+        "note": "The first physical snapshot showed bounded OWNED and immediate resume, but the run ended before five windows, lag/apply tails, or complete causal phase coverage.",
+        "result": "partial_before_failure"
+      },
+      "V21S10": {
+        "evidence": [
+          "native_coordination_trace",
+          "node1_primary_failure"
+        ],
+        "note": "Leased READY succeeded, but the first insufficient-cohort response caused manager loss instead of bounded closure progress.",
+        "result": "failed_after_ready"
+      },
+      "V21S11": {
+        "evidence": [
+          "native_coordination_trace"
+        ],
+        "note": "No verified result entered the mailbox and no node apply began; the zero-result outcome prevented partial visibility.",
+        "result": "not_reached_fail_closed"
+      },
+      "V21S12": {
+        "evidence": [
+          "clean_plan",
+          "native_build_manifest",
+          "g2_clean_gate",
+          "seed_node0",
+          "seed_node1"
+        ],
+        "note": "The exact v2.1 policy/schema, exact-token eta_outer=1 identities, two-node floor, compiled CXI bundle, and final offline seed were bound and verified; no model commit completed.",
+        "result": "identity_or_g2_pass_model_incomplete"
+      },
+      "V21S13": {
+        "evidence": [
+          "native_coordination_trace",
+          "node1_primary_failure"
+        ],
+        "note": "The first physical snapshot showed bounded OWNED and immediate resume, but the run ended before five windows, lag/apply tails, or complete causal phase coverage.",
+        "result": "partial_before_failure"
+      },
+      "V21S14": {
+        "evidence": [
+          "clean_plan",
+          "native_build_manifest",
+          "g2_clean_gate",
+          "seed_node0",
+          "seed_node1"
+        ],
+        "note": "The exact v2.1 policy/schema, exact-token eta_outer=1 identities, two-node floor, compiled CXI bundle, and final offline seed were bound and verified; no model commit completed.",
+        "result": "identity_or_g2_pass_model_incomplete"
+      },
+      "V21S15": {
+        "evidence": [
+          "collector_terminal_verdict",
+          "clean_terminal_scheduler"
+        ],
+        "note": "Current-source clean physical qualification failed on batch/debug with collector verdict passed=false.",
+        "result": "failed"
+      },
+      "V21S16": {
+        "evidence": [
+          "collector_terminal_verdict"
+        ],
+        "note": "No two-node systems pass exists, so no direct-scale authorization or scale closure may be derived.",
+        "result": "not_authorized"
+      },
+      "V21S17": {
+        "evidence": [
+          "collector_terminal_verdict"
+        ],
+        "note": "No two-node systems pass exists, so no direct-scale authorization or scale closure may be derived.",
+        "result": "not_authorized"
+      }
+    }
+  },
+  "first_terminal_failure": {
+    "accepted_token_clock_delta": 0,
+    "committed_generations": 0,
+    "exception": "TimeoutError",
+    "job_id": "5120935",
+    "message": "native global freeze failed: {'attempt': 1, 'disposition': 'deferred', 'generation': 0, 'status': 'deferred'}",
+    "no_partial_publication": true,
+    "payload_digest": "cf065a49813efd552a935221c2837cbeefc060c148787aa34ff0eefd8003c769",
+    "phase": "clean-overlap",
+    "result_receipts": 0,
+    "secondary_failure": "node-0-manager later received ndp_coord_step_v1 route failure (-12) during allocation teardown.",
+    "semantic_summary": "The first node contribution was valid but insufficient for Q_min=2/T_min=3934080. Native authority returned deferred without mutation; the model manager treated that bounded nonterminal state as fatal instead of waiting or polling until the second contribution or the 420-second deadline.",
+    "worker": "node-1-manager"
+  },
+  "forbidden_historical_jobs_resubmitted": false,
+  "full_pass": false,
+  "generated_at_utc": "2026-07-30T19:34:55.082355Z",
+  "identity": {
+    "async_v21_abi": 131073,
+    "checkpoint_schema": "emender-async-v21-reference-checkpoint-v1",
+    "contribution_schema": "emender-native-e97-submission-v2.1",
+    "data_identity_digest": "91321b2b90bb159f3aa73881455778f10e8df588edd526b1066281fa72997962",
+    "execution_source_digest": "a97ac00bbcf21b08a858e6be67098ed2936aef30dc0a751929c2c90b81bb34bc",
+    "execution_source_schema": "emender-async-v21-execution-source-v1",
+    "fetched_origin_main": "7139cc5bf497e183d784bf276fb6bc55a4ff31bd",
+    "launcher_sha256": "1f2f1027e0dcc3e7e0940a20f6f0d0c469b670429e1928a94be6c51f3542fb55",
+    "local_abi": 65536,
+    "manifest_schema": "emender-native-e97-generation-v2.1",
+    "native_bundle_sha256": "6e962075594cf2db36280b55e05a35fde1965e67d8beefb40a3fec776b26d908",
+    "policy_digest": "fa9def95daf7bce25f1b962ca5437e7a76317b94ccfb9a710fbf126a344e7d98",
+    "policy_id": "async-decoupled-v2.1-simple",
+    "policy_schema": "emender-async-policy-v2.1",
+    "remote_main_at_freeze": "7139cc5bf497e183d784bf276fb6bc55a4ff31bd",
+    "runtime_sha256": "7c395b23d4493982246bcc37a333cb994467a6f8945a4eab4ee2a6f46cdf5915",
+    "seed": {
+      "accepted_tokens": 150793748480,
+      "bytes": 7719680116,
+      "node_network_fetches": 0,
+      "sha256": "0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2",
+      "step": 2300930
+    },
+    "source_commit": "7139cc5bf497e183d784bf276fb6bc55a4ff31bd",
+    "tokenizer_sha256": "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069",
+    "transport_abi": 65536,
+    "wire_protocol": {
+      "major": 2,
+      "minor": 1
+    }
+  },
+  "jobs": {
+    "clean_collector": {
+      "dependency": "afterany:5120935",
+      "exit_code": "0:0",
+      "job_id": "5120936",
+      "nodes": 1,
+      "partition": "batch",
+      "passed": false,
+      "qos": "normal",
+      "semantic_verdict": "failed",
+      "state": "COMPLETED"
+    },
+    "clean_model": {
+      "exit_code": "1:0",
+      "job_id": "5120935",
+      "nodes": 2,
+      "partition": "batch",
+      "qos": "debug",
+      "semantic_status": "failed",
+      "state": "FAILED"
+    },
+    "fresh_allocation_recovery": {
+      "reason": "stopped after first terminal clean semantic failure",
+      "submitted": false
+    },
+    "g2_clean": {
+      "exit_code": "0:0",
+      "job_id": "5120760",
+      "nodes": 2,
+      "partition": "batch",
+      "qos": "debug",
+      "semantic_status": "passed",
+      "state": "COMPLETED"
+    },
+    "g2_fault": {
+      "exit_code": "0:0",
+      "job_id": "5120892",
+      "nodes": 2,
+      "partition": "batch",
+      "qos": "debug",
+      "semantic_status": "passed",
+      "state": "COMPLETED"
+    },
+    "model_fault_campaign": {
+      "reason": "stopped after first terminal clean semantic failure",
+      "submitted": false
+    }
+  },
+  "local_regression": {
+    "fixed_validator_accepts_canonical_native_zero": true,
+    "focused_tests_passed": 7,
+    "legacy_literal_comparison_rejects_canonical_native_zero": true,
+    "physical_progress_after_ready": "all 16 trainers completed the initial K40 boundary snapshot, reached OWNED, and started the next local window before closure failed",
+    "physical_ready_accepted": 2,
+    "physical_recover_peer_accepted": 2
+  },
+  "operations": {
+    "changed_payload_only": true,
+    "controller_batch_collector_roots_disjoint": true,
+    "environment": "source scripts/frontier/activate_emender_frontier.sh; use $EMENDER_PYTHON and PYTHON_BIN=$EMENDER_PYTHON",
+    "historical_payload_jobs_not_resubmitted": [
+      "5111908",
+      "5111909"
+    ],
+    "one_active_model_allocation": true,
+    "sequential_order": [
+      "local-regression",
+      "native-build",
+      "g2-clean:5120760",
+      "g2-fault:5120892",
+      "clean-model:5120935",
+      "collector:5120936",
+      "stop"
+    ]
+  },
+  "passed": false,
+  "physical_progress": {
+    "approximately_200_second_stall_gate_complete": false,
+    "atomic_commits": 0,
+    "finite_loss_observations": 2004,
+    "foreground_result_wait_proven_zero_for_complete_gate": false,
+    "initial_k40_boundaries": 16,
+    "pause_max_p99_complete": false,
+    "pipelined_performance_verdict_present": false,
+    "ready_members": 2,
+    "real_trainers": 16,
+    "required_minimum_atomic_commits": 3,
+    "required_minimum_windows": 5,
+    "snapshot_owned_events": 16,
+    "trainers_resumed_next_window": 16
+  },
+  "scale_authorized": false,
+  "schema": "emender-async-v21-fixed-rc-2n-requalification-v1",
+  "status": "terminal_failed_clean_phase",
+  "task_id": "requalify-v21-fixed-rc-2n",
+  "unchanged_payload_retry_performed": false
+}
