@@ -218,6 +218,291 @@ def test_production_native_coordination_job5105811_and_rejoin(tmp_path):
         session.close("allocation_term_handoff")
 
 
+def test_deferred_first_contribution_closes_when_second_ready_peer_arrives(tmp_path):
+    """A pre-floor open and first close defer without losing either payload."""
+    manifest = json.loads(BUILD_MANIFEST.read_text())
+    transport_library = (
+        BUILD_MANIFEST.parent
+        / manifest["artifacts"]["transport_library"]["path"])
+    run_id, fence = "job5120935-regression", 5120935
+    session = NativeManagerSession.start(
+        backend=NATIVE_TEST, run_id=run_id, fence_epoch=fence,
+        worker_id="node-a", incarnation="node-a-boot", host="127.0.0.1",
+        build_manifest=BUILD_MANIFEST, gate_json=None, source_root=ROOT,
+        production=False, full_layout=False, deadline_s=20,
+        telemetry_path=tmp_path / "native.jsonl", payload_max=4096,
+        resident_limit_bytes=1 << 20,
+    )
+    peers: list[NativeTransport] = []
+
+    def endpoint(worker: str, incarnation: str, epoch: int) -> OwnerEndpoint:
+        transport = NativeTransport.open(
+            library=NativeTransportLibrary(transport_library),
+            provider="tcp;ofi_rxm", production=False,
+            bind_node="127.0.0.1", deadline_s=20, payload_max=4096,
+            tx_slots=1, rx_slots=1, resident_limit_bytes=1 << 20)
+        peers.append(transport)
+        expiry = time.time_ns() + 15_000_000_000
+        record = transport.bind(
+            run_key=run_id, fence_epoch=fence, worker_key=worker,
+            incarnation=incarnation, endpoint_epoch=epoch,
+            expires_unix_ns=expiry)
+        return OwnerEndpoint(
+            worker, incarnation, "127.0.0.1", 0, NATIVE_TEST,
+            record.encoded.hex(), record.provider, record.endpoint_epoch,
+            record.expires_unix_ns, manifest["bundle_sha256"])
+
+    config = PoolControlConfig(
+        run_id, fence, q_min=2, t_min=20, ready_fraction=None,
+        base_digest="11" * 32, policy_digest="22" * 32,
+        layout_digest="33" * 32, code_digest="44" * 32,
+        slo=PoolStageSLO(1, 2, 5, 5, 5, 5, 5, 5),
+        dataplane_backend=NATIVE_TEST,
+        artifact_bundle_sha256=manifest["bundle_sha256"])
+    trace_path = tmp_path / "coordination.jsonl"
+    authority = session.coordination_authority(config, trace_path=trace_path)
+    server = NativePoolControlServer(
+        ("127.0.0.1", 0), config, authority=authority,
+        evidence_root=tmp_path / "evidence")
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    clients = [
+        PoolControlClient(server.server_address, timeout_s=.5).bind(run_id, fence)
+        for _ in range(2)
+    ]
+    endpoints = {
+        "node-a": session.owner_endpoint,
+        "node-b": endpoint("node-b", "node-b-boot", 2),
+    }
+    try:
+        assert clients[0].recover(
+            worker_id="node-a", incarnation="node-a-boot",
+            known_generation=0, known_receipt_digest="",
+            incarnation_sequence=1)["status"] == "recover"
+        assert clients[0].ready(
+            endpoints["node-a"], 0,
+            incarnation_sequence=1)["status"] == "READY"
+
+        # Exact physical race: node A reaches OPEN while node B is still
+        # completing its leased READY handshake.  OPEN must remain a
+        # non-mutating deferred poll rather than freezing a one-node cohort.
+        opened: dict[str, object] = {}
+        open_error: list[BaseException] = []
+
+        def open_generation():
+            try:
+                opened.update(clients[0].open_generation(
+                    0, 1, deadline=time.monotonic() + 1))
+            except BaseException as error:
+                open_error.append(error)
+
+        opener = threading.Thread(target=open_generation)
+        opener.start()
+        time.sleep(.05)
+        assert opener.is_alive()
+        pre_ready_trace = [
+            json.loads(line) for line in trace_path.read_text().splitlines()
+        ]
+        assert not any(
+            item["event"]["kind"] == "open-generation"
+            for item in pre_ready_trace)
+
+        assert clients[1].recover(
+            worker_id="node-b", incarnation="node-b-boot",
+            known_generation=0, known_receipt_digest="",
+            incarnation_sequence=1)["status"] == "recover"
+        assert clients[1].ready(
+            endpoints["node-b"], 0,
+            incarnation_sequence=1)["status"] == "READY"
+        opener.join(2)
+        assert not opener.is_alive() and not open_error
+        assert {item["worker_id"] for item in opened["peers"]} == {
+            "node-a", "node-b"}
+
+        closes: dict[str, dict[str, object]] = {}
+        failures: list[BaseException] = []
+
+        def contribute(index: int, worker: str, incarnation: str, digest: str):
+            try:
+                closes[worker] = clients[index].contribute_and_freeze(
+                    generation=0, attempt=1, worker_id=worker,
+                    incarnation=incarnation, contribution_seq=1,
+                    accepted_tokens=10, payload_digest=digest,
+                    deadline=time.monotonic() + 1)
+            except BaseException as error:
+                failures.append(error)
+
+        first = threading.Thread(
+            target=contribute,
+            args=(0, "node-a", "node-a-boot", "51" * 32))
+        first.start()
+        deadline = time.monotonic() + .5
+        while time.monotonic() < deadline:
+            state = authority.step(
+                CoordinationEventKind.QUERY_COMMIT, generation=0)
+            if state["contribution_count"] == 1:
+                break
+            time.sleep(.005)
+        else:
+            raise AssertionError("first native contribution was not retained")
+        deferred = clients[0]._rpc("close", generation=0, attempt=1)
+        assert deferred == {
+            "status": "open", "disposition": "insufficient-cohort",
+            "accepted_tokens": 10,
+        }
+        assert first.is_alive()
+
+        second = threading.Thread(
+            target=contribute,
+            args=(1, "node-b", "node-b-boot", "52" * 32))
+        second.start()
+        first.join(2); second.join(2)
+        assert not first.is_alive() and not second.is_alive() and not failures
+        assert {item["status"] for item in closes.values()} == {"commit_ready"}
+        for close in closes.values():
+            assert close["accepted_tokens"] == 20
+            assert {item["worker_id"] for item in close["frozen_identities"]} \
+                == {"node-a", "node-b"}
+
+        # Exact retained request replay is an acknowledgement, never a second
+        # contribution.  Both leased peers remain live and no retry attempt or
+        # expiry effect was emitted.
+        for index, (worker, incarnation, digest) in enumerate((
+                ("node-a", "node-a-boot", "51" * 32),
+                ("node-b", "node-b-boot", "52" * 32))):
+            replay = clients[index].contribute(
+                0, 1, worker, incarnation, 1, 10, digest)
+            assert replay["status"] == "accepted"
+            assert replay["disposition"] == "identical-duplicate"
+        final = authority.step(CoordinationEventKind.QUERY_COMMIT, generation=0)
+        assert final["phase"] == "closed"
+        assert final["contribution_count"] == 2
+        assert all(
+            item["live"] and item["ready"]
+            for item in final["members"]
+            if item["worker_id"] in {"node-a", "node-b"})
+        trace = [json.loads(line) for line in trace_path.read_text().splitlines()]
+        assert not any(
+            item["event"]["kind"] == "expire-peer"
+            or any(effect["kind"] == "retry-next-generation"
+                   for effect in item["effects"])
+            for item in trace)
+    finally:
+        server.shutdown()
+        server.server_close()
+        server_thread.join(2)
+        for transport in reversed(peers):
+            transport.close()
+        session.close("allocation_term_handoff")
+
+
+def test_deferred_contribution_is_replayed_exactly_until_original_deadline(monkeypatch):
+    client = PoolControlClient(("127.0.0.1", 1), timeout_s=.1).bind("run", 7)
+    contributions: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    closes = iter((
+        {"status": "open", "disposition": "insufficient-cohort"},
+        {"status": "commit_ready", "accepted_tokens": 20},
+    ))
+
+    def contribute(*args, **kwargs):
+        contributions.append((args, kwargs))
+        return ({"status": "deferred", "disposition": "deferred"}
+                if len(contributions) == 1 else
+                {"status": "accepted", "disposition": "accepted"})
+
+    monkeypatch.setattr(client, "contribute", contribute)
+    monkeypatch.setattr(
+        client, "_rpc", lambda op, **_fields: next(closes))
+    result = client.contribute_and_freeze(
+        generation=0, attempt=1, worker_id="node-a",
+        incarnation="node-a-boot", contribution_seq=1,
+        accepted_tokens=10, payload_digest="51" * 32,
+        deadline=time.monotonic() + 1)
+    assert result["status"] == "commit_ready"
+    assert len(contributions) == 2
+    assert contributions[0][0] == contributions[1][0]
+    assert set(contributions[0][1]) == set(contributions[1][1]) == {"deadline"}
+
+
+@pytest.mark.parametrize("status", (
+    "stale-fence", "stale-incarnation", "stale-generation",
+    "conflicting-duplicate", "corrupt", "nonfinite", "generation-closed",
+))
+def test_deferred_polling_does_not_retry_terminal_contribution_status(
+        monkeypatch, status):
+    client = PoolControlClient(("127.0.0.1", 1), timeout_s=.1).bind("run", 7)
+    calls = []
+    monkeypatch.setattr(
+        client, "contribute",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or {
+            "status": status})
+    monkeypatch.setattr(
+        client, "_rpc",
+        lambda *_args, **_fields: pytest.fail("terminal input polled close"))
+    result = client.contribute_and_freeze(
+        generation=0, attempt=1, worker_id="node-a",
+        incarnation="node-a-boot", contribution_seq=1,
+        accepted_tokens=10, payload_digest="51" * 32,
+        deadline=time.monotonic() + 1)
+    assert result["status"] == status and len(calls) == 1
+
+
+def test_deferred_polling_is_bounded_for_shutdown_and_missing_peer(monkeypatch):
+    client = PoolControlClient(("127.0.0.1", 1), timeout_s=.1).bind("run", 7)
+    submissions = []
+    monkeypatch.setattr(
+        client, "contribute",
+        lambda *args, **kwargs: submissions.append((args, kwargs)) or {
+            "status": "deferred", "disposition": "deferred"})
+    stopped = client.contribute_and_freeze(
+        generation=0, attempt=1, worker_id="node-a",
+        incarnation="node-a-boot", contribution_seq=1,
+        accepted_tokens=10, payload_digest="51" * 32,
+        deadline=time.monotonic() + 1, should_stop=lambda: True)
+    assert stopped["status"] == "shutdown" and len(submissions) == 1
+
+    # A route timeout that races with SIGTERM is also bounded by the short RPC
+    # slice; the already accepted identity remains retained and no retry occurs.
+    stop_after_rpc = {"value": False}
+    accepted_calls = []
+    monkeypatch.setattr(
+        client, "contribute",
+        lambda *args, **kwargs: accepted_calls.append((args, kwargs)) or {
+            "status": "accepted", "disposition": "accepted"})
+
+    def timeout_during_close(*_args, **_kwargs):
+        stop_after_rpc["value"] = True
+        raise TimeoutError("lost route")
+
+    monkeypatch.setattr(client, "_rpc", timeout_during_close)
+    stopped = client.contribute_and_freeze(
+        generation=0, attempt=1, worker_id="node-a",
+        incarnation="node-a-boot", contribution_seq=1,
+        accepted_tokens=10, payload_digest="51" * 32,
+        deadline=time.monotonic() + 1,
+        should_stop=lambda: stop_after_rpc["value"])
+    assert stopped["status"] == "shutdown"
+    assert stopped["contribution_retained"] is True
+    assert len(accepted_calls) == 1
+
+    monkeypatch.setattr(
+        client, "contribute",
+        lambda *_args, **_kwargs: {
+            "status": "accepted", "disposition": "accepted"})
+    close_calls = []
+    monkeypatch.setattr(
+        client, "_rpc",
+        lambda _op, **_fields: close_calls.append(_fields) or {
+            "status": "open", "disposition": "insufficient-cohort"})
+    with pytest.raises(TimeoutError, match="deterministic freeze deadline"):
+        client.contribute_and_freeze(
+            generation=0, attempt=1, worker_id="node-a",
+            incarnation="node-a-boot", contribution_seq=1,
+            accepted_tokens=10, payload_digest="51" * 32,
+            deadline=time.monotonic() + .04)
+    assert 1 < len(close_calls) < 20
+
+
 def test_wait_metadata_tolerates_stale_atomic_generation_until_publication(tmp_path):
     latest = tmp_path / "latest.json"
     atomic_metadata(latest, {"generation": 1, "fence": 9})

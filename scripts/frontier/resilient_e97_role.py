@@ -2471,7 +2471,8 @@ def _native_manager(args) -> int:
                         # 15-second native freeze SLO cannot replace that Q/T
                         # close window: harmless K40 skew can make one node
                         # contribute later.
-                        deadline=native_deadline)
+                        deadline=native_deadline,
+                        should_stop=lambda: term_requested["value"])
                     if close.get("status") != "rejoin":
                         break
                     rejoin_generation, rejoin_evidence = (
@@ -2532,6 +2533,20 @@ def _native_manager(args) -> int:
                         loss=None, stage="peer_control_rejoined",
                         commit_receipt_digest=
                             rejoin_evidence["commit_receipt_digest"])
+                if (close.get("status") == "shutdown"
+                        and term_requested["value"]):
+                    # SIGTERM cannot turn a finite background closure wait into
+                    # a 420-second shutdown stall.  The immutable local result
+                    # was never published; release it and leave the compiled
+                    # attempt to the normal bounded abort/drain path.
+                    final_result.close()
+                    final_operation.close()
+                    freeze.close()
+                    try:
+                        session.abort(deadline_s=1)
+                    except Exception:
+                        pass
+                    return 0
                 if close.get("status") == "catch_up":
                     authoritative_generation = int(
                         close.get("authoritative_generation", -1))

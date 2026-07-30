@@ -19,7 +19,7 @@ import socket
 import socketserver
 import threading
 import time
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 from ndm.native_artifacts import (
     NATIVE_CXI, NATIVE_TEST, PYTHON_TCP_DEBUG, validate_backend,
@@ -950,6 +950,11 @@ class NativePoolControlServer(socketserver.ThreadingTCPServer):
         self.endpoints: dict[tuple[str, str], OwnerEndpoint] = {}
         self.endpoint_leases: dict[tuple[str, str], float] = {}
         self.endpoint_sequences: dict[tuple[str, str], int] = {}
+        # Effect-side mirror used only to delay the external OpenGeneration
+        # event until its configured leased-READY diversity floor exists.  The
+        # compiled kernel remains membership authority; this cache cannot add
+        # a member or mutate a cohort.
+        self.endpoint_generations: dict[tuple[str, str], int] = {}
         self.snapshots: dict[tuple[int, int], dict[str, object]] = {}
         self.opened: dict[tuple[int, int], tuple[float, float, float | None]] = {}
         self.accepted_payloads: dict[
@@ -1071,6 +1076,7 @@ class NativePoolControlServer(socketserver.ThreadingTCPServer):
             self.endpoints[identity] = endpoint
             self.endpoint_leases[identity] = lease_expiry
             self.endpoint_sequences[identity] = sequence
+            self.endpoint_generations[identity] = generation
             frozen_incarnations = {
                 str(item["cohort_incarnation"])
                 for item in result["members"]  # type: ignore[index]
@@ -1084,6 +1090,7 @@ class NativePoolControlServer(socketserver.ThreadingTCPServer):
                     self.endpoints.pop(identity, None)
                     self.endpoint_leases.pop(identity, None)
                     self.endpoint_sequences.pop(identity, None)
+                    self.endpoint_generations.pop(identity, None)
             return {
                 "status": "READY", "disposition": disposition,
                 "worker_id": endpoint.worker_id,
@@ -1125,6 +1132,33 @@ class NativePoolControlServer(socketserver.ThreadingTCPServer):
                     self.endpoints.pop(identity, None)
                     self.endpoint_leases.pop(identity, None)
                     self.endpoint_sequences.pop(identity, None)
+                    self.endpoint_generations.pop(identity, None)
+            # OpenGeneration freezes its READY cohort exactly once.  Do not
+            # submit that mutating event while the configured stable-worker
+            # floor is still arriving: a peer that becomes READY one RPC later
+            # is intentionally ineligible for an already-frozen cohort, so its
+            # otherwise valid contribution can never repair that early open.
+            required_ready = (
+                self.config.scale_stable_diversity_floor
+                if self.config.scale_stable_diversity_floor is not None
+                else self.config.q_min
+            )
+            eligible_workers = {
+                identity[0]
+                for identity, item_generation
+                in self.endpoint_generations.items()
+                if item_generation == generation
+                and self.endpoint_leases.get(identity, 0.0) > now
+            }
+            if len(eligible_workers) < required_ready:
+                return {
+                    "status": "insufficient-cohort",
+                    "disposition": "insufficient-cohort",
+                    "generation": generation,
+                    "attempt": attempt,
+                    "ready": len(eligible_workers),
+                    "required": required_ready,
+                }
         result = self._step(
             request, CoordinationEventKind.OPEN_GENERATION,
             generation=generation, attempt=attempt)
@@ -1703,16 +1737,23 @@ class PoolControlClient:
         self.run_id, self.fence = run_id, int(fence)
         return self
 
-    def _rpc(self, op: str, *, payload: bytes = b"", **fields: object) -> dict[str, object]:
+    def _rpc(self, op: str, *, payload: bytes = b"",
+             deadline: float | None = None,
+             **fields: object) -> dict[str, object]:
         run_id = str(fields.pop("run_id", self.run_id or "run"))
         fence = int(fields.pop("fence", self.fence if self.fence is not None else 0))
         # Unit/local callers may not explicitly bind; the server-side values are
         # carried by public methods once their first READY call succeeds.
-        deadline = time.monotonic() + self.timeout_s
+        started = time.monotonic()
+        rpc_deadline = started + self.timeout_s
+        if deadline is not None:
+            rpc_deadline = min(rpc_deadline, float(deadline))
         last: BaseException | None = None
-        while time.monotonic() < deadline:
+        while time.monotonic() < rpc_deadline:
             try:
-                sock = socket.create_connection(self.address, timeout=min(1.0, self.timeout_s))
+                remaining = max(.001, rpc_deadline - time.monotonic())
+                sock = socket.create_connection(
+                    self.address, timeout=min(1.0, self.timeout_s, remaining))
                 with sock, sock.makefile("rwb", buffering=0) as stream:
                     send_frame(stream, {"op": op, "run_id": run_id, "fence": fence, **fields}, payload)
                     header, _ = recv_frame(stream, max_payload_bytes=0)
@@ -1721,7 +1762,8 @@ class PoolControlClient:
                 return dict(header["result"])
             except OSError as error:
                 last = error
-                time.sleep(min(.02, max(0.0, deadline - time.monotonic())))
+                time.sleep(min(
+                    .02, max(0.0, rpc_deadline - time.monotonic())))
         raise TimeoutError(f"pool control RPC deadline expired: {last}")
 
     def ready(self, endpoint: OwnerEndpoint, generation: int, *,
@@ -1813,7 +1855,8 @@ class PoolControlClient:
         while time.monotonic() < deadline:
             try:
                 result = self._rpc(
-                    "open", generation=generation, attempt=attempt)
+                    "open", generation=generation, attempt=attempt,
+                    deadline=deadline)
                 if result.get("status") in {
                     "deferred", "insufficient-cohort",
                 }:
@@ -1829,27 +1872,92 @@ class PoolControlClient:
 
     def contribute(self, generation: int, attempt: int, worker_id: str,
                    incarnation: str, contribution_seq: int, accepted_tokens: int,
-                   payload_digest: str) -> dict[str, object]:
-        return self._rpc("contribute", payload=payload_digest.encode(), generation=generation,
-                         attempt=attempt, worker_id=worker_id, incarnation=incarnation,
-                         contribution_seq=contribution_seq,
-                         accepted_tokens=accepted_tokens)
+                   payload_digest: str, *, deadline: float | None = None
+                   ) -> dict[str, object]:
+        return self._rpc(
+            "contribute", payload=payload_digest.encode(),
+            generation=generation, attempt=attempt,
+            worker_id=worker_id, incarnation=incarnation,
+            contribution_seq=contribution_seq,
+            accepted_tokens=accepted_tokens, deadline=deadline)
 
     def contribute_and_freeze(self, *, generation: int, attempt: int,
                               worker_id: str, incarnation: str,
                               contribution_seq: int, accepted_tokens: int,
                               payload_digest: str, deadline: float,
+                              should_stop: Callable[[], bool] | None = None,
                               ) -> dict[str, object]:
-        receipt = self.contribute(generation, attempt, worker_id, incarnation,
-                                  contribution_seq, accepted_tokens, payload_digest)
-        if receipt["status"] != "accepted":
-            return receipt
+        """Retain one exact contribution while polling finite group closure.
+
+        Native ``deferred``/``insufficient-cohort`` dispositions are
+        deliberately non-mutating.  Re-submit the same fenced identity and
+        bytes until it receives an accepted/idempotent receipt, while also
+        polling closure so a concurrent contributor can finish the group.
+        Once accepted, never submit it again.  Every wait shares the caller's
+        original absolute deadline; terminal rejection and shutdown return
+        immediately and no attempt identity is changed here.
+        """
+        transient = {"deferred", "insufficient-cohort", "open"}
+        accepted = False
+        last: dict[str, object] = {}
+
+        def shutdown() -> dict[str, object] | None:
+            if should_stop is None or not should_stop():
+                return None
+            return {
+                "status": "shutdown", "disposition": "shutdown",
+                "generation": generation, "attempt": attempt,
+                "contribution_retained": accepted,
+            }
+
         while time.monotonic() < deadline:
-            close = self._rpc("close", generation=generation, attempt=attempt)
-            if close["status"] != "open":
+            # Bound each network attempt separately so a lost control route
+            # cannot conceal shutdown for the whole 420-second parent stage.
+            # A response lost after mutation is safe: the exact contribution
+            # and close events are idempotent on replay.
+            rpc_deadline = min(
+                deadline, time.monotonic() + min(.1, self.timeout_s))
+            if not accepted:
+                try:
+                    receipt = self.contribute(
+                        generation, attempt, worker_id, incarnation,
+                        contribution_seq, accepted_tokens, payload_digest,
+                        deadline=rpc_deadline)
+                except TimeoutError:
+                    receipt = {
+                        "status": "deferred",
+                        "disposition": "rpc-timeout",
+                    }
+                last = receipt
+                status = str(receipt.get("status", ""))
+                if status in {"accepted", "identical-duplicate"}:
+                    accepted = True
+                elif status not in transient:
+                    return receipt
+            stopped = shutdown()
+            if stopped is not None:
+                return stopped
+            try:
+                close = self._rpc(
+                    "close", generation=generation, attempt=attempt,
+                    deadline=rpc_deadline)
+            except TimeoutError:
+                close = {
+                    "status": "open", "disposition": "rpc-timeout",
+                }
+            last = close
+            if str(close.get("status", "")) not in transient:
                 return close
-            time.sleep(.01)
-        raise TimeoutError("deterministic freeze deadline expired")
+            stopped = shutdown()
+            if stopped is not None:
+                return stopped
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(.01, remaining))
+        detail = "" if not last else f": {last}"
+        raise TimeoutError(
+            f"deterministic freeze deadline expired{detail}")
 
     def await_peer_route_ready(self, *, generation: int, attempt: int,
                                worker_id: str, incarnation: str,

@@ -1444,8 +1444,12 @@ def test_native_manager_freeze_wait_spans_the_open_generation_deadline():
     # therefore waits on the generation's existing absolute deadline for the
     # slower node contribution; a fresh 15-second freeze_s clock is only an
     # inner native operation bound and cannot replace the Q/T close window.
-    assert "deadline=native_deadline)" in contribute
+    assert "deadline=native_deadline," in contribute
+    assert 'should_stop=lambda: term_requested["value"]' in contribute
     assert "pool_config.slo.freeze_s" not in contribute
+    assert 'close.get("status") == "shutdown"' in manager
+    assert manager.index('close.get("status") == "shutdown"') < manager.index(
+        'close.get("status") == "catch_up"')
 
 
 def test_native_manager_treats_generation_catch_up_as_successful_reload_handoff():
