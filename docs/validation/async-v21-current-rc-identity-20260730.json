@@ -1,0 +1,256 @@
+{
+  "schema": "emender-async-v21-current-rc-identity-v1",
+  "generated_at_utc": "2026-07-30T17:51:23Z",
+  "task_id": "integrate-v21-receipt-fix-current-rc",
+  "rc_id": "async-v21-rc-a97ac00bbcf21b08",
+  "status": "integration_passed_requalification_required",
+  "source": {
+    "repository": "https://github.com/spinozans/emender.git",
+    "operational_git_commit": "6d08d9860345f6b442a2ba370b73f8c49cf0e408",
+    "operational_parent": "76385074da8e22bfef0044c99fe0063d2f346edf",
+    "reviewed_fix_commit": "9a2b613db373f5befc9e9939fadb8b7e1489559a",
+    "reviewed_and_integrated_patch_id": "d77d888867c0c4b6b4d54cccfaa840c0fbbcc579",
+    "execution_source_schema": "emender-async-v21-execution-source-v1",
+    "execution_source_digest": "a97ac00bbcf21b08a858e6be67098ed2936aef30dc0a751929c2c90b81bb34bc",
+    "execution_source_algorithm": "sha256-domain-separated-path-length-content",
+    "evidence_only_path_prefixes": [
+      "docs/validation/",
+      "logs/",
+      "reports/"
+    ],
+    "publication_note": "This manifest is evidence-only. Its publication commit may follow operational_git_commit while retaining the exact execution_source_digest above.",
+    "minimal_integration": {
+      "operational_commits_added": 1,
+      "worker_branch_commits_imported": [],
+      "changed_paths": [
+        "docs/validation/fix-async-v2-1-generation-zero-receipt-20260729.md",
+        "scripts/frontier/resilient_e97_role.py",
+        "tests/test_resilient_e97_true_2n_launcher.py"
+      ],
+      "reviewed_patch_id_matches": true
+    }
+  },
+  "policy_and_schemas": {
+    "policy_id": "async-decoupled-v2.1-simple",
+    "policy_schema": "emender-async-policy-v2.1",
+    "policy_digest": "fa9def95daf7bce25f1b962ca5437e7a76317b94ccfb9a710fbf126a344e7d98",
+    "contribution_schema": "emender-native-e97-submission-v2.1",
+    "manifest_schema": "emender-native-e97-generation-v2.1",
+    "checkpoint_schema": "emender-async-v21-reference-checkpoint-v1",
+    "q_min": 2,
+    "t_min": 3934080,
+    "k_local_steps": 40,
+    "eta_outer": 1.0,
+    "max_commit_lag": 2,
+    "max_anchor_lag": 2,
+    "max_result_lag": 2,
+    "max_speculative_windows": 2,
+    "generation_attempt_retries": 0
+  },
+  "native": {
+    "build_manifest_schema": "emender-native-dataplane-build-v1",
+    "build_manifest_sha256": "24ab8d00e41615d5d6043087f9d3dac491912c264510463a58c1d6d7cb8ff677",
+    "build_source_commit": "6d08d9860345f6b442a2ba370b73f8c49cf0e408",
+    "source_tree_dirty": false,
+    "bundle_sha256": "6e962075594cf2db36280b55e05a35fde1965e67d8beefb40a3fec776b26d908",
+    "local_abi": 65536,
+    "transport_abi": 65536,
+    "protocol_version": "1.0",
+    "async_v21_abi": 131073,
+    "async_v21_abi_hex": "0x00020001",
+    "wire_protocol": {
+      "major": 2,
+      "minor": 1
+    },
+    "artifacts": {
+      "local_library": {
+        "path": "lib64/libemender_ndp.so.1",
+        "bytes": 1062112,
+        "sha256": "dbb0ea7dd163e0c4b600fe6185bc7ed4ba2bfcc43ad0a0e85512dc98d2ea4645"
+      },
+      "transport_library": {
+        "path": "lib64/libemender_ndp_transport.so.1",
+        "bytes": 2331016,
+        "sha256": "ebe232da8974b7205fd1b43efee41374262ea3472cf66a15dc547beae8ba5572"
+      },
+      "service_binary": {
+        "path": "bin/ndp_cxi_service",
+        "bytes": 6879520,
+        "sha256": "fbb6beb8164c8c6511f4d3726e4586f13538c6ab998abaf092dfca6710241594"
+      },
+      "synthetic_gate_binary": {
+        "path": "bin/ndp_frontier_2n_gate",
+        "bytes": 3613008,
+        "sha256": "7d8990b56ad906549964f99bbdfbc1f605cb78f2759bba475748c24a3ec7d0ef"
+      }
+    },
+    "build_validation": {
+      "command": "PYTHON_BIN=\"$EMENDER_PYTHON\" scripts/frontier/build_native_resilient_dataplane.sh",
+      "ctest_passed": 11,
+      "ctest_failed": 0
+    }
+  },
+  "controller_launcher_runtime": {
+    "controller": {
+      "path": "scripts/frontier/run_async_v21_qualification.py",
+      "sha256": "e0d6ec8359bda767f657e8a94ab13577db15cdb44146605c0a50e0f7a05223a3"
+    },
+    "launcher": {
+      "path": "scripts/frontier/resilient_e97_true_2n.sbatch",
+      "sha256": "1f2f1027e0dcc3e7e0940a20f6f0d0c469b670429e1928a94be6c51f3542fb55"
+    },
+    "runtime": {
+      "path": "scripts/frontier/resilient_e97_role.py",
+      "sha256": "7c395b23d4493982246bcc37a333cb994467a6f8945a4eab4ee2a6f46cdf5915"
+    },
+    "seed_config": {
+      "path": "configs/frontier/e97_async_256.yaml",
+      "sha256": "3f704e32bdfffd308eda13758b8a95b3989e4ecc7545a32a673b5589c8085d24"
+    },
+    "training_arguments": {
+      "path": "configs/frontier/e97_resilient_split_role_flat.json",
+      "sha256": "afc2a65fd8c73499e74e21cb9531c978206c3a9c898e42d18cc58bb93eb9fe9c"
+    }
+  },
+  "training_inputs": {
+    "data": {
+      "schema": "emender-reviewed-data-object-v1",
+      "path": "/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt",
+      "bytes": 1000000725401,
+      "mtime_ns": 1782022917000000000,
+      "device": 135357496,
+      "inode": 594487560063942659,
+      "identity_digest": "91321b2b90bb159f3aa73881455778f10e8df588edd526b1066281fa72997962"
+    },
+    "tokenizer": {
+      "name": "p50k_base",
+      "path": "/lustre/orion/bif148/proj-shared/emender/tokenizers/tiktoken/p50k_base/ec7223a39ce59f226a68acc30dc1af2788490e15",
+      "bytes": 836186,
+      "sha256": "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069"
+    },
+    "final_e97_seed": {
+      "schema": "emender-e97-seed-bootstrap-attestation-v1",
+      "step": 2300930,
+      "accepted_tokens": 150793748480,
+      "bytes": 7719680116,
+      "loss": 2.4365,
+      "sha256": "0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2",
+      "uri": "s3://spinozans/emender/e97-diloco/emender_E97_1.3B_20260709_084606/step_2300930/checkpoint_step_2300930_loss_2.4365.pt",
+      "manifest_uri": "s3://spinozans/emender/e97-diloco/emender_E97_1.3B_20260709_084606/step_2300930/manifest.json",
+      "content_addressed_cache": "/lustre/orion/bif148/proj-shared/emender/bootstrap/e97-seeds/sha256-0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2.pt",
+      "attestation_sha256": "27e234891df02b64b9db77fc784c341e5a3ae6e87418b8f1af167776d1d710bb",
+      "compute_node_network_fetches": 0,
+      "job_scoped_offline_path_template": "/tmp/emender-e97-seed-$SLURM_JOB_ID/checkpoint-step-2300930.pt"
+    }
+  },
+  "receipt_normalization": {
+    "scope": "generation_zero_only",
+    "canonical_no_prior_commit_representations": [
+      "",
+      "0000000000000000000000000000000000000000000000000000000000000000"
+    ],
+    "generation_zero_ready_requires_canonical_representation": true,
+    "noncanonical_generation_zero_rejected": [
+      "0",
+      "00000000000000000000000000000000000000000000000000000000000000",
+      "0100000000000000000000000000000000000000000000000000000000000000",
+      "not-a-digest"
+    ],
+    "generation_greater_than_zero_comparison": "exact_string_identity",
+    "generation_greater_than_zero_rejected_mismatch_classes": [
+      "commit_receipt",
+      "result_root",
+      "accepted_token_clock",
+      "allocation_fence",
+      "incarnation",
+      "generation",
+      "manifest_digest",
+      "node_apply_receipts"
+    ]
+  },
+  "validation": {
+    "environment_activation": "source scripts/frontier/activate_emender_frontier.sh",
+    "emender_python": "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/bin/python",
+    "focused_command": "\"$EMENDER_PYTHON\" -m pytest -q tests/test_resilient_e97_true_2n_launcher.py::test_generation_zero_native_recovery_normalizes_only_no_commit_receipt_and_readies tests/test_resilient_e97_true_2n_launcher.py::test_nonzero_native_recovery_authority_mismatches_remain_fail_closed tests/test_resilient_e97_runtime.py::test_atomic_cohort_recovery_rejects_stale_fence_incarnation_and_generation",
+    "focused_result": {
+      "passed": 7,
+      "failed": 0
+    },
+    "suite_command": "\"$EMENDER_PYTHON\" -m pytest -q tests/test_async_v21_qualification_controller.py tests/test_resilient_e97_true_2n_launcher.py tests/test_resilient_e97_runtime.py",
+    "suite_result": {
+      "passed": 190,
+      "failed": 0
+    },
+    "diff_check_passed": true
+  },
+  "conformance": {
+    "authority": {
+      "document": "docs/RESILIENT_DILOCO_COMPUTE_POOL.md",
+      "title": "Resilient DiLoCo Compute Pool",
+      "version": 1,
+      "section": "Conformance checklist (required in every implementation/runner/scale task Validation)"
+    },
+    "companion_matrix": "docs/RESILIENT_DILOCO_GAP_MATRIX.md",
+    "applicable_requirements": [
+      "R01",
+      "R04",
+      "R07",
+      "R11",
+      "R12",
+      "R14",
+      "R16",
+      "NDP01",
+      "NDP06",
+      "NDP10",
+      "NDP14",
+      "NDP15",
+      "NDP16",
+      "NDP17",
+      "V21S01",
+      "V21S05",
+      "V21S10",
+      "V21S11",
+      "V21S14",
+      "V21S15",
+      "V21S16",
+      "ISP05",
+      "ISP06"
+    ],
+    "requirement_map": {
+      "R01": "The scheduler-fenced claim boundary is unchanged; the RC source identity changed and must be requalified before model load.",
+      "R04": "Generation greater than zero remains exact and stale generation, fence, and incarnation identities reject.",
+      "R07": "Generation zero normalization does not synthesize a commit; committed receipt chains remain exact-once.",
+      "R11": "Cold-start recovery can reach READY only after canonical no-prior-commit validation; returning incarnations remain fenced.",
+      "R12": "Manifest, result, token, receipt, and apply authority remain exact for committed recovery.",
+      "R14": "The bounded recovery path and existing stage deadlines are unchanged; local tests do not claim live overlap telemetry.",
+      "R16": "The new execution-source digest invalidates the failed RC qualification and requires a new exact-source two-node pass.",
+      "NDP01": "The Python/native boundary only normalizes the native fixed-width zero receipt at generation zero; native authority remains sole live committer.",
+      "NDP06": "Fixed receipt identity has one canonical generation-zero meaning; every committed identity remains fixed and exact.",
+      "NDP10": "Idempotent exact receipts and corruption/conflict rejection are unchanged beyond the no-prior-commit sentinel.",
+      "NDP14": "The rebuilt bundle retains stable local/transport ABI 65536 and async-v2.1 ABI 131073.",
+      "NDP15": "Checkpoint and apply evidence comparisons remain fail closed at committed generations.",
+      "NDP16": "Source, controller, launcher, runtime, bundle, ABI, wire, data, tokenizer, and seed identities are explicitly retained here.",
+      "NDP17": "Local native CTest is additive only; current-source G2 and physical two-node gates remain required downstream.",
+      "V21S01": "The v2.1 policy, contribution, manifest, checkpoint, ABI, and wire identities are pinned without v2.0 relabeling.",
+      "V21S05": "Fenced identity and exact two-node Q_min/T_min policy remain unchanged.",
+      "V21S10": "Only canonical recovered authority may transition to leased READY; stale generation/fence/incarnation reject.",
+      "V21S11": "No partial apply may authorize READY; generation greater than zero apply mismatches reject.",
+      "V21S14": "The final E97 seed and immutable recovery identity bundle are pinned exactly.",
+      "V21S15": "This integration is local evidence only and does not claim a current-source Frontier pass.",
+      "V21S16": "No scale promotion is authorized; downstream must complete exact-source two-node requalification.",
+      "ISP05": "Apply mismatches remain fail closed; no local test is substituted for the required physical atomic-apply/timing gate.",
+      "ISP06": "Identity evidence is retained, but no live causal phase/tail telemetry pass is claimed."
+    }
+  },
+  "slurm": {
+    "submitted": false,
+    "submission_commands_executed": [],
+    "historical_failed_model_job": "5111908",
+    "historical_collector_job": "5111909"
+  },
+  "promotion": {
+    "systems_qualification_passed": false,
+    "scale_authorized": false,
+    "required_next_gate": "exact-source two-node clean/fault/fresh-recovery requalification"
+  }
+}
