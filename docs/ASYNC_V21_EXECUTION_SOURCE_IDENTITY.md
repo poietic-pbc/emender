@@ -97,7 +97,10 @@ parent `sacct` row with separate `Partition` and `QOS`, `ExitCode` and
 inputs and SHA-256s, and one canonical machine verdict. An evidence-directory
 lock and atomic final manifest make repeated collector execution idempotent.
 
-This transaction does not authorize a Slurm job. Promotion remains
-`two-node gates -> review -> 4 -> 8 -> 16 -> 32 -> 64 -> 256`; every scale
-rung still requires its exact immediate predecessor and the reviewed
-leased-READY V21S17 finite closure.
+This transaction does not authorize a Slurm job. Systems promotion is
+`current-source two-node clean + fault/rejoin + fresh-recovery -> 8 -> 32 ->
+128 -> explicit 256 review`. Four, 16, and 64 nodes are not rungs, and 256 has
+no runner under this policy. Convergence/model quality remains separate. Every
+live scale rung still requires its exact immediate predecessor, exact
+policy/schema/native/seed/launcher identities, complete collector-backed
+machine evidence, and the reviewed leased-READY V21S17 finite closure.

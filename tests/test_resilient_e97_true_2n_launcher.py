@@ -224,10 +224,18 @@ def test_v21_launcher_defaults_two_nodes_and_scale_requires_serial_ladder():
     ).read_text()
 
     assert "RESILIENT_E97_NODE_COUNT=${RESILIENT_E97_NODE_COUNT:-2}" in launcher
-    assert "2|4|8|16|32|64|256" in launcher
+    assert "2|8|32|128" in launcher
+    assert "4|16|64|256" not in launcher
+    assert "256 is review-only" in launcher
     assert '[[ ${ASYNC_V21_GATE:-} == scale ]]' in launcher
     assert "ASYNC_V21_SCALE_AUTHORIZATION" in launcher
     assert "ASYNC_V21_PRIOR_RUNG_PASS" in launcher
+    assert "ASYNC_V21_SCALE_IDENTITY_DIGEST" in launcher
+    assert "ASYNC_V21_TRUSTED_REVIEWER_KEY" in launcher
+    assert "review_verified(authorization)" in launcher
+    assert "review_verified(prior)" in launcher
+    assert '"native_abi": 0x00020001' in launcher
+    assert '"native_wire": {"major": 2, "minor": 1}' in launcher
     assert '[[ ${SLURM_JOB_NUM_NODES:?} == "$RESILIENT_E97_NODE_COUNT" ]]' in launcher
     assert "--nodes=$RESILIENT_E97_NODE_COUNT --ntasks=$RESILIENT_E97_NODE_COUNT" in launcher
     assert "--node-count $RESILIENT_E97_NODE_COUNT" in launcher
@@ -1565,6 +1573,96 @@ def test_native_manager_rejoins_equal_generation_reconstructed_control():
         manager.index("final_operation, final_result"):
         manager.index('if close.get("status") == "catch_up":')
     ]
+
+
+def test_generation_zero_native_recovery_normalizes_only_no_commit_receipt_and_readies():
+    from scripts.frontier import resilient_e97_role as role
+
+    sync = {
+        "commit_receipt_digest": "",
+        "manifest_sha256": "",
+        "result_root": "",
+        "accepted_tokens": 0,
+        "apply_receipts": [],
+    }
+    base = {
+        "status": "recover",
+        "generation": 0,
+        "manifest_digest": "0" * 64,
+        "result_root": "0" * 64,
+        "accepted_tokens": 0,
+        "apply_receipts": [],
+        "requires_node_apply": False,
+    }
+
+    class ReadyClient:
+        calls = []
+
+        def ready(self, endpoint, generation, **kwargs):
+            self.calls.append((endpoint, generation, kwargs))
+            return {"status": "ready", "generation": generation}
+
+    for native_receipt in ("", "0" * 64):
+        role._validate_native_recovery_handshake(
+            {**base, "receipt_digest": native_receipt}, sync, generation=0)
+        client = ReadyClient()
+        result = role._ready_recovered_peer(
+            client, "endpoint", generation=0, run_id="run", fence=5111908,
+            apply_receipt_digest="", deadline=time.monotonic() + 1)
+        assert result == {"status": "ready", "generation": 0}
+        assert client.calls[0][2]["apply_receipt_digest"] == ""
+
+    for noncanonical in ("0", "00" * 31, "01" + "00" * 31, "not-a-digest"):
+        with pytest.raises(ValueError, match="disagrees with manifest"):
+            role._validate_native_recovery_handshake(
+                {**base, "receipt_digest": noncanonical},
+                sync, generation=0)
+        with pytest.raises(ValueError, match="disagrees with manifest"):
+            role._validate_native_recovery_handshake(
+                {**base, "receipt_digest": noncanonical},
+                {**sync, "commit_receipt_digest": noncanonical},
+                generation=0)
+
+
+@pytest.mark.parametrize(
+    ("field", "mismatch"),
+    [
+        ("receipt_digest", "99" * 32),
+        ("manifest_digest", "99" * 32),
+        ("result_root", "99" * 32),
+        ("accepted_tokens", 201),
+        ("apply_receipts", [
+            {"worker_id": "node-0", "receipt_digest": "99" * 32},
+        ]),
+    ],
+)
+def test_nonzero_native_recovery_authority_mismatches_remain_fail_closed(
+        field, mismatch):
+    from scripts.frontier import resilient_e97_role as role
+
+    sync = {
+        "commit_receipt_digest": "11" * 32,
+        "manifest_sha256": "22" * 32,
+        "result_root": "33" * 32,
+        "accepted_tokens": 200,
+        "apply_receipts": [
+            {"worker_id": "node-0", "receipt_digest": "44" * 32},
+        ],
+    }
+    recovery = {
+        "status": "recover",
+        "generation": 3,
+        "receipt_digest": "11" * 32,
+        "manifest_digest": "22" * 32,
+        "result_root": "33" * 32,
+        "accepted_tokens": 200,
+        "apply_receipts": sync["apply_receipts"],
+        "requires_node_apply": False,
+    }
+    recovery[field] = mismatch
+    with pytest.raises(ValueError, match="disagrees with manifest"):
+        role._validate_native_recovery_handshake(
+            recovery, sync, generation=3)
 
 
 def test_local_and_owner_transport_use_separate_bounded_frontier_chunks():

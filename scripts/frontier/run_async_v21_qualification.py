@@ -4,8 +4,10 @@
 This is the only qualification/submission surface for the v2.1 production
 path.  It renders a single immutable payload at a time.  Two-node gates are
 always ``Nodes=2, Partition=batch, QOS=debug``.  Scale requires a separately
-signed promotion manifest, a signed pass from the exact predecessor, and the
-reviewed V21S17 finite close derived from retained passing two-node evidence.
+signed systems authorization, a signed machine pass from the exact
+predecessor, and the reviewed V21S17 finite close derived from retained
+passing current-source two-node evidence.  Convergence is a separate
+model-quality study and is never a systems-scale prerequisite.
 
 The controller does not use launched ranks as training membership.  A scale
 job receives only the reviewed closure description; the allocation control
@@ -48,13 +50,16 @@ EVIDENCE_ONLY_PATH_PREFIXES = (
     "logs/",
     "reports/",
 )
-AUTHORIZATION_SCHEMA = "emender-async-v21-scale-authorization-v1"
-RUNG_PASS_SCHEMA = "emender-async-v21-rung-pass-v1"
+AUTHORIZATION_SCHEMA = "emender-async-v21-direct-scale-authorization-v2"
+RUNG_PASS_SCHEMA = "emender-async-v21-direct-rung-pass-v2"
+SCALE_IDENTITY_SCHEMA = "emender-async-v21-direct-scale-identity-v1"
 CLOSURE_SCHEMA = "emender-v21s17-scale-closure-v1"
 CONFIG_PATH = ROOT / "configs/frontier/e97_async_256.yaml"
 LAUNCHER_PATH = ROOT / "scripts/frontier/resilient_e97_true_2n.sbatch"
-SCALE_RUNGS = (4, 8, 16, 32, 64, 256)
-PREDECESSOR = {4: 2, 8: 4, 16: 8, 32: 16, 64: 32, 256: 64}
+SYSTEMS_SCALE_LADDER = (2, 8, 32, 128)
+SCALE_RUNGS = SYSTEMS_SCALE_LADDER[1:]
+PREDECESSOR = {8: 2, 32: 8, 128: 32}
+REVIEW_ONLY_NODES = (256,)
 TWO_NODE_GATES = ("clean", "faults", "convergence")
 ALL_GATES = (*TWO_NODE_GATES, "scale")
 SEED_STEP = 2_300_930
@@ -188,6 +193,34 @@ CLEAN_PARAMETERS = {
     "trainers_per_node": 8,
     "warmup_windows_per_trainer": 2,
 }
+
+SYSTEMS_EVIDENCE_PHASES = (
+    "clean",
+    "fault",
+    "fresh-recovery",
+)
+SYSTEMS_EVIDENCE_DIGEST_FIELDS = (
+    "clean_terminal_verdict",
+    "fault_campaign_verdict",
+    "fresh_recovery_terminal_verdict",
+    "causal_telemetry",
+    "publication_receipt",
+    "checkpoint_manifest",
+)
+SYSTEMS_EVIDENCE_TRUE_FIELDS = (
+    "durable_afterany_collector",
+    "causal_telemetry_complete",
+    "publication_complete",
+    "leased_ready_finite_closure",
+    "immutable_safe_boundary_snapshots",
+    "immediate_trainer_resume",
+    "background_compiled_cxi",
+    "later_atomic_apply",
+    "checkpoint_recovery",
+    "fencing_idempotency",
+    "exact_token_eta_outer_one",
+    "changed_payload_only_retry",
+)
 
 
 def canonical_bytes(value: object) -> bytes:
@@ -421,6 +454,153 @@ def _verify_review_signature(
         raise ValueError("invalid Ed25519 review signature") from error
     except Exception as error:
         raise ValueError("invalid Ed25519 review signature") from error
+
+
+def scale_identity_contract() -> dict[str, object]:
+    """Return the immutable protocol/seed identity required at every rung."""
+    return {
+        "schema": SCALE_IDENTITY_SCHEMA,
+        "policy_id": POLICY_ID,
+        "policy_schema": POLICY_SCHEMA,
+        "payload_schema": PAYLOAD_SCHEMA,
+        "contribution_schema": "emender-native-e97-submission-v2.1",
+        "generation_schema": "emender-native-e97-generation-v2.1",
+        "native_abi": 0x00020001,
+        "native_wire": {"major": 2, "minor": 1},
+        "seed": {
+            "step": SEED_STEP,
+            "accepted_tokens": SEED_ACCEPTED_TOKENS,
+            "bytes": SEED_BYTES,
+            "sha256": SEED_SHA256,
+        },
+    }
+
+
+def scale_identity_digest(
+    identities: Mapping[str, str],
+    identity_contract: Mapping[str, object] | None = None,
+) -> str:
+    return canonical_digest({
+        "identities": dict(identities),
+        "identity_contract": dict(
+            identity_contract or scale_identity_contract()),
+    })
+
+
+def _validate_systems_evidence(value: object) -> None:
+    if not isinstance(value, Mapping):
+        raise ValueError("predecessor systems evidence is missing")
+    if value.get("qualification_phases") != list(SYSTEMS_EVIDENCE_PHASES):
+        raise ValueError(
+            "systems evidence must contain clean, fault, and "
+            "fresh-recovery in order")
+    evidence_digests = value.get("evidence_digests")
+    if (
+        not isinstance(evidence_digests, Mapping)
+        or set(evidence_digests) != set(SYSTEMS_EVIDENCE_DIGEST_FIELDS)
+    ):
+        raise ValueError("complete systems evidence digests are required")
+    for name in SYSTEMS_EVIDENCE_DIGEST_FIELDS:
+        _digest(evidence_digests.get(name), f"systems evidence {name}")
+    if value.get("durable_afterany_collector") is not True:
+        raise ValueError("durable afterany collector evidence is required")
+    if value.get("collector_terminal_verdict") != "passed":
+        raise ValueError("collector immutable terminal pass is required")
+    if value.get("causal_telemetry_complete") is not True:
+        raise ValueError("complete causal telemetry is required")
+    if value.get("publication_complete") is not True:
+        raise ValueError("complete atomic publication evidence is required")
+    snapshot_bound = value.get("snapshot_admission_seconds_max")
+    apply_bound = value.get("apply_swap_seconds_max")
+    foreground_wait = value.get("foreground_result_wait_seconds_max")
+    if (
+        isinstance(snapshot_bound, bool)
+        or not isinstance(snapshot_bound, (int, float))
+        or snapshot_bound < 0
+        or snapshot_bound > 1
+        or isinstance(apply_bound, bool)
+        or not isinstance(apply_bound, (int, float))
+        or apply_bound < 0
+        or apply_bound > 60
+        or isinstance(foreground_wait, bool)
+        or not isinstance(foreground_wait, (int, float))
+        or foreground_wait != 0
+    ):
+        raise ValueError(
+            "foreground interruption evidence must bind <=1 s snapshot "
+            "admission, <=60 s apply/swap, and zero result wait")
+    if value.get("forbidden_data_paths") != []:
+        raise ValueError(
+            "forbidden data paths must be empty (no SQLite/Lustre/Python "
+            "dense or collective fallback)")
+    for field in SYSTEMS_EVIDENCE_TRUE_FIELDS:
+        if value.get(field) is not True:
+            label = field.replace("_", " ")
+            if field == "fencing_idempotency":
+                label = "fencing/idempotency"
+            elif field == "exact_token_eta_outer_one":
+                label = "exact-token eta_outer=1"
+            elif field == "changed_payload_only_retry":
+                label = "changed-payload-only retry"
+            raise ValueError(f"{label} systems evidence is required")
+    if value.get("convergence_claim") is not False:
+        raise ValueError(
+            "convergence remains separate from the systems-scale ladder")
+
+
+def _validate_scale_manifest(
+    value: Mapping[str, object],
+    *,
+    expected_nodes: int,
+    expected_identities: Mapping[str, str],
+) -> None:
+    if value.get("nodes") != expected_nodes:
+        raise ValueError(
+            f"exact predecessor node count {expected_nodes} is required")
+    if not _identities_match(value, expected_identities):
+        raise ValueError("scale manifest identity does not bind the exact payload")
+    contract = value.get("identity_contract")
+    if contract != scale_identity_contract():
+        raise ValueError("scale manifest identity contract is incompatible")
+    expected_identity_digest = scale_identity_digest(
+        expected_identities, scale_identity_contract())
+    if value.get("identity_digest") != expected_identity_digest:
+        raise ValueError("scale manifest identity digest mismatch")
+    scheduler = value.get("scheduler")
+    if not isinstance(scheduler, Mapping):
+        raise ValueError("predecessor scheduler evidence is missing")
+    if scheduler.get("Nodes") != expected_nodes:
+        raise ValueError("predecessor scheduler node count is wrong")
+    if scheduler.get("Partition") != "batch":
+        raise ValueError("predecessor scheduler Partition must be batch")
+    if scheduler.get("QOS") != "debug":
+        raise ValueError("predecessor scheduler QOS must be debug")
+    _validate_systems_evidence(value.get("systems_evidence"))
+
+
+def validate_rung_pass(
+    path: str | Path,
+    *,
+    expected_nodes: int,
+    expected_identities: Mapping[str, str],
+    trusted_reviewer_key: str | Path | None = None,
+    allow_test_signatures: bool = False,
+) -> dict[str, object]:
+    """Load and validate one complete immutable predecessor machine pass."""
+    value = _load_json(path, schema=RUNG_PASS_SCHEMA)
+    _verify_review_signature(
+        value,
+        trusted_reviewer_key=trusted_reviewer_key,
+        allow_test_signatures=allow_test_signatures,
+    )
+    if value.get("status") != "passed":
+        raise ValueError("immediate predecessor machine verdict did not pass")
+    _validate_scale_manifest(
+        value,
+        expected_nodes=expected_nodes,
+        expected_identities=expected_identities,
+    )
+    return value
 
 
 def _manifest_reference(
@@ -696,8 +876,11 @@ def build_plan(
         raise ValueError("node count must be positive")
     if gate in TWO_NODE_GATES and nodes != 2:
         raise ValueError(f"{gate} qualification is exactly two nodes")
+    if gate == "scale" and nodes in REVIEW_ONLY_NODES:
+        raise ValueError(
+            "256 is review-only; no direct async v2.1 256-node payload exists")
     if gate == "scale" and nodes not in SCALE_RUNGS:
-        raise ValueError("scale nodes must follow 4->8->16->32->64->256")
+        raise ValueError("systems scale nodes must follow 2->8->32->128")
     if gate == "scale" and (
         parameters.get("close_on_q_min") is not False
         or parameters.get("uses_launched_ranks") is not False
@@ -908,24 +1091,26 @@ def build_plan(
         if (
             authorization.get("status") != "passed"
             or authorization.get("authorized_nodes") != nodes
-            or not _identities_match(authorization, identities)
+            or authorization.get("systems_scale_ladder")
+            != list(SYSTEMS_SCALE_LADDER)
+            or authorization.get("review_only_nodes")
+            != list(REVIEW_ONLY_NODES)
+            or authorization.get("convergence_required") is not False
         ):
             raise ValueError("scale authorization does not bind this exact payload/rung")
-        predecessor = _load_json(predecessor_path, schema=RUNG_PASS_SCHEMA)
-        _verify_review_signature(
-            predecessor,
+        _validate_scale_manifest(
+            authorization,
+            expected_nodes=nodes,
+            expected_identities=identities,
+        )
+        required_predecessor = PREDECESSOR[nodes]
+        predecessor = validate_rung_pass(
+            predecessor_path,
+            expected_nodes=required_predecessor,
+            expected_identities=identities,
             trusted_reviewer_key=trusted_reviewer_key,
             allow_test_signatures=allow_test_signatures,
         )
-        required_predecessor = PREDECESSOR[nodes]
-        if predecessor.get("nodes") != required_predecessor:
-            raise ValueError(
-                f"exact immediate predecessor {required_predecessor} pass is required")
-        if (
-            predecessor.get("status") != "passed"
-            or not _identities_match(predecessor, identities)
-        ):
-            raise ValueError("immediate predecessor is not a bound passing manifest")
         reviewed_ready_count = int(
             authorization.get("reviewed_ready_snapshot_size", 0))
         scale_evidence = validate_scale_evidence(
@@ -936,6 +1121,12 @@ def build_plan(
         payload["scale_authorization_digest"] = authorization["manifest_digest"]
         payload["predecessor_pass_digest"] = predecessor["manifest_digest"]
         payload["scale_closure"] = scale_evidence
+        payload["scale_identity_digest"] = scale_identity_digest(identities)
+        payload["scale_policy"] = {
+            "systems_scale_ladder": list(SYSTEMS_SCALE_LADDER),
+            "review_only_nodes": list(REVIEW_ONLY_NODES),
+            "convergence_required": False,
+        }
         payload_digest = canonical_digest(payload)
         old = retained_state["payloads"].get(payload_digest)
         if isinstance(old, Mapping) and old.get("status") == "retired":
@@ -1086,6 +1277,8 @@ def build_plan(
             + str(Path(evidence_root).resolve()),
             "ASYNC_V21_SCALE_CLOSURE_DIGEST="
             + canonical_digest(scale_evidence),
+            "ASYNC_V21_SCALE_IDENTITY_DIGEST="
+            + str(payload["scale_identity_digest"]),
             "ASYNC_V21_SCALE_CLOSE_OFFSET_NS="
             + str(scale_evidence["close_offset_ns"]),
             "ASYNC_V21_SCALE_STABLE_DIVERSITY_FLOOR="

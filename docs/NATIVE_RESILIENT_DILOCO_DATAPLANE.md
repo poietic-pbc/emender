@@ -35,7 +35,7 @@ appendices and do not change these decisions.
 | Node-local path | Trainers produce directly into XPMEM or service-allocated memfd buffers. Handoff adds no trainer-sized write; redistribution creates one shared node aggregate, not eight files/copies. Disk may retain one reduced node contribution only as an explicit bounded NVMe replay fallback. |
 | Correctness | Python reports clocks and locally complete, checksummed, replayable node contributions as typed events. The native kernel freezes the immutable accepted set and authorizes commit/apply; native owners apply each fenced identity exactly once, in the specified deterministic float64 order, with exact integer weights, checksums, credits, and idempotent receipts. |
 | Checkpoint/commit | Native code returns a fenced read-only aggregate view. Native peers agree the exact next result/token/receipt identity; background policy materializes and reload-verifies the immutable checkpoint from immutable inputs, and a digest-linked receipt makes it durable. In bounded asynchronous mode, live trainers apply only the complete verified result later at a safe boundary. `latest.json` and fabric receipts are not authority. |
-| Admission gates | G0 local -> G1 two-node CXI probe -> **G2 full-layout two-node synthetic** -> G3 real two-node -> G4 failure/rejoin -> G5 fresh-allocation restart -> G6 ordered 4/8/16/32/64/256 scale. No real model or 4+ node native job is allowed before exact-code G2 passes. |
+| Admission gates | G0 local -> G1 two-node CXI probe -> **G2 full-layout two-node synthetic** -> current-source G3 clean -> G4 failure/rejoin -> G5 fresh-allocation restart -> G6 direct 8/32/128 systems scale -> explicit 256 review. No real model or scale native job is allowed before exact-code G2 and current-source G3–G5 pass. |
 
 ## Decisions and requirements
 
@@ -114,7 +114,8 @@ the new version. The extension carries:
 - bounded one-owned/one-mutable cohort admission, correction-ledger identity,
   capacity-one mailbox publication/replacement/release, and all-eight-trainer
   node-apply/recovery facts; and
-- scale-authorization and leased-READY-snapshot closure digests for any 4+
+- scale-authorization and leased-READY-snapshot closure digests for any
+  direct scale
   group plan.
 
 No v2.1 production record contains a distinct aggregation/effective/staleness
@@ -1070,6 +1071,46 @@ source commit, binary SHA-256, provider facts, layout/plan digests, commands,
 metrics, and telemetry hashes. Model launchers reject a missing/mismatched
 artifact via `NDP_FULL_LAYOUT_GATE_JSON`.
 
+#### G2 retained-artifact ownership
+
+`NDP_ARTIFACT_ROOT` is a shared container, not an invitation for every actor
+to create `<job-id>`. Its immutable `ARTIFACT-OWNERSHIP.json` uses schema
+`emender-native-g2-artifact-ownership-v1` and assigns these exclusive
+namespaces:
+
+| Actor | Sole writable authoritative namespace | Permitted reads and publication rule |
+|---|---|---|
+| submit/controller monitor | `controller/<payload-job-id>/scheduler-evidence/` | May capture `squeue -o '%i|%T|%P|%q'`, `scontrol`, and reconciliation records. Complete records are published by content-addressed hard link without replacement. It MUST NOT create `<payload-job-id>/`. |
+| native G2 batch | `<payload-job-id>/` | Sole writer of job artifacts. On Frontier Lustre it atomically creates a no-replace relative symlink to a batch-owned directory under `.batch-storage/` that already contains `.artifact-owner.json`. Thus neither `mkdir` nor a directory rename can observe and replace an empty authoritative directory. Any existing path fails closed with exit 73 and is never overwritten. |
+| scheduler-owned `afterany` collector | `collectors/<collector-job-id>/payload-<payload-job-id>/` | May read the batch directory after dependency release and write only immutable content-addressed hard-link publications in its own directory. It MUST NOT create or mutate the batch or controller directory. |
+
+No actor may pre-create another actor's authoritative root. Legitimate
+controller evidence, including prior failed or repeated observations, is
+therefore never placed below the batch root and cannot trip its create-once
+guard. The canonical submit helper initializes the schema, durably records the
+numeric job identity returned by `sbatch`, then immediately captures both
+`Partition` and `QOS` outside the batch namespace. Repeated observation and
+collector reconciliation are idempotent because equal canonical records have
+one digest-derived filename; a new scheduler state creates a new immutable
+record rather than overwriting history.
+
+The only supported ownership operations are:
+
+```bash
+"$NDP_PYTHON_BIN" scripts/frontier/native_g2_artifact_namespace.py \
+  observe-scheduler --artifact-root "$NDP_ARTIFACT_ROOT" \
+  --job-id "$JOB_ID" --kind monitor
+
+"$NDP_PYTHON_BIN" scripts/frontier/native_g2_artifact_namespace.py \
+  record-collector --artifact-root "$NDP_ARTIFACT_ROOT" \
+  --collector-job-id "$SLURM_JOB_ID" --payload-job-id "$PAYLOAD_JOB_ID" \
+  --kind terminal --evidence-json '{"dependency":"afterany"}'
+```
+
+Callers provide identities and evidence, never destination paths. Direct
+operator writes under `NDP_ARTIFACT_ROOT/<job-id>` are conflicting
+authoritative artifacts and deliberately remain an exit-73 condition.
+
 ### G3: real two-node generation
 
 Only after G2:
@@ -1128,13 +1169,13 @@ clock. Artifacts must prove the two Slurm allocations, fence increase,
 independent reload, old-frame rejection, no mutation by the stale process, and
 bounded shutdown. A same-process “restart” is insufficient.
 
-### G6: ordered scale ladder and compiled reference
+### G6: direct systems-scale ladder and compiled reference
 
 Each rung is submitted separately only after the preceding rung's artifact is
 accepted. The exact command shape is:
 
 ```bash
-sbatch --parsable --nodes=<4|8|16|32|64|256> --time=00:20:00 \
+sbatch --parsable --nodes=<8|32|128> --time=00:20:00 \
   --export=ALL,NDP_GATE=scale,NDP_SCALE_NODES=<same>,NDP_LAYOUT=e97-f64-5506770496,FI_PROVIDER=cxi \
   scripts/frontier/native_dataplane_scale_gate.sbatch
 ```
@@ -1148,13 +1189,17 @@ credit/resident bounds, full release, and p50 no slower than
 injects one owner loss after the clean measurements and requires bounded
 reassignment or a clean no-commit result according to the configured floor.
 
-The 4, 8, 16, 32, 64, and 256 rungs are strictly ordered. A real model scale
-rung is separately authorized only after its same-size synthetic artifact and
-every smaller synthetic/real policy rung. V2.1 additionally requires the
+The 8, 32, and 128 systems rungs are strictly ordered after the current-source
+two-node clean, fault/rejoin, and fresh-allocation recovery pass. A real model
+scale rung is separately authorized only after its same-size synthetic
+artifact and exact immediate real-policy predecessor. Four, 16, and 64 are
+not rungs. After 128, 256 is an explicit evidence review only and no G6
+256-node runner is authorized. V2.1 additionally requires the
 authorization-pinned finite close over the leased READY snapshot defined by
 ADR-002: the v1 clean all-READY measurement is a reference, not permission to
-wait for launched ranks or close at `Q_min=2`. At 256 nodes (2,048 trainer
-lanes), the retained fixed-world compiled reference is
+wait for launched ranks or close at `Q_min=2`. Convergence/model quality is a
+separate study and does not authorize or block G6. For a possible future
+256-node proposal (2,048 trainer lanes), the retained fixed-world compiled reference is
 `5.304643992334604 s`. Elastic v1 acceptance requires the native clean
 reduction-plus-redistribution median no greater than twice that value,
 `10.609287984669208 s`; matching or beating `5.304643992334604 s` is the
@@ -1198,7 +1243,7 @@ ISP01–ISP07.
 Its native artifact must prove the versioned identity/exact-token/descriptor/
 coalescing/correction/mailbox/node-apply extensions above, immutable snapshot
 coherence and foreground/background phase timing, while retaining every
-applicable NDP01–NDP17 invariant. A 4+ artifact must also prove the reviewed
+applicable NDP01–NDP17 invariant. A scale artifact must also prove the reviewed
 leased-READY scale closure. Passing the v1 G2/G3 gate is a prerequisite and
 reference, not evidence that v2.1 transport has passed.
 
