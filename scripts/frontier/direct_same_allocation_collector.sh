@@ -13,7 +13,7 @@ ROOT=$DIRECT_RESTART_ROOT
 COLLECTOR_ROOT="$(dirname "$ROOT")/collectors/${SLURM_JOB_ID}/payload-${PAYLOAD_JOB_ID}"
 mkdir -p "$COLLECTOR_ROOT"
 cp --reflink=auto "$SUBMISSION_RECORD" "$COLLECTOR_ROOT/submission.json"
-sacct -X -j "$PAYLOAD_JOB_ID,$SLURM_JOB_ID" -P \
+sacct -j "$PAYLOAD_JOB_ID,$SLURM_JOB_ID" -P \
   --format=JobIDRaw,JobName,State,ExitCode,DerivedExitCode,NNodes,NTasks,NodeList,Partition,QOS,Account,Submit,Start,End,Elapsed \
   > "$COLLECTOR_ROOT/sacct.txt"
 scontrol show job -dd "$PAYLOAD_JOB_ID" > "$COLLECTOR_ROOT/scontrol-payload.txt" || true
