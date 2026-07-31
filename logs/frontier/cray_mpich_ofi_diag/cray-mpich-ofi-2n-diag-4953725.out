@@ -1,0 +1,123 @@
+task_id=resolve-frontier-2n
+run_root=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z
+summary_file=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z/summary.md
+env_file=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z/artifacts/env.txt
+command_file=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z/artifacts/command.txt
+smoke_c=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z/artifacts/cray_mpich_init_sendrecv.c
+smoke_bin=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z/artifacts/cray_mpich_init_sendrecv
+requested_qos=debug
+requested_partition=batch
+requested_nodes=2
+requested_walltime=00:10:00
+requested_node_hours=0.333333
+mpich_gpu_support_enabled=0
+
+=== modules ===
+craype-x86-trento
+libfabric/2.3.1
+craype-network-ofi
+xpmem/1.0.1-1.5_1_gfb6998056825
+Core/25.03
+tmux/3.4
+hsi/default
+lfs-wrapper/0.0.1
+DefApps
+emacs/29.4
+cray-dsmml/0.3.0
+PrgEnv-gnu/8.7.0
+gcc-native/14.2
+cray-libsci/26.03.0
+cray-mpich/9.1.0
+cray-pmi/6.1.17
+craype/2.7.36
+perftools-base/26.03.0
+cpe/26.03
+darshan-runtime/3.4.7-mpi
+miniforge3/23.11.0-0
+rocm/7.1.1
+craype-accel-amd-gfx90a
+
+=== cc version ===
+gcc-14 (SUSE Linux) 14.2.0
+Copyright (C) 2024 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+
+=== frontier runtime ===
+frontier_runtime_profile=default
+frontier_enable_olcf_rccl_plugin=0
+frontier_rocm_module=rocm/7.1.1
+frontier_rccl_net_plugin_module=rccl-net-plugin/1.0
+EMENDER_CONDA_ENV=
+CONDA_PREFIX=/autofs/nccs-svm1_sw/frontier/miniforge3/23.11.0-0
+OLCF_OFI_NCCL_ROOT=
+NCCL_NET_PLUGIN=
+librccl_net_path=not-found
+
+=== frontier communication env ===
+CONDA_PREFIX=/autofs/nccs-svm1_sw/frontier/miniforge3/23.11.0-0
+LD_LIBRARY_PATH=/opt/cray/pe/perftools/26.03.0/lib64:/opt/cray/pe/pmi/6.1.17/lib:/opt/cray/pe/mpich/9.1.0/ofi/gnu/12.3/lib:/opt/cray/pe/mpich/9.1.0/gtl/lib:/opt/cray/pe/libsci/26.03.0/GNU/12/x86_64/lib:/opt/cray/pe/dsmml/0.3.0/dsmml/lib:/opt/cray/pe/lib64:/opt/cray/lib64:/opt/rocm-7.1.1/lib/roctracer:/opt/rocm-7.1.1/lib/rocprofiler:/opt/rocm-7.1.1/lib:/sw/frontier/spack-envs/cpe26.03-cpu/opt/__spack_path_placeholder__/__spack_path_placeholder__/__spack_path_placeholder__/__spac/gcc-14.2/darshan-runtime-3.4.7-i6lglufb3nzhpr6gneuq2bjdaonwtv66/lib:/opt/cray/pe/papi/7.3.0.1/lib64:/sw/frontier/spack-envs/core-25.03/opt/gcc-13.2/emacs-29.4-unh4yuyvxeg5vnbffszz5xml33f5ahvv/lib:/opt/cray/libfabric/2.3.1/lib64
+
+=== python runtime versions ===
+python_executable=/autofs/nccs-svm1_sw/frontier/miniforge3/23.11.0-0/bin/python
+python_version=3.10.13
+torch.__version__=2.8.0.dev20250422+rocm6.4
+torch.version.hip=6.4.43482-0f2d60242
+triton.__version__=3.2.0
+{"mpi_init_thread_provided":2,"world_size":16,"unique_hosts":2,"rank0_received_from":15,"mpich_gpu_support_enabled":"0","fi_provider":"","mpich_ofi_nic_policy":"NUMA"}
+{"mpi_init_thread_provided":2,"world_size":1,"unique_hosts":1,"rank0_received_from":0,"mpich_gpu_support_enabled":"0","fi_provider":"","mpich_ofi_nic_policy":"NUMA"}
+{"mpi_init_thread_provided":2,"world_size":1,"unique_hosts":1,"rank0_received_from":0,"mpich_gpu_support_enabled":"0","fi_provider":"","mpich_ofi_nic_policy":"NUMA"}
+{"mpi_init_thread_provided":2,"world_size":1,"unique_hosts":1,"rank0_received_from":0,"mpich_gpu_support_enabled":"0","fi_provider":"","mpich_ofi_nic_policy":"NUMA"}
+{"mpi_init_thread_provided":2,"world_size":1,"unique_hosts":1,"rank0_received_from":0,"mpich_gpu_support_enabled":"0","fi_provider":"","mpich_ofi_nic_policy":"NUMA"}
+{"mpi_init_thread_provided":2,"world_size":1,"unique_hosts":1,"rank0_received_from":0,"mpich_gpu_support_enabled":"0","fi_provider":"","mpich_ofi_nic_policy":"NUMA"}
+{"mpi_init_thread_provided":2,"world_size":1,"unique_hosts":1,"rank0_received_from":0,"mpich_gpu_support_enabled":"0","fi_provider":"","mpich_ofi_nic_policy":"NUMA"}
+{"mpi_init_thread_provided":2,"world_size":1,"unique_hosts":1,"rank0_received_from":0,"mpich_gpu_support_enabled":"0","fi_provider":"","mpich_ofi_nic_policy":"NUMA"}
+{"mpi_init_thread_provided":2,"world_size":1,"unique_hosts":1,"rank0_received_from":0,"mpich_gpu_support_enabled":"0","fi_provider":"","mpich_ofi_nic_policy":"NUMA"}
+{"mpi_init_thread_provided":2,"world_size":1,"unique_hosts":1,"rank0_received_from":0,"mpich_gpu_support_enabled":"0","fi_provider":"","mpich_ofi_nic_policy":"NUMA"}
+{"mpi_init_thread_provided":2,"world_size":1,"unique_hosts":1,"rank0_received_from":0,"mpich_gpu_support_enabled":"0","fi_provider":"","mpich_ofi_nic_policy":"NUMA"}
+{"mpi_init_thread_provided":2,"world_size":1,"unique_hosts":1,"rank0_received_from":0,"mpich_gpu_support_enabled":"0","fi_provider":"","mpich_ofi_nic_policy":"NUMA"}
+{"mpi_init_thread_provided":2,"world_size":1,"unique_hosts":1,"rank0_received_from":0,"mpich_gpu_support_enabled":"0","fi_provider":"","mpich_ofi_nic_policy":"NUMA"}
+{"mpi_init_thread_provided":2,"world_size":1,"unique_hosts":1,"rank0_received_from":0,"mpich_gpu_support_enabled":"0","fi_provider":"","mpich_ofi_nic_policy":"NUMA"}
+{"mpi_init_thread_provided":2,"world_size":1,"unique_hosts":1,"rank0_received_from":0,"mpich_gpu_support_enabled":"0","fi_provider":"","mpich_ofi_nic_policy":"NUMA"}
+{"mpi_init_thread_provided":2,"world_size":1,"unique_hosts":1,"rank0_received_from":0,"mpich_gpu_support_enabled":"0","fi_provider":"","mpich_ofi_nic_policy":"NUMA"}
+{"mpi_init_thread_provided":2,"world_size":1,"unique_hosts":1,"rank0_received_from":0,"mpich_gpu_support_enabled":"0","fi_provider":"","mpich_ofi_nic_policy":"NUMA"}
+srun: error: MPI: Cannot create context for mpi/pmix
+srun: error: MPI: Unable to load any plugin
+srun: error: Invalid MPI type 'pmix', --mpi=list for acceptable types
+{"mpi_init_thread_provided":2,"world_size":16,"unique_hosts":2,"rank0_received_from":15,"mpich_gpu_support_enabled":"0","fi_provider":"cxi","mpich_ofi_nic_policy":"NUMA"}
+# 2-node Cray MPICH OFI C diagnostic
+
+- Job id: `4953725`
+- QOS/walltime/node-hours: `debug` / `00:10:00` / `0.333333`
+- Run root: `/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z`
+- Baseline status: `0`
+- PMI2 status: `0`
+- PMIx status: `1`
+- CXI/NUMA status: `0`
+
+## Commands
+
+```bash
+srun -N 2 -n 16 --ntasks-per-node=8 -c 7 --gpus-per-task=1 --gpu-bind=closest env MPICH_GPU_SUPPORT_ENABLED=0 /lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z/artifacts/cray_mpich_init_sendrecv 
+srun -N 2 -n 16 --ntasks-per-node=8 -c 7 --gpus-per-task=1 --gpu-bind=closest --mpi=pmi2 env MPICH_GPU_SUPPORT_ENABLED=0 /lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z/artifacts/cray_mpich_init_sendrecv 
+srun -N 2 -n 16 --ntasks-per-node=8 -c 7 --gpus-per-task=1 --gpu-bind=closest --mpi=pmix env MPICH_GPU_SUPPORT_ENABLED=0 /lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z/artifacts/cray_mpich_init_sendrecv 
+srun -N 2 -n 16 --ntasks-per-node=8 -c 7 --gpus-per-task=1 --gpu-bind=closest env MPICH_GPU_SUPPORT_ENABLED=0 FI_PROVIDER=cxi MPICH_OFI_NIC_POLICY=NUMA FI_CXI_RX_MATCH_MODE=hybrid FI_CXI_DEFAULT_CQ_SIZE=131072 FI_CXI_DEFAULT_TX_SIZE=2048 /lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z/artifacts/cray_mpich_init_sendrecv 
+```
+
+## Environment
+
+```text
+/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z/artifacts/env.txt:mpich_gpu_support_enabled=0
+/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z/artifacts/env.txt:CONDA_PREFIX=/autofs/nccs-svm1_sw/frontier/miniforge3/23.11.0-0
+/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z/artifacts/env.txt:CONDA_PREFIX=/autofs/nccs-svm1_sw/frontier/miniforge3/23.11.0-0
+/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z/artifacts/env.txt:LD_LIBRARY_PATH=/opt/cray/pe/perftools/26.03.0/lib64:/opt/cray/pe/pmi/6.1.17/lib:/opt/cray/pe/mpich/9.1.0/ofi/gnu/12.3/lib:/opt/cray/pe/mpich/9.1.0/gtl/lib:/opt/cray/pe/libsci/26.03.0/GNU/12/x86_64/lib:/opt/cray/pe/dsmml/0.3.0/dsmml/lib:/opt/cray/pe/lib64:/opt/cray/lib64:/opt/rocm-7.1.1/lib/roctracer:/opt/rocm-7.1.1/lib/rocprofiler:/opt/rocm-7.1.1/lib:/sw/frontier/spack-envs/cpe26.03-cpu/opt/__spack_path_placeholder__/__spack_path_placeholder__/__spack_path_placeholder__/__spac/gcc-14.2/darshan-runtime-3.4.7-i6lglufb3nzhpr6gneuq2bjdaonwtv66/lib:/opt/cray/pe/papi/7.3.0.1/lib64:/sw/frontier/spack-envs/core-25.03/opt/gcc-13.2/emacs-29.4-unh4yuyvxeg5vnbffszz5xml33f5ahvv/lib:/opt/cray/libfabric/2.3.1/lib64
+/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z/artifacts/baseline.env:CONDA_PREFIX=/autofs/nccs-svm1_sw/frontier/miniforge3/23.11.0-0
+/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z/artifacts/baseline.env:LD_LIBRARY_PATH=/opt/cray/pe/perftools/26.03.0/lib64:/opt/cray/pe/pmi/6.1.17/lib:/opt/cray/pe/mpich/9.1.0/ofi/gnu/12.3/lib:/opt/cray/pe/mpich/9.1.0/gtl/lib:/opt/cray/pe/libsci/26.03.0/GNU/12/x86_64/lib:/opt/cray/pe/dsmml/0.3.0/dsmml/lib:/opt/cray/pe/lib64:/opt/cray/lib64:/opt/rocm-7.1.1/lib/roctracer:/opt/rocm-7.1.1/lib/rocprofiler:/opt/rocm-7.1.1/lib:/sw/frontier/spack-envs/cpe26.03-cpu/opt/__spack_path_placeholder__/__spack_path_placeholder__/__spack_path_placeholder__/__spac/gcc-14.2/darshan-runtime-3.4.7-i6lglufb3nzhpr6gneuq2bjdaonwtv66/lib:/opt/cray/pe/papi/7.3.0.1/lib64:/sw/frontier/spack-envs/core-25.03/opt/gcc-13.2/emacs-29.4-unh4yuyvxeg5vnbffszz5xml33f5ahvv/lib:/opt/cray/libfabric/2.3.1/lib64
+/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z/artifacts/cxi_numa.env:CONDA_PREFIX=/autofs/nccs-svm1_sw/frontier/miniforge3/23.11.0-0
+/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z/artifacts/cxi_numa.env:LD_LIBRARY_PATH=/opt/cray/pe/perftools/26.03.0/lib64:/opt/cray/pe/pmi/6.1.17/lib:/opt/cray/pe/mpich/9.1.0/ofi/gnu/12.3/lib:/opt/cray/pe/mpich/9.1.0/gtl/lib:/opt/cray/pe/libsci/26.03.0/GNU/12/x86_64/lib:/opt/cray/pe/dsmml/0.3.0/dsmml/lib:/opt/cray/pe/lib64:/opt/cray/lib64:/opt/rocm-7.1.1/lib/roctracer:/opt/rocm-7.1.1/lib/rocprofiler:/opt/rocm-7.1.1/lib:/sw/frontier/spack-envs/cpe26.03-cpu/opt/__spack_path_placeholder__/__spack_path_placeholder__/__spack_path_placeholder__/__spac/gcc-14.2/darshan-runtime-3.4.7-i6lglufb3nzhpr6gneuq2bjdaonwtv66/lib:/opt/cray/pe/papi/7.3.0.1/lib64:/sw/frontier/spack-envs/core-25.03/opt/gcc-13.2/emacs-29.4-unh4yuyvxeg5vnbffszz5xml33f5ahvv/lib:/opt/cray/libfabric/2.3.1/lib64
+/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z/artifacts/pmi2.env:CONDA_PREFIX=/autofs/nccs-svm1_sw/frontier/miniforge3/23.11.0-0
+/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z/artifacts/pmi2.env:LD_LIBRARY_PATH=/opt/cray/pe/perftools/26.03.0/lib64:/opt/cray/pe/pmi/6.1.17/lib:/opt/cray/pe/mpich/9.1.0/ofi/gnu/12.3/lib:/opt/cray/pe/mpich/9.1.0/gtl/lib:/opt/cray/pe/libsci/26.03.0/GNU/12/x86_64/lib:/opt/cray/pe/dsmml/0.3.0/dsmml/lib:/opt/cray/pe/lib64:/opt/cray/lib64:/opt/rocm-7.1.1/lib/roctracer:/opt/rocm-7.1.1/lib/rocprofiler:/opt/rocm-7.1.1/lib:/sw/frontier/spack-envs/cpe26.03-cpu/opt/__spack_path_placeholder__/__spack_path_placeholder__/__spack_path_placeholder__/__spac/gcc-14.2/darshan-runtime-3.4.7-i6lglufb3nzhpr6gneuq2bjdaonwtv66/lib:/opt/cray/pe/papi/7.3.0.1/lib64:/sw/frontier/spack-envs/core-25.03/opt/gcc-13.2/emacs-29.4-unh4yuyvxeg5vnbffszz5xml33f5ahvv/lib:/opt/cray/libfabric/2.3.1/lib64
+/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z/artifacts/pmix.env:CONDA_PREFIX=/autofs/nccs-svm1_sw/frontier/miniforge3/23.11.0-0
+/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/cray_mpich_ofi_diag/20260707/4953725-20260707T212132Z/artifacts/pmix.env:LD_LIBRARY_PATH=/opt/cray/pe/perftools/26.03.0/lib64:/opt/cray/pe/pmi/6.1.17/lib:/opt/cray/pe/mpich/9.1.0/ofi/gnu/12.3/lib:/opt/cray/pe/mpich/9.1.0/gtl/lib:/opt/cray/pe/libsci/26.03.0/GNU/12/x86_64/lib:/opt/cray/pe/dsmml/0.3.0/dsmml/lib:/opt/cray/pe/lib64:/opt/cray/lib64:/opt/rocm-7.1.1/lib/roctracer:/opt/rocm-7.1.1/lib/rocprofiler:/opt/rocm-7.1.1/lib:/sw/frontier/spack-envs/cpe26.03-cpu/opt/__spack_path_placeholder__/__spack_path_placeholder__/__spack_path_placeholder__/__spac/gcc-14.2/darshan-runtime-3.4.7-i6lglufb3nzhpr6gneuq2bjdaonwtv66/lib:/opt/cray/pe/papi/7.3.0.1/lib64:/sw/frontier/spack-envs/core-25.03/opt/gcc-13.2/emacs-29.4-unh4yuyvxeg5vnbffszz5xml33f5ahvv/lib:/opt/cray/libfabric/2.3.1/lib64
+```

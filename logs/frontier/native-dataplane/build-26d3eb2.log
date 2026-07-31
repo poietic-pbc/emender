@@ -1,0 +1,92 @@
+-- The C compiler identification is CrayClang 18.0.1
+-- The CXX compiler identification is CrayClang 18.0.1
+-- Cray Programming Environment 2.7.33 C
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /opt/cray/pe/craype/2.7.33/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Cray Programming Environment 2.7.33 CXX
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /opt/cray/pe/craype/2.7.33/bin/CC - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+-- Found PkgConfig: /usr/bin/pkg-config (found version "0.29.2")
+-- Checking for module 'libfabric>=1.18'
+--   Found libfabric, version 2.3.1
+-- Found OpenSSL: /usr/lib64/libcrypto.so (found version "3.2.3") found components: Crypto
+-- Configuring done (1.3s)
+-- Generating done (0.3s)
+-- Build files have been written to: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-frontier-g2-26d3eb2-build
+[  5%] Building CXX object local/CMakeFiles/emender_ndp.dir/src/ndp.cpp.o
+[ 15%] Building CXX object transport/CMakeFiles/emender_ndp_core.dir/src/protocol.cpp.o
+[ 15%] Building CXX object transport/CMakeFiles/emender_ndp_core.dir/src/owner.cpp.o
+[ 20%] Building CXX object transport/CMakeFiles/emender_ndp_core.dir/src/fabric.cpp.o
+[ 25%] Linking CXX static library libemender_ndp_core.a
+[ 25%] Built target emender_ndp_core
+[ 30%] Building CXX object transport/CMakeFiles/ndp_protocol_owner_test.dir/tests/protocol_owner_test.cpp.o
+[ 40%] Building CXX object transport/CMakeFiles/ndp_fabric_multiprocess_test.dir/tests/fabric_multiprocess_test.cpp.o
+[ 40%] Building CXX object transport/CMakeFiles/emender_ndp_transport.dir/src/transport_c.cpp.o
+[ 45%] Linking CXX shared library libemender_ndp.so
+[ 45%] Built target emender_ndp
+[ 50%] Building C object local/CMakeFiles/ndp_local_abi_test.dir/tests/abi_test.c.o
+[ 55%] Linking CXX executable ndp_local_abi_test
+[ 55%] Built target ndp_local_abi_test
+[ 60%] Linking CXX executable ndp_fabric_multiprocess_test
+[ 60%] Built target ndp_fabric_multiprocess_test
+[ 65%] Linking CXX executable ndp_protocol_owner_test
+[ 70%] Linking CXX shared library libemender_ndp_transport.so
+[ 70%] Built target ndp_protocol_owner_test
+[ 70%] Built target emender_ndp_transport
+[ 75%] Building C object transport/CMakeFiles/ndp_transport_c_abi_test.dir/tests/transport_c_abi_test.c.o
+[ 80%] Building CXX object transport/CMakeFiles/ndp_frontier_2n_gate.dir/src/frontier_2n_gate.cpp.o
+[ 85%] Building CXX object transport/CMakeFiles/ndp_cxi_service.dir/src/service_main.cpp.o
+[ 90%] Linking CXX executable ndp_transport_c_abi_test
+[ 90%] Built target ndp_transport_c_abi_test
+[ 95%] Linking CXX executable ndp_cxi_service
+[ 95%] Built target ndp_cxi_service
+[100%] Linking CXX executable ndp_frontier_2n_gate
+[100%] Built target ndp_frontier_2n_gate
+Internal ctest changing into directory: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-frontier-g2-26d3eb2-build
+Test project /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-frontier-g2-26d3eb2-build
+    Start 1: ndp_local_abi_test
+1/8 Test #1: ndp_local_abi_test .....................   Passed    0.02 sec
+    Start 2: ndp_protocol_owner_test
+2/8 Test #2: ndp_protocol_owner_test ................   Passed    0.01 sec
+    Start 3: ndp_fabric_multiprocess_test
+3/8 Test #3: ndp_fabric_multiprocess_test ...........   Passed    0.31 sec
+    Start 4: ndp_transport_c_abi_test
+4/8 Test #4: ndp_transport_c_abi_test ...............   Passed    0.23 sec
+    Start 5: ndp_production_provider_fails_closed
+5/8 Test #5: ndp_production_provider_fails_closed ...   Passed    0.03 sec
+    Start 6: ndp_test_provider_explicit
+6/8 Test #6: ndp_test_provider_explicit .............   Passed    0.11 sec
+    Start 7: ndp_test_mode_cannot_select_cxi
+7/8 Test #7: ndp_test_mode_cannot_select_cxi ........   Passed    0.03 sec
+    Start 8: ndp_production_env_cannot_weaken
+8/8 Test #8: ndp_production_env_cannot_weaken .......   Passed    0.03 sec
+
+100% tests passed, 0 tests failed out of 8
+
+Total Test time (real) =   0.77 sec
+-- Install configuration: "RelWithDebInfo"
+-- Installing: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/lib64/libemender_ndp.so.1.0.0
+-- Up-to-date: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/lib64/libemender_ndp.so.1
+-- Set non-toolchain portion of runtime path of "/lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/lib64/libemender_ndp.so.1.0.0" to "$ORIGIN/../lib64"
+-- Up-to-date: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/lib64/libemender_ndp.so
+-- Up-to-date: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/include/emender/ndp.h
+-- Installing: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/lib64/libemender_ndp_transport.so.1.0.0
+-- Up-to-date: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/lib64/libemender_ndp_transport.so.1
+-- Set non-toolchain portion of runtime path of "/lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/lib64/libemender_ndp_transport.so.1.0.0" to "$ORIGIN/../lib64"
+-- Up-to-date: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/lib64/libemender_ndp_transport.so
+-- Installing: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/bin/ndp_cxi_service
+-- Set non-toolchain portion of runtime path of "/lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/bin/ndp_cxi_service" to "$ORIGIN/../lib64"
+-- Installing: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/bin/ndp_frontier_2n_gate
+-- Set non-toolchain portion of runtime path of "/lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/bin/ndp_frontier_2n_gate" to "$ORIGIN/../lib64"
+-- Up-to-date: /lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/include/emender/ndp_transport.h
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+{"build_manifest":"/lustre/orion/bif148/scratch/erikgarrison/emender/build/native-resilient-dataplane/native-artifacts.json","status":"recorded"}

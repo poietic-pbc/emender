@@ -1,0 +1,58 @@
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-a8885e432a/scripts/frontier/resilient_e97_role.py", line 2078, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-a8885e432a/scripts/frontier/resilient_e97_role.py", line 2074, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+                                                        ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-a8885e432a/scripts/frontier/resilient_e97_role.py", line 1912, in trainer
+    _wait_for_native_apply_lane(
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-a8885e432a/scripts/frontier/resilient_e97_role.py", line 438, in _wait_for_native_apply_lane
+    return wait_metadata(
+           ^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-a8885e432a/ndm/native_e97_runtime.py", line 65, in wait_metadata
+    raise TimeoutError(f"native metadata deadline expired for {target}: {last}")
+TimeoutError: native metadata deadline expired for /tmp/resilient-e97-4n-20260720T020000Z/npv1f-progress-20260719T223459Z-f56e27a/node-2/control/native-result-applied-00000005-05.json: [Errno 2] No such file or directory: '/tmp/resilient-e97-4n-20260720T020000Z/npv1f-progress-20260719T223459Z-f56e27a/node-2/control/native-result-applied-00000005-05.json'
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-a8885e432a/scripts/frontier/resilient_e97_role.py", line 2078, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-a8885e432a/scripts/frontier/resilient_e97_role.py", line 2074, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+                                                        ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-a8885e432a/scripts/frontier/resilient_e97_role.py", line 1693, in trainer
+    raise ValueError("resume handoff is not the authoritative fenced latest")
+ValueError: resume handoff is not the authoritative fenced latest
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-a8885e432a/scripts/frontier/resilient_e97_role.py", line 2078, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-a8885e432a/scripts/frontier/resilient_e97_role.py", line 2074, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+                                                        ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-a8885e432a/scripts/frontier/resilient_e97_role.py", line 1693, in trainer
+    raise ValueError("resume handoff is not the authoritative fenced latest")
+ValueError: resume handoff is not the authoritative fenced latest
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-10c6fd4181/scripts/frontier/resilient_e97_role.py", line 2127, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-10c6fd4181/scripts/frontier/resilient_e97_role.py", line 2123, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+                                                        ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-10c6fd4181/scripts/frontier/resilient_e97_role.py", line 1961, in trainer
+    _wait_for_native_apply_lane(
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-10c6fd4181/scripts/frontier/resilient_e97_role.py", line 484, in _wait_for_native_apply_lane
+    return wait_metadata(
+           ^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/proj-shared/emender/source-snapshots/emender-10c6fd4181/ndm/native_e97_runtime.py", line 65, in wait_metadata
+    raise TimeoutError(f"native metadata deadline expired for {target}: {last}")
+TimeoutError: native metadata deadline expired for /tmp/resilient-e97-4n-20260720T023707Z/npv1f-progress-20260719T223459Z-f56e27a/node-2/control/native-result-applied-00000006-05.json: [Errno 2] No such file or directory: '/tmp/resilient-e97-4n-20260720T023707Z/npv1f-progress-20260719T223459Z-f56e27a/node-2/control/native-result-applied-00000006-05.json'
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)

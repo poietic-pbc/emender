@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "golden_manifest": "configs/frontier/e97_async_256_job4962400_golden.json",
+  "seed": {
+    "uri": "s3://spinozans/emender/e97-diloco/emender_E97_1.3B_20260709_084606/step_2300930/checkpoint_step_2300930_loss_2.4365.pt",
+    "manifest_uri": "s3://spinozans/emender/e97-diloco/emender_E97_1.3B_20260709_084606/step_2300930/manifest.json",
+    "latest_pointer_uri": "s3://spinozans/emender/e97-diloco/latest_emender_E97_1.3B.json",
+    "step": 2300930,
+    "loss": 2.4365,
+    "tokens": 150793748480,
+    "size": 7719680116,
+    "sha256": "0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2",
+    "provenance": "Final clean E97 consensus checkpoint after 150B-token target; immutable S3 step manifest and discovery pointer cross-checked 2026-07-22."
+  },
+  "profiles": {
+    "smoke": {"nodes": 2, "walltime": "00:20:00", "queue": {"partition": "batch", "qos": "debug"}},
+    "production": {"nodes": 256, "walltime": "12:00:00", "queue": {"partition": "batch", "qos": "normal"}}
+  }
+}

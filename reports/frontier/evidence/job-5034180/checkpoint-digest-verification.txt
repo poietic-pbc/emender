@@ -1,0 +1,26 @@
+Independent verification environment:
+  executable: /lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/bin/python
+  load: torch.load(path, map_location="cpu", mmap=True, weights_only=True)
+  digest: streaming SHA-256, 16 MiB chunks
+
+generation=10 fence=7 bytes=7899873907 loaded_under_fence=9
+expected_sha256=89058e658b5a21ce1aa87fdbc93d83d38928cf4976f4a4c76f75d888ea81cb37
+recomputed_sha256=89058e658b5a21ce1aa87fdbc93d83d38928cf4976f4a4c76f75d888ea81cb37
+loaded_generation=10 loaded_step=1525400 loaded_accepted_tokens=78681600
+model_tensor_count=146 model_state_digest=2e3eef16a6fb2394b4538fbcde4fa8618d0543871882c7e1a3cba237ce656614
+inner_optimizer_state_entries=145 inner_optimizer_param_groups=1
+outer_update_state={"algorithm":"weighted-mean","eta_outer":1.0}
+membership=["node-0","node-1","node-2","node-3"] reload_status=passed
+
+generation=11 fence=9 bytes=7899874035
+expected_sha256=5084db3032037ab511aed09296c77f6d120eed5b7e15b758f9f4dcbf09bb158c
+recomputed_sha256=5084db3032037ab511aed09296c77f6d120eed5b7e15b758f9f4dcbf09bb158c
+loaded_generation=11 loaded_step=1525440 loaded_accepted_tokens=89172480
+model_tensor_count=146 model_state_digest=217258beececb4ad6c31e49acc63470807be90962accb9d46eb4a4eef635074c
+inner_optimizer_state_entries=145 inner_optimizer_param_groups=1
+outer_update_state={"algorithm":"weighted-mean","eta_outer":1.0}
+membership=["node-0","node-1","node-2","node-3"] reload_status=passed
+
+Both recomputed digests equal the immutable handoff values. Job 5034180 loaded
+generation 10/fence 7 under strictly newer fence 9 before K40 began. An
+independent post-job process then streamed and reloaded generation 11/fence 9.

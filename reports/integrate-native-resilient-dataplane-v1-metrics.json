@@ -1,0 +1,118 @@
+{
+  "schema": "emender-native-dataplane-integration-v1",
+  "task_id": "integrate-native-resilient-dataplane-v1",
+  "captured_utc": "2026-07-18T22:56:42Z",
+  "authority": {
+    "compute_pool": "docs/RESILIENT_DILOCO_COMPUTE_POOL.md version 1",
+    "native_dataplane": "docs/NATIVE_RESILIENT_DILOCO_DATAPLANE.md version 1",
+    "compute_requirement_ids": [
+      "R01", "R02", "R03", "R04", "R05", "R06", "R07", "R08",
+      "R09", "R10", "R11", "R12", "R13", "R14", "R15", "R16"
+    ],
+    "native_requirement_ids": [
+      "NDP01", "NDP02", "NDP03", "NDP04", "NDP05", "NDP06",
+      "NDP07", "NDP08", "NDP09", "NDP10", "NDP11", "NDP12",
+      "NDP13", "NDP14", "NDP15", "NDP16", "NDP17"
+    ]
+  },
+  "commits": {
+    "native_local_dependency": "796a503eb24258b4c83bdd1629c3053f627b41d3",
+    "native_transport_dependency": "00ce168478ed589ee1c5892f3b518fc6aa227a66",
+    "compiled_reference_base": "2c2e827d9f03095060dc05b6d85130d2bb5fc4f3",
+    "local_merge": "dbc1fc9294a390577cf680b6902d0325172f0d53",
+    "transport_merge": "d1f8cc134612e24bd4bcefe9f9484ae8287e8c19",
+    "core_integration": "9acd2a7af64f1049275f8a5f485cfa9560553681",
+    "tested_implementation_tip": "6eaa52dedd232b2b1b4896181223d18b9ddc3063"
+  },
+  "build": {
+    "manifest_schema": "emender-native-dataplane-build-v1",
+    "source_commit": "6eaa52dedd232b2b1b4896181223d18b9ddc3063",
+    "source_tree_dirty": false,
+    "build_type": "RelWithDebInfo",
+    "cmake": "cmake version 3.28.3",
+    "c_compiler": "/opt/cray/pe/craype/2.7.33/bin/cc",
+    "cxx_compiler": "/opt/cray/pe/craype/2.7.33/bin/CC",
+    "xpmem_enabled": true,
+    "local_abi": 65536,
+    "transport_abi": 65536,
+    "bundle_sha256": "446613d84147dc4d63ffd114ec2ea9ea4129233889cafc8854de05e5f1c562bb",
+    "artifacts": {
+      "local_library": {
+        "path": "lib64/libemender_ndp.so.1",
+        "bytes": 981496,
+        "sha256": "5345c26c606b3b3329087cb7cbecafb7c1ed4e0372bccda092917ff694a76b96"
+      },
+      "transport_library": {
+        "path": "lib64/libemender_ndp_transport.so.1",
+        "bytes": 1129152,
+        "sha256": "1fb8b85e8c8cb1a1bab13c0a1ad00b59c6137b1cbef78a8dde5898961333269f"
+      },
+      "service_binary": {
+        "path": "bin/ndp_cxi_service",
+        "bytes": 777640,
+        "sha256": "63e43df6d72a56ad88d37836d75aa7f084418392df21b5717237fdc708140264"
+      }
+    }
+  },
+  "gates": {
+    "highest_completed": "G0",
+    "g0_status": "passed",
+    "g1_status": "not-run",
+    "g2_status": "not-run",
+    "production_admission": "fail-closed-until-matching-g2",
+    "slurm_submitted": false
+  },
+  "tests": {
+    "unified_ctest": {"passed": 8, "failed": 0},
+    "focused_python": {"collected": 103, "passed": 103, "failed": 0},
+    "exact_math": true,
+    "fencing_and_stale_rejection": true,
+    "replay_and_reassignment": true,
+    "leased_membership": true,
+    "atomic_checkpoint_and_restart": true,
+    "launcher_and_attestation": true,
+    "local_and_transport_abi": true,
+    "transport_faults_and_release": true,
+    "native_lifecycle_and_term": true
+  },
+  "full_layout_contract": {
+    "layout_bytes": 5506770496,
+    "payload_max": 67108864,
+    "shards": 83,
+    "nodes": 2,
+    "trainers_per_node": 8,
+    "logical_contribution_bytes": 11013540992,
+    "logical_redistribution_bytes": 11013540992,
+    "frame_header_bytes": 320,
+    "endpoint_record_max_bytes": 4096,
+    "python_dense_socket_bytes_required": 0,
+    "trainer_spool_bytes_required": 0,
+    "disk_replay_bytes_required": 0,
+    "handoff_full_copy_bytes_required": 0
+  },
+  "g0_local_fixture": {
+    "trainers": 8,
+    "shared_high_water_bytes": 4096,
+    "mapped_lane_high_water_bytes": 512,
+    "admitted_bytes": 4608,
+    "released_bytes": 4608,
+    "default_disk_spool_bytes": 0,
+    "default_trainer_spool_bytes": 0,
+    "explicit_debug_journal_bytes": 1120,
+    "debug_journal_removed_at_commit": true
+  },
+  "forbidden_paths": {
+    "lustre_dense_hot_path": false,
+    "all_rank_collective": false,
+    "central_full_model_broker": false,
+    "python_scalar_packing": false,
+    "unbounded_wait": false,
+    "mpi_symbols_in_native_elastic_artifacts": false,
+    "python_tcp_production_or_full_layout": false
+  },
+  "publication": {
+    "origin_main_fetched_after_push": true,
+    "origin_main_equals_published_tip": true,
+    "force_push": false
+  }
+}

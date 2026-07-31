@@ -1,0 +1,35 @@
+flowchart LR
+  scale-simple-async-v21-64n["scale-simple-async-v21-64n: Qualify async v2.1 at 64 Frontier nodes"]
+  fix-atomic-node-apply-v21["fix-atomic-node-apply-v21: Fix atomic node apply and restart for async v2.1"]
+  scale-simple-async-v21-4n["scale-simple-async-v21-4n: Qualify async v2.1 at 4 Frontier nodes"]
+  implement-simple-async-v21["implement-simple-async-v21: Implement minimal async decoupled v2.1"]
+  integrate-simple-async-v21["integrate-simple-async-v21: Integrate and publish async v2.1 runtime"]
+  reconcile-async-v21-authority["reconcile-async-v21-authority: Reconcile async v2 terminal evidence and authoritative main"]
+  scale-simple-async-v21-256n["scale-simple-async-v21-256n: Qualify async v2.1 at 256 Frontier nodes"]
+  qualify-simple-async-v21-2n-faults["qualify-simple-async-v21-2n-faults: Qualify async v2.1 failure and restart on two nodes"]
+  qualify-simple-async-v21-2n-convergence["qualify-simple-async-v21-2n-convergence: Qualify async v2.1 convergence on two nodes"]
+  qualify-simple-async-v21-2n-clean["qualify-simple-async-v21-2n-clean: Qualify clean async v2.1 on two Frontier nodes"]
+  scale-simple-async-v21-8n["scale-simple-async-v21-8n: Qualify async v2.1 at 8 Frontier nodes"]
+  scale-simple-async-v21-32n["scale-simple-async-v21-32n: Qualify async v2.1 at 32 Frontier nodes"]
+  scale-simple-async-v21-16n["scale-simple-async-v21-16n: Qualify async v2.1 at 16 Frontier nodes"]
+  package-async-v21-production["package-async-v21-production: Package async v2.1 resilient E97 production launcher"]
+  authorize-simple-async-v21-scale["authorize-simple-async-v21-scale: Review and authorize async v2.1 scale ladder"]
+  codify-simple-async-v21["codify-simple-async-v21: Codify minimal async decoupled v2.1 policy"]
+
+  scale-simple-async-v21-32n --> scale-simple-async-v21-64n
+  implement-simple-async-v21 --> fix-atomic-node-apply-v21
+  authorize-simple-async-v21-scale --> scale-simple-async-v21-4n
+  codify-simple-async-v21 --> implement-simple-async-v21
+  fix-atomic-node-apply-v21 --> integrate-simple-async-v21
+  scale-simple-async-v21-64n --> scale-simple-async-v21-256n
+  qualify-simple-async-v21-2n-clean --> qualify-simple-async-v21-2n-faults
+  qualify-simple-async-v21-2n-faults --> qualify-simple-async-v21-2n-convergence
+  integrate-simple-async-v21 --> qualify-simple-async-v21-2n-clean
+  scale-simple-async-v21-4n --> scale-simple-async-v21-8n
+  scale-simple-async-v21-16n --> scale-simple-async-v21-32n
+  scale-simple-async-v21-8n --> scale-simple-async-v21-16n
+  scale-simple-async-v21-256n --> package-async-v21-production
+  qualify-simple-async-v21-2n-convergence --> authorize-simple-async-v21-scale
+  qualify-simple-async-v21-2n-clean --> authorize-simple-async-v21-scale
+  qualify-simple-async-v21-2n-faults --> authorize-simple-async-v21-scale
+  reconcile-async-v21-authority --> codify-simple-async-v21

@@ -1,0 +1,25 @@
+{"event": "started", "identity": "node-0-manager", "local_rank": null, "node_rank": 0, "pid": 3818089, "restart": 0, "role": "manager", "time": 1784401639.8295844}
+{"event": "started", "identity": "node-1-manager", "local_rank": null, "node_rank": 1, "pid": 2003921, "restart": 0, "role": "manager", "time": 1784401643.3254132}
+{"event": "started", "identity": "node-0-trainer-0", "local_rank": 0, "node_rank": 0, "pid": 3818193, "restart": 0, "role": "trainer", "time": 1784401653.850472}
+{"event": "started", "identity": "node-0-trainer-1", "local_rank": 1, "node_rank": 0, "pid": 3818194, "restart": 0, "role": "trainer", "time": 1784401653.8557637}
+{"event": "started", "identity": "node-0-trainer-2", "local_rank": 2, "node_rank": 0, "pid": 3818196, "restart": 0, "role": "trainer", "time": 1784401653.8599174}
+{"event": "started", "identity": "node-0-trainer-3", "local_rank": 3, "node_rank": 0, "pid": 3818197, "restart": 0, "role": "trainer", "time": 1784401653.863432}
+{"event": "started", "identity": "node-0-trainer-4", "local_rank": 4, "node_rank": 0, "pid": 3818198, "restart": 0, "role": "trainer", "time": 1784401653.8674476}
+{"event": "started", "identity": "node-0-trainer-5", "local_rank": 5, "node_rank": 0, "pid": 3818200, "restart": 0, "role": "trainer", "time": 1784401653.870852}
+{"event": "started", "identity": "node-0-trainer-6", "local_rank": 6, "node_rank": 0, "pid": 3818201, "restart": 0, "role": "trainer", "time": 1784401653.8744678}
+{"event": "started", "identity": "node-0-trainer-7", "local_rank": 7, "node_rank": 0, "pid": 3818202, "restart": 0, "role": "trainer", "time": 1784401653.878224}
+{"event": "started", "identity": "node-1-trainer-0", "local_rank": 0, "node_rank": 1, "pid": 2004010, "restart": 0, "role": "trainer", "time": 1784401657.3462903}
+{"event": "started", "identity": "node-1-trainer-1", "local_rank": 1, "node_rank": 1, "pid": 2004011, "restart": 0, "role": "trainer", "time": 1784401657.3534172}
+{"event": "started", "identity": "node-1-trainer-2", "local_rank": 2, "node_rank": 1, "pid": 2004012, "restart": 0, "role": "trainer", "time": 1784401657.3579578}
+{"event": "started", "identity": "node-1-trainer-3", "local_rank": 3, "node_rank": 1, "pid": 2004013, "restart": 0, "role": "trainer", "time": 1784401657.3614993}
+{"event": "started", "identity": "node-1-trainer-4", "local_rank": 4, "node_rank": 1, "pid": 2004014, "restart": 0, "role": "trainer", "time": 1784401657.3653655}
+{"event": "started", "identity": "node-1-trainer-5", "local_rank": 5, "node_rank": 1, "pid": 2004015, "restart": 0, "role": "trainer", "time": 1784401657.3692715}
+{"event": "started", "identity": "node-1-trainer-6", "local_rank": 6, "node_rank": 1, "pid": 2004016, "restart": 0, "role": "trainer", "time": 1784401657.373122}
+{"event": "started", "identity": "node-1-trainer-7", "local_rank": 7, "node_rank": 1, "pid": 2004017, "restart": 0, "role": "trainer", "time": 1784401657.3765728}
+{"event": "completed", "exit_code": 0, "identity": "node-1-manager", "local_rank": null, "node_rank": 1, "role": "manager", "time": 1784402135.840008}
+{"event": "completed", "exit_code": 0, "identity": "node-0-manager", "local_rank": null, "node_rank": 0, "role": "manager", "time": 1784402166.3313541}
+{"event": "completed", "exit_code": 0, "identity": "node-0-trainer-0", "local_rank": 0, "node_rank": 0, "role": "trainer", "time": 1784402166.3444462}
+{"event": "evicted", "exit_code": -9, "identity": "node-0-trainer-1", "local_rank": 1, "node_rank": 0, "reason": "progress_deadline", "role": "trainer", "time": 1784402201.3637445}
+{"event": "restart_exhausted", "identity": "node-0-trainer-1", "local_rank": 1, "node_rank": 0, "reason": "progress_deadline", "role": "trainer", "time": 1784402201.3659246}
+{"event": "evicted", "exit_code": -9, "identity": "node-1-trainer-0", "local_rank": 0, "node_rank": 1, "reason": "progress_deadline", "role": "trainer", "time": 1784402206.9270463}
+{"event": "restart_exhausted", "identity": "node-1-trainer-0", "local_rank": 0, "node_rank": 1, "reason": "progress_deadline", "role": "trainer", "time": 1784402206.9318194}

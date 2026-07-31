@@ -5,6 +5,13 @@ Task: `plan-e97-first-diloco-scaleout`
 
 ## Recommendation
 
+2026-06-25 policy update: future E97-MLP scaleout tasks should treat
+`DILOCO_ISLAND_SIZE=1` GPU islands, with no per-step DDP gradient averaging, as
+the primary hypothesis when the model fits on one GPU. The older
+`DILOCO_ISLAND_SIZE=8` node-island shape in this plan is retained as historical
+baseline/control context, not as the preferred launch recipe. See
+`docs/FRONTIER_E97_SCALEOUT_NO_DDP_POLICY_20260625.md`.
+
 Decision: **PLAN ONLY; do not submit 4-node or 8-node jobs yet**.
 
 Run a cheap E97-MLP 2-node canary first, then compare E97-MLP regular
@@ -91,7 +98,7 @@ export VAL_DATA="/lustre/orion/bif148/scratch/erikgarrison/emender/data/commapil
 export TIKTOKEN_CACHE_DIR="/lustre/orion/bif148/proj-shared/tiktoken_cache"
 export EMENDER_CONDA_ENV="${MEMBERWORK}/emender/conda/emender-rocm711"
 export DILOCO_K=250
-export DILOCO_ISLAND_SIZE=8
+export DILOCO_ISLAND_SIZE=1
 export BATCH_SIZE=1
 export CHUNK_SIZE=2048
 export SAVE_EVERY=250
@@ -167,19 +174,25 @@ The template now checks that `RESUME_CHECKPOINT` is readable and passes
 
 ## E97 Scaleout Matrix
 
+Policy note: for new primary-path E97-MLP scaleout rows, "islands" means
+singleton GPU islands (`DILOCO_ISLAND_SIZE=1`) unless the task explicitly says
+it is running a node-island DDP control. The historical one-node-island column in
+this plan described the old `DILOCO_ISLAND_SIZE=8` topology and should not be
+copied into new primary launch tasks.
+
 All rows below are planned, not approved. Requested node-hours are conservative
 scheduler requests, not consumed accounting. Before submission, the execution
 task must add a row to `docs/FRONTIER_ALLOCATION_LEDGER_20260621.md` and record
 the approval artifact.
 
-| Stage | Arm | Nodes | GCDs | One-node islands | Walltime | Train minutes | Requested node-hours | Status | Required gate |
+| Stage | Arm | Nodes | GCDs | GPU islands | Walltime | Train minutes | Requested node-hours | Status | Required gate |
 | --- | --- | ---: | ---: | ---: | --- | ---: | ---: | --- | --- |
-| `E97-DILOCO-2N-AVG-CANARY` | regular average | 2 | 16 | 2 | 02:00:00 | 90 | 4 | first canary candidate | `validate-e97-two-node-checkpoint-canary` prerequisite tasks have produced clean E97 checkpoint/final/resume implementation evidence |
-| `E97-DILOCO-2N-SFOUTER-CANARY` | schedule-free outer | 2 | 16 | 2 | 02:00:00 | 90 | 4 | second canary candidate | 2-node avg canary reaches finite loss, at least one merge, checkpoint, final checkpoint, and resume |
-| `E97-DILOCO-4N-AVG-PILOT` | regular average | 4 | 32 | 4 | 04:00:00 | 210 | 16 | blocked | both 2-node E97 arms pass and checkpoint/resume evidence is clean |
-| `E97-DILOCO-4N-SFOUTER-PILOT` | schedule-free outer | 4 | 32 | 4 | 04:00:00 | 210 | 16 | blocked | 4-node avg reaches first merge, checkpoint, and stable loss/throughput |
-| `E97-DILOCO-8N-AVG-PILOT` | regular average | 8 | 64 | 8 | 08:00:00 | 450 | 64 | blocked | 4-node comparison reviewed, no open checkpoint/resume/merge defect |
-| `E97-DILOCO-8N-SFOUTER-PILOT` | schedule-free outer | 8 | 64 | 8 | 08:00:00 | 450 | 64 | blocked | 8-node avg is interpretable and approval is refreshed |
+| `E97-DILOCO-2N-AVG-CANARY` | regular average | 2 | 16 | 16 | 02:00:00 | 90 | 4 | first canary candidate | `validate-e97-two-node-checkpoint-canary` prerequisite tasks have produced clean E97 checkpoint/final/resume implementation evidence |
+| `E97-DILOCO-2N-SFOUTER-CANARY` | schedule-free outer | 2 | 16 | 16 | 02:00:00 | 90 | 4 | second canary candidate | 2-node avg canary reaches finite loss, at least one merge, checkpoint, final checkpoint, and resume |
+| `E97-DILOCO-4N-AVG-PILOT` | regular average | 4 | 32 | 32 | 04:00:00 | 210 | 16 | blocked | both 2-node E97 arms pass and checkpoint/resume evidence is clean |
+| `E97-DILOCO-4N-SFOUTER-PILOT` | schedule-free outer | 4 | 32 | 32 | 04:00:00 | 210 | 16 | blocked | 4-node avg reaches first merge, checkpoint, and stable loss/throughput |
+| `E97-DILOCO-8N-AVG-PILOT` | regular average | 8 | 64 | 64 | 08:00:00 | 450 | 64 | blocked | 4-node comparison reviewed, no open checkpoint/resume/merge defect |
+| `E97-DILOCO-8N-SFOUTER-PILOT` | schedule-free outer | 8 | 64 | 64 | 08:00:00 | 450 | 64 | blocked | 8-node avg is interpretable and approval is refreshed |
 
 E97 requested node-hour envelope for the six planned rows:
 
@@ -238,7 +251,8 @@ Hard gate before any scaleout submission:
 - Shared tokenizer cache is readable from compute nodes.
 - Data and validation paths are readable from compute nodes.
 - E97 fused guard prints `NO eager fallback` on all ranks.
-- `--diloco_island_size 8` divides `WORLD_SIZE`.
+- Primary-path E97-MLP runs use `--diloco_island_size 1`; any
+  `--diloco_island_size 8` run is labeled as a node-island DDP control/baseline.
 - `SAVE_EVERY` is aligned with `DILOCO_K=250` for consensus checkpoints.
 - `RESUME_CHECKPOINT`, if set, is readable before launch.
 

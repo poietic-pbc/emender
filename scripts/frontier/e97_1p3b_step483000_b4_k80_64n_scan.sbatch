@@ -1,0 +1,53 @@
+#!/bin/bash
+# Bounded 64-node BATCH_SIZE=4 scan arm from the verified step-483000
+# E97 1.3B checkpoint. K80 probes a still lower communication / more
+# island-like regime while staying below the weaker old B1 K160/K320 range.
+
+#SBATCH -A bif148
+#SBATCH -J e97-s483-b4-k80-64n
+#SBATCH -p batch
+#SBATCH -N 64
+#SBATCH -t 00:45:00
+#SBATCH --ntasks-per-node=8
+#SBATCH --cpus-per-task=7
+#SBATCH --gpus-per-task=1
+#SBATCH --gpu-bind=closest
+#SBATCH -o logs/frontier/scaleout/%x-%j.out
+#SBATCH -e logs/frontier/scaleout/%x-%j.err
+
+set -euo pipefail
+
+export WG_TASK_ID=${WG_TASK_ID:-scan-b4-k40-k80}
+export SCALEOUT_VARIANT=${SCALEOUT_VARIANT:-E97_1.3B_step483000_b4_k80_64n_hier_g4_bucket64m_avg_scan}
+export RESUME_CHECKPOINT=${RESUME_CHECKPOINT:-/lustre/orion/bif148/proj-shared/emender/checkpoints/E97_1.3B_20260623_103742_step_483000/checkpoint_step_483000_loss_2.5431.pt}
+export TRAIN_MINUTES=${TRAIN_MINUTES:-28}
+export DILOCO_ISLAND_SIZE=${DILOCO_ISLAND_SIZE:-1}
+export DILOCO_K=${DILOCO_K:-80}
+export DILOCO_OUTER_OPTIMIZER=${DILOCO_OUTER_OPTIMIZER:-avg}
+export DILOCO_OUTER_LR=${DILOCO_OUTER_LR:-1.0}
+export DILOCO_OUTER_BETA=${DILOCO_OUTER_BETA:-0.0}
+export DILOCO_EXPORT_BASIS=${DILOCO_EXPORT_BASIS:-x}
+export DILOCO_MERGE_TOPOLOGY=${DILOCO_MERGE_TOPOLOGY:-hierarchical}
+export DILOCO_MERGE_GROUP_SIZE=${DILOCO_MERGE_GROUP_SIZE:-4}
+export DILOCO_MERGE_GROUP_CREATE_BARRIER_EVERY=${DILOCO_MERGE_GROUP_CREATE_BARRIER_EVERY:-8}
+export DILOCO_MERGE_BUCKET_NUMEL=${DILOCO_MERGE_BUCKET_NUMEL:-67108864}
+export FRONTIER_RCCL_ENV=${FRONTIER_RCCL_ENV:-recommended}
+export FRONTIER_RCCL_ALT_RDZV=${FRONTIER_RCCL_ALT_RDZV:-1}
+export BATCH_SIZE=${BATCH_SIZE:-4}
+export CHUNK_SIZE=${CHUNK_SIZE:-2048}
+export LOG_EVERY=${LOG_EVERY:-5}
+export VAL_EVERY=${VAL_EVERY:-10000}
+export SAVE_EVERY=${SAVE_EVERY:-80}
+export KEEP_CHECKPOINTS=${KEEP_CHECKPOINTS:-4}
+export COMPILE_WARMUP_STEPS=${COMPILE_WARMUP_STEPS:-1}
+export FRONTIER_PER_RANK_TRITON_CACHE=${FRONTIER_PER_RANK_TRITON_CACHE:-1}
+export WALLTIME_FINAL_CHECKPOINT_MARGIN_SECONDS=${WALLTIME_FINAL_CHECKPOINT_MARGIN_SECONDS:-600}
+export WALLTIME_CHECK_EVERY=${WALLTIME_CHECK_EVERY:-80}
+export DISTRIBUTED_HEALTH_CHECK_EVERY=${DISTRIBUTED_HEALTH_CHECK_EVERY:-80}
+export REQUESTED_SECONDS=${REQUESTED_SECONDS:-2700}
+export REQUESTED_WALLTIME=${REQUESTED_WALLTIME:-00:45:00}
+export REQUESTED_NODE_HOURS=${REQUESTED_NODE_HOURS:-48.0}
+export HUMAN_APPROVAL_RECORD=${HUMAN_APPROVAL_RECORD:-WG scan-b4-k40-k80: bounded 64-node BATCH_SIZE=4 K80 scan from verified step483000 checkpoint; low-communication probe below the weaker old B1 K160/K320 range.}
+
+REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
+exec bash "${REPO}/scripts/frontier/e97_1p3b_pretrained_canary.sbatch"

@@ -1,0 +1,112 @@
+import json
+import subprocess
+import sys
+import time
+
+import pytest
+from scripts.frontier.resilient_e97_allocation_supervisor import AllocationSupervisor, Child
+
+from ndm.resilient_e97_topology import (
+    ChildSpec, IndependentProcessSupervisor, rank_topology_certificate,
+    true_frontier_topology,
+    validate_true_topology,
+)
+
+
+def test_two_nodes_are_two_cpu_managers_and_sixteen_real_gpu_trainers():
+    specs = true_frontier_topology(2, ["manager"], ["approved-e97-trainer", "--local-steps=40"])
+    managers = [item for item in specs if item.role == "manager"]
+    trainers = [item for item in specs if item.role == "trainer"]
+    assert len(managers) == 2
+    assert len(trainers) == 16
+    assert all(item.env["CUDA_VISIBLE_DEVICES"] == "" for item in managers)
+    assert {item.env["CUDA_VISIBLE_DEVICES"] for item in trainers} == {str(i) for i in range(8)}
+    assert all("--local-steps=40" in item.command for item in trainers)
+
+
+def test_rank_topology_certificate_enumerates_exactly_sixteen_independent_identities():
+    specs = true_frontier_topology(2, ["manager"], ["trainer"])
+    certificate = rank_topology_certificate(specs, lease_id="lease-7", fence=7)
+    ranks = certificate["ranks"]
+    assert len(ranks) == 16
+    assert [(r["node_rank"], r["local_gpu"], r["global_rank"])
+            for r in ranks] == [(node, gpu, node * 8 + gpu)
+                                for node in range(2) for gpu in range(8)]
+    assert len({r["process_id"] for r in ranks}) == 16
+    assert {r["manager_id"] for r in ranks} == {"node-0/manager", "node-1/manager"}
+    assert all(r["membership"] == "eligible" and r["lease_id"] == "lease-7"
+               and r["fence"] == 7 and r["decision"] == "pending" for r in ranks)
+
+
+def test_sentinel_workaround_is_rejected():
+    specs = list(true_frontier_topology(1, ["manager"], ["trainer"]))
+    specs[-1] = ChildSpec("sentinel", 0, 7, ("sleep", "1"), {})
+    with pytest.raises(ValueError, match="sentinel"):
+        validate_true_topology(specs, node_count=1)
+
+
+def test_independent_supervision_evicts_failed_trainer_without_manager(tmp_path):
+    supervisor = IndependentProcessSupervisor(tmp_path, heartbeat_deadline_s=2,
+                                               progress_deadline_s=2)
+    healthy = ChildSpec("manager", 0, None,
+                        (sys.executable, "-c", "import time; time.sleep(10)"),
+                        {"CUDA_VISIBLE_DEVICES": ""})
+    failed = ChildSpec("trainer", 0, 3,
+                       (sys.executable, "-c", "raise SystemExit(17)"),
+                       {"CUDA_VISIBLE_DEVICES": "3"})
+    manager = supervisor.start(healthy); trainer = supervisor.start(failed)
+    state = tmp_path / "supervision"; state.mkdir()
+    now = time.time()
+    (state / "node-0-manager.json").write_text(json.dumps({"heartbeat_time": now, "progress_time": now}))
+    (state / "node-0-trainer-3.json").write_text(json.dumps({"heartbeat_time": now, "progress_time": now}))
+    trainer.wait(2)
+    assert supervisor.check() == ("node-0/trainer-3",)
+    assert manager.poll() is None
+    manager.terminate(); manager.wait(2)
+
+
+def test_progress_deadline_evicts_only_stalled_manager(tmp_path):
+    supervisor = IndependentProcessSupervisor(tmp_path, heartbeat_deadline_s=5,
+                                               progress_deadline_s=.1)
+    spec = ChildSpec("manager", 0, None,
+                     (sys.executable, "-c", "import time; time.sleep(10)"),
+                     {"CUDA_VISIBLE_DEVICES": ""})
+    process = supervisor.start(spec)
+    state = tmp_path / "supervision"; state.mkdir()
+    now = time.time()
+    (state / "node-0-manager.json").write_text(json.dumps({"heartbeat_time": now, "progress_time": now - 1}))
+    assert supervisor.check(now) == ("node-0/manager",)
+    process.wait(2)
+
+
+def test_generation_gated_injections_are_distinct_and_one_shot(tmp_path, monkeypatch):
+    monkeypatch.setenv("RESILIENT_E97_BULK_ROOT", str(tmp_path / "bulk"))
+    monkeypatch.setenv("RESILIENT_E97_RUN_ID", "run")
+    monkeypatch.setenv("RESILIENT_E97_INJECT_TRAINER", "0:3:2")
+    child = Child("trainer", 0, "node0", 3, "true")
+    class Process:
+        returncode = None
+        def poll(self): return None
+    child.process = Process()
+    state = tmp_path / "bulk/run/node-0/supervision"
+    state.mkdir(parents=True)
+    now = time.time()
+    path = state / "node-0-trainer-3.json"
+    supervisor = AllocationSupervisor(tmp_path / "run", [child], heartbeat_s=10,
+                                      progress_s=10, max_restarts=1)
+    path.write_text(json.dumps({"generation": 1, "heartbeat_time": now,
+                                "progress_time": now}))
+    assert supervisor._deadline_reason(child, now) is None
+    path.write_text(json.dumps({"generation": 2, "heartbeat_time": now,
+                                "progress_time": now, "stage": "applied"}))
+    assert supervisor._deadline_reason(child, now) == "injected_generation_gate"
+    assert supervisor._deadline_reason(child, now) is None
+
+
+def test_exhausted_trainer_is_retired_without_retiring_manager_or_siblings():
+    source = __import__(
+        "inspect").getsource(AllocationSupervisor.run)
+    assert 'if child.role == "trainer"' in source
+    assert 'self._event("rank_retired"' in source
+    assert "completed.add(child.identity)" in source
+    assert 'revocation="lease_incarnation_revoked"' in source

@@ -1,0 +1,53 @@
+#!/bin/bash
+# One-node BATCH_SIZE=4 startup smoke for the step-483000 E97 1.3B checkpoint.
+# This validates per-rank Triton cache isolation before any 64-node B4 scan.
+
+#SBATCH -A bif148
+#SBATCH -J e97-s483-b4-1n-triton-smoke
+#SBATCH -p batch
+#SBATCH -q debug
+#SBATCH -N 1
+#SBATCH -t 00:20:00
+#SBATCH --ntasks-per-node=8
+#SBATCH --cpus-per-task=7
+#SBATCH --gpus-per-task=1
+#SBATCH --gpu-bind=closest
+#SBATCH -o logs/frontier/scaleout/%x-%j.out
+#SBATCH -e logs/frontier/scaleout/%x-%j.err
+
+set -euo pipefail
+
+export WG_TASK_ID=${WG_TASK_ID:-fix-b4-triton}
+export SCALEOUT_VARIANT=${SCALEOUT_VARIANT:-E97_1.3B_step483000_b4_1n_triton_cache_smoke}
+export RESUME_CHECKPOINT=${RESUME_CHECKPOINT:-/lustre/orion/bif148/proj-shared/emender/checkpoints/E97_1.3B_20260623_103742_step_483000/checkpoint_step_483000_loss_2.5431.pt}
+export TRAIN_MINUTES=${TRAIN_MINUTES:-8}
+export DILOCO_ISLAND_SIZE=${DILOCO_ISLAND_SIZE:-1}
+export DILOCO_K=${DILOCO_K:-10}
+export DILOCO_OUTER_OPTIMIZER=${DILOCO_OUTER_OPTIMIZER:-avg}
+export DILOCO_OUTER_LR=${DILOCO_OUTER_LR:-1.0}
+export DILOCO_OUTER_BETA=${DILOCO_OUTER_BETA:-0.0}
+export DILOCO_EXPORT_BASIS=${DILOCO_EXPORT_BASIS:-x}
+export DILOCO_MERGE_TOPOLOGY=${DILOCO_MERGE_TOPOLOGY:-global}
+export DILOCO_MERGE_GROUP_SIZE=${DILOCO_MERGE_GROUP_SIZE:-8}
+export DILOCO_MERGE_GROUP_CREATE_BARRIER_EVERY=${DILOCO_MERGE_GROUP_CREATE_BARRIER_EVERY:-8}
+export DILOCO_MERGE_BUCKET_NUMEL=${DILOCO_MERGE_BUCKET_NUMEL:-0}
+export FRONTIER_RCCL_ENV=${FRONTIER_RCCL_ENV:-recommended}
+export FRONTIER_RCCL_ALT_RDZV=${FRONTIER_RCCL_ALT_RDZV:-1}
+export FRONTIER_PER_RANK_TRITON_CACHE=${FRONTIER_PER_RANK_TRITON_CACHE:-1}
+export BATCH_SIZE=${BATCH_SIZE:-4}
+export CHUNK_SIZE=${CHUNK_SIZE:-2048}
+export LOG_EVERY=${LOG_EVERY:-1}
+export VAL_EVERY=${VAL_EVERY:-10000}
+export SAVE_EVERY=${SAVE_EVERY:-10}
+export KEEP_CHECKPOINTS=${KEEP_CHECKPOINTS:-2}
+export COMPILE_WARMUP_STEPS=${COMPILE_WARMUP_STEPS:-1}
+export WALLTIME_FINAL_CHECKPOINT_MARGIN_SECONDS=${WALLTIME_FINAL_CHECKPOINT_MARGIN_SECONDS:-600}
+export WALLTIME_CHECK_EVERY=${WALLTIME_CHECK_EVERY:-1}
+export DISTRIBUTED_HEALTH_CHECK_EVERY=${DISTRIBUTED_HEALTH_CHECK_EVERY:-1}
+export REQUESTED_SECONDS=${REQUESTED_SECONDS:-1200}
+export REQUESTED_WALLTIME=${REQUESTED_WALLTIME:-00:20:00}
+export REQUESTED_NODE_HOURS=${REQUESTED_NODE_HOURS:-0.333333}
+export HUMAN_APPROVAL_RECORD=${HUMAN_APPROVAL_RECORD:-WG fix-b4-triton: one-node BATCH_SIZE=4 startup smoke with per-rank Triton cache isolation before any 64-node resubmission.}
+
+REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
+exec bash "${REPO}/scripts/frontier/e97_1p3b_pretrained_canary.sbatch"

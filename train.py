@@ -34,6 +34,8 @@ import datetime
 import glob
 import re
 import tempfile
+import ctypes.util
+from contextlib import nullcontext
 
 _SHUTDOWN_REQUEST = {
     'requested': False,
@@ -354,6 +356,13 @@ def parse_args():
                         help='Basis exported to the outer optimizer at a DiLoCo boundary. '
                              'x preserves current eval-weight semantics; y exports the '
                              'inner ScheduleFree train point for ablations.')
+    parser.add_argument('--diloco_bootstrap_outer_state', type=str, default='none',
+                        choices=['none', 'from-loaded-model'],
+                        help='Explicit non-avg DiLoCo resume guard. Default none preserves '
+                             'fail-closed behavior when the checkpoint lacks compatible '
+                             'diloco_outer_state. from-loaded-model initializes fresh outer '
+                             'bookkeeping from the already-loaded model/optimizer tensors '
+                             'without changing live model parameters.')
     parser.add_argument('--diloco_island_size', type=int, default=0,
                         help='HYBRID mode (task diloco-loss-parity-longhorizon): >1 forms '
                              'islands of this many consecutive ranks that do per-step DDP '
@@ -362,10 +371,59 @@ def parse_args():
                              'steps. world_size must be divisible by island_size. 0/1 = pure '
                              'DiLoCo (no intra-island DDP). Trades some throughput for '
                              'sample-efficiency when pure-DiLoCo lags DDP at matched tokens.')
+    parser.add_argument('--diloco_merge_bucket_numel', type=int,
+                        default=_env_int('NDM_DILOCO_MERGE_BUCKET_NUMEL', 0),
+                        help='Optional DiLoCo merge all-reduce bucket size in elements. '
+                             '0/unset preserves the default monolithic flat all-reduce. '
+                             'Can also be set with NDM_DILOCO_MERGE_BUCKET_NUMEL.')
+    parser.add_argument('--diloco_merge_topology', type=str,
+                        default=os.environ.get('DILOCO_MERGE_TOPOLOGY', 'global'),
+                        choices=['global', 'hierarchical'],
+                        help='DiLoCo merge communication topology. global preserves the '
+                             'existing all-rank all-reduce. hierarchical is opt-in and '
+                             'reduces exact sums within rank groups, all-reduces group '
+                             'roots, then broadcasts the exact global average back '
+                             '(env: DILOCO_MERGE_TOPOLOGY).')
+    parser.add_argument('--diloco_merge_group_size', type=int,
+                        default=_env_int('NDM_DILOCO_MERGE_GROUP_SIZE', 8),
+                        help='Ranks per first-level group for '
+                             '--diloco_merge_topology=hierarchical. Frontier srun ranks '
+                             'are consecutive by node with 8 GPU tasks/node, so the '
+                             'default forms node-local groups. The final group may be '
+                             'smaller; weighted SUM/count averaging keeps semantics exact. '
+                             '(env: NDM_DILOCO_MERGE_GROUP_SIZE).')
+    parser.add_argument('--diloco_merge_group_create_barrier_every', type=int,
+                        default=_env_int('NDM_DILOCO_MERGE_GROUP_CREATE_BARRIER_EVERY', 8),
+                        help='Hierarchical merge process-group construction pacing. '
+                             'When >0, all ranks enter a default-group barrier after '
+                             'the root communicator and after each batch of this many '
+                             'first-level groups. This avoids a large burst of RCCL/NCCL '
+                             'communicator construction at scale while preserving '
+                             'collective order. 0 disables the pacing barriers. '
+                             '(env: NDM_DILOCO_MERGE_GROUP_CREATE_BARRIER_EVERY).')
+    parser.add_argument('--diloco_merge_completion_barrier', type=int,
+                        default=_env_bool_int('NDM_DILOCO_MERGE_COMPLETION_BARRIER', True),
+                        help='For hierarchical DiLoCo merges, run one all-rank completion '
+                             'barrier after the tree reduce/broadcast finishes. This keeps '
+                             'local subgroups from racing ahead while another subgroup is '
+                             'still completing its final broadcast. 1=enabled, 0=disabled '
+                             '(env: NDM_DILOCO_MERGE_COMPLETION_BARRIER).')
+    parser.add_argument('--diloco_merge_debug', type=int, choices=[0, 1],
+                        default=_env_bool_int('NDM_DILOCO_MERGE_DEBUG', False),
+                        help='Enable rank-filtered DiLoCo merge entry/exit logging '
+                             '(0/1; env: NDM_DILOCO_MERGE_DEBUG).')
+    parser.add_argument('--diloco_merge_debug_ranks', type=str,
+                        default=os.environ.get('NDM_DILOCO_MERGE_DEBUG_RANKS', '0'),
+                        help='Comma-separated ranks to log when --diloco_merge_debug=1, '
+                             'or "*" for all ranks (env: NDM_DILOCO_MERGE_DEBUG_RANKS).')
 
     # Checkpointing
     parser.add_argument('--output', type=str, default='./output',
                         help='Output directory')
+    parser.add_argument('--exact_output_dir', type=str, default=None,
+                        help='Use this exact run/checkpoint directory instead of creating a '
+                             'timestamped child. Intended for externally supervised restart '
+                             'epochs that must share one atomic latest.pt and retention set.')
     parser.add_argument('--save_every', type=int, default=1000,
                         help='Save checkpoint every N steps')
     parser.add_argument('--log_every', type=int, default=10,
@@ -384,9 +442,35 @@ def parse_args():
                              'Default 600s leaves room for DiLoCo final merge and rank-0 save.')
     parser.add_argument('--walltime_check_every', type=int, default=1,
                         help='Check coordinated walltime/shutdown finalization every N optimizer '
-                             'steps. Distributed runs perform one scalar all-reduce at each check '
-                             'so a signal or deadline observed by any rank brings all ranks into '
-                             'finalization together.')
+                             'steps. By default distributed runs perform one scalar all-reduce at '
+                             'each check so a signal or deadline observed by any rank brings all '
+                             'ranks into finalization together.')
+    parser.add_argument('--distributed_health_check_every', type=int, default=1,
+                        help='Check distributed non-finite loss/grad health every N optimizer '
+                             'steps. Defaults to every step. Pure DiLoCo scaleout jobs can set '
+                             'this to the DiLoCo K interval to avoid per-step scalar collectives; '
+                             'a local non-finite value between checks raises on that rank and '
+                             'fails the job rather than entering a mismatched collective.')
+    parser.add_argument('--distributed_init_timeout_seconds', type=float,
+                        default=(
+                            float(os.environ['NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS'])
+                            if os.environ.get('NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS') else None
+                        ),
+                        help='Optional explicit torch.distributed init_process_group timeout. '
+                             'Unset preserves PyTorch defaults; set a finite debug value such as '
+                             '900 to expose rendezvous failures without waiting indefinitely '
+                             '(env: NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS).')
+    parser.add_argument('--disable_scalar_status_collectives', action='store_true',
+                        help='Disable steady-state default-process-group scalar all-reduces used '
+                             'for health, train-budget, and walltime status checks. DiLoCo jobs '
+                             'then use local non-finite guards plus filesystem stop requests at '
+                             'safe optimizer-step boundaries; model-weight DiLoCo collectives are '
+                             'unchanged.')
+    parser.add_argument('--status_request_poll_seconds', type=float, default=1.0,
+                        help='When --disable_scalar_status_collectives is set, poll this many '
+                             'seconds for a filesystem stop request at each walltime/budget check '
+                             'boundary. This lets one rank publish a stop without a NCCL/RCCL '
+                             'scalar all-reduce.')
     parser.add_argument('--disable_walltime_final_checkpoint', action='store_true',
                         help='Disable walltime-aware pre-shutdown final checkpointing. Signal '
                              'handling still requests a graceful final checkpoint.')
@@ -664,7 +748,18 @@ class FinalCheckpointController:
             return None
         return payload.get('reason') or 'peer_final_checkpoint_request'
 
-    def maybe_request_stop(self, step, dist_enabled=False):
+    def _poll_peer_request_reason(self, timeout_s=0.0, poll_s=0.05):
+        deadline = time.time() + max(0.0, float(timeout_s))
+        while True:
+            reason = self._read_peer_request_reason()
+            if reason:
+                return reason
+            if time.time() >= deadline:
+                return None
+            time.sleep(min(poll_s, max(0.0, deadline - time.time())))
+
+    def maybe_request_stop(self, step, dist_enabled=False, peer_poll_s=0.0,
+                           extra_local_reason=None, extra_remaining=None):
         """Return (stop, reason, remaining_s) at safe optimizer-step boundaries."""
         if self.triggered:
             return True, self.reason, self.remaining_s
@@ -672,15 +767,21 @@ class FinalCheckpointController:
             return False, None, None
 
         local_reason, remaining = self._local_request()
+        if local_reason is None and extra_local_reason:
+            local_reason = extra_local_reason
+            remaining = extra_remaining
         if local_reason:
             self._write_stop_request(local_reason, step)
             reason = local_reason
         else:
-            reason = (
-                'peer_final_checkpoint_request'
-                if dist_enabled and self._read_peer_request_reason()
-                else None
-            )
+            reason = None
+
+        if dist_enabled:
+            peer_reason = self._poll_peer_request_reason(peer_poll_s)
+            if peer_reason and not reason:
+                reason = 'peer_final_checkpoint_request'
+        elif not reason:
+            reason = self._read_peer_request_reason()
 
         if reason:
             self.triggered = True
@@ -767,6 +868,70 @@ def parse_level(level_str):
         return level_str  # Keep as string for any other format
 
 
+def _resolve_library_from_ld_path(name):
+    paths = []
+    for root_var in ('OLCF_OFI_NCCL_ROOT', 'AWS_OFI_RCCL_PLUGIN_DIR'):
+        root = os.environ.get(root_var)
+        if root:
+            paths.extend([
+                os.path.join(root, 'lib', name),
+                os.path.join(root, 'lib64', name),
+            ])
+            if root_var == 'OLCF_OFI_NCCL_ROOT':
+                rocm_module = os.environ.get('FRONTIER_ROCM_MODULE')
+                if rocm_module:
+                    paths.append(os.path.join(root, rocm_module, 'lib', name))
+                paths.extend(glob.glob(os.path.join(root, 'rocm', '*', 'lib', name)))
+    for part in os.environ.get('LD_LIBRARY_PATH', '').split(':'):
+        if part:
+            paths.append(os.path.join(part, name))
+    for path in paths:
+        if os.path.isfile(path) and os.access(path, os.R_OK):
+            return path
+    found = ctypes.util.find_library(name[:-3] if name.endswith('.so') else name)
+    return found or None
+
+
+def _selected_env(prefixes, names):
+    keys = sorted(
+        key for key in os.environ
+        if key in names or any(key.startswith(prefix) for prefix in prefixes)
+    )
+    return {key: os.environ.get(key) for key in keys}
+
+
+def frontier_runtime_manifest():
+    """Capture Frontier communication/runtime state for post-run diagnosis."""
+    try:
+        import triton
+        triton_version = getattr(triton, '__version__', None)
+    except Exception as exc:
+        triton_version = f"import-error:{exc!r}"
+
+    return {
+        'python_version': sys.version.split()[0],
+        'python_executable': sys.executable,
+        'torch_version': getattr(torch, '__version__', None),
+        'torch_version_hip': getattr(torch.version, 'hip', None),
+        'triton_version': triton_version,
+        'olcf_ofi_nccl_root': os.environ.get('OLCF_OFI_NCCL_ROOT'),
+        'librccl_net_path': _resolve_library_from_ld_path('librccl-net.so') or 'not-found',
+        'env': _selected_env(
+            prefixes=('FI_CXI', 'NCCL'),
+            names={
+                'HSA_FORCE_FINE_GRAIN_PCIE',
+                'OLCF_OFI_NCCL_ROOT',
+                'NCCL_NET_PLUGIN',
+                'FRONTIER_RUNTIME_PROFILE',
+                'FRONTIER_ENABLE_OLCF_RCCL_PLUGIN',
+                'FRONTIER_ROCM_MODULE',
+                'FRONTIER_RCCL_NET_PLUGIN_MODULE',
+                'NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS',
+            },
+        ),
+    }
+
+
 def setup_output_dir(args, model_metadata=None):
     """Create output directory with run info."""
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -775,8 +940,13 @@ def setup_output_dir(args, model_metadata=None):
         prefix = model_metadata.get('run_label_prefix')
     if prefix is None:
         prefix = f"level{args.level}_{args.params}"
-    run_name = f"{prefix}_{timestamp}"
-    output_dir = Path(args.output) / run_name
+    exact_output_dir = getattr(args, 'exact_output_dir', None)
+    if exact_output_dir:
+        output_dir = Path(exact_output_dir)
+        run_name = output_dir.name
+    else:
+        run_name = f"{prefix}_{timestamp}"
+        output_dir = Path(args.output) / run_name
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -786,7 +956,9 @@ def setup_output_dir(args, model_metadata=None):
         'output_dir': str(output_dir),
         'created_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'),
         'resume': getattr(args, 'resume', None),
+        'diloco_bootstrap_outer_state': getattr(args, 'diloco_bootstrap_outer_state', 'none'),
         'model': model_metadata or getattr(args, '_model_metadata', None),
+        'runtime': frontier_runtime_manifest(),
     }
 
     # Save args
@@ -819,6 +991,20 @@ def lr_scale_at(step, warmup_steps, total_steps, min_lr_frac=0.1):
     denom = max(1, total_steps - warmup_steps)
     progress = min(1.0, max(0.0, (step - warmup_steps) / denom))
     return min_lr_frac + (1.0 - min_lr_frac) * 0.5 * (1.0 + math.cos(math.pi * progress))
+
+
+def _env_int(name, default):
+    value = os.environ.get(name)
+    if value is None or value == '':
+        return default
+    return int(value)
+
+
+def _env_bool_int(name, default=False):
+    value = os.environ.get(name)
+    if value is None or value == '':
+        return 1 if default else 0
+    return 1 if value.strip().lower() in ('1', 'true', 'yes', 'on') else 0
 
 
 def _infer_visible_device_count():
@@ -913,8 +1099,14 @@ def save_checkpoint(model, optimizer, step, loss, output_dir, keep_n=5, outer_st
         if tmp_latest.exists() or tmp_latest.is_symlink():
             tmp_latest.unlink()
 
-    # Clean up old checkpoints
-    ckpts = sorted(glob.glob(str(output_dir / 'checkpoint_step_*.pt')))
+    # Clean up old checkpoints by numeric training step.  Lexicographic filename
+    # ordering breaks across digit-width boundaries such as 999500 -> 1000000.
+    def _checkpoint_sort_key(path):
+        match = re.search(r'checkpoint_step_(\d+)_loss_', os.path.basename(path))
+        return int(match.group(1)) if match else -1
+
+    ckpts = sorted(glob.glob(str(output_dir / 'checkpoint_step_*.pt')),
+                   key=_checkpoint_sort_key)
     for old_ckpt in ckpts[:-keep_n]:
         os.remove(old_ckpt)
 
@@ -922,8 +1114,16 @@ def save_checkpoint(model, optimizer, step, loss, output_dir, keep_n=5, outer_st
 
 
 def load_checkpoint(path, model, optimizer=None, return_checkpoint=False):
-    """Load checkpoint."""
-    ckpt = torch.load(path, map_location='cpu')
+    """Load a checkpoint without privately materializing its full CPU storage.
+
+    Frontier launches several GPU trainers per physical node.  A conventional
+    ``torch.load`` allocates one anonymous CPU copy of every model and optimizer
+    tensor in every trainer, multiplying a large restart image by the local GPU
+    count.  File-backed storages let the kernel share clean checkpoint pages
+    across those independently supervised processes; ``load_state_dict`` still
+    gives each model the normal owned parameter storage it requires.
+    """
+    ckpt = torch.load(path, map_location='cpu', mmap=True, weights_only=False)
     model.load_state_dict(ckpt['model_state_dict'])
     if optimizer is not None and 'optimizer_state_dict' in ckpt:
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
@@ -994,6 +1194,336 @@ def heldout_eval_mode_label(args):
     return 'y' if args.heldout_eval_mode in ('y', 'train') else 'x'
 
 
+def normalize_training_args(args, *, announce=False):
+    """Apply train.py's import-safe argument normalization in-place."""
+    args.level = parse_level(args.level)
+    if getattr(args, 'use_triton', None) is None:
+        _e97_family = str(args.level) in ('E97', '97', 'E97-M2')
+        _needs_triton_fused = _e97_family or bool(getattr(args, 'e88_raw_write', 0))
+        if _needs_triton_fused and getattr(args, 'bf16', False):
+            args.use_triton = 1
+            if announce:
+                print(f"[fused] level={args.level!r} raw_write={bool(getattr(args, 'e88_raw_write', 0))}: "
+                      f"AUTO-enabling Triton split-edit kernel (--use_triton 1). Pass --use_triton 0 to force eager.",
+                      flush=True)
+        else:
+            args.use_triton = 0
+    return args
+
+
+def resolve_training_r_h_mode(args, *, announce=False):
+    """Resolve the effective recurrent W_h constraint mode used by train.py."""
+    r_h_mode = getattr(args, 'r_h_mode', 'auto')
+    if r_h_mode == 'auto' and args.level != 'mamba2':
+        full_wh_levels = {1, 33, 42, 51, 52, 53, 56, 57, 58, 60}
+        matrix_state_levels = {70, 71, 72, 73}
+        level_int = int(args.level) if str(args.level).isdigit() else 0
+        if level_int in full_wh_levels:
+            r_h_mode = 'spectral_norm'
+            if announce:
+                print(f"Auto r_h_mode: spectral_norm (level {level_int} has full W_h)")
+        elif level_int in matrix_state_levels:
+            r_h_mode = 'none'
+            if announce:
+                print(f"Auto r_h_mode: none (level {level_int} is matrix state - gated update is bounded)")
+        else:
+            r_h_mode = 'none'
+            if announce:
+                print(f"Auto r_h_mode: none (level {level_int} has bounded/no W_h)")
+    return r_h_mode
+
+
+def resolve_training_vocab_size(args, *, announce=False):
+    """Return the token vocabulary size for byte-level or tiktoken training."""
+    if getattr(args, 'tokenizer', None):
+        import tiktoken
+        enc = tiktoken.get_encoding(args.tokenizer)
+        vocab_size = enc.n_vocab
+        if announce:
+            print(f"Tokenizer: {args.tokenizer}, vocab_size={vocab_size}")
+        return vocab_size
+    return 256
+
+
+def build_training_model(args, *, vocab_size=None, r_h_mode=None):
+    """Build an unwrapped train.py LadderLM model without invoking the CLI.
+
+    The helper intentionally exposes the real E97/Ladder path needed by the
+    async DiLoCo orchestrator. Legacy special-case baseline branches remain in
+    train(args) so existing CLI behavior stays unchanged.
+    """
+    normalize_training_args(args)
+    if vocab_size is None:
+        vocab_size = resolve_training_vocab_size(args)
+    if r_h_mode is None:
+        r_h_mode = resolve_training_r_h_mode(args)
+
+    if args.dim is not None and args.depth is not None:
+        layer_kwargs = {}
+        if getattr(args, 'head_type_logits', None) is not None:
+            layer_kwargs['head_type_logits'] = [float(x) for x in args.head_type_logits.split(',')]
+            layer_kwargs['gdn_allow_neg_eigval'] = bool(getattr(args, 'gdn_allow_neg_eigval', 1))
+        if getattr(args, 'corner_mixture', None) is not None:
+            layer_kwargs['corner_mixture'] = [float(x) for x in args.corner_mixture.split(',')]
+        if getattr(args, 'lam_max', None) is not None:
+            layer_kwargs['lam_max'] = args.lam_max
+        if getattr(args, 'beta_max', None) is not None:
+            layer_kwargs['beta_max'] = args.beta_max
+        if getattr(args, 'igain_max', None) is not None:
+            layer_kwargs['igain_max'] = args.igain_max
+        if getattr(args, 'layer_kwargs', None) is not None:
+            layer_kwargs.update(json.loads(args.layer_kwargs))
+        return LadderLM(
+            vocab_size=vocab_size,
+            dim=args.dim,
+            depth=args.depth,
+            level=args.level,
+            layer_kwargs=(layer_kwargs or None),
+            expansion=getattr(args, 'expansion', 1.0),
+            n_groups=getattr(args, 'n_groups', 32),
+            n_state=getattr(args, 'n_state', 64),
+            n_slots=getattr(args, 'n_slots', 64),
+            n_heads=getattr(args, 'n_heads', None),
+            top_k=getattr(args, 'top_k', None),
+            k_fast=getattr(args, 'k_fast', None),
+            k_slow=getattr(args, 'k_slow', None),
+            use_gate=bool(getattr(args, 'use_gate', 1)),
+            gate_activation=getattr(args, 'gate_activation', 'sigmoid'),
+            linear_state=bool(getattr(args, 'linear_state', 0)),
+            use_write_gate=bool(getattr(args, 'use_write_gate', 0)),
+            e88_decay_mode=getattr(args, 'e88_decay_mode', 'mamba'),
+            e88_value_residual=bool(getattr(args, 'e88_value_residual', 0)),
+            e88_raw_write=bool(getattr(args, 'e88_raw_write', 0)),
+            use_chunked_e97=bool(getattr(args, 'use_chunked_e97', 0)),
+            e97_chunk_size=getattr(args, 'e97_chunk_size', 32),
+            state_expansion=getattr(args, 'state_expansion', 2),
+            r_h_mode=r_h_mode,
+            use_conv=bool(getattr(args, 'use_conv', 0)),
+            d_conv=getattr(args, 'd_conv', 4),
+            gdn2_mlp_ratio=getattr(args, 'gdn2_mlp_ratio', 6208 / 2304),
+            dropout=getattr(args, 'dropout', 0.0),
+            checkpoint_interval=getattr(args, 'checkpoint_interval', 16),
+            gradient_checkpointing=bool(getattr(args, 'gradient_checkpointing', False)),
+            projection_chunk_size=getattr(args, 'projection_chunk_size', 0),
+            loss_chunk_size=getattr(args, 'loss_chunk_size', 0),
+            use_triton=bool(getattr(args, 'use_triton', 0)),
+            mlp_ratio=getattr(args, 'mlp_ratio', 0.0),
+            mlp_multiple=getattr(args, 'mlp_multiple', 64),
+        )
+
+    return create_ladder_model(
+        target_params=args.params,
+        level=args.level,
+        vocab_size=vocab_size,
+        expansion=getattr(args, 'expansion', 1.0),
+        n_groups=getattr(args, 'n_groups', 32),
+        state_expansion=getattr(args, 'state_expansion', 2),
+        r_h_mode=r_h_mode,
+    )
+
+
+def build_training_optimizer(core_model, args, *, announce=False):
+    """Create train.py-compatible optimizer and per-group base_lr metadata."""
+    knob_suffixes = ('lam_raw', 'beta_raw', 'igain_raw', 'gamma_raw')
+    knob_params, base_params = [], []
+    for name, p in core_model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if any(name.endswith(s) for s in knob_suffixes):
+            knob_params.append(p)
+        else:
+            base_params.append(p)
+
+    knob_lr_mult = float(getattr(args, 'knob_lr_mult', 1.0))
+    use_knob_group = knob_lr_mult != 1.0 and len(knob_params) > 0
+    if use_knob_group:
+        param_groups = [
+            {'params': base_params, 'lr': args.lr},
+            {'params': knob_params, 'lr': args.lr * knob_lr_mult},
+        ]
+        if announce:
+            print(f"Knob-LR group: {len(knob_params)} knob params at lr="
+                  f"{args.lr * knob_lr_mult:.2e} ({knob_lr_mult}x base); "
+                  f"{len(base_params)} base params at lr={args.lr:.2e}")
+    else:
+        param_groups = core_model.parameters()
+
+    if args.optimizer == 'schedulefree':
+        optimizer = schedulefree.AdamWScheduleFree(
+            param_groups,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            betas=(0.9, 0.95),
+            warmup_steps=getattr(args, 'warmup_steps', 0),
+        )
+        if announce:
+            print(f"Using schedule-free AdamW (lr={args.lr}, warmup_steps={args.warmup_steps})")
+    else:
+        optimizer = AdamW(
+            param_groups,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            betas=(0.9, 0.95),
+        )
+        if announce:
+            print(f"Using AdamW with warmup={args.warmup_steps} steps + cosine decay to "
+                  f"{args.min_lr_frac:.0%} of lr over {args.steps} steps")
+
+    for pg in optimizer.param_groups:
+        pg['base_lr'] = pg['lr']
+    return optimizer
+
+
+def build_training_dataset(args, *, rank=0, dist_enabled=False):
+    """Create the real train.py streaming dataset for one rank."""
+    data_seed = args.seed + (rank if dist_enabled else 0)
+    if args.tbptt:
+        return BatchedStreamDataset(
+            data_path=args.data,
+            batch_size=args.batch_size,
+            chunk_size=args.chunk_size + 1,
+            seed=data_seed,
+        )
+    if getattr(args, 'tokenizer', None):
+        return TokenizedStreamDataset(
+            data_path=args.data,
+            chunk_size=args.chunk_size + 1,
+            seed=data_seed,
+            tokenizer_name=args.tokenizer,
+        )
+    return DocumentStreamDataset(
+        data_path=args.data,
+        chunk_size=args.chunk_size + 1,
+        seed=data_seed,
+    )
+
+
+def get_training_batch(train_dataset, args, device):
+    """Fetch one train.py-style batch from a streaming dataset."""
+    if args.tbptt:
+        chunks, is_doc_end = train_dataset.get_batch(device=device)
+        actual_lengths = torch.full((args.batch_size,), args.chunk_size + 1, device=device)
+    else:
+        chunks, is_doc_end, actual_lengths = train_dataset.get_batch(args.batch_size, device=device)
+    return chunks, is_doc_end, actual_lengths
+
+
+def compute_training_loss(model, chunks, args, *, prev_hiddens=None):
+    """Compute train.py's autoregressive loss for one chunk batch."""
+    if getattr(args, 'bf16', False):
+        autocast_ctx = torch.autocast(
+            device_type=chunks.device.type,
+            dtype=torch.bfloat16,
+            enabled=True,
+        )
+    else:
+        autocast_ctx = nullcontext()
+    with autocast_ctx:
+        if args.tbptt:
+            result = model(
+                chunks,
+                return_loss=True,
+                return_prev_hiddens=True,
+                prev_hiddens=prev_hiddens,
+            )
+        else:
+            result = model(
+                chunks,
+                return_loss=True,
+            )
+
+        if isinstance(result, tuple):
+            loss, (next_hidden, _) = result
+        else:
+            loss = result
+            next_hidden = None
+
+    return loss, next_hidden
+
+
+def train_one_optimizer_step(model, optimizer, args, *, batch_iter=None, device=None,
+                             step=0, hidden_state=None, phase_callback=None):
+    """Run one real train.py optimizer step, including grad accumulation."""
+    if device is None:
+        device = next(model.parameters()).device
+    model.train()
+    if args.optimizer == 'schedulefree':
+        optimizer.train()
+    optimizer.zero_grad(set_to_none=True)
+
+    total_loss = 0.0
+    tokens_processed = 0
+    def phase(name, **details):
+        if phase_callback is not None:
+            phase_callback(name, {"step": step, **details})
+
+    phase("optimizer_step_start")
+    for micro_step in range(max(1, int(getattr(args, 'grad_accum', 1)))):
+        if batch_iter is None:
+            raise ValueError("batch_iter is required for train_one_optimizer_step")
+        phase("data_load_start", micro_step=micro_step)
+        chunks, is_doc_end, actual_lengths = next(batch_iter)
+        chunks = chunks.to(device)
+        actual_lengths = actual_lengths.to(device)
+        phase("data_load_end", micro_step=micro_step,
+              tokens=int(actual_lengths.sum().item()))
+        if args.tbptt and hidden_state is not None:
+            reset_mask = is_doc_end.to(device).view(-1, 1)
+            hidden_state = [h * (~reset_mask) if h is not None else None for h in hidden_state]
+        phase("forward_start", micro_step=micro_step)
+        loss, next_hidden = compute_training_loss(
+            model, chunks, args, prev_hiddens=hidden_state)
+        phase("forward_end", micro_step=micro_step)
+        if not torch.isfinite(loss):
+            raise FloatingPointError(f"non-finite training loss at step {step}: {loss.item()}")
+        phase("backward_start", micro_step=micro_step)
+        (loss / max(1, int(getattr(args, 'grad_accum', 1)))).backward()
+        phase("backward_end", micro_step=micro_step)
+        if args.tbptt and next_hidden is not None:
+            hidden_state = [h.detach() if h is not None else None for h in next_hidden]
+        phase("loss_sync_start", micro_step=micro_step)
+        loss_value = float(loss.item())
+        phase("loss_sync_end", micro_step=micro_step, loss=loss_value)
+        total_loss += loss_value
+        tokens_processed += int(actual_lengths.sum().item())
+
+    if getattr(args, 'grad_clip', 0) > 0:
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+    else:
+        grad_norm = sum(
+            p.grad.norm().item() ** 2 for p in model.parameters()
+            if p.grad is not None
+        ) ** 0.5
+    if not torch.isfinite(torch.as_tensor(grad_norm)):
+        optimizer.zero_grad(set_to_none=True)
+        grad_value = grad_norm.item() if hasattr(grad_norm, 'item') else float(grad_norm)
+        raise FloatingPointError(f"non-finite grad norm at step {step}: {grad_value}")
+
+    if args.optimizer == 'adamw':
+        scale = lr_scale_at(step, args.warmup_steps, args.steps, args.min_lr_frac)
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = param_group['base_lr'] * scale
+        lr = optimizer.param_groups[0]['lr']
+    else:
+        lr = args.lr
+
+    phase("optimizer_update_start")
+    optimizer.step()
+    phase("optimizer_update_end")
+    optimizer.zero_grad()
+    grad_value = grad_norm.item() if hasattr(grad_norm, 'item') else float(grad_norm)
+    result = {
+        'step': step + 1,
+        'loss': total_loss / max(1, int(getattr(args, 'grad_accum', 1))),
+        'grad_norm': grad_value,
+        'lr': lr,
+        'tokens_processed': tokens_processed,
+        'hidden_state': hidden_state,
+    }
+    phase("optimizer_step_end", loss=result['loss'], tokens=tokens_processed)
+    return result
+
+
 def _clone_param_list_like(params, source=None, fill_zeros=False):
     out = []
     for i, p in enumerate(params):
@@ -1005,6 +1535,204 @@ def _clone_param_list_like(params, source=None, fill_zeros=False):
                 t.zero_()
         out.append(t)
     return out
+
+
+def _snapshot_model_params(core_model):
+    return [p.data.detach().clone() for p in core_model.parameters()]
+
+
+def _restore_model_params(core_model, snapshot):
+    for p, saved in zip(core_model.parameters(), snapshot):
+        p.data.copy_(saved)
+
+
+def _model_params_equal_snapshot(core_model, snapshot):
+    return all(torch.equal(p.data, saved) for p, saved in zip(core_model.parameters(), snapshot))
+
+
+def _current_git_commit():
+    try:
+        import subprocess
+        return subprocess.check_output(
+            ['git', 'rev-parse', 'HEAD'],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except Exception:
+        return None
+
+
+def _diloco_outer_bootstrap_metadata(args, ckpt=None, reason=None,
+                                     inner_optimizer_state_loaded=None,
+                                     source_basis='loaded',
+                                     source_has_outer_state=None,
+                                     model_tensors_equal_after_restore=None):
+    ckpt = ckpt or {}
+    if source_has_outer_state is None:
+        source_has_outer_state = 'diloco_outer_state' in ckpt
+    metadata = {
+        'performed': True,
+        'guard': 'from-loaded-model',
+        'requested_cli': '--diloco_bootstrap_outer_state=from-loaded-model',
+        'source_checkpoint': getattr(args, 'resume', None),
+        'source_checkpoint_step': ckpt.get('step'),
+        'source_checkpoint_has_diloco_outer_state': bool(source_has_outer_state),
+        'missing_or_incompatible_reason': reason,
+        'target_outer_optimizer': getattr(args, 'diloco_outer_optimizer', None),
+        'target_export_basis': getattr(args, 'diloco_export_basis', None),
+        'target_outer_lr': getattr(args, 'diloco_outer_lr', None),
+        'target_outer_beta': getattr(args, 'diloco_outer_beta', None),
+        'bootstrap_source': 'loaded_model_weights',
+        'model_weight_mutation': 'none; restored byte-identical after bootstrap',
+        'model_tensors_equal_after_restore': bool(model_tensors_equal_after_restore),
+        'inner_optimizer_state_loaded': bool(inner_optimizer_state_loaded),
+        'inner_schedulefree_basis_used_for_anchor': source_basis,
+        'created_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'),
+        'code_commit': _current_git_commit(),
+    }
+    return metadata
+
+
+def checkpoint_metadata_with_diloco_bootstrap(metadata, bootstrap_metadata):
+    if bootstrap_metadata:
+        out = dict(metadata or {})
+        out['diloco_outer_state_bootstrap'] = bootstrap_metadata
+        return out
+    return metadata
+
+
+def bootstrap_diloco_outer_state_from_loaded_model(core_model, optimizer, args,
+                                                  ckpt=None,
+                                                  reason=None,
+                                                  inner_optimizer_state_loaded=None,
+                                                  source_has_outer_state=None):
+    """Create fresh non-avg DiLoCo outer state from already-loaded tensors.
+
+    The helper may switch ScheduleFree modes to derive the requested basis, but
+    it restores the live model parameters byte-for-byte before returning.
+    """
+    if args.diloco_outer_optimizer == 'avg':
+        return None, None
+
+    params = list(core_model.parameters())
+    pre_bootstrap = _snapshot_model_params(core_model)
+    pre_schedulefree_train_modes = None
+    if getattr(args, 'optimizer', None) == 'schedulefree':
+        pre_schedulefree_train_modes = [
+            group.get('train_mode') for group in optimizer.param_groups
+        ]
+    source_basis = 'loaded'
+    try:
+        if args.diloco_outer_optimizer == 'momentum':
+            if args.optimizer == 'schedulefree' and inner_optimizer_state_loaded:
+                optimizer.eval()
+                source_basis = 'x'
+                anchor = [p.data.detach().clone() for p in params]
+            else:
+                anchor = [t.clone() for t in pre_bootstrap]
+            state = {
+                'mode': 'momentum',
+                'anchor': anchor,
+                'moment': [torch.zeros_like(t) for t in anchor],
+            }
+        elif args.diloco_outer_optimizer == 'sfsgd':
+            if args.optimizer != 'schedulefree':
+                raise ValueError("--diloco_outer_optimizer sfsgd requires --optimizer schedulefree")
+            export_basis = getattr(args, 'diloco_export_basis', 'x')
+            if inner_optimizer_state_loaded:
+                if export_basis == 'y':
+                    optimizer.train()
+                    source_basis = 'y'
+                else:
+                    optimizer.eval()
+                    source_basis = 'x'
+                outer_basis = [p.data.detach().clone() for p in params]
+            else:
+                outer_basis = [t.clone() for t in pre_bootstrap]
+            outer_lr = float(args.diloco_outer_lr)
+            state = {
+                'mode': 'sfsgd',
+                'x': [t.clone() for t in outer_basis],
+                'z': [t.clone() for t in outer_basis],
+                'y': [t.clone() for t in outer_basis],
+                'k': 0,
+                'weight_sum': 0.0,
+                'lr_max': outer_lr,
+            }
+        else:
+            raise ValueError(f"unknown DiLoCo outer optimizer: {args.diloco_outer_optimizer}")
+    finally:
+        _restore_model_params(core_model, pre_bootstrap)
+        if pre_schedulefree_train_modes is not None:
+            for group, train_mode in zip(optimizer.param_groups, pre_schedulefree_train_modes):
+                if train_mode is not None:
+                    group['train_mode'] = train_mode
+
+    restored_equal = _model_params_equal_snapshot(core_model, pre_bootstrap)
+    if not restored_equal:
+        raise RuntimeError("DiLoCo outer-state bootstrap changed live model parameters")
+    metadata = _diloco_outer_bootstrap_metadata(
+        args,
+        ckpt=ckpt,
+        reason=reason,
+        inner_optimizer_state_loaded=inner_optimizer_state_loaded,
+        source_basis=source_basis,
+        source_has_outer_state=source_has_outer_state,
+        model_tensors_equal_after_restore=restored_equal,
+    )
+    state['bootstrap_metadata'] = metadata
+    return state, metadata
+
+
+def resolve_diloco_outer_state_for_resume(core_model, optimizer, args,
+                                          loaded_state=None,
+                                          ckpt=None,
+                                          inner_optimizer_state_loaded=False):
+    """Fail-closed DiLoCo resume guard plus explicit bootstrap opt-in."""
+    if args.diloco_outer_optimizer == 'avg':
+        return initialize_diloco_outer_state(
+            core_model, optimizer, args, loaded_state=loaded_state), None
+
+    if not getattr(args, 'resume', None):
+        return initialize_diloco_outer_state(core_model, optimizer, args), None
+
+    bootstrap_guard = getattr(args, 'diloco_bootstrap_outer_state', 'none')
+    reason = None
+    source_has_outer_state = loaded_state is not None
+    if loaded_state is None:
+        reason = 'missing_diloco_outer_state'
+    else:
+        mode = loaded_state.get('mode') if isinstance(loaded_state, dict) else None
+        if mode != args.diloco_outer_optimizer:
+            reason = f"incompatible_diloco_outer_state_mode:{mode}->{args.diloco_outer_optimizer}"
+
+    if reason is None:
+        if bootstrap_guard == 'from-loaded-model':
+            raise ValueError(
+                "checkpoint already contains compatible diloco_outer_state; "
+                "--diloco_bootstrap_outer_state from-loaded-model is only allowed "
+                "when outer state is missing or incompatible")
+        return initialize_diloco_outer_state(
+            core_model, optimizer, args, loaded_state=loaded_state), None
+
+    if bootstrap_guard != 'from-loaded-model':
+        raise ValueError(
+            f"checkpoint {getattr(args, 'resume', None)} lacks compatible "
+            f"diloco_outer_state for --diloco_outer_optimizer "
+            f"{args.diloco_outer_optimizer} ({reason}); rerun with "
+            "--diloco_bootstrap_outer_state from-loaded-model only if you intend "
+            "to start fresh outer state from the loaded model weights")
+
+    return bootstrap_diloco_outer_state_from_loaded_model(
+        core_model,
+        optimizer,
+        args,
+        ckpt=ckpt,
+        reason=reason,
+        inner_optimizer_state_loaded=inner_optimizer_state_loaded,
+        source_has_outer_state=source_has_outer_state,
+    )
 
 
 def initialize_diloco_outer_state(core_model, optimizer, args, loaded_state=None):
@@ -1063,8 +1791,223 @@ def initialize_diloco_outer_state(core_model, optimizer, args, loaded_state=None
     raise ValueError(f"unknown DiLoCo outer optimizer: {args.diloco_outer_optimizer}")
 
 
+def _diloco_merge_debug_rank_enabled(args):
+    if int(getattr(args, 'diloco_merge_debug', 0) or 0) != 1:
+        return False
+    rank = int(getattr(args, '_rank', os.environ.get('RANK', '0')) or 0)
+    ranks = str(getattr(args, 'diloco_merge_debug_ranks', '0') or '0').strip()
+    if ranks == '*':
+        return True
+    enabled = set()
+    for item in ranks.split(','):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            enabled.add(int(item))
+        except ValueError:
+            continue
+    return rank in enabled
+
+
+def _diloco_merge_log(args, step, merge_index, label, bucket_index, numel, dtype,
+                      phase, elapsed_s=None):
+    if not _diloco_merge_debug_rank_enabled(args):
+        return
+    rank = int(getattr(args, '_rank', os.environ.get('RANK', '0')) or 0)
+    elapsed = "" if elapsed_s is None else f" elapsed_s={elapsed_s:.6f}"
+    print(
+        f"[DiLoCoMergeDebug] rank={rank} step={step} merge={merge_index} "
+        f"label={label} bucket={bucket_index} numel={numel} dtype={dtype} "
+        f"phase={phase}{elapsed}",
+        flush=True,
+    )
+
+
+def _diloco_sync_accelerator():
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+
+def _build_diloco_hierarchical_merge_groups(world_size, rank, group_size,
+                                            create_barrier_every=8):
+    """Create exact two-level DiLoCo merge groups.
+
+    The first level is consecutive rank groups, which matches Frontier's
+    8-tasks-per-node srun layout used by the scaleout scripts. Groups may be
+    unequal: the merge reduces SUMs, never averages local averages, so the final
+    division by world_size preserves the current all-rank mean exactly.
+    """
+    if group_size <= 0:
+        raise ValueError("--diloco_merge_group_size must be >0 for hierarchical merge")
+    if not dist.is_initialized():
+        raise RuntimeError("hierarchical DiLoCo merge requires torch.distributed")
+    groups = []
+    local_group = None
+    local_group_ranks = None
+    local_root = None
+    n_groups = (world_size + group_size - 1) // group_size
+    root_ranks = [
+        group_idx * group_size
+        for group_idx in range(n_groups)
+    ]
+    root_group = None
+    create_barrier_every = int(create_barrier_every or 0)
+    if len(root_ranks) > 1:
+        # Create the overlapping second-level communicator first, before local
+        # subgroups. Frontier RCCL/NCCL is sensitive to subgroup creation order
+        # when later collectives involve non-contiguous root ranks.
+        root_group = dist.new_group(ranks=root_ranks)
+        if create_barrier_every > 0:
+            dist.barrier()
+
+    for group_idx in range(n_groups):
+        start = group_idx * group_size
+        group_ranks = list(range(start, min(start + group_size, world_size)))
+        root = group_ranks[0]
+        g = dist.new_group(ranks=group_ranks)
+        groups.append((group_ranks, g))
+        if rank in group_ranks:
+            local_group = g
+            local_group_ranks = group_ranks
+            local_root = root
+        if create_barrier_every > 0 and (
+            (group_idx + 1) % create_barrier_every == 0 or
+            (group_idx + 1) == n_groups
+        ):
+            dist.barrier()
+
+    if local_group is None or local_group_ranks is None or local_root is None:
+        raise RuntimeError(f"rank {rank} was not assigned to a DiLoCo merge group")
+
+    return {
+        'topology': 'hierarchical',
+        'group_size': int(group_size),
+        'groups': groups,
+        'root_ranks': root_ranks,
+        'root_group': root_group,
+        'local_group': local_group,
+        'local_group_ranks': local_group_ranks,
+        'local_root': int(local_root),
+        'local_count': int(len(local_group_ranks)),
+        'is_root': bool(rank == local_root),
+        'n_groups': int(len(root_ranks)),
+    }
+
+
+def _diloco_hierarchical_sum_average_flat(flat, world_size, args):
+    meta = getattr(args, '_diloco_merge_groups', None)
+    if not meta or meta.get('topology') != 'hierarchical':
+        raise RuntimeError("missing hierarchical DiLoCo merge group metadata")
+    local_group = meta['local_group']
+    local_root = int(meta['local_root'])
+    is_root = bool(meta['is_root'])
+    root_group = meta.get('root_group')
+
+    dist.reduce(flat, dst=local_root, op=dist.ReduceOp.SUM, group=local_group)
+    # The next stage uses a different process group, and ProcessGroupNCCL/RCCL
+    # CUDA collectives may return after enqueue. Force the local reduce to finish
+    # before the root all-reduce consumes the same buffer on another communicator.
+    _diloco_sync_accelerator()
+    if is_root:
+        if root_group is not None:
+            dist.all_reduce(flat, op=dist.ReduceOp.SUM, group=root_group)
+            _diloco_sync_accelerator()
+        flat.div_(world_size)
+    dist.broadcast(flat, src=local_root, group=local_group)
+    _diloco_sync_accelerator()
+
+
+def _warm_diloco_hierarchical_merge_groups(args, device):
+    meta = getattr(args, '_diloco_merge_groups', None)
+    if not meta or meta.get('topology') != 'hierarchical':
+        raise RuntimeError("missing hierarchical DiLoCo merge group metadata")
+    _w = torch.zeros(1, device=device)
+    dist.all_reduce(_w, group=meta['local_group'])
+    if meta['is_root'] and meta.get('root_group') is not None:
+        dist.all_reduce(_w, group=meta['root_group'])
+    dist.barrier()
+
+
+def _maybe_inject_diloco_collective_rank_exit(*, label, bucket_index,
+                                               merge_index):
+    """Test-only, fail-closed rank exit immediately before a DiLoCo collective.
+
+    The surrounding ``srun`` owns failure containment.  Exiting here strands the
+    other ranks inside the collective, exercising the real RCCL failure path;
+    the batch-shell supervisor must terminate that step and start a fresh one.
+    No handler or communicator recovery is attempted in this process.
+    """
+    requested_rank = os.environ.get('EMENDER_DILOCO_EXIT_RANK')
+    if requested_rank is None:
+        return
+    try:
+        rank = dist.get_rank()
+        target_rank = int(requested_rank)
+        target_merge = int(os.environ['EMENDER_DILOCO_EXIT_MERGE'])
+        target_bucket = int(os.environ.get('EMENDER_DILOCO_EXIT_BUCKET', '0'))
+        exit_code = int(os.environ.get('EMENDER_DILOCO_EXIT_CODE', '86'))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError('invalid EMENDER_DILOCO_EXIT_* fault injection') from exc
+    if not 1 <= exit_code <= 255:
+        raise RuntimeError('EMENDER_DILOCO_EXIT_CODE must be in [1,255]')
+    if (rank != target_rank or merge_index != target_merge
+            or bucket_index != target_bucket
+            or label != os.environ.get('EMENDER_DILOCO_EXIT_LABEL', 'model')):
+        return
+    print('DILOCO_FAULT_INJECTION ' + json.dumps({
+        'rank': rank, 'merge_index': merge_index, 'bucket_index': bucket_index,
+        'label': label, 'exit_code': exit_code,
+    }, sort_keys=True), flush=True)
+    # Give peers a bounded head start into the same collective, making this a
+    # communicator/process-failure experiment rather than a pre-collective stop.
+    time.sleep(float(os.environ.get('EMENDER_DILOCO_EXIT_DELAY_SECONDS', '0.25')))
+    os._exit(exit_code)
+
+
+def _diloco_allreduce_average_flat(flat, world_size, args, label, step=None,
+                                   merge_index=None):
+    topology = str(getattr(args, 'diloco_merge_topology', 'global') or 'global').lower()
+    bucket_numel = int(getattr(args, 'diloco_merge_bucket_numel', 0) or 0)
+    if bucket_numel <= 0 or bucket_numel >= flat.numel():
+        _diloco_merge_log(args, step, merge_index, label, 0, int(flat.numel()),
+                          flat.dtype, 'enter')
+        t0 = time.time()
+        if topology == 'hierarchical':
+            _diloco_hierarchical_sum_average_flat(flat, world_size, args)
+        elif topology == 'global':
+            dist.all_reduce(flat, op=dist.ReduceOp.SUM)
+            flat.div_(world_size)
+        else:
+            raise ValueError(f"unknown DiLoCo merge topology: {topology}")
+        _diloco_merge_log(args, step, merge_index, label, 0, int(flat.numel()),
+                          flat.dtype, 'exit', time.time() - t0)
+        return
+
+    bucket_index = 0
+    for start in range(0, flat.numel(), bucket_numel):
+        chunk = flat.narrow(0, start, min(bucket_numel, flat.numel() - start))
+        _diloco_merge_log(args, step, merge_index, label, bucket_index,
+                          int(chunk.numel()), chunk.dtype, 'enter')
+        t0 = time.time()
+        _maybe_inject_diloco_collective_rank_exit(
+            label=label, bucket_index=bucket_index, merge_index=merge_index)
+        if topology == 'hierarchical':
+            _diloco_hierarchical_sum_average_flat(chunk, world_size, args)
+        elif topology == 'global':
+            dist.all_reduce(chunk, op=dist.ReduceOp.SUM)
+            chunk.div_(world_size)
+        else:
+            raise ValueError(f"unknown DiLoCo merge topology: {topology}")
+        _diloco_merge_log(args, step, merge_index, label, bucket_index,
+                          int(chunk.numel()), chunk.dtype, 'exit',
+                          time.time() - t0)
+        bucket_index += 1
+
+
 @torch.no_grad()
-def diloco_merge(core_model, optimizer, args, world_size, outer_state):
+def diloco_merge(core_model, optimizer, args, world_size, outer_state,
+                 step=None, merge_index=None):
     """DiLoCo outer step: average model weights across ranks (every K local steps).
 
     task implement-diloco-periodic. This is the inter-worker synchronization that
@@ -1074,17 +2017,15 @@ def diloco_merge(core_model, optimizer, args, world_size, outer_state):
     ScheduleFree interaction (docs/SCHEDULEFREE_DILOCO_FRONTIER_DESIGN.md): the
     optimizer evolves both the running-average eval weights x (held implicitly in
     p.data while in eval mode) and the base iterate z (held in per-param state).
-    DiLoCo therefore merges both: x is averaged across replicas using the same
-    model-weight semantics, z is averaged across replicas, and the live train
-    weights y are rebuilt from the merged x/z pair. The ScheduleFree scalar
-    clock state (weight_sum, k, lr_max) is part of the long-horizon averaging
-    schedule and is preserved, not reset. The training loop keeps all replicas
-    on identical step counts, so these scalars are normally byte-identical; if a
-    future uneven-step caller reaches this function, x is merged with
-    weight_sum-weighted averaging and weight_sum is set to the cross-rank
-    consensus mean rather than discarded. Adam second moments (exp_avg_sq) stay
-    per-rank (independent preconditioning -> independent exploration, the point
-    of DiLoCo).
+    DiLoCo therefore merges both tensor states: x is averaged across replicas
+    using the same model-weight semantics, z is averaged across replicas, and the
+    live train weights y are rebuilt from the merged x/z pair. ScheduleFree's
+    scalar clocks (weight_sum, k, lr_max) are local optimizer bookkeeping and are
+    preserved as-is. That avoids fragile 1-element process-group collectives at
+    large scale; under the normal equal-step DiLoCo schedule they are already
+    identical, and under uneven ranks equal-weight tensor averaging is acceptable.
+    Adam second moments (exp_avg_sq) stay per-rank (independent preconditioning
+    -> independent exploration, the point of DiLoCo).
 
     Outer optimizer (general DiLoCo):
         delta       = mean_i(W_{r,i}) - W_r
@@ -1131,46 +2072,28 @@ def diloco_merge(core_model, optimizer, args, world_size, outer_state):
     #    all-reduce per K steps, not K). SUM+divide rather than ReduceOp.AVG so
     #    the path is backend-agnostic (gloo, used by the CPU unit test, has no AVG).
     if sf:
-        # ScheduleFree's x average has mass weight_sum. Under the normal DiLoCo
-        # schedule every rank has the same weight_sum, making this exactly the
-        # arithmetic mean. The weighted path preserves averaging mass if a future
-        # caller ever reaches a merge with uneven local step counts.
+        # Average ScheduleFree tensor state only. Scalar clocks are intentionally
+        # left local: reducing them would add tiny NCCL collectives that are not
+        # worth the fragility for DiLoCo's equal-step scaleout path.
         for group in optimizer.param_groups:
             group_params = list(group['params'])
             if not group_params:
                 continue
-            device = group_params[0].device
-            local_weight_sum = float(group.get('weight_sum', 0.0))
-            weight_sum = torch.tensor(local_weight_sum, device=device, dtype=torch.float64)
-            dist.all_reduce(weight_sum, op=dist.ReduceOp.SUM)
-            total_weight_sum = float(weight_sum.item())
 
             flat_x = torch._utils._flatten_dense_tensors([p.data for p in group_params])
-            if total_weight_sum > 0.0:
-                flat_x.mul_(local_weight_sum)
-            dist.all_reduce(flat_x, op=dist.ReduceOp.SUM)
-            flat_x.div_(total_weight_sum if total_weight_sum > 0.0 else world_size)
+            _diloco_allreduce_average_flat(flat_x, world_size, args, 'sf_x',
+                                           step=step, merge_index=merge_index)
             for p, merged in zip(
                     group_params,
                     torch._utils._unflatten_dense_tensors(flat_x, [p.data for p in group_params])):
                 p.data.copy_(merged)
 
-            group['weight_sum'] = total_weight_sum / world_size
-            for scalar_name in ('lr_max',):
-                scalar = torch.tensor(float(group.get(scalar_name, 0.0)),
-                                      device=device, dtype=torch.float64)
-                dist.all_reduce(scalar, op=dist.ReduceOp.SUM)
-                group[scalar_name] = float(scalar.item() / world_size)
-            k = torch.tensor(float(group.get('k', 0)), device=device, dtype=torch.float64)
-            dist.all_reduce(k, op=dist.ReduceOp.SUM)
-            group['k'] = int(round(float(k.item() / world_size)))
-
             z_params = [p for p in group_params if 'z' in optimizer.state.get(p, {})]
             if z_params:
                 flat_z = torch._utils._flatten_dense_tensors(
                     [optimizer.state[p]['z'] for p in z_params])
-                dist.all_reduce(flat_z, op=dist.ReduceOp.SUM)
-                flat_z.div_(world_size)
+                _diloco_allreduce_average_flat(flat_z, world_size, args, 'sf_z',
+                                               step=step, merge_index=merge_index)
                 for p, merged_z in zip(
                         z_params,
                         torch._utils._unflatten_dense_tensors(
@@ -1179,17 +2102,27 @@ def diloco_merge(core_model, optimizer, args, world_size, outer_state):
 
             if outer_optimizer == 'sfsgd' and export_basis == 'y':
                 flat_y = export_y_by_group[id(group)]
-                dist.all_reduce(flat_y, op=dist.ReduceOp.SUM)
-                flat_y.div_(world_size)
+                _diloco_allreduce_average_flat(flat_y, world_size, args, 'sf_y',
+                                               step=step, merge_index=merge_index)
                 export_y_by_group[id(group)] = flat_y
     else:
         flat = torch._utils._flatten_dense_tensors([p.data for p in params])
-        dist.all_reduce(flat, op=dist.ReduceOp.SUM)
-        flat.div_(world_size)
+        _diloco_allreduce_average_flat(flat, world_size, args, 'params',
+                                       step=step, merge_index=merge_index)
         for p, merged in zip(params, torch._utils._unflatten_dense_tensors(flat, [p.data for p in params])):
             p.data.copy_(merged)
     if torch.cuda.is_available():
         torch.cuda.synchronize()
+    merge_topology = str(getattr(args, 'diloco_merge_topology', 'global') or 'global').lower()
+    completion_barrier = int(getattr(args, 'diloco_merge_completion_barrier', 1) or 0)
+    if merge_topology == 'hierarchical' and completion_barrier != 0:
+        # Hierarchical merging ends with independent local-group broadcasts. A
+        # fast local group can otherwise leave the merge while another group is
+        # still in its final broadcast, and later K-step collectives may overlap.
+        # One all-rank barrier per merge restores a single completion point.
+        dist.barrier()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
     sync_s = time.time() - t0
 
     # 3. Outer optimizer (momentum). Skipped for the local-SGD default.
@@ -1351,25 +2284,13 @@ def train(args):
     """Main training loop."""
     install_shutdown_signal_handlers()
 
-    # Parse level (convert '3' to 3, keep 'log_5' as string)
-    args.level = parse_level(args.level)
-
     # AUTO-resolve --use_triton (default None). E97 (split-edit) and raw-write have
     # their fused fwd/bwd ONLY in the Triton kernel — the CUDA register-owned path
     # rejects both, so without Triton they silently fall back to the eager T-scan
     # (~40-260x slower). Default those families to the fused Triton path under bf16
     # (parity-verified, paper/review/E97_FUSED_LM_KERNEL_NOTE.md). Everything else
     # keeps the historical default (CUDA register-owned, use_triton=0).
-    if args.use_triton is None:
-        _e97_family = str(args.level) in ('E97', '97', 'E97-M2')
-        _needs_triton_fused = _e97_family or bool(getattr(args, 'e88_raw_write', 0))
-        if _needs_triton_fused and getattr(args, 'bf16', False):
-            args.use_triton = 1
-            print(f"[fused] level={args.level!r} raw_write={bool(getattr(args, 'e88_raw_write', 0))}: "
-                  f"AUTO-enabling Triton split-edit kernel (--use_triton 1). Pass --use_triton 0 to force eager.",
-                  flush=True)
-        else:
-            args.use_triton = 0
+    normalize_training_args(args, announce=True)
 
     # --- Distributed setup (opt-in, backward compatible) -----------------------
     # Activates ONLY under torchrun (WORLD_SIZE>1). Single-GPU/no-torchrun runs are
@@ -1404,10 +2325,19 @@ def train(args):
     # Setup
     torch.manual_seed(args.seed)
     if dist_enabled:
-        if not dist.is_initialized():
-            dist.init_process_group(backend='nccl')
         torch.cuda.set_device(local_rank)
         device = torch.device(f'cuda:{local_rank}')
+        if not dist.is_initialized():
+            init_kwargs = {}
+            if getattr(args, 'distributed_init_timeout_seconds', None) is not None:
+                init_timeout_s = max(1.0, float(args.distributed_init_timeout_seconds))
+                init_kwargs['timeout'] = datetime.timedelta(seconds=init_timeout_s)
+                if is_main:
+                    print(f"[distributed-init] timeout={init_timeout_s:.1f}s", flush=True)
+            try:
+                dist.init_process_group(backend='nccl', device_id=device, **init_kwargs)
+            except TypeError:
+                dist.init_process_group(backend='nccl', **init_kwargs)
         _mode = 'DiLoCo' if use_diloco else 'DDP'
         if is_main:
             print(f"[{_mode}] world_size={world_size} backend=nccl; this is rank {rank} "
@@ -1424,6 +2354,17 @@ def train(args):
     else:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"Using device: {device}")
+
+    status_collectives_enabled = (
+        dist_enabled
+        and dist.is_initialized()
+        and not bool(getattr(args, 'disable_scalar_status_collectives', False))
+    )
+    status_request_poll_s = max(0.0, float(getattr(args, 'status_request_poll_seconds', 0.0)))
+    if is_main and dist_enabled and not status_collectives_enabled:
+        print("[status] scalar default-process-group status collectives disabled; "
+              f"filesystem stop-request polling={status_request_poll_s:.2f}s at "
+              "walltime/budget check boundaries", flush=True)
 
     final_ckpt = FinalCheckpointController(args, device)
     if is_main:
@@ -1481,37 +2422,11 @@ def train(args):
     heldout_curve = None
     heldout_curve_path = None
 
-    # Resolve 'auto' r_h_mode based on model architecture
-    r_h_mode = args.r_h_mode
-    if r_h_mode == 'auto' and args.level != 'mamba2':
-        # Models with full W_h matrix need spectral norm for stability
-        # Models with diagonal/scalar W_h are already bounded
-        full_wh_levels = {1, 33, 42, 51, 52, 53, 56, 57, 58, 60}  # Full W_h matrix (E59 is highway, no W_h)
-        diagonal_levels = {34, 44, 54}  # Diagonal W_h (already bounded)
-        scalar_levels = {43, 55}  # Scalar decay (already bounded)
-        no_wh_levels = {45, 46, 48}  # No W_h at all
-        # E70-73: Matrix state models use gated updates (alpha*S + (1-alpha)*outer), naturally bounded
-        matrix_state_levels = {70, 71, 72, 73}  # No spectral norm needed - gated update is bounded
+    # Resolve 'auto' r_h_mode based on model architecture.
+    r_h_mode = resolve_training_r_h_mode(args, announce=True)
 
-        level_int = int(args.level) if str(args.level).isdigit() else 0
-        if level_int in full_wh_levels:
-            r_h_mode = 'spectral_norm'
-            print(f"Auto r_h_mode: spectral_norm (level {level_int} has full W_h)")
-        elif level_int in matrix_state_levels:
-            r_h_mode = 'none'
-            print(f"Auto r_h_mode: none (level {level_int} is matrix state - gated update is bounded)")
-        else:
-            r_h_mode = 'none'
-            print(f"Auto r_h_mode: none (level {level_int} has bounded/no W_h)")
-
-    # Resolve vocab size: 256 for byte-level (default) or tokenizer vocab size
-    if args.tokenizer:
-        import tiktoken
-        _enc = tiktoken.get_encoding(args.tokenizer)
-        vocab_size = _enc.n_vocab
-        print(f"Tokenizer: {args.tokenizer}, vocab_size={vocab_size}")
-    else:
-        vocab_size = 256
+    # Resolve vocab size: 256 for byte-level (default) or tokenizer vocab size.
+    vocab_size = resolve_training_vocab_size(args, announce=True)
 
     # Create model
     if args.level == 'mamba2':
@@ -1924,6 +2839,45 @@ def train(args):
             print(f"[DiLoCo] broadcast rank-0 W_0 to all {world_size} ranks "
                   f"(identical start)", flush=True)
 
+        merge_topology = str(getattr(args, 'diloco_merge_topology', 'global') or 'global').lower()
+        args._diloco_merge_topology = merge_topology
+        args._diloco_merge_groups = None
+        if merge_topology == 'hierarchical':
+            merge_group_size = int(getattr(args, 'diloco_merge_group_size', 8) or 8)
+            create_barrier_every = int(
+                getattr(args, 'diloco_merge_group_create_barrier_every', 8) or 0)
+            if is_main:
+                n_merge_groups = (world_size + merge_group_size - 1) // merge_group_size
+                print(f"[DiLoCo-merge] building hierarchical process groups: "
+                      f"group_size={merge_group_size} n_groups={n_merge_groups} "
+                      f"create_barrier_every={create_barrier_every}",
+                      flush=True)
+            args._diloco_merge_groups = _build_diloco_hierarchical_merge_groups(
+                world_size, rank, merge_group_size, create_barrier_every)
+            if is_main:
+                print("[DiLoCo-merge] hierarchical process groups built; warming "
+                      "communicators", flush=True)
+            # Warm subgroup communicators without interleaving default-group
+            # barriers against nonmember ranks. Each rank first warms exactly
+            # the group it will use for first-level local reductions; then roots
+            # warm the second-level root group.
+            _warm_diloco_hierarchical_merge_groups(args, device)
+            if is_main:
+                group_counts = [
+                    len(group_ranks)
+                    for group_ranks, _ in args._diloco_merge_groups['groups']
+                ]
+                print(f"[DiLoCo-merge] topology=hierarchical group_size={merge_group_size} "
+                      f"groups={group_counts} roots={args._diloco_merge_groups['root_ranks']} "
+                      f"(exact weighted SUM/world_size; bucket_numel="
+                      f"{getattr(args, 'diloco_merge_bucket_numel', 0)})",
+                      flush=True)
+        elif merge_topology != 'global':
+            raise ValueError(f"unknown DiLoCo merge topology: {merge_topology}")
+        elif is_main:
+            print(f"[DiLoCo-merge] topology=global bucket_numel="
+                  f"{getattr(args, 'diloco_merge_bucket_numel', 0)}", flush=True)
+
         # HYBRID (task diloco-loss-parity-longhorizon): if --diloco_island_size > 1,
         # form islands of consecutive ranks that do per-step DDP gradient all-reduce
         # WITHIN the island (tight, exact-SGD sync over a cheap 2-GPU collective),
@@ -1974,64 +2928,20 @@ def train(args):
     if is_main:
         print(f"Model: Level {args.level}, {core_model.get_num_params():,} parameters")
 
-    # Build param groups. With --knob_lr_mult != 1, the UnifiedCell recurrence
-    # knobs (lam/beta/igain/gamma raw) get a SEPARATE optimizer group at a higher
-    # LR; everything else stays at base LR. This mirrors the expressivity path
-    # (experiments/expressivity_tasks/train_hybrid.py) so the E98-CMA candidate's
-    # validated knob_lr_mult=5.38 placement is preserved at LM scale.
-    KNOB_SUFFIXES = ('lam_raw', 'beta_raw', 'igain_raw', 'gamma_raw')
-    knob_params, base_params = [], []
-    for name, p in core_model.named_parameters():
-        if not p.requires_grad:
-            continue
-        if any(name.endswith(s) for s in KNOB_SUFFIXES):
-            knob_params.append(p)
-        else:
-            base_params.append(p)
-    use_knob_group = args.knob_lr_mult != 1.0 and len(knob_params) > 0
-    if use_knob_group:
-        param_groups = [
-            {'params': base_params, 'lr': args.lr},
-            {'params': knob_params, 'lr': args.lr * args.knob_lr_mult},
-        ]
-        print(f"Knob-LR group: {len(knob_params)} knob params at lr="
-              f"{args.lr * args.knob_lr_mult:.2e} ({args.knob_lr_mult}x base); "
-              f"{len(base_params)} base params at lr={args.lr:.2e}")
-    else:
-        param_groups = core_model.parameters()
-
-    # Create optimizer
-    if args.optimizer == 'schedulefree':
-        optimizer = schedulefree.AdamWScheduleFree(
-            param_groups,
-            lr=args.lr,
-            weight_decay=args.weight_decay,
-            betas=(0.9, 0.95),
-            warmup_steps=args.warmup_steps,
-        )
-        print(f"Using schedule-free AdamW (lr={args.lr}, warmup_steps={args.warmup_steps})")
-    else:
-        optimizer = AdamW(
-            param_groups,
-            lr=args.lr,
-            weight_decay=args.weight_decay,
-            betas=(0.9, 0.95),
-        )
-        print(f"Using AdamW with warmup={args.warmup_steps} steps + cosine decay to "
-              f"{args.min_lr_frac:.0%} of lr over {args.steps} steps")
-    # Capture each group's base LR so the warmup+cosine schedule can scale them
-    # while preserving per-group ratios (e.g. --knob_lr_mult).
-    for pg in optimizer.param_groups:
-        pg['base_lr'] = pg['lr']
+    optimizer = build_training_optimizer(core_model, args, announce=True)
 
     # Resume if requested
     start_step = 0
     loaded_outer_state = None
+    loaded_checkpoint = None
+    loaded_optimizer_state = False
     if args.resume:
         print(f"Resuming from {args.resume}")
         start_step, _, ckpt = load_checkpoint(
             args.resume, core_model, optimizer, return_checkpoint=True)
+        loaded_checkpoint = ckpt
         loaded_outer_state = ckpt.get('diloco_outer_state')
+        loaded_optimizer_state = 'optimizer_state_dict' in ckpt
         # Optimizer state dicts carry their original param-group LR. For
         # continuation runs we want the explicit CLI LR to be authoritative.
         for param_group in optimizer.param_groups:
@@ -2042,31 +2952,10 @@ def train(args):
     # different real tokens every step (true data parallelism, not replicated work).
     # Offsetting the dataset seed by rank gives disjoint sampling positions across
     # the corpus. Model weights stay identical (DDP broadcast); only the data differs.
-    data_seed = args.seed + (rank if dist_enabled else 0)
-
     # Create dataset - use BatchedStreamDataset for TBPTT (persistent per-batch streams)
     if args.tbptt:
         print("TBPTT enabled: using BatchedStreamDataset (persistent streams)")
-        train_dataset = BatchedStreamDataset(
-            data_path=args.data,
-            batch_size=args.batch_size,
-            chunk_size=args.chunk_size + 1,  # +1 for target
-            seed=data_seed,
-        )
-    else:
-        if args.tokenizer:
-            train_dataset = TokenizedStreamDataset(
-                data_path=args.data,
-                chunk_size=args.chunk_size + 1,  # +1 for target
-                seed=data_seed,
-                tokenizer_name=args.tokenizer,
-            )
-        else:
-            train_dataset = DocumentStreamDataset(
-                data_path=args.data,
-                chunk_size=args.chunk_size + 1,  # +1 for target
-                seed=data_seed,
-            )
+    train_dataset = build_training_dataset(args, rank=rank, dist_enabled=dist_enabled)
 
     val_loader = None
     if args.val_data:
@@ -2117,18 +3006,32 @@ def train(args):
     # ScheduleFree-SGD state machine (outer_x/outer_z/outer_y) and never wraps the
     # live parameters with schedulefree.SGDScheduleFree.
     outer_state = None
+    diloco_bootstrap_metadata = None
     if use_diloco:
-        if loaded_outer_state is None and args.resume and args.diloco_outer_optimizer != 'avg':
-            raise ValueError(
-                f"checkpoint {args.resume} does not contain diloco_outer_state; "
-                f"cannot coherently resume --diloco_outer_optimizer "
-                f"{args.diloco_outer_optimizer}")
-        outer_state = initialize_diloco_outer_state(
-            core_model, optimizer, args, loaded_state=loaded_outer_state)
+        outer_state, diloco_bootstrap_metadata = resolve_diloco_outer_state_for_resume(
+            core_model,
+            optimizer,
+            args,
+            loaded_state=loaded_outer_state,
+            ckpt=loaded_checkpoint,
+            inner_optimizer_state_loaded=loaded_optimizer_state,
+        )
         if is_main:
             if args.diloco_outer_optimizer == 'avg':
                 print("[DiLoCo] outer optimizer: avg (stateless periodic averaging)",
                       flush=True)
+            elif diloco_bootstrap_metadata:
+                print(
+                    "[DiLoCo] bootstrapped missing outer state from loaded model weights: "
+                    f"mode={args.diloco_outer_optimizer} "
+                    f"export_basis={args.diloco_export_basis} "
+                    f"reason={diloco_bootstrap_metadata['missing_or_incompatible_reason']} "
+                    f"guard={diloco_bootstrap_metadata['guard']} "
+                    f"source={args.resume} "
+                    f"step={diloco_bootstrap_metadata['source_checkpoint_step']}; "
+                    "model tensors restored byte-identical after bootstrap",
+                    flush=True,
+                )
             elif loaded_outer_state is not None:
                 print(f"[DiLoCo] restored outer optimizer state "
                       f"({args.diloco_outer_optimizer}) from checkpoint", flush=True)
@@ -2276,15 +3179,37 @@ def train(args):
                 loss = result
                 next_hidden = None
 
+        health_check_every = max(1, int(args.distributed_health_check_every))
+        check_health_now = (
+            not dist_enabled
+            or health_check_every == 1
+            or step % health_check_every == 0
+        )
+
         local_nonfinite_loss = not torch.isfinite(loss)
-        if distributed_any(local_nonfinite_loss, device, dist_enabled=dist_enabled):
-            if local_nonfinite_loss:
+        if check_health_now:
+            if status_collectives_enabled and distributed_any(local_nonfinite_loss, device, dist_enabled=True):
+                if local_nonfinite_loss:
+                    print(f"Non-finite loss at step {step}: {loss.item()}. Stopping before optimizer step.")
+                else:
+                    print(f"Peer reported non-finite loss at step {step}. Stopping before optimizer step.",
+                          flush=True)
+                stopped_nonfinite = True
+                break
+            elif not status_collectives_enabled and local_nonfinite_loss:
+                if dist_enabled:
+                    raise RuntimeError(
+                        f"Non-finite loss at step {step}: {loss.item()} "
+                        "(scalar status collectives disabled)"
+                    )
                 print(f"Non-finite loss at step {step}: {loss.item()}. Stopping before optimizer step.")
-            elif dist_enabled:
-                print(f"Peer reported non-finite loss at step {step}. Stopping before optimizer step.",
-                      flush=True)
-            stopped_nonfinite = True
-            break
+                stopped_nonfinite = True
+                break
+        elif local_nonfinite_loss:
+            raise RuntimeError(
+                f"Non-finite loss at step {step}: {loss.item()} "
+                f"(distributed health check cadence={health_check_every})"
+            )
 
         # Add orthogonality regularization for E79 if enabled
         if args.orth_reg > 0:
@@ -2329,22 +3254,25 @@ def train(args):
                 grad_norm = sum(p.grad.norm().item() ** 2 for p in model.parameters() if p.grad is not None) ** 0.5
 
             local_nonfinite_grad = not torch.isfinite(torch.as_tensor(grad_norm))
-            if distributed_any(local_nonfinite_grad, device, dist_enabled=dist_enabled):
+            if (check_health_now and status_collectives_enabled
+                    and distributed_any(local_nonfinite_grad, device, dist_enabled=True)):
+                grad_value = grad_norm.item() if hasattr(grad_norm, 'item') else float(grad_norm)
+                # Multi-rank (DiLoCo/DDP): a per-rank skip desyncs the collective merge
+                # (ranks would diverge in step count). Keep the stop guard for safety.
+                if local_nonfinite_grad:
+                    print(f"Non-finite grad norm at step {step}: {grad_value}. Stopping before optimizer step (multi-rank).", flush=True)
+                else:
+                    print(f"Peer reported non-finite grad norm at step {step}. Stopping before optimizer step (multi-rank).", flush=True)
+                optimizer.zero_grad(set_to_none=True)
+                stopped_nonfinite = True
+                break
+            elif local_nonfinite_grad:
                 grad_value = grad_norm.item() if hasattr(grad_norm, 'item') else float(grad_norm)
                 if dist_enabled:
-                    # Multi-rank (DiLoCo/DDP): a per-rank skip desyncs the collective merge
-                    # (ranks would diverge in step count). Keep the stop guard for safety.
-                    if local_nonfinite_grad:
-                        print(f"Non-finite grad norm at step {step}: {grad_value}. Stopping before optimizer step (multi-rank).", flush=True)
-                    else:
-                        print(f"Peer reported non-finite grad norm at step {step}. Stopping before optimizer step (multi-rank).", flush=True)
-                    optimizer.zero_grad(set_to_none=True)
-                    stopped_nonfinite = True
-                    break
-                # Single-GPU: SKIP this step and continue (standard mixed-precision recipe).
-                # Grad clipping handles finite explosions; a one-off bf16 inf cannot be scaled,
-                # so dropping the offending step is correct — far better than killing a multi-day run.
-                # Per-skip log: if these become frequent it signals a real divergence, not a transient.
+                    raise RuntimeError(
+                        f"Non-finite grad norm at step {step}: {grad_value} "
+                        f"({'scalar status collectives disabled' if check_health_now else f'distributed health check cadence={health_check_every}'})"
+                    )
                 print(f"Non-finite grad norm at step {step}: {grad_value}. SKIPPING this step (transient overflow), continuing.", flush=True)
                 optimizer.zero_grad(set_to_none=True)
                 accumulated_steps = 0
@@ -2376,7 +3304,9 @@ def train(args):
             # current log window's `elapsed`, so reported global_tok/s already
             # reflects the amortized communication cost.
             if use_diloco and step % args.diloco_k == 0:
-                sync_s = diloco_merge(core_model, optimizer, args, world_size, outer_state)
+                sync_s = diloco_merge(core_model, optimizer, args, world_size,
+                                      outer_state, step=step,
+                                      merge_index=diloco_merges + 1)
                 diloco_merges += 1
                 diloco_sync_total_s += sync_s
                 if is_main:
@@ -2409,6 +3339,46 @@ def train(args):
                 running_loss = 0
                 tokens_processed = 0
                 start_time = time.time()
+
+            # Final-stop coordination must run before any rank-0-only eval or
+            # checkpoint work. Otherwise non-head ranks can enter finalization
+            # while rank 0 is still validating/saving, which desynchronizes the
+            # next distributed boundary.
+            walltime_check_every = max(1, int(args.walltime_check_every))
+            check_walltime_now = (
+                step % walltime_check_every == 0
+                or bool(getattr(final_ckpt, 'triggered', False))
+            )
+            if check_walltime_now:
+                local_budget_done = train_end_time is not None and time.time() >= train_end_time
+                extra_stop_reason = 'train_budget' if local_budget_done else None
+                stop_for_final, final_reason, remaining_s = final_ckpt.maybe_request_stop(
+                    step,
+                    dist_enabled=dist_enabled,
+                    peer_poll_s=(status_request_poll_s if not status_collectives_enabled else 0.0),
+                    extra_local_reason=extra_stop_reason,
+                )
+                if status_collectives_enabled:
+                    stop_for_final, final_reason, remaining_s = consensus_final_checkpoint_stop(
+                        final_ckpt,
+                        stop_for_final,
+                        final_reason,
+                        remaining_s,
+                        device,
+                        dist_enabled,
+                    )
+                if stop_for_final:
+                    rem_text = 'unknown' if remaining_s is None else f"{remaining_s:.1f}"
+                    print(f"[final-checkpoint] rank {rank}/{world_size} entering finalization "
+                          f"at step={step} reason={final_reason} remaining_s={rem_text} "
+                          f"model_variant={args._model_variant} is_head={is_main}",
+                          flush=True)
+                    break
+
+                if status_collectives_enabled and distributed_any(local_budget_done, device, dist_enabled=True):
+                    stop_training = True
+                elif not status_collectives_enabled and local_budget_done:
+                    stop_training = True
 
             # Fixed held-out curve (rank 0 only). For schedule-free y-mode this
             # intentionally keeps optimizer.train() weights and only flips the
@@ -2459,7 +3429,7 @@ def train(args):
                 ckpt_path = save_checkpoint(
                     core_model, optimizer, step, avg_loss, output_dir,
                     args.keep_checkpoints, outer_state=outer_state,
-                    metadata={
+                    metadata=checkpoint_metadata_with_diloco_bootstrap({
                         'kind': 'periodic',
                         'model_variant': args._model_variant,
                         'model': args._model_metadata,
@@ -2473,33 +3443,11 @@ def train(args):
                             final_ckpt.deadline - time.time()
                             if final_ckpt.deadline is not None else None
                         ),
-                    },
+                    }, diloco_bootstrap_metadata),
                 )
                 print(f"  >>> saved checkpoint: {ckpt_path.name}")
                 if args.optimizer == 'schedulefree':
                     optimizer.train()  # Back to training mode
-
-            stop_for_final, final_reason, remaining_s = final_ckpt.maybe_request_stop(
-                step, dist_enabled=dist_enabled)
-            stop_for_final, final_reason, remaining_s = consensus_final_checkpoint_stop(
-                final_ckpt,
-                stop_for_final,
-                final_reason,
-                remaining_s,
-                device,
-                dist_enabled,
-            )
-            if stop_for_final:
-                rem_text = 'unknown' if remaining_s is None else f"{remaining_s:.1f}"
-                print(f"[final-checkpoint] rank {rank}/{world_size} entering finalization "
-                      f"at step={step} reason={final_reason} remaining_s={rem_text} "
-                      f"model_variant={args._model_variant} is_head={is_main}",
-                      flush=True)
-                break
-
-            local_budget_done = train_end_time is not None and time.time() >= train_end_time
-            if distributed_any(local_budget_done, device, dist_enabled=dist_enabled):
-                stop_training = True
 
     # Stop prefetch thread
     prefetch_stop.set()
@@ -2535,7 +3483,9 @@ def train(args):
     # the guard is correct for all configs.
     last_step_already_merged = use_diloco and (step % args.diloco_k == 0)
     if use_diloco and not stopped_nonfinite and not last_step_already_merged:
-        sync_s = diloco_merge(core_model, optimizer, args, world_size, outer_state)
+        sync_s = diloco_merge(core_model, optimizer, args, world_size,
+                              outer_state, step=step,
+                              merge_index=diloco_merges + 1)
         diloco_merges += 1
         diloco_sync_total_s += sync_s
         if is_main:
@@ -2588,7 +3538,8 @@ def train(args):
         ckpt_path = save_checkpoint(
             core_model, optimizer, step, last_100_avg, output_dir,
             args.keep_checkpoints, outer_state=outer_state,
-            metadata=final_metadata,
+            metadata=checkpoint_metadata_with_diloco_bootstrap(
+                final_metadata, diloco_bootstrap_metadata),
         )
         print(f"[final-checkpoint] END path={ckpt_path} latest={output_dir / 'latest.pt'} "
               f"model_variant={args._model_variant} rank={rank}/{world_size} "

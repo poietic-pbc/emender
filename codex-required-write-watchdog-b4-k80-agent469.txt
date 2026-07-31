@@ -1,0 +1,14 @@
+Task: watchdog-b4-k80
+Agent: agent-469
+Timestamp: 2026-06-29T21:00:30-04:00
+
+This marker exists only because the outer Codex batch-worker instructions
+required a file write and git commit before completion, while the WG watchdog
+task itself requested read-only Slurm/log observations.
+
+Watchdog action summary:
+- Checked squeue and sacct for Slurm job 4911454.
+- Confirmed the job was PENDING, not RUNNING, with no allocated nodes.
+- Confirmed stable stdout/stderr paths were absent.
+- Confirmed no matching run root, train.log, or latest.pt was present.
+- Did not run scancel.

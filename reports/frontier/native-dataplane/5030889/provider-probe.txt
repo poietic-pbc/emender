@@ -1,0 +1,21 @@
+Exact live allocation probe, attached with:
+srun --jobid=5030889 --overlap --exact --nodes=2 --ntasks=2 --ntasks-per-node=1 --cpus-per-task=1
+
+frontier07789: network job-step environment contained SLINGSHOT_DEVICES, SLINGSHOT_SVC_IDS, SLINGSHOT_TCS, and SLINGSHOT_VNIS.
+frontier07791: network job-step environment contained SLINGSHOT_DEVICES, SLINGSHOT_SVC_IDS, SLINGSHOT_TCS, and SLINGSHOT_VNIS.
+
+FI_PROVIDER=cxi fi_info -p cxi -t FI_EP_RDM returned rc=0 on both nodes and exposed two non-equivalent native matches per node:
+
+provider: cxi
+fabric: cxi
+domain: cxi0
+type: FI_EP_RDM
+protocol: FI_PROTO_CXI
+
+provider: cxi
+fabric: cxi
+domain: cxi1
+type: FI_EP_RDM
+protocol: FI_PROTO_CXI
+
+The unpinned native service probe returned provider policy/setup failure on both nodes. FabricEndpoint::resolve_provider intentionally rejects multiple non-equivalent matches, so the correction pins domain cxi0 and continues to reject fallback providers.

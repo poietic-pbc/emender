@@ -1,0 +1,18 @@
+Four-node scale-rung Slurm accounting (all attempts)
+
+JobID   State       ExitCode  Elapsed   Nodes  Durable result
+5033611 CANCELLED   0:0       00:00:00  4      none; cancelled while pending before compute/fence
+5033672 FAILED      1:0       00:07:04  4      none; exchange deadline failed closed
+5033788 FAILED      1:0       00:09:08  4      generation 6/fence 4
+5033953 FAILED      1:0       00:10:26  4      generation 7/fence 5
+5034067 FAILED      1:0       00:08:43  4      generation 8/fence 6
+5034117 COMPLETED   0:0       00:13:59  4      generations 9 and 10/fence 7
+5034173 FAILED      143:0     00:01:01  4      none; fence 8 only, before model load
+5034180 COMPLETED   0:0       00:07:28  4      generation 11/fence 9
+
+Every request used partition=batch, QOS=debug, TimeLimit=00:30:00, job_vni,
+eight GPUs per node, and exactly four nodes. No 8-, 32-, 64-, or larger-node
+job was submitted by this task. Per-job terminal accounting for the two
+accepted allocations is retained in job-5034117/slurm-sacct.txt and
+job-5034180/slurm-sacct.txt; job 5034173's fail-closed evidence is retained in
+job-5034173.

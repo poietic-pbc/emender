@@ -1,0 +1,405 @@
+{
+  "schema_version": 1,
+  "baseline_id": "frontier-native-dataplane-reference-v1",
+  "captured_utc": "2026-07-18T21:00:55Z",
+  "qualification_status": "qualified-reference-only",
+  "authority": {
+    "compute_pool_document": "docs/RESILIENT_DILOCO_COMPUTE_POOL.md",
+    "native_dataplane_document": "docs/NATIVE_RESILIENT_DILOCO_DATAPLANE.md",
+    "version": 1,
+    "applicable_requirement_ids": [
+      "R03",
+      "R05",
+      "R06",
+      "R08",
+      "R10",
+      "R14",
+      "R15",
+      "R16"
+    ],
+    "applicable_native_requirement_ids": [
+      "NDP02",
+      "NDP03",
+      "NDP05",
+      "NDP16",
+      "NDP17"
+    ]
+  },
+  "active_toolchain": {
+    "host": "login04",
+    "system": "Frontier login node",
+    "effective_cpe_release": "24.11",
+    "effective_cpe_evidence": "/opt/cray/pe/cpe/default -> 24.11 and the loaded component tuple matches cpe/24.11",
+    "explicit_cpe_module_loaded": false,
+    "module_tree_marker": "Core/25.03",
+    "programming_environment": "PrgEnv-cray/8.6.0",
+    "compiler_wrapper": "/opt/cray/pe/craype/2.7.33/bin/CC",
+    "compiler": "Cray clang 18.0.1",
+    "craype": "2.7.33",
+    "cpu_target": "x86-trento",
+    "network_target": "ofi",
+    "cray_mpich": {
+      "product_version": "8.1.31",
+      "upstream_version": "3.4a2",
+      "device": "ch4:ofi",
+      "resolved_library": "/opt/cray/pe/mpich/8.1.31/ofi/cray/17.0/lib/libmpi_cray.so.12.0.0",
+      "resolved_library_sha256": "2c4c8ebf39a26c04e813c37a1c838793dbe893567890f92a9792f229bfacb545"
+    },
+    "libfabric": {
+      "version": "2.3.1",
+      "api_version": "2.3",
+      "fi_info": "/opt/cray/libfabric/2.3.1/bin/fi_info",
+      "resolved_library": "/opt/cray/libfabric/2.3.1/lib64/libfabric.so.1.29.1",
+      "resolved_library_sha256": "4ff4ea1009c6472d9f3b5b60f43ed339862f5af74bd0288832266a05e5ddf916",
+      "resolved_cxi_library": "/usr/lib64/libcxi.so.1.6.0",
+      "resolved_cxi_library_sha256": "3ab52632ec6ccdb2d7bd42002841ef103e30794f200b47b641544bc152178532",
+      "provider_query_scope": "fi_info provider discovery on login04; no inter-node payload transfer",
+      "providers": [
+        {
+          "name": "cxi",
+          "version": "0.1",
+          "fabric": "cxi",
+          "domain": "cxi0",
+          "endpoint": "FI_EP_RDM",
+          "protocol": "FI_PROTO_CXI",
+          "query": "fi_info -p cxi",
+          "query_exit_code": 0
+        },
+        {
+          "name": "shm",
+          "class": "shared-memory-test",
+          "version": "203.10",
+          "fabric": "shm",
+          "domain": "shm",
+          "endpoint": "FI_EP_RDM",
+          "protocol": "FI_PROTO_SHM",
+          "query": "fi_info -p shm",
+          "query_exit_code": 0
+        },
+        {
+          "name": "sm2",
+          "class": "shared-memory-test",
+          "version": "203.10",
+          "fabric": "sm2",
+          "domain": "sm2",
+          "endpoint": "FI_EP_RDM",
+          "protocol": "FI_PROTO_SM2",
+          "query": "fi_info -p sm2",
+          "query_exit_code": 0
+        },
+        {
+          "name": "tcp",
+          "class": "tcp-test",
+          "version": "203.10",
+          "fabrics": [
+            "10.128.0.0/16",
+            "128.219.135.128/27",
+            "172.30.204.128/25",
+            "127.0.0.1/32",
+            "::1/128"
+          ],
+          "domains": [
+            "hsn0",
+            "ens9f1np1",
+            "bond0",
+            "lo"
+          ],
+          "endpoint": "FI_EP_RDM",
+          "protocol": "FI_PROTO_XNET",
+          "layered_provider": "tcp;ofi_rxm",
+          "query": "fi_info -p tcp",
+          "query_exit_code": 0
+        }
+      ]
+    },
+    "loaded_modules": [
+      "craype-x86-trento",
+      "libfabric/2.3.1",
+      "craype-network-ofi",
+      "xpmem/1.0.1-1.5_1_gfb6998056825",
+      "cray-pmi/6.1.15",
+      "cce/18.0.1",
+      "craype/2.7.33",
+      "cray-dsmml/0.3.0",
+      "cray-mpich/8.1.31",
+      "cray-libsci/24.11.0",
+      "PrgEnv-cray/8.6.0",
+      "perftools-base/24.11.0",
+      "Core/25.03"
+    ]
+  },
+  "current_build": {
+    "checkout_commit": "8a95df372db1b2952398245a912c001c2b3ce010",
+    "source_last_change_commit": "dc372fcdb2d4140f39ce311d169dd29c9e3ca93c",
+    "source_sha256": "4b84788ee2a22d1dbf8a04fcc1af9029c07e4d5e52dc95201d308e2972248a46",
+    "build_script_sha256": "cfe55e66ddb4886b70812926bcfb2b642b3bcd91891c0b52d357bc4fe955b17e",
+    "command_executable": "CC -O2 -std=c++17 -Wall -Wextra scripts/frontier/compiled_mpich_dense_helper.cpp -o <artifact-dir>/compiled_mpich_dense_helper",
+    "command_shared_library": "CC -O2 -std=c++17 -Wall -Wextra -fPIC -shared scripts/frontier/compiled_mpich_dense_helper.cpp -o <artifact-dir>/compiled_mpich_dense_helper.so",
+    "binary_sha256": "8c3844b06077e407dc05941ba5ed04295797bb73df64ea82ee539fd815e43b92",
+    "shared_library_sha256": "28743e10bf99ba751769264defa83f63c47e8b3c4bfb03af63b99a785614c342",
+    "independent_build_directories": 2,
+    "byte_identical_executables": true,
+    "byte_identical_shared_libraries": true,
+    "compiler_warnings": 0,
+    "local_diagnostic": {
+      "command": "<artifact-dir>/compiled_mpich_dense_helper --diagnostic",
+      "exit_code": 0,
+      "world_size": 1,
+      "provided_thread_level": "MPI_THREAD_SERIALIZED",
+      "transport": "compiled-cray-mpich-helper-collective-reduce",
+      "rank0_received_from": 0
+    },
+    "focused_tests": {
+      "python": "3.12.13",
+      "torch": "2.10.0+rocm7.1",
+      "fast_command": "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/bin/python -m pytest -q tests/test_async_diloco_compiled_mpich.py -k 'not cpp_request_parser_preserves_all_bucket_paths'",
+      "fast_passed": 11,
+      "fast_deselected": 1,
+      "fast_seconds": 10.80,
+      "compiler_command": "/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/bin/python -m pytest -vv tests/test_async_diloco_compiled_mpich.py::test_compiled_mpich_cpp_request_parser_preserves_all_bucket_paths",
+      "compiler_passed": 1,
+      "compiler_seconds": 23.39,
+      "total_passed": 12
+    }
+  },
+  "fixed_world_reference": {
+    "job_id": 4974616,
+    "status": "successful-retained-historical-reference",
+    "topology": {
+      "nodes": 256,
+      "ranks": 2048,
+      "ranks_per_node": 8,
+      "unique_rank_start_hosts": 256,
+      "membership_model": "all-launched-ranks",
+      "fixed_world": true
+    },
+    "transport": "compiled-cray-mpich-helper-collective-reduce",
+    "collective": "MPI_Reduce",
+    "provided_thread_level": "MPI_THREAD_SERIALIZED",
+    "strict_collective_all_launched_ranks": true,
+    "elastic_backend_compatible": false,
+    "payload": {
+      "dtype": "mixed dense delta encoded as the E97 aggregate byte stream",
+      "bucket_count": 80,
+      "bucket_target_bytes": 67108864,
+      "aggregate_update_bytes": 5506770496,
+      "payload_bytes_per_rank_contribution": 5506770496,
+      "accepted_rank_contributions": 2048,
+      "logical_ingress_bytes": 11277865975808
+    },
+    "latency_seconds": {
+      "reported_merge": 5.304643992334604,
+      "collective_reduce": 73.9047,
+      "bucket_min": 0.0366269,
+      "bucket_median_upper": 0.625382,
+      "bucket_max": 5.42538
+    },
+    "throughput_bytes_per_second": {
+      "reported_merge_payload": 1038103688.7597878,
+      "collective_logical_ingress": 152600118474.30542,
+      "collective_payload_per_contribution": 74511776.59878194
+    },
+    "outcome": {
+      "rank_starts": 2048,
+      "accepted_updates": 2048,
+      "failed_updates": 0,
+      "invalid_updates": 0,
+      "missing_updates": 0,
+      "stale_updates": 0,
+      "timed_out_updates": 0,
+      "accepted_tokens": 671416320,
+      "quorum_status": "advanced",
+      "wrapper_validation": "pass"
+    },
+    "interpretation": {
+      "reported_merge_latency_scope": "Python-side merge/apply metric; not the helper collective duration",
+      "collective_reduce_latency_scope": "sum of the sequential 80-bucket helper reduction schedule and generation duration",
+      "comparison_rule": "Never substitute the 5.304643992334604-second reported merge value for the 73.9047-second collective transport duration. Report both with their scopes.",
+      "limitation": "A missing or failed launched rank can strand or abort the MPI collective. The result proves only full-world correctness/performance for its exact historical source and toolchain."
+    }
+  },
+  "elastic_backend_acceptance_targets": {
+    "normative_source": "docs/NATIVE_RESILIENT_DILOCO_DATAPLANE.md version 1",
+    "layout": {
+      "total_elements": 688346312,
+      "layout_bytes": 5506770496,
+      "payload_max_bytes": 67108864,
+      "shard_count": 83,
+      "wire_dtype": "IEEE-754 little-endian binary64"
+    },
+    "topology": {
+      "control_plane": "Python leased READY membership and generation closure",
+      "native_service": "one persistent model-free C++17 service per live node",
+      "trainers_per_frontier_node": 8,
+      "transport": "libfabric FI_EP_RDM with exact cxi in production",
+      "minimum_distributed_owners": 2,
+      "membership_model": "live-leased-ready-node-peers"
+    },
+    "stage_hard_max_seconds": {
+      "control_bind": 10,
+      "provider_endpoint_pools_ready": 30,
+      "endpoint_install_probe": 30,
+      "local_trainer_handoff": 180,
+      "frozen_transfer_including_replay": 180,
+      "owner_finalization": 30,
+      "redistribution_root_validation": 180,
+      "checkpoint_handoff_apply_publication_two_node": 180,
+      "drain": 30,
+      "process_kill": 45
+    },
+    "g2_full_layout_two_node": {
+      "nodes": 2,
+      "trainers_per_node": 8,
+      "node_weights": [1966080, 1968000],
+      "global_weight": 3934080,
+      "warmup_generations": 1,
+      "timed_generations": 3,
+      "logical_contribution_bytes": 11013540992,
+      "logical_redistribution_bytes": 11013540992,
+      "throughput_numerator_bytes": 22027081984,
+      "p50_transfer_plus_redistribution_max_seconds": 98.961446568,
+      "minimum_logical_goodput_bytes_per_second": 222582457.59,
+      "maximum_timed_iteration_seconds": 118.753735882,
+      "result_comparison": "bitwise exact offline v1 reference roots on both nodes",
+      "provider": "cxi",
+      "provider_exact": true
+    },
+    "g6_256_node": {
+      "nodes": 256,
+      "trainer_lanes": 2048,
+      "logical_contribution_bytes": 1409733246976,
+      "logical_redistribution_bytes": 1409733246976,
+      "throughput_numerator_bytes": 2819466493952,
+      "acceptance_median_max_seconds": 10.609287984669208,
+      "acceptance_minimum_logical_goodput_bytes_per_second": 265754544322.50568,
+      "performance_target_median_seconds": 5.304643992334604,
+      "performance_target_logical_goodput_bytes_per_second": 531509088645.01135,
+      "sample_max_relative_to_rung_median": 1.2,
+      "policy": "Correctness without the 10.609287984669208-second cap leaves native CXI unpromoted; matching or beating 5.304643992334604 seconds is the target."
+    },
+    "synthetic_reference": {
+      "bitwise_exact": true,
+      "absolute_tolerance": 0,
+      "arrival_order_independent": true
+    },
+    "retained_python_reducer_reference": {
+      "equal_cohort": {
+        "rtol": 1e-6,
+        "atol": 1e-7,
+        "reference": "synchronous DiLoCo"
+      },
+      "unequal_weight_float64_reference": {
+        "rtol": 6e-8,
+        "atol": 2e-7
+      }
+    },
+    "must_tolerate_missing_launched_ranks": true,
+    "must_use_live_leased_ready_membership": true,
+    "must_freeze_complete_accepted_set": true,
+    "must_reject_stale_corrupt_and_conflicting_duplicate_input": true,
+    "must_publish_one_fenced_atomic_result_or_none": true,
+    "must_bound_inflight_and_retained_bytes": true,
+    "must_release_payloads_after_receipt_or_commit": true,
+    "lustre_dense_hot_path_allowed": false,
+    "central_full_model_broker_allowed": false,
+    "all_rank_collective_allowed": false,
+    "mpi_allowed_in_elastic_binary": false,
+    "python_dense_tcp_allowed": false,
+    "production_provider_required": "cxi",
+    "minimum_progress_floor": "configured Q_min complete READY node peers and T_min > 0 accepted tokens before the generation deadline",
+    "scale_gate": "G0 local, G1 two-node CXI probe, G2 full-layout two-node synthetic, current-source G3 clean, G4 failure/rejoin, G5 fresh-allocation restart, then direct G6 8/32/128 systems scale and explicit 256 review"
+  },
+  "evidence": {
+    "repository": [
+      {
+        "path": "scripts/frontier/compiled_mpich_dense_helper.cpp",
+        "sha256": "4b84788ee2a22d1dbf8a04fcc1af9029c07e4d5e52dc95201d308e2972248a46"
+      },
+      {
+        "path": "scripts/frontier/build_compiled_mpich_dense_helper.sh",
+        "sha256": "cfe55e66ddb4886b70812926bcfb2b642b3bcd91891c0b52d357bc4fe955b17e"
+      },
+      {
+        "path": "reports/frontier/e97-async-256-rerun-job4974616-20260712.md",
+        "sha256": "b812f28c29911011da4cf7f9903bc6f1fe793d81ce7c8bfbbcb4bb27e0a36f32"
+      },
+      {
+        "path": "docs/RESILIENT_DILOCO_COMPUTE_POOL.md",
+      "sha256": "967a6b4d6c21f23e7e028eab06f46da75bf2d289fe3bff05b527efe91ccf9dd9"
+      },
+      {
+        "path": "docs/RESILIENT_DILOCO_GAP_MATRIX.md",
+      "sha256": "95cbfe89bfabc45d7df759ae8bbbefd337fb46f1d4c3d75868a6708daa50fc00"
+      },
+      {
+        "path": "docs/NATIVE_RESILIENT_DILOCO_DATAPLANE.md",
+      "sha256": "ced4d7f9b091d5895b67ecb0b76d40a1a2749ecd97921c510e482dd524c13d90"
+      },
+      {
+        "path": "reports/resilient-e97-deterministic-reducer-numerics-20260717.json",
+        "sha256": "e24b134c9f656a0c3ab8fe39a14e03801b76ef09e3d0575d4c366c95daafed19"
+      }
+    ],
+    "retained_job_4974616": {
+      "job_id": 4974616,
+      "run_root": "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260712/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4974616-20260712T125530Z",
+      "git_commit": "40eb8d48e6dfe414aae3bfccf056904433aecdcb",
+      "toolchain": {
+        "cpe": "26.03",
+        "programming_environment": "PrgEnv-gnu/8.7.0",
+        "compiler": "gcc-native/14.2",
+        "cray_mpich": "9.1.0",
+        "libfabric": "2.3.1"
+      },
+      "source_sha256": "fab9d0bbbe18322060ad2ee5279d252bc281e04b4cf4d347c0f1eef17952e4ac",
+      "build_script_sha256": "cfe55e66ddb4886b70812926bcfb2b642b3bcd91891c0b52d357bc4fe955b17e",
+      "binary_sha256": "b7441676ff2d891e730b22cce2b8d3ece4d88283b27fb3b17d5dadfdea4b41f4",
+      "shared_library_sha256": "b16e1c216ac4ab8a247e051789192ed6870a309c6a6bbca05cd61e24d0d6d3b8",
+      "source_delta_to_current": {
+        "insertions": 114,
+        "deletions": 46,
+        "summary": "Current code adds node-local communicators, leader all-reduction, per-node aggregate materialization, common bucket-layout checks, and bounded node aggregate memory."
+      },
+      "artifacts": [
+        {
+          "path": "artifacts/manifest.json",
+          "sha256": "a0d96f1b3ce168ffdd101724a11024045d848ceb569e6c434b1a37308863b454"
+        },
+        {
+          "path": "artifacts/metrics.json",
+          "sha256": "ef60edbaec5a5c8f66435f06b5f38ed2be6a13b51288ef303cdde110bf7b22e4"
+        },
+        {
+          "path": "artifacts/command.txt",
+          "sha256": "26289eaea21c9a7aba18eca587e1d1af1f162693a467081fb6619f1f7e2ea7fe"
+        },
+        {
+          "path": "artifacts/env.txt",
+          "sha256": "e6b00660ba570a3cab1a47344466b901c5fa182b8fd1277e209d20053c0420b7"
+        },
+        {
+          "path": "artifacts/rank-start.tsv",
+          "sha256": "24a9e2a1fc204f35f4460443cdd03e223e31cf2b3440bae3ad9448b54aab8a4e"
+        },
+        {
+          "path": "summaries/summary.md",
+          "sha256": "7f41a5822748a3bbecd56d94075d406c901230010369caa386e49ad74445ebc1"
+        },
+        {
+          "path": "async_run/generations/gen_000000/manifest.json",
+          "sha256": "2e101d7a6749e2185a53859a2667f784da4fdfa042b74fc8c8297a6e0c33cf50"
+        },
+        {
+          "path": "async_run/recovery_checkpoints/gen_000000/walltime_finalization.json",
+          "sha256": "a0d1d53b0aa0d1244496fb0a1505486d18800ebd0020c153504d746645eea4e4"
+        }
+      ]
+    }
+  },
+  "slurm_diagnostic": {
+    "submitted": false,
+    "job_id": null,
+    "reason": "The current helper built twice, passed its singleton MPI diagnostic and focused tests, resolved the active Cray MPICH/libfabric/CXI libraries, and fi_info -p cxi returned cxi0 with exit 0. The task therefore did not meet its condition for submitting a two-node diagnostic.",
+    "large_training_job_submitted": false
+  }
+}

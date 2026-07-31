@@ -1,0 +1,54 @@
+{
+  "allowlist": [
+    "failure_injection",
+    "nodes",
+    "partition",
+    "qos",
+    "walltime"
+  ],
+  "allowlisted_diff": {
+    "failure_injection": {
+      "debug": {
+        "manager": "0:-1:4",
+        "node_step": "1:-1:2",
+        "trainer": "0:3:2"
+      },
+      "production": null
+    },
+    "nodes": {
+      "debug": 2,
+      "production": 256
+    },
+    "qos": {
+      "debug": "debug",
+      "production": "normal"
+    },
+    "walltime": {
+      "debug": "02:00:00",
+      "production": "12:00:00"
+    }
+  },
+  "forbidden_diff": [],
+  "identical_fields": [
+    "bulk_transport",
+    "checkpoint_contract",
+    "code_id",
+    "control_transport",
+    "dataset",
+    "deadlines",
+    "launcher",
+    "local_steps",
+    "manager_model_free",
+    "managers_per_node",
+    "model",
+    "optimizer",
+    "payload_id",
+    "quorum_policy",
+    "seed",
+    "trainers_per_node"
+  ],
+  "injection_disabled_in_production": true,
+  "missing_required": [],
+  "ok": true,
+  "schema": 1
+}

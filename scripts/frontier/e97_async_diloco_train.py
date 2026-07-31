@@ -1,0 +1,398 @@
+#!/usr/bin/env python3
+"""Run real train.py-backed async DiLoCo E97 training.
+
+This entrypoint is intentionally small: orchestration logic lives in
+``ndm.async_diloco_real`` so tests can import it without shelling out.
+"""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+import os
+import sys
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from ndm.async_diloco import AsyncDiLoCoCheckpointCadence
+from ndm.async_diloco import RESILIENT_QUORUM_DILOCO_MODE
+from ndm.async_diloco import STRICT_COLLECTIVE_DILOCO_MODE
+from ndm.async_diloco import stable_json_dumps
+from ndm.async_diloco_compiled_mpich import COMPILED_MPICH_TRANSPORT
+from ndm.async_diloco_real import (
+    RealAsyncDiLoCoConfig,
+    RealAsyncFileRankConfig,
+    RealAsyncWorkerSpec,
+    default_tiny_e97_train_args,
+    run_real_async_diloco,
+    run_real_async_diloco_file_rank,
+)
+from ndm.resilient_node_transport import RESILIENT_NODE_TRANSPORT
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Real async DiLoCo E97 trainer using train.py helper steps."
+    )
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--run-dir", required=True)
+    parser.add_argument("--metrics-json", default="")
+    parser.add_argument("--checkpoint", default="",
+                        help="Optional train.py checkpoint used as the initial global state.")
+    parser.add_argument("--data", default="")
+    parser.add_argument("--tokenizer", default=None)
+    parser.add_argument("--synthetic-token-stream", action="store_true",
+                        help="Use deterministic local token batches for smoke tests.")
+    parser.add_argument("--worker-count", type=int, default=None)
+    parser.add_argument("--worker-count-per-node", type=int, default=None,
+                        help="Compatibility alias for wrappers that specify per-node workers.")
+    parser.add_argument("--node-count", type=int, default=1)
+    parser.add_argument("--local-quorum", type=int, default=0,
+                        help="Per-node quorum. Defaults to async DiLoCo local default.")
+    parser.add_argument("--global-quorum", type=int, default=0,
+                        help="Global node quorum. Defaults to ceil(2/3 * node-count).")
+    parser.add_argument("--generations", type=int, default=1)
+    parser.add_argument("--local-steps", type=int, default=1)
+    parser.add_argument("--tokens-per-step", type=int, default=0,
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--timeout-s", type=float, default=900.0)
+    parser.add_argument("--delta-scale", type=float, default=0.0,
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--eta-outer", type=float, default=1.0)
+    parser.add_argument("--level", default="E97")
+    parser.add_argument("--params", default="100m")
+    parser.add_argument("--dim", type=int, default=None)
+    parser.add_argument("--depth", type=int, default=None)
+    parser.add_argument("--n-heads", type=int, default=None)
+    parser.add_argument("--n-state", type=int, default=None)
+    parser.add_argument("--n-groups", type=int, default=None)
+    parser.add_argument("--n-slots", type=int, default=None)
+    parser.add_argument("--expansion", type=float, default=None)
+    parser.add_argument("--state-expansion", type=int, default=None)
+    parser.add_argument("--gate-activation", default=None)
+    parser.add_argument("--linear-state", type=int, default=None)
+    parser.add_argument("--mlp-ratio", type=float, default=None)
+    parser.add_argument("--mlp-multiple", type=int, default=None)
+    parser.add_argument("--batch-size", type=int, default=2)
+    parser.add_argument("--chunk-size", type=int, default=8)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--optimizer", choices=["adamw", "schedulefree"], default="adamw")
+    parser.add_argument("--weight-decay", type=float, default=0.0)
+    parser.add_argument("--warmup-steps", type=int, default=0)
+    parser.add_argument("--min-lr-frac", type=float, default=0.1)
+    parser.add_argument("--grad-accum", type=int, default=1)
+    parser.add_argument("--grad-clip", type=float, default=1.0)
+    parser.add_argument("--steps", type=int, default=8)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--bf16", action="store_true",
+                        help="Store/train the worker model in bf16, matching train.py production memory mode.")
+    parser.add_argument("--use-chunked-e97", action="store_true",
+                        help="Use the chunked E97 kernel path exposed by train.py.")
+    parser.add_argument("--e97-chunk-size", type=int, default=32)
+    parser.add_argument("--checkpoint-interval", type=int, default=16)
+    parser.add_argument("--gradient-checkpointing", action="store_true")
+    parser.add_argument("--projection-chunk-size", type=int, default=0)
+    parser.add_argument("--loss-chunk-size", type=int, default=0)
+    parser.add_argument("--recovery-every-generations", type=int, default=-1,
+                        help="Recovery checkpoint generation cadence; -1 disables generation cadence.")
+    parser.add_argument("--recovery-every-seconds", type=float, default=-1.0,
+                        help="Recovery checkpoint wall-clock cadence; -1 disables wall-clock cadence.")
+    parser.add_argument("--export-every-generations", type=int, default=-1,
+                        help="Export checkpoint generation cadence; -1 disables generation cadence.")
+    parser.add_argument("--export-every-seconds", type=float, default=-1.0,
+                        help="Export checkpoint wall-clock cadence; -1 disables wall-clock cadence.")
+    parser.add_argument("--finalization-reserve-seconds", type=float, default=1200.0)
+    parser.add_argument("--walltime-remaining-s", type=float, default=-1.0,
+                        help="If set, publish a finalization checkpoint when inside the reserve window.")
+    parser.add_argument("--estimated-finalization-duration-s", type=float, default=-1.0)
+    parser.add_argument("--device", default=os.environ.get("ASYNC_DILOCO_DEVICE", "cpu"))
+    parser.add_argument("--actual-multinode-tcp-quorum", action="store_true",
+                        help="Run one Slurm-launched rank and use rank 0 as a TCP quorum coordinator.")
+    parser.add_argument("--allow-tcp-scale-debug", action="store_true",
+                        help="Explicitly allow nonlocal TCP quorum debug runs; never production-approval eligible.")
+    parser.add_argument("--actual-multinode-mpi-dense-quorum", action="store_true",
+                        help="Explicit legacy comparison path: use mpi4py MPI point-to-point for dense tensor deltas.")
+    parser.add_argument("--actual-multinode-compiled-mpich-quorum", action="store_true",
+                        help="Run one Slurm-launched rank and use the compiled Cray MPICH dense helper.")
+    parser.add_argument("--actual-resilient-node-quorum", action="store_true",
+                        help="Use independent node-manager peers with dense bucket quorum/replay.")
+    parser.add_argument("--resilient-spool-dir", default=os.environ.get("ASYNC_RESILIENT_SPOOL_DIR", ""))
+    parser.add_argument("--resilient-coordinator-epoch", type=int,
+                        default=int(os.environ.get("ASYNC_RESILIENT_COORDINATOR_EPOCH", "1")))
+    parser.add_argument("--diloco-quorum-mode",
+                        choices=[RESILIENT_QUORUM_DILOCO_MODE, STRICT_COLLECTIVE_DILOCO_MODE],
+                        default="",
+                        help="Generation selection mode. Defaults to strict_collective for compiled MPICH and resilient_quorum otherwise.")
+    parser.add_argument("--mpi-dense-bucket-bytes", type=int,
+                        default=int(os.environ.get("ASYNC_MPI_DENSE_BUCKET_BYTES", str(64 * 1024 * 1024))),
+                        help="Target dense delta bucket size for MPI point-to-point payloads.")
+    parser.add_argument("--compiled-mpich-helper-bin",
+                        default=os.environ.get("ASYNC_COMPILED_MPICH_HELPER_BIN", ""),
+                        help="Path to compiled_mpich_dense_helper binary.")
+    parser.add_argument("--compiled-mpich-ipc-dir",
+                        default=os.environ.get("ASYNC_COMPILED_MPICH_IPC_DIR", ""),
+                        help="Run-local IPC directory for compiled MPICH helper manifests and payload files.")
+    parser.add_argument("--coordinator-host", default=os.environ.get("ASYNC_COORDINATOR_HOST", "127.0.0.1"),
+                        help="Host/IP of rank 0 TCP quorum coordinator.")
+    parser.add_argument("--coordinator-bind-host", default=os.environ.get("ASYNC_COORDINATOR_BIND_HOST", "0.0.0.0"),
+                        help="Bind host for rank 0 TCP quorum coordinator.")
+    parser.add_argument("--coordinator-port", type=int,
+                        default=int(os.environ.get("ASYNC_COORDINATOR_PORT", "29497")),
+                        help="TCP port for the async quorum coordinator.")
+    parser.add_argument("--allow-actual-multinode-synthetic-token-stream", action="store_true",
+                        help="Allow explicitly labeled synthetic-token fallback in the debug file-quorum path.")
+    parser.add_argument("--node-rank", type=int, default=None,
+                        help="Actual rank for --actual-multinode-tcp-quorum; defaults to SLURM_PROCID.")
+    parser.add_argument("--task-id", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--slurm-job-id", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--slurm-job-name", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--requested-walltime", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--requested-node-hours", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--command-file", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--stdout-path", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--stderr-path", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--training-target", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--resume-check", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--production-latest-path", default="", help=argparse.SUPPRESS)
+
+    args = parser.parse_args(argv)
+    if args.worker_count is None:
+        if args.worker_count_per_node is not None:
+            args.worker_count = int(args.worker_count_per_node) * int(args.node_count)
+        else:
+            args.worker_count = 8
+    return args
+
+
+def _optional_positive_int(value: int) -> int | None:
+    return None if int(value) < 0 else int(value)
+
+
+def _optional_positive_float(value: float) -> float | None:
+    return None if float(value) < 0.0 else float(value)
+
+
+def _selected_transport_metadata(args: argparse.Namespace) -> tuple[str, str, str, bool]:
+    if args.actual_resilient_node_quorum:
+        return (RESILIENT_NODE_TRANSPORT, RESILIENT_NODE_TRANSPORT, "frontier-resilient-debug", False)
+    if args.actual_multinode_compiled_mpich_quorum:
+        return (
+            COMPILED_MPICH_TRANSPORT,
+            "compiled-cray-mpich-helper-p2p",
+            "frontier-production-candidate",
+            True,
+        )
+    if args.actual_multinode_mpi_dense_quorum:
+        return ("mpi-dense", "mpi-dense", "legacy-comparison-only", False)
+    return ("tcp", "tcp", "tcp-debug-only", False)
+
+
+def _validate_tcp_scale_debug_guard(args: argparse.Namespace) -> None:
+    if args.actual_multinode_tcp_quorum and args.node_count > 8 and not args.allow_tcp_scale_debug:
+        raise ValueError(
+            "--actual-multinode-tcp-quorum is local/debug-only above 8 ranks; "
+            "set --allow-tcp-scale-debug only for explicitly labeled tcp-debug-no-production runs"
+        )
+
+
+def main() -> int:
+    args = parse_args()
+    if args.worker_count <= 0:
+        raise ValueError("--worker-count must be positive")
+    if args.node_count <= 0:
+        raise ValueError("--node-count must be positive")
+    if not args.synthetic_token_stream and not args.data:
+        raise ValueError("--data is required unless --synthetic-token-stream is set")
+    if (
+        (
+            args.actual_multinode_tcp_quorum
+            or args.actual_multinode_mpi_dense_quorum
+            or args.actual_multinode_compiled_mpich_quorum
+            or args.actual_resilient_node_quorum
+        )
+        and args.synthetic_token_stream
+        and not args.allow_actual_multinode_synthetic_token_stream
+    ):
+        raise ValueError("actual multinode quorum requires real data; synthetic token stream is disabled")
+    selected_transports = sum(
+        bool(value)
+        for value in (
+            args.actual_multinode_tcp_quorum,
+            args.actual_multinode_mpi_dense_quorum,
+            args.actual_multinode_compiled_mpich_quorum,
+            args.actual_resilient_node_quorum,
+        )
+    )
+    if selected_transports > 1:
+        raise ValueError("choose only one actual multinode quorum transport")
+    if args.actual_multinode_compiled_mpich_quorum and not args.compiled_mpich_helper_bin:
+        raise ValueError("--compiled-mpich-helper-bin is required for compiled MPICH transport")
+    selected_transport, transport_selector, transport_approval_class, production_eligible = _selected_transport_metadata(args)
+    _validate_tcp_scale_debug_guard(args)
+    quorum_mode = args.diloco_quorum_mode or (
+        STRICT_COLLECTIVE_DILOCO_MODE
+        if args.actual_multinode_compiled_mpich_quorum
+        else RESILIENT_QUORUM_DILOCO_MODE
+    )
+    if quorum_mode == STRICT_COLLECTIVE_DILOCO_MODE and not args.actual_multinode_compiled_mpich_quorum:
+        raise ValueError("--diloco-quorum-mode strict_collective requires --actual-multinode-compiled-mpich-quorum")
+
+    train_overrides = {
+        key: value
+        for key, value in {
+            "data": args.data or None,
+            "tokenizer": args.tokenizer,
+            "level": args.level,
+            "params": args.params,
+            "dim": args.dim,
+            "depth": args.depth,
+            "n_heads": args.n_heads,
+            "n_state": args.n_state,
+            "n_groups": args.n_groups,
+            "n_slots": args.n_slots,
+            "expansion": args.expansion,
+            "state_expansion": args.state_expansion,
+            "gate_activation": args.gate_activation,
+            "linear_state": args.linear_state,
+            "mlp_ratio": args.mlp_ratio,
+            "mlp_multiple": args.mlp_multiple,
+        }.items()
+        if value is not None
+    }
+    train_args = default_tiny_e97_train_args(
+        **train_overrides,
+        batch_size=args.batch_size,
+        chunk_size=args.chunk_size,
+        lr=args.lr,
+        optimizer=args.optimizer,
+        weight_decay=args.weight_decay,
+        warmup_steps=args.warmup_steps,
+        min_lr_frac=args.min_lr_frac,
+        grad_accum=args.grad_accum,
+        grad_clip=args.grad_clip,
+        steps=args.steps,
+        seed=args.seed,
+        bf16=args.bf16,
+        use_triton=(None if args.bf16 else 0),
+        use_chunked_e97=1 if args.use_chunked_e97 else 0,
+        e97_chunk_size=args.e97_chunk_size,
+        checkpoint_interval=args.checkpoint_interval,
+        gradient_checkpointing=args.gradient_checkpointing,
+        projection_chunk_size=args.projection_chunk_size,
+        loss_chunk_size=args.loss_chunk_size,
+    )
+    if (
+        args.actual_multinode_tcp_quorum
+        or args.actual_multinode_mpi_dense_quorum
+        or args.actual_multinode_compiled_mpich_quorum
+        or args.actual_resilient_node_quorum
+    ):
+        if args.steps != args.generations * args.local_steps:
+            raise ValueError("steps must equal generations * local_steps")
+        node_rank = args.node_rank
+        if node_rank is None:
+            node_rank = int(os.environ.get("SLURM_PROCID", os.environ.get("PMI_RANK", "0")))
+        global_quorum = None if args.global_quorum <= 0 else args.global_quorum
+        if global_quorum is None:
+            global_quorum = int((2 * args.node_count + 2) // 3)
+        result = run_real_async_diloco_file_rank(RealAsyncFileRankConfig(
+            run_id=args.run_id,
+            run_dir=Path(args.run_dir),
+            metrics_json=(args.metrics_json or None),
+            train_args=train_args,
+            node_rank=int(node_rank),
+            node_count=args.node_count,
+            global_quorum=int(global_quorum),
+            local_steps=args.local_steps,
+            generations=args.generations,
+            timeout_s=args.timeout_s,
+            quorum_mode=quorum_mode,
+            eta_outer=args.eta_outer,
+            initial_checkpoint=(Path(args.checkpoint) if args.checkpoint else None),
+            synthetic_token_stream=bool(args.synthetic_token_stream),
+            allow_synthetic_token_stream=bool(args.allow_actual_multinode_synthetic_token_stream),
+            device=args.device,
+            coordinator_host=args.coordinator_host,
+            coordinator_bind_host=args.coordinator_bind_host,
+            coordinator_port=int(args.coordinator_port),
+            transport=(
+                selected_transport
+            ),
+            transport_selector=transport_selector,
+            transport_approval_class=transport_approval_class,
+            production_approval_eligible=production_eligible,
+            allow_tcp_scale_debug=bool(args.allow_tcp_scale_debug),
+            mpi_bucket_bytes=int(args.mpi_dense_bucket_bytes),
+            compiled_mpich_helper_bin=(args.compiled_mpich_helper_bin or None),
+            compiled_mpich_ipc_dir=(args.compiled_mpich_ipc_dir or None),
+            resilient_spool_dir=(args.resilient_spool_dir or None),
+            resilient_coordinator_epoch=int(args.resilient_coordinator_epoch),
+            walltime_remaining_s=_optional_positive_float(args.walltime_remaining_s),
+            estimated_finalization_duration_s=_optional_positive_float(
+                args.estimated_finalization_duration_s
+            ),
+            checkpoint_cadence=AsyncDiLoCoCheckpointCadence(
+                recovery_every_generations=_optional_positive_int(args.recovery_every_generations),
+                recovery_every_seconds=_optional_positive_float(args.recovery_every_seconds),
+                export_every_generations=_optional_positive_int(args.export_every_generations),
+                export_every_seconds=_optional_positive_float(args.export_every_seconds),
+                finalization_reserve_seconds=float(args.finalization_reserve_seconds),
+            ),
+        ))
+        print(stable_json_dumps(result), flush=True)
+        return 0
+
+    worker_specs = []
+    for idx in range(args.worker_count):
+        node_id = f"node-{idx % args.node_count}"
+        worker_specs.append(RealAsyncWorkerSpec(
+            worker_id=f"{node_id}/worker-{idx}",
+            node_id=node_id,
+            device=args.device,
+            local_steps=args.local_steps,
+            seed_offset=idx,
+        ))
+
+    result = run_real_async_diloco(RealAsyncDiLoCoConfig(
+        run_id=args.run_id,
+        run_dir=Path(args.run_dir),
+        metrics_json=(args.metrics_json or None),
+        train_args=train_args,
+        worker_specs=tuple(worker_specs),
+        generations=args.generations,
+        local_quorum=(None if args.local_quorum <= 0 else args.local_quorum),
+        global_quorum=(None if args.global_quorum <= 0 else args.global_quorum),
+        global_node_count=args.node_count,
+        eta_outer=args.eta_outer,
+        quorum_mode=quorum_mode,
+        timeout_s=args.timeout_s,
+        synthetic_token_stream=args.synthetic_token_stream,
+        initial_checkpoint=(Path(args.checkpoint) if args.checkpoint else None),
+        walltime_remaining_s=_optional_positive_float(args.walltime_remaining_s),
+        estimated_finalization_duration_s=_optional_positive_float(
+            args.estimated_finalization_duration_s
+        ),
+        checkpoint_cadence=AsyncDiLoCoCheckpointCadence(
+            recovery_every_generations=_optional_positive_int(args.recovery_every_generations),
+            recovery_every_seconds=_optional_positive_float(args.recovery_every_seconds),
+            export_every_generations=_optional_positive_int(args.export_every_generations),
+            export_every_seconds=_optional_positive_float(args.export_every_seconds),
+            finalization_reserve_seconds=float(args.finalization_reserve_seconds),
+        ),
+    ))
+    print(stable_json_dumps({
+        "run_id": result.run_id,
+        "latest_generation": result.latest_generation,
+        "latest_path": result.latest_path,
+        "metrics_json": result.metrics_json,
+        "global_quorum_status": [
+            generation.metrics.quorum_status for generation in result.generations
+        ],
+    }), flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

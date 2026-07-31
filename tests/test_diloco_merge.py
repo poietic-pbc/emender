@@ -36,9 +36,34 @@ def _ns(**kw):
         diloco_outer_beta=0.0,
         diloco_outer_optimizer='avg',
         diloco_export_basis='x',
+        diloco_merge_bucket_numel=0,
+        diloco_merge_debug=0,
+        diloco_merge_debug_ranks='0',
     )
     base.update(kw)
     return SimpleNamespace(**base)
+
+
+def test_diloco_fault_injection_exits_only_exact_collective(monkeypatch, capsys):
+    import train
+
+    monkeypatch.setenv('EMENDER_DILOCO_EXIT_RANK', '3')
+    monkeypatch.setenv('EMENDER_DILOCO_EXIT_MERGE', '2')
+    monkeypatch.setenv('EMENDER_DILOCO_EXIT_BUCKET', '1')
+    monkeypatch.setenv('EMENDER_DILOCO_EXIT_LABEL', 'model')
+    monkeypatch.setenv('EMENDER_DILOCO_EXIT_CODE', '86')
+    monkeypatch.setenv('EMENDER_DILOCO_EXIT_DELAY_SECONDS', '0')
+    monkeypatch.setattr(train.dist, 'get_rank', lambda: 3)
+    exits = []
+    monkeypatch.setattr(train.os, '_exit', lambda code: exits.append(code))
+
+    train._maybe_inject_diloco_collective_rank_exit(
+        label='model', bucket_index=0, merge_index=2)
+    assert exits == []
+    train._maybe_inject_diloco_collective_rank_exit(
+        label='model', bucket_index=1, merge_index=2)
+    assert exits == [86]
+    assert 'DILOCO_FAULT_INJECTION' in capsys.readouterr().out
 
 
 def _build():
@@ -484,6 +509,419 @@ def test_single_rank_diloco_merge_is_byte_identical_noop():
     print("PASS test_single_rank_diloco_merge_is_byte_identical_noop")
 
 
+def test_schedulefree_avg_merge_avoids_scalar_collectives():
+    """The Frontier DiLoCo scaleout path must not rely on 1-element NCCL
+    collectives for ScheduleFree scalar clocks. Tensor state is averaged; scalar
+    clocks remain local."""
+    import train
+    model, opt = _build()
+    _local_train(model, opt, rank=0, k_steps=3)
+
+    class NoScalarCollective:
+        class ReduceOp:
+            SUM = object()
+
+        calls = []
+
+        @staticmethod
+        def all_reduce(tensor, op=None):
+            assert op is NoScalarCollective.ReduceOp.SUM
+            NoScalarCollective.calls.append(int(tensor.numel()))
+            assert tensor.numel() > 1, (
+                f"DiLoCo merge attempted scalar all_reduce with numel={tensor.numel()}"
+            )
+            tensor.mul_(2)
+
+    old_dist = train.dist
+    try:
+        train.dist = NoScalarCollective
+        before_group = {
+            key: opt.param_groups[0][key]
+            for key in ('weight_sum', 'k', 'lr_max')
+        }
+        train.diloco_merge(model, opt, _ns(), world_size=2, outer_state=None)
+        after_group = {
+            key: opt.param_groups[0][key]
+            for key in ('weight_sum', 'k', 'lr_max')
+        }
+    finally:
+        train.dist = old_dist
+
+    assert NoScalarCollective.calls, "test did not exercise any tensor all_reduce"
+    assert before_group == after_group, "ScheduleFree scalar clocks changed at merge"
+    print("PASS test_schedulefree_avg_merge_avoids_scalar_collectives")
+
+
+def test_bucketed_non_schedulefree_merge_preserves_sum_then_divide_semantics():
+    """Bucketed non-SF merge must be exactly sum then divide per flat slice."""
+    import train
+    torch.manual_seed(123)
+    model = torch.nn.Sequential(torch.nn.Linear(3, 5), torch.nn.Linear(5, 2))
+    before = [p.detach().clone() for p in model.parameters()]
+
+    class AddPeerCollective:
+        class ReduceOp:
+            SUM = object()
+
+        calls = []
+
+        @staticmethod
+        def all_reduce(tensor, op=None):
+            assert op is AddPeerCollective.ReduceOp.SUM
+            AddPeerCollective.calls.append(int(tensor.numel()))
+            tensor.add_(1.0)
+
+    args = _ns(
+        optimizer='adamw',
+        diloco_merge_bucket_numel=4,
+    )
+    old_dist = train.dist
+    try:
+        train.dist = AddPeerCollective
+        train.diloco_merge(model, optimizer=None, args=args, world_size=2, outer_state=None)
+    finally:
+        train.dist = old_dist
+
+    assert len(AddPeerCollective.calls) > 1, "bucketed merge did not split the flat tensor"
+    assert max(AddPeerCollective.calls) <= 4, AddPeerCollective.calls
+    for p, old in zip(model.parameters(), before):
+        expected = (old + 1.0) / 2.0
+        assert torch.allclose(p, expected), "bucketed non-SF merge changed averaging math"
+    print("PASS test_bucketed_non_schedulefree_merge_preserves_sum_then_divide_semantics")
+
+
+def test_bucketed_schedulefree_merge_avoids_scalar_collectives():
+    """ScheduleFree x/z bucketed merge still reduces tensor state only, never clocks."""
+    import train
+    model, opt = _build()
+    _local_train(model, opt, rank=0, k_steps=3)
+
+    class BucketCollective:
+        class ReduceOp:
+            SUM = object()
+
+        calls = []
+
+        @staticmethod
+        def all_reduce(tensor, op=None):
+            assert op is BucketCollective.ReduceOp.SUM
+            BucketCollective.calls.append(int(tensor.numel()))
+            assert 1 <= tensor.numel() <= 7, (
+                f"unexpected bucket size for ScheduleFree merge: {tensor.numel()}"
+            )
+            tensor.mul_(2)
+
+    old_dist = train.dist
+    try:
+        train.dist = BucketCollective
+        before_group = {
+            key: opt.param_groups[0][key]
+            for key in ('weight_sum', 'k', 'lr_max')
+        }
+        train.diloco_merge(
+            model, opt, _ns(diloco_merge_bucket_numel=7),
+            world_size=2, outer_state=None)
+        after_group = {
+            key: opt.param_groups[0][key]
+            for key in ('weight_sum', 'k', 'lr_max')
+        }
+    finally:
+        train.dist = old_dist
+
+    assert len(BucketCollective.calls) > 1, "ScheduleFree bucketed merge did not split"
+    assert before_group == after_group, "ScheduleFree scalar clocks changed at bucketed merge"
+    print("PASS test_bucketed_schedulefree_merge_avoids_scalar_collectives")
+
+
+def test_hierarchical_warmup_avoids_default_barrier_between_subgroups(monkeypatch):
+    """Frontier NCCL smoke regression: warm only this rank's subgroup, then roots.
+
+    The failed 4908293 smoke died during the old warm-up sequence, where ranks
+    outside a subgroup entered a default-group barrier while subgroup members
+    were still in that subgroup's NCCL all_reduce. The warm-up must not emit a
+    default barrier until after local and root communicators have been warmed.
+    """
+    import train
+
+    calls = []
+
+    class FakeDist:
+        @staticmethod
+        def all_reduce(tensor, group=None):
+            calls.append(("all_reduce", group))
+
+        @staticmethod
+        def barrier():
+            calls.append(("barrier", None))
+
+    monkeypatch.setattr(train, "dist", FakeDist)
+    monkeypatch.setattr(train.torch, "zeros", lambda *args, **kwargs: object())
+
+    args = _ns()
+    args._diloco_merge_groups = {
+        "topology": "hierarchical",
+        "local_group": "local-ranks-4-7",
+        "root_group": "root-ranks-0-4",
+        "is_root": True,
+    }
+
+    train._warm_diloco_hierarchical_merge_groups(args, device="cuda:0")
+
+    assert calls == [
+        ("all_reduce", "local-ranks-4-7"),
+        ("all_reduce", "root-ranks-0-4"),
+        ("barrier", None),
+    ]
+
+
+def test_hierarchical_group_builder_creates_root_group_before_local_groups(monkeypatch):
+    """Root communicator is created before overlapping local communicators."""
+    import train
+
+    calls = []
+
+    class FakeDist:
+        @staticmethod
+        def is_initialized():
+            return True
+
+        @staticmethod
+        def new_group(ranks):
+            calls.append(("new_group", tuple(ranks)))
+            return f"group-{tuple(ranks)}"
+
+        @staticmethod
+        def barrier():
+            calls.append(("barrier", None))
+
+    monkeypatch.setattr(train, "dist", FakeDist)
+
+    meta = train._build_diloco_hierarchical_merge_groups(
+        world_size=8, rank=4, group_size=4, create_barrier_every=0)
+
+    assert calls == [
+        ("new_group", (0, 4)),
+        ("new_group", (0, 1, 2, 3)),
+        ("new_group", (4, 5, 6, 7)),
+    ]
+    assert meta["root_ranks"] == [0, 4]
+    assert meta["root_group"] == "group-(0, 4)"
+    assert meta["local_group"] == "group-(4, 5, 6, 7)"
+    assert meta["local_root"] == 4
+
+
+def test_hierarchical_group_builder_paces_32n_g4_construction(monkeypatch):
+    """The 32-node E97 g4 shape must not burst-create all RCCL groups at once."""
+    import train
+
+    calls = []
+
+    class FakeDist:
+        @staticmethod
+        def is_initialized():
+            return True
+
+        @staticmethod
+        def new_group(ranks):
+            calls.append(("new_group", tuple(ranks)))
+            return f"group-{tuple(ranks)}"
+
+        @staticmethod
+        def barrier():
+            calls.append(("barrier", None))
+
+    monkeypatch.setattr(train, "dist", FakeDist)
+
+    meta = train._build_diloco_hierarchical_merge_groups(
+        world_size=256, rank=252, group_size=4, create_barrier_every=8)
+
+    root_ranks = tuple(range(0, 256, 4))
+    assert calls[0] == ("new_group", root_ranks)
+    assert calls[1] == ("barrier", None)
+    assert meta["root_ranks"] == list(root_ranks)
+    assert meta["local_group_ranks"] == [252, 253, 254, 255]
+    assert meta["local_root"] == 252
+
+    barrier_indexes = [idx for idx, call in enumerate(calls) if call == ("barrier", None)]
+    assert barrier_indexes == [1, 10, 19, 28, 37, 46, 55, 64, 73]
+    assert calls[-1] == ("barrier", None)
+
+
+def test_hierarchical_merge_syncs_dependent_stages(monkeypatch):
+    """Root ranks must not enqueue root all-reduce or local broadcast before the
+    prior communicator has completed the same buffer."""
+    import train
+
+    calls = []
+
+    class FakeDist:
+        class ReduceOp:
+            SUM = object()
+
+        @staticmethod
+        def reduce(tensor, dst=None, op=None, group=None):
+            calls.append(("reduce", dst, group))
+
+        @staticmethod
+        def all_reduce(tensor, op=None, group=None):
+            calls.append(("all_reduce", group))
+
+        @staticmethod
+        def broadcast(tensor, src=None, group=None):
+            calls.append(("broadcast", src, group))
+
+    monkeypatch.setattr(train, "dist", FakeDist)
+    monkeypatch.setattr(train.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(train.torch.cuda, "synchronize",
+                        lambda *args, **kwargs: calls.append(("cuda_sync",)))
+
+    args = _ns()
+    args._diloco_merge_groups = {
+        "topology": "hierarchical",
+        "local_group": "local-ranks-0-3",
+        "local_root": 0,
+        "is_root": True,
+        "root_group": "root-ranks",
+    }
+
+    train._diloco_hierarchical_sum_average_flat(torch.ones(4), world_size=8, args=args)
+
+    assert calls == [
+        ("reduce", 0, "local-ranks-0-3"),
+        ("cuda_sync",),
+        ("all_reduce", "root-ranks"),
+        ("cuda_sync",),
+        ("broadcast", 0, "local-ranks-0-3"),
+        ("cuda_sync",),
+    ]
+
+
+def _worker_hierarchical_exact(rank, world_size, init_file, ret):
+    dist.init_process_group(backend='gloo', init_method=f'file://{init_file}',
+                            rank=rank, world_size=world_size)
+    import train
+
+    args = _ns(
+        optimizer='adamw',
+        diloco_merge_topology='hierarchical',
+        diloco_merge_group_size=2,
+        diloco_merge_bucket_numel=4,
+    )
+    args._rank = rank
+    args._diloco_merge_groups = train._build_diloco_hierarchical_merge_groups(
+        world_size=world_size, rank=rank, group_size=2)
+
+    # Non-ScheduleFree path: exact weighted SUM/world_size over unequal groups
+    # [0, 1] and [2]. A naive average of local averages would overweight rank 2.
+    model = torch.nn.Sequential(torch.nn.Linear(3, 4), torch.nn.Linear(4, 2))
+    with torch.no_grad():
+        for idx, p in enumerate(model.parameters()):
+            p.fill_(10.0 * rank + idx)
+    pre_flat = torch._utils._flatten_dense_tensors([p.data for p in model.parameters()]).clone()
+    gathered_pre = [torch.zeros_like(pre_flat) for _ in range(world_size)]
+    dist.all_gather(gathered_pre, pre_flat)
+    train.diloco_merge(model, optimizer=None, args=args, world_size=world_size, outer_state=None)
+    post_flat = torch._utils._flatten_dense_tensors([p.data for p in model.parameters()]).clone()
+    gathered_post = [torch.zeros_like(post_flat) for _ in range(world_size)]
+    dist.all_gather(gathered_post, post_flat)
+
+    # ScheduleFree path: x and z tensor state use the same hierarchical average.
+    sf_model, opt = _build()
+    _local_train(sf_model, opt, rank, k_steps=5)
+    sf_args = _ns(
+        diloco_merge_topology='hierarchical',
+        diloco_merge_group_size=2,
+        diloco_merge_bucket_numel=7,
+    )
+    sf_args._rank = rank
+    sf_args._diloco_merge_groups = args._diloco_merge_groups
+    opt.eval()
+    pre_x = torch._utils._flatten_dense_tensors([p.data for p in sf_model.parameters()]).clone()
+    opt.train()
+    pre_z = torch._utils._flatten_dense_tensors(
+        [opt.state[p]['z'] for p in sf_model.parameters()]).clone()
+    gathered_sf = [None] * world_size
+    dist.all_gather_object(gathered_sf, {
+        'x': pre_x.tolist(),
+        'z': pre_z.tolist(),
+    })
+    train.diloco_merge(sf_model, opt, sf_args, world_size=world_size, outer_state=None)
+    opt.eval()
+    post_x = torch._utils._flatten_dense_tensors([p.data for p in sf_model.parameters()]).clone()
+    opt.train()
+    post_z = torch._utils._flatten_dense_tensors(
+        [opt.state[p]['z'] for p in sf_model.parameters()]).clone()
+    gathered_post_x = [torch.zeros_like(post_x) for _ in range(world_size)]
+    gathered_post_z = [torch.zeros_like(post_z) for _ in range(world_size)]
+    dist.all_gather(gathered_post_x, post_x)
+    dist.all_gather(gathered_post_z, post_z)
+
+    if rank == 0:
+        expected = torch.stack(gathered_pre).mean(dim=0)
+        expected_sf_x = torch.stack([
+            torch.tensor(row['x'], dtype=post_x.dtype)
+            for row in gathered_sf
+        ]).mean(dim=0)
+        expected_sf_z = torch.stack([
+            torch.tensor(row['z'], dtype=post_z.dtype)
+            for row in gathered_sf
+        ]).mean(dim=0)
+        ret['hierarchical'] = {
+            'non_sf_expected': expected.tolist(),
+            'non_sf_post': [t.tolist() for t in gathered_post],
+            'sf_x_expected': expected_sf_x.tolist(),
+            'sf_x_post': [t.tolist() for t in gathered_post_x],
+            'sf_z_expected': expected_sf_z.tolist(),
+            'sf_z_post': [t.tolist() for t in gathered_post_z],
+            'group_counts': [
+                len(group_ranks)
+                for group_ranks, _ in args._diloco_merge_groups['groups']
+            ],
+            'root_ranks': list(args._diloco_merge_groups['root_ranks']),
+        }
+
+    dist.barrier()
+    dist.destroy_process_group()
+
+
+def _run_hierarchical_exact():
+    world_size = 3
+    mgr = mp.Manager()
+    ret = mgr.dict()
+    with tempfile.NamedTemporaryFile() as f:
+        init_file = f.name
+    if os.path.exists(init_file):
+        os.remove(init_file)
+    mp.spawn(_worker_hierarchical_exact, args=(world_size, init_file, ret),
+             nprocs=world_size, join=True)
+    return dict(ret)['hierarchical']
+
+
+def test_hierarchical_merge_matches_global_average_for_unequal_groups():
+    """Opt-in hierarchical merge must match the current global average exactly
+    enough for dtype expectations, including unequal first-level groups."""
+    r = _run_hierarchical_exact()
+    assert r['group_counts'] == [2, 1], r['group_counts']
+    assert r['root_ranks'] == [0, 2], r['root_ranks']
+    tol = 1e-5
+    expected = torch.tensor(r['non_sf_expected'])
+    for post in r['non_sf_post']:
+        assert torch.allclose(torch.tensor(post), expected, atol=tol, rtol=0), (
+            "hierarchical non-ScheduleFree params != global mean"
+        )
+    expected_x = torch.tensor(r['sf_x_expected'])
+    for post_x in r['sf_x_post']:
+        assert torch.allclose(torch.tensor(post_x), expected_x, atol=tol, rtol=0), (
+            "hierarchical ScheduleFree x != global mean"
+        )
+    expected_z = torch.tensor(r['sf_z_expected'])
+    for post_z in r['sf_z_post']:
+        assert torch.allclose(torch.tensor(post_z), expected_z, atol=tol, rtol=0), (
+            "hierarchical ScheduleFree z != global mean"
+        )
+    print("PASS test_hierarchical_merge_matches_global_average_for_unequal_groups")
+
+
 # ===========================================================================
 # sf-diloco-p1 regression tests: lock the SF x/z/y geometry on the outer update.
 #
@@ -681,7 +1119,7 @@ def test_sfsgd_identical_rank_noop_at_coherent_boundary():
     print("PASS test_sfsgd_identical_rank_noop_at_coherent_boundary")
 
 
-def test_diloco_checkpoint_roundtrip_preserves_outer_and_inner_sf_state():
+def test_diloco_checkpoint_roundtrip_preserves_outer_and_inner_sf_state(monkeypatch):
     """Checkpoint both systems: inner ScheduleFree optimizer state and the
     separate outer sfsgd state must reload onto a fresh model coherently."""
     import train
@@ -705,6 +1143,14 @@ def test_diloco_checkpoint_roundtrip_preserves_outer_and_inner_sf_state():
             model, opt, step=123, loss=4.5, output_dir=Path(d),
             keep_n=2, outer_state=outer_state)
         model2, opt2 = _build()
+        real_torch_load = torch.load
+        load_calls = []
+
+        def recording_load(*args, **kwargs):
+            load_calls.append(dict(kwargs))
+            return real_torch_load(*args, **kwargs)
+
+        monkeypatch.setattr(torch, 'load', recording_load)
         step, loss, ckpt = train.load_checkpoint(
             path, model2, opt2, return_checkpoint=True)
         restored = train.initialize_diloco_outer_state(
@@ -722,7 +1168,247 @@ def test_diloco_checkpoint_roundtrip_preserves_outer_and_inner_sf_state():
         assert torch.equal(opt.state[p1]['z'], opt2.state[p2]['z']), "inner z did not roundtrip"
     assert opt.param_groups[0]['k'] == opt2.param_groups[0]['k']
     assert opt.param_groups[0]['weight_sum'] == opt2.param_groups[0]['weight_sum']
+    assert load_calls == [{
+        'map_location': 'cpu',
+        'mmap': True,
+        'weights_only': False,
+    }], "restart checkpoint tensors must remain file-backed to bound per-node RAM"
     print("PASS test_diloco_checkpoint_roundtrip_preserves_outer_and_inner_sf_state")
+
+
+def test_nonavg_resume_missing_outer_state_fails_closed():
+    import train
+    model, opt = _build()
+    args = _ns(
+        resume='missing_outer_state.pt',
+        diloco_outer_optimizer='momentum',
+        diloco_bootstrap_outer_state='none',
+    )
+    try:
+        train.resolve_diloco_outer_state_for_resume(
+            model, opt, args, loaded_state=None, ckpt={'step': 12},
+            inner_optimizer_state_loaded=True)
+    except ValueError as exc:
+        assert 'from-loaded-model' in str(exc)
+        assert 'missing_diloco_outer_state' in str(exc)
+    else:
+        raise AssertionError("non-avg resume without outer state did not fail closed")
+    print("PASS test_nonavg_resume_missing_outer_state_fails_closed")
+
+
+def test_bootstrap_momentum_preserves_loaded_model_tensors():
+    import train
+    model, opt = _build()
+    _local_train(model, opt, rank=0, k_steps=4)
+    opt.eval()
+    expected_x = [p.data.detach().clone() for p in model.parameters()]
+    opt.train()
+    pre = [p.data.detach().clone() for p in model.parameters()]
+
+    args = _ns(
+        resume='loaded.pt',
+        diloco_outer_optimizer='momentum',
+        diloco_bootstrap_outer_state='from-loaded-model',
+    )
+    outer_state, metadata = train.resolve_diloco_outer_state_for_resume(
+        model, opt, args, loaded_state=None, ckpt={'step': 4},
+        inner_optimizer_state_loaded=True)
+
+    assert outer_state['mode'] == 'momentum'
+    assert opt.param_groups[0]['train_mode'] is True
+    for p, before in zip(model.parameters(), pre):
+        assert torch.equal(p.data, before), "momentum bootstrap changed live model tensor bytes"
+    for anchor, expected in zip(outer_state['anchor'], expected_x):
+        assert torch.allclose(anchor, expected, rtol=0.0, atol=1e-7), (
+            "momentum anchor did not use loaded eval/x basis"
+        )
+    for moment in outer_state['moment']:
+        assert torch.equal(moment, torch.zeros_like(moment)), "momentum buffer is not exact zero"
+    assert metadata['inner_schedulefree_basis_used_for_anchor'] == 'x'
+    assert metadata['model_tensors_equal_after_restore'] is True
+    print("PASS test_bootstrap_momentum_preserves_loaded_model_tensors")
+
+
+def _worker_bootstrap_partial_average(rank, world_size, init_file, ret):
+    dist.init_process_group(backend='gloo', init_method=f'file://{init_file}',
+                            rank=rank, world_size=world_size)
+    import train
+    model, opt = _build()
+    args = _ns(
+        resume='loaded.pt',
+        diloco_outer_optimizer='momentum',
+        diloco_outer_lr=0.5,
+        diloco_outer_beta=0.0,
+        diloco_bootstrap_outer_state='from-loaded-model',
+    )
+    outer_state, metadata = train.resolve_diloco_outer_state_for_resume(
+        model, opt, args, loaded_state=None, ckpt={'step': 0},
+        inner_optimizer_state_loaded=False)
+    anchor = [t.detach().clone() for t in outer_state['anchor']]
+    assert metadata['inner_schedulefree_basis_used_for_anchor'] == 'loaded'
+
+    _local_train(model, opt, rank, k_steps=8)
+    opt.eval()
+    pre_x = [p.data.detach().clone() for p in model.parameters()]
+    opt.train()
+    gathered = [None] * world_size
+    dist.all_gather_object(gathered, {'x': [t.tolist() for t in pre_x]})
+
+    train.diloco_merge(model, opt, args, world_size, outer_state)
+    opt.eval()
+    post_x = [p.data.detach().clone() for p in model.parameters()]
+    opt.train()
+
+    if rank == 0:
+        expected = []
+        for j, a in enumerate(anchor):
+            mean_x = torch.zeros_like(a)
+            for rr in range(world_size):
+                mean_x += torch.tensor(gathered[rr]['x'][j])
+            mean_x /= world_size
+            expected.append(a + 0.5 * (mean_x - a))
+        ret['max_diff'] = max((a - b).abs().max().item() for a, b in zip(post_x, expected))
+        ret['anchor_advanced'] = max(
+            (a - b).abs().max().item()
+            for a, b in zip(outer_state['anchor'], expected)
+        )
+    flat = torch._utils._flatten_dense_tensors([p.data for p in model.parameters()]).clone()
+    allp = [torch.zeros_like(flat) for _ in range(world_size)]
+    dist.all_gather(allp, flat)
+    if rank == 0:
+        ret['consensus_diff'] = max((allp[r] - allp[0]).abs().max().item()
+                                    for r in range(world_size))
+    dist.barrier()
+    dist.destroy_process_group()
+
+
+def test_bootstrap_partial_average_first_merge_math():
+    r = _run_worker(_worker_bootstrap_partial_average)
+    assert r['max_diff'] <= 1e-5, f"partial-average bootstrap first merge mismatch: {r}"
+    assert r['anchor_advanced'] <= 1e-5, f"partial-average anchor did not advance: {r}"
+    assert r['consensus_diff'] <= 1e-6, f"partial-average merge lost consensus: {r}"
+    print("PASS test_bootstrap_partial_average_first_merge_math")
+
+
+def test_bootstrap_sfsgd_y_preserves_loaded_model_tensors():
+    import train
+    model, opt = _build()
+    _local_train(model, opt, rank=0, k_steps=4)
+    opt.train()
+    expected_y = [p.data.detach().clone() for p in model.parameters()]
+    pre = [p.data.detach().clone() for p in model.parameters()]
+    args = _ns(
+        resume='loaded.pt',
+        diloco_outer_optimizer='sfsgd',
+        diloco_outer_lr=1.25,
+        diloco_outer_beta=0.1,
+        diloco_export_basis='y',
+        diloco_bootstrap_outer_state='from-loaded-model',
+    )
+    outer_state, metadata = train.resolve_diloco_outer_state_for_resume(
+        model, opt, args, loaded_state=None, ckpt={'step': 4},
+        inner_optimizer_state_loaded=True)
+    assert opt.param_groups[0]['train_mode'] is True
+    for p, before in zip(model.parameters(), pre):
+        assert torch.equal(p.data, before), "sfsgd_y bootstrap changed live model tensor bytes"
+    for key in ('x', 'z', 'y'):
+        for got, expected in zip(outer_state[key], expected_y):
+            assert torch.equal(got, expected), f"sfsgd_y outer {key} did not start at loaded y"
+    assert outer_state['k'] == 0
+    assert outer_state['weight_sum'] == 0.0
+    assert outer_state['lr_max'] == 1.25
+    assert metadata['inner_schedulefree_basis_used_for_anchor'] == 'y'
+    print("PASS test_bootstrap_sfsgd_y_preserves_loaded_model_tensors")
+
+
+def test_bootstrap_sfsgd_y_pretrained_no_optimizer_state():
+    import train
+    model, opt = _build()
+    pre = [p.data.detach().clone() for p in model.parameters()]
+    args = _ns(
+        resume='pretrained.pt',
+        diloco_outer_optimizer='sfsgd',
+        diloco_outer_lr=0.75,
+        diloco_outer_beta=0.1,
+        diloco_export_basis='y',
+        diloco_bootstrap_outer_state='from-loaded-model',
+    )
+    outer_state, metadata = train.resolve_diloco_outer_state_for_resume(
+        model, opt, args, loaded_state=None, ckpt={'step': 0},
+        inner_optimizer_state_loaded=False)
+    for p, before in zip(model.parameters(), pre):
+        assert torch.equal(p.data, before), "pretrained sfsgd_y bootstrap changed model bytes"
+    for key in ('x', 'z', 'y'):
+        for got, expected in zip(outer_state[key], pre):
+            assert torch.equal(got, expected), f"pretrained sfsgd_y outer {key} != loaded weights"
+    assert metadata['inner_optimizer_state_loaded'] is False
+    assert metadata['inner_schedulefree_basis_used_for_anchor'] == 'loaded'
+    print("PASS test_bootstrap_sfsgd_y_pretrained_no_optimizer_state")
+
+
+def test_checkpoint_metadata_records_outer_bootstrap():
+    import train
+    model, opt = _build()
+    args = _ns(
+        resume='source.pt',
+        diloco_outer_optimizer='momentum',
+        diloco_outer_lr=0.5,
+        diloco_outer_beta=0.0,
+        diloco_bootstrap_outer_state='from-loaded-model',
+    )
+    outer_state, bootstrap_metadata = train.resolve_diloco_outer_state_for_resume(
+        model, opt, args, loaded_state=None, ckpt={'step': 99},
+        inner_optimizer_state_loaded=False)
+    metadata = train.checkpoint_metadata_with_diloco_bootstrap(
+        {'kind': 'periodic'}, bootstrap_metadata)
+    with tempfile.TemporaryDirectory() as d:
+        path = train.save_checkpoint(
+            model, opt, step=100, loss=1.25, output_dir=Path(d), keep_n=2,
+            outer_state=outer_state, metadata=metadata)
+        ckpt = torch.load(path, map_location='cpu')
+    block = ckpt['checkpoint_metadata']['diloco_outer_state_bootstrap']
+    assert block['performed'] is True
+    assert block['guard'] == 'from-loaded-model'
+    assert block['source_checkpoint'] == 'source.pt'
+    assert block['source_checkpoint_step'] == 99
+    assert block['missing_or_incompatible_reason'] == 'missing_diloco_outer_state'
+    assert block['target_outer_optimizer'] == 'momentum'
+    assert block['target_outer_lr'] == 0.5
+    assert block['target_outer_beta'] == 0.0
+    assert block['bootstrap_source'] == 'loaded_model_weights'
+    assert block['model_tensors_equal_after_restore'] is True
+    assert 'restored byte-identical' in block['model_weight_mutation']
+    assert ckpt['diloco_outer_state']['bootstrap_metadata']['guard'] == 'from-loaded-model'
+    print("PASS test_checkpoint_metadata_records_outer_bootstrap")
+
+
+def test_compatible_outer_state_not_overwritten_by_bootstrap_flag():
+    import train
+    model, opt = _build()
+    args = _ns(
+        resume='source.pt',
+        diloco_outer_optimizer='sfsgd',
+        diloco_bootstrap_outer_state='from-loaded-model',
+    )
+    loaded_state = {
+        'mode': 'sfsgd',
+        'x': [p.data.detach().clone() for p in model.parameters()],
+        'z': [p.data.detach().clone() for p in model.parameters()],
+        'y': [p.data.detach().clone() for p in model.parameters()],
+        'k': 3,
+        'weight_sum': 2.0,
+        'lr_max': 1.0,
+    }
+    try:
+        train.resolve_diloco_outer_state_for_resume(
+            model, opt, args, loaded_state=loaded_state,
+            ckpt={'step': 3, 'diloco_outer_state': loaded_state},
+            inner_optimizer_state_loaded=True)
+    except ValueError as exc:
+        assert 'compatible diloco_outer_state' in str(exc)
+    else:
+        raise AssertionError("bootstrap flag silently overwrote compatible outer state")
+    print("PASS test_compatible_outer_state_not_overwritten_by_bootstrap_flag")
 
 
 def _worker_basis(rank, world_size, init_file, ret):
@@ -879,11 +1565,21 @@ def test_state_gap_preserved_under_outer_rebase():
 
 
 if __name__ == '__main__':
+    test_nonavg_resume_missing_outer_state_fails_closed()
+    test_bootstrap_momentum_preserves_loaded_model_tensors()
+    test_bootstrap_partial_average_first_merge_math()
+    test_bootstrap_sfsgd_y_preserves_loaded_model_tensors()
+    test_bootstrap_sfsgd_y_pretrained_no_optimizer_state()
+    test_checkpoint_metadata_records_outer_bootstrap()
+    test_compatible_outer_state_not_overwritten_by_bootstrap_flag()
     test_local_sgd_averaging()
     test_outer_momentum()
     test_schedulefree_dynamic_loss_continuity()
     test_schedulefree_full_trajectory_average_survives_merges()
     test_single_rank_diloco_merge_is_byte_identical_noop()
+    test_schedulefree_avg_merge_avoids_scalar_collectives()
+    test_bucketed_non_schedulefree_merge_preserves_sum_then_divide_semantics()
+    test_bucketed_schedulefree_merge_avoids_scalar_collectives()
     # sf-diloco-p1 regression suite (x/z/y geometry on outer update):
     test_translation_invariance_scalar()
     test_identical_rank_noop_all_modes()

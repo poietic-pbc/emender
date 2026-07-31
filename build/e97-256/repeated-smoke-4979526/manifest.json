@@ -1,0 +1,29 @@
+{
+  "accepted_updates": 0,
+  "checkpoint_paths": [],
+  "command_file": "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260713/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4979526-20260713T092808Z/artifacts/command.txt",
+  "ddp_forbidden_line_count": 0,
+  "env_file": "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260713/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4979526-20260713T092808Z/artifacts/env.txt",
+  "exit_status": 1,
+  "expected_launched_ranks": 16,
+  "latest_path": ".",
+  "metrics_json": "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260713/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4979526-20260713T092808Z/artifacts/metrics.json",
+  "rank_start_count": 16,
+  "rank_start_log": "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260713/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4979526-20260713T092808Z/artifacts/rank-start.tsv",
+  "schema_version": 1,
+  "smoke_name": "256n",
+  "stderr": "logs/frontier/trainpy_async_quorum/async-b4k40-ladder-256n-4979526.err",
+  "stdout": "logs/frontier/trainpy_async_quorum/async-b4k40-ladder-256n-4979526.out",
+  "timed_out_updates": 0,
+  "tokens_per_generation": 0,
+  "train_log": "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260713/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/4979526-20260713T092808Z/logs/trainpy_async_quorum.log",
+  "validation_errors": [
+    "payload_exit_status=1",
+    "metrics_json_missing_or_empty",
+    "no_accepted_updates",
+    "no_training_tokens_recorded",
+    "latest_not_advanced",
+    "checkpoint_paths_missing"
+  ],
+  "validation_status": "fail"
+}

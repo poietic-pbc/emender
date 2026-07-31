@@ -1,0 +1,23 @@
+job_id=4979526
+generation_ids=000000
+ranks=0-15
+rank_start_count=16
+bridge_enter_count=16
+mpi_initialized_count=16
+request_parsed_count=16
+collective_reduce_complete_count=16
+result_written_count=16
+accepted_updates=0
+completed_generations=0
+completed_merges=0
+output_checkpoints=0
+cross_node_tmp_reference_count=0
+
+All trace request paths are rank-local and have the form:
+/tmp/emender-erikgarrison/trainpy_async_quorum/4979526-20260713T092808Z/ipc/rank_NNNNN/request.gen000000.json
+
+No result directs a remote rank to another node's /tmp tree. The repaired
+helper completed its collective reduce and locally materialized its result on
+all 16 ranks. The allocation was OOM-killed before the Python layer accepted
+generation 0, so successive-generation and per-generation cleanup behavior
+were not exercised by this job.

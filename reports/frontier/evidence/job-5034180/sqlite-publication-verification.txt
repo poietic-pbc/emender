@@ -1,0 +1,20 @@
+PRAGMA integrity_check: ok
+lease_epochs.last_fence: 9
+active leases after completion: 0
+publication primary key: (run_id, kind, name)
+commit rows: 11
+checkpoint rows: 11
+authoritative latest rows: 1
+
+Final same-code commit rows:
+generation=9 fence=7 step=1525360 accepted_tokens=68190720 manifest_sha256=3c9f4735c703f24fe378225b3b158a5708a68407f919d98296d29346bf377ba1
+generation=10 fence=7 step=1525400 accepted_tokens=78681600 manifest_sha256=dc53a24b2b723463e8a5fab0640285d10543db93852989461ae5de339ecb88f7
+generation=11 fence=9 step=1525440 accepted_tokens=89172480 manifest_sha256=c1896f28f805ca9cf519f470d9e5f1b5132eae33d6decec232abac43b0f16a1e
+
+authoritative latest:
+generation=11 fence=9 accepted_tokens=89172480 manifest_sha256=c1896f28f805ca9cf519f470d9e5f1b5132eae33d6decec232abac43b0f16a1e
+
+There is exactly one commit row and one checkpoint row per generation, and
+exactly one mutable authoritative pointer. Fence 8 published no commit or
+checkpoint. No partial or duplicate publication was present after the bounded
+node-3 loss/rejoin or the strictly newer-fence continuation.

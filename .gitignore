@@ -6,6 +6,8 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.wg
+.wg-worktrees/
 .lake/
 lake-packages/
 build/
@@ -13,8 +15,11 @@ dist/
 output/
 benchmark_results/
 experiments/local/
+.envs/
 frontier_runs/
 logs/frontier/debug/
+logs/frontier/native-dataplane/*.err
+logs/frontier/native-dataplane/*.out
 checkpoints/
 *.pt
 *.pth

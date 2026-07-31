@@ -1,0 +1,6 @@
+Task: watchdog-b4-k80
+Purpose: Session-level batch-worker contract required a file write and git commit.
+
+The assigned watchdog task itself requested read-only observation via wg log and
+no commits. The actual watchdog observation was logged to WG rather than this
+file.

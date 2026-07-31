@@ -1,0 +1,15 @@
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+native_step_network=job_vni slingshot_env_names=SLINGSHOT_DEVICES,SLINGSHOT_SVC_IDS,SLINGSHOT_TCS,SLINGSHOT_VNIS
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/scripts/frontier/validate_native_dataplane_2n_gate.py", line 492, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/scripts/frontier/validate_native_dataplane_2n_gate.py", line 476, in main
+    result = validate_gate(
+             ^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/scripts/frontier/validate_native_dataplane_2n_gate.py", line 229, in validate_gate
+    _validate_common_node(node, rank=rank, mode=mode, provider=provider, exact=exact)
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/scripts/frontier/validate_native_dataplane_2n_gate.py", line 158, in _validate_common_node
+    raise ValueError(f"node {rank} identity/bound mismatch: {mismatches}")
+ValueError: node 0 identity/bound mismatch: {'admitted_resident_bytes': (14369008000, 14440737184)}

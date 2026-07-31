@@ -1,0 +1,201 @@
+task_id=complete-resilient-e97
+smoke_name=resilient-e97-2n-20260715T082135Z
+run_id=complete-resilient-e97-resilient-e97-2n-20260715T082135Z-5000818-20260715T082930Z
+scaleout_variant=E97_resilient_2n_20260715T082135Z
+run_root=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/resilient_e97_foundation_2n/20260715/E97_resilient_2n_20260715T082135Z/5000818-20260715T082930Z
+run_dir=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/resilient_e97_foundation_2n/20260715/E97_resilient_2n_20260715T082135Z/5000818-20260715T082930Z/async_run
+metrics_json=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/resilient_e97_foundation_2n/20260715/E97_resilient_2n_20260715T082135Z/5000818-20260715T082930Z/artifacts/metrics.json
+summary_file=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/resilient_e97_foundation_2n/20260715/E97_resilient_2n_20260715T082135Z/5000818-20260715T082930Z/summaries/summary.md
+manifest_file=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/resilient_e97_foundation_2n/20260715/E97_resilient_2n_20260715T082135Z/5000818-20260715T082930Z/artifacts/manifest.json
+command_file=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/resilient_e97_foundation_2n/20260715/E97_resilient_2n_20260715T082135Z/5000818-20260715T082930Z/artifacts/command.txt
+rank_start_log=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/resilient_e97_foundation_2n/20260715/E97_resilient_2n_20260715T082135Z/5000818-20260715T082930Z/artifacts/rank-start.tsv
+stdout=logs/frontier/trainpy_async_quorum/resilient-e97-2n-20260715T082135Z-5000818.out
+stderr=logs/frontier/trainpy_async_quorum/resilient-e97-2n-20260715T082135Z-5000818.err
+training_data_mode=real-token
+synthetic_token_stream=0
+data=/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt
+e97_checkpoint=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260715/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/5000436-20260715T064518Z/async_run/checkpoints/emender_E97_100m_20260715/checkpoint_step_1525400_loss_2.4184.pt
+async_entrypoint=scripts/frontier/e97_async_diloco_train.py
+emender_conda_env=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312
+python_bin=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/bin/python
+one_trainpy_rank_per_gpu=1
+slurm_nodes=2
+slurm_ntasks_per_node=8
+slurm_gpus_per_task=1
+slurm_gpu_bind=closest
+trainpy_launched_ranks=16
+async_expected_ranks=16
+async_global_quorum=15
+async_expected_missing_updates=1
+async_timeout_s=300
+diloco_k=40
+async_local_steps=40
+async_diloco_quorum_mode=resilient_quorum
+async_quorum_transport=resilient-node-quorum-sharded-p2p
+async_quorum_transport_selector=resilient-node-quorum-sharded-p2p
+async_quorum_transport_actual=resilient-node-quorum-sharded-p2p
+transport_approval_class=frontier-resilient-debug
+production_approval_eligible=false
+allow_frontier_tcp_scale_debug=0
+tcp_scale_debug_override=0
+async_mpi_dense_bucket_bytes=67108864
+async_compiled_mpich_helper_bin=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/resilient_e97_foundation_2n/20260715/E97_resilient_2n_20260715T082135Z/5000818-20260715T082930Z/artifacts/compiled_mpich_dense_helper
+async_compiled_mpich_ipc_dir=/tmp/emender-erikgarrison/trainpy_async_quorum/5000818-20260715T082930Z/ipc
+async_compiled_mpich_trace_dir=/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/resilient_e97_foundation_2n/20260715/E97_resilient_2n_20260715T082135Z/5000818-20260715T082930Z/artifacts/compiled_mpich_trace
+async_compiled_mpich_file_gather=0
+mpich_gpu_support_enabled=0
+cray_mpi4py_site=/opt/cray/pe/python/3.10.10/lib/python3.10/site-packages
+async_coordinator_host=frontier06636
+async_coordinator_port=29497
+requested_walltime=02:00:00
+requested_node_hours=4
+batch_size=4
+chunk_size=2048
+learning_rate=0.001007
+optimizer=schedulefree
+weight_decay=0.01
+warmup_steps=0
+min_lr_frac=0.1
+grad_accum=1
+grad_clip=1.0
+tokenizer=p50k_base
+human_approval_record=WG complete-resilient-e97 debug-only 2-node resilient foundation gate
+ddp_wrapper_expected=0
+per_step_all_reduce_expected=0
+bounded_debug_transport=actual_resilient_node_quorum
+git_commit=89477cea79f15b0104a18ebd3d268bfd43c0b733
+
+=== modules ===
+craype-x86-trento
+libfabric/2.3.1
+craype-network-ofi
+xpmem/1.0.1-1.5_1_gfb6998056825
+Core/25.03
+tmux/3.4
+hsi/default
+lfs-wrapper/0.0.1
+DefApps
+emacs/29.4
+cray-dsmml/0.3.0
+PrgEnv-gnu/8.7.0
+gcc-native/14.2
+cray-libsci/26.03.0
+cray-mpich/9.1.0
+cray-pmi/6.1.17
+craype/2.7.36
+perftools-base/26.03.0
+cpe/26.03
+darshan-runtime/3.4.7-mpi
+miniforge3/23.11.0-0
+rocm/7.1.1
+craype-accel-amd-gfx90a
+
+=== frontier runtime ===
+frontier_runtime_profile=default
+frontier_enable_olcf_rccl_plugin=0
+frontier_rocm_module=rocm/7.1.1
+frontier_rccl_net_plugin_module=rccl-net-plugin/1.0
+EMENDER_CONDA_ENV=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312
+CONDA_PREFIX=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312
+OLCF_OFI_NCCL_ROOT=
+NCCL_NET_PLUGIN=
+librccl_net_path=not-found
+
+=== frontier communication env ===
+CONDA_PREFIX=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312
+EMENDER_CONDA_ENV=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312
+LD_LIBRARY_PATH=/opt/cray/pe/perftools/26.03.0/lib64:/opt/cray/pe/pmi/6.1.17/lib:/opt/cray/pe/mpich/9.1.0/ofi/gnu/12.3/lib:/opt/cray/pe/mpich/9.1.0/gtl/lib:/opt/cray/pe/libsci/26.03.0/GNU/12/x86_64/lib:/opt/cray/pe/dsmml/0.3.0/dsmml/lib:/opt/cray/pe/lib64:/opt/cray/lib64:/opt/rocm-7.1.1/lib/roctracer:/opt/rocm-7.1.1/lib/rocprofiler:/opt/rocm-7.1.1/lib:/sw/frontier/spack-envs/cpe26.03-cpu/opt/__spack_path_placeholder__/__spack_path_placeholder__/__spack_path_placeholder__/__spac/gcc-14.2/darshan-runtime-3.4.7-i6lglufb3nzhpr6gneuq2bjdaonwtv66/lib:/opt/cray/pe/papi/7.3.0.1/lib64:/sw/frontier/spack-envs/core-25.03/opt/gcc-13.2/emacs-29.4-unh4yuyvxeg5vnbffszz5xml33f5ahvv/lib:/opt/cray/libfabric/2.3.1/lib64
+
+=== python runtime versions ===
+python_executable=/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312/bin/python
+python_version=3.12.13
+torch.__version__=2.10.0+rocm7.1
+torch.version.hip=7.1.25424
+triton.__version__=3.6.0
+
+=== command ===
+srun -N 2 -n 16 --ntasks-per-node=8 -c 7 --gpus-per-task=1 --gpu-bind=closest bash -lc source\ \"\$\{REPO\}/scripts/frontier/frontier_runtime_env.sh\"\;\ frontier_activate_emender_conda_env\;\ frontier_assert_emender_conda_env\;\ printf\ \"%s\\t%s\\t%s\\t%s\\t%s\\n\"\ \"\$\(date\ -u\ +%Y-%m-%dT%H:%M:%SZ\)\"\ \"\$\{SLURM_PROCID:-\}\"\ \"\$\{SLURM_LOCALID:-\}\"\ \"\$\{SLURMD_NODENAME:-\$\(hostname\)\}\"\ \"\$\{SLURM_NTASKS:-\}\"\ \>\>\ \"\$RANK_START_LOG\"\;\ exec\ \"\$PYTHON_BIN\"\ -u\ \"\$ASYNC_ENTRYPOINT\"\ \"\$@\"\ --node-rank\ \"\$\{SLURM_PROCID:\?missing\ SLURM_PROCID\}\"\ --device\ \"cuda:\$\{ASYNC_VISIBLE_DEVICE_ORDINAL:-0\}\" bash --run-id complete-resilient-e97-resilient-e97-2n-20260715T082135Z-5000818-20260715T082930Z --run-dir /lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/resilient_e97_foundation_2n/20260715/E97_resilient_2n_20260715T082135Z/5000818-20260715T082930Z/async_run --metrics-json /lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/resilient_e97_foundation_2n/20260715/E97_resilient_2n_20260715T082135Z/5000818-20260715T082930Z/artifacts/metrics.json --data /lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt --tokenizer p50k_base --worker-count 16 --node-count 16 --global-quorum 15 --generations 8 --local-steps 40 --steps 40000000 --timeout-s 300 --diloco-quorum-mode resilient_quorum --level E97 --params 100m --batch-size 4 --chunk-size 2048 --lr 0.001007 --optimizer schedulefree --weight-decay 0.01 --warmup-steps 0 --min-lr-frac 0.1 --grad-accum 1 --grad-clip 1.0 --dim 1792 --depth 11 --n-heads 216 --n-state 32 --n-groups 32 --n-slots 64 --expansion 1.0 --state-expansion 2 --gate-activation silu --linear-state 0 --mlp-ratio 2.2623 --mlp-multiple 64 --e97-chunk-size 32 --checkpoint-interval 16 --projection-chunk-size 0 --loss-chunk-size 0 --recovery-every-generations 1 --recovery-every-seconds -1 --export-every-generations 1 --export-every-seconds -1 --finalization-reserve-seconds 1200 --walltime-remaining-s 1200 --estimated-finalization-duration-s 0 --coordinator-host frontier06636 --coordinator-bind-host 0.0.0.0 --coordinator-port 29497 --mpi-dense-bucket-bytes 67108864 --compiled-mpich-helper-bin /lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/resilient_e97_foundation_2n/20260715/E97_resilient_2n_20260715T082135Z/5000818-20260715T082930Z/artifacts/compiled_mpich_dense_helper --compiled-mpich-ipc-dir /tmp/emender-erikgarrison/trainpy_async_quorum/5000818-20260715T082930Z/ipc --actual-resilient-node-quorum --checkpoint /lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_quorum_b4k40_ladder_20260709/20260715/E97_1.3B_step1065000_async_quorum_b4k40_ladder_256n/5000436-20260715T064518Z/async_run/checkpoints/emender_E97_100m_20260715/checkpoint_step_1525400_loss_2.4184.pt --bf16
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+Deactivating conda environments
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1107/scripts/frontier/e97_async_diloco_train.py", line 398, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1107/scripts/frontier/e97_async_diloco_train.py", line 293, in main
+    raise ValueError("steps must equal generations * local_steps")
+ValueError: steps must equal generations * local_steps
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1107/scripts/frontier/e97_async_diloco_train.py", line 398, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1107/scripts/frontier/e97_async_diloco_train.py", line 293, in main
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1107/scripts/frontier/e97_async_diloco_train.py", line 398, in <module>
+    raise ValueError("steps must equal generations * local_steps")
+ValueError: steps must equal generations * local_steps
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1107/scripts/frontier/e97_async_diloco_train.py", line 293, in main
+    raise ValueError("steps must equal generations * local_steps")
+ValueError: steps must equal generations * local_steps
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1107/scripts/frontier/e97_async_diloco_train.py", line 398, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1107/scripts/frontier/e97_async_diloco_train.py", line 293, in main
+    raise ValueError("steps must equal generations * local_steps")
+ValueError: steps must equal generations * local_steps
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1107/scripts/frontier/e97_async_diloco_train.py", line 398, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1107/scripts/frontier/e97_async_diloco_train.py", line 293, in main
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1107/scripts/frontier/e97_async_diloco_train.py", line 398, in <module>
+    raise ValueError("steps must equal generations * local_steps")
+ValueError: steps must equal generations * local_steps
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1107/scripts/frontier/e97_async_diloco_train.py", line 293, in main
+    raise ValueError("steps must equal generations * local_steps")
+ValueError: steps must equal generations * local_steps
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1107/scripts/frontier/e97_async_diloco_train.py", line 398, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1107/scripts/frontier/e97_async_diloco_train.py", line 293, in main
+    raise ValueError("steps must equal generations * local_steps")
+ValueError: steps must equal generations * local_steps
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1107/scripts/frontier/e97_async_diloco_train.py", line 398, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1107/scripts/frontier/e97_async_diloco_train.py", line 293, in main
+    raise ValueError("steps must equal generations * local_steps")
+ValueError: steps must equal generations * local_steps
+srun: error: frontier06636: tasks 0-7: Exited with exit code 1
+srun: Terminating StepId=5000818.0
+srun: error: frontier06637: tasks 8-15: Terminated
+srun: Force Terminated StepId=5000818.0

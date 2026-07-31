@@ -1,0 +1,174 @@
+{
+  "schema": "emender-async-v21-clean-attempt-v1",
+  "task_id": "qualify-simple-async-v21-2n-clean",
+  "passed": false,
+  "verdict": "failed",
+  "job": {
+    "job_id": "5080469",
+    "state": "FAILED",
+    "exit_code": "1:0",
+    "nodes": 2,
+    "partition": "batch",
+    "qos": "debug",
+    "start": "2026-07-26T09:16:24",
+    "end": "2026-07-26T09:29:17",
+    "elapsed": "00:12:53",
+    "nodelist": "frontier[03074,03144]",
+    "restarts": 0,
+    "terminal_sacct": "5080469|FAILED|1:0|2|batch|debug|2026-07-26T09:16:24|2026-07-26T09:29:17|00:12:53"
+  },
+  "payload": {
+    "digest": "ba5133b81654fd7215508e29ff63ac276efc2c089dd74c506ff4c0800702f9ed",
+    "status": "retired_failed",
+    "unchanged_resubmit_forbidden": true,
+    "source_commit": "2ad87c9a8b3d70f9316ad51cb2100c751242f0e1",
+    "source_digest": "f271caf85084c96d92acff8e4601ec82bb67ae732e4d90d31af70430da7731b4",
+    "policy_digest": "fa9def95daf7bce25f1b962ca5437e7a76317b94ccfb9a710fbf126a344e7d98",
+    "launcher_digest": "70b96385b5ec0795d2d1c6b6495846b20e94fe53e5256e9c53c824b65c223fb7",
+    "native_bundle_digest": "f19e10be9987cfdb551a8dd75c5c88145c3cf35b73c54d3898fe562ce4182441",
+    "native_build_manifest_sha256": "81936e615903cb7a0c8a99c8d351c78e14d7f5e6f648fa862f710a0645dd9146",
+    "full_layout_gate_job_id": "5080458",
+    "full_layout_gate_sha256": "a5a5be8c6894ca5c122c73b4c46766592fa10415d9ed4f963871f6b3c84d624b",
+    "acceptance_manifest_sha256": "fa41a2824c044624dddd282d5956abd3eeed8cd6465e34b88f7b13da426ff982",
+    "data_identity_digest": "91321b2b90bb159f3aa73881455778f10e8df588edd526b1066281fa72997962",
+    "tokenizer_sha256": "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069"
+  },
+  "native_g2": {
+    "job_id": "5080458",
+    "state": "COMPLETED",
+    "exit_code": "0:0",
+    "nodes": 2,
+    "partition": "batch",
+    "qos": "debug",
+    "terminal_sacct": "5080458|COMPLETED|0:0|2|batch|debug|2026-07-26T09:11:20|2026-07-26T09:14:12|00:02:52",
+    "median_seconds": 23.573505062,
+    "maximum_seconds": 23.888658168,
+    "speedup_over_python": 4.197994583697738,
+    "route_errors": 0,
+    "cq_errors": 0,
+    "retries": 0,
+    "python_dense_socket_bytes": 0,
+    "disk_replay_bytes": 0,
+    "all_rank_barriers": 0,
+    "central_full_model_broker": false
+  },
+  "seed": {
+    "step": 2300930,
+    "accepted_tokens": 150793748480,
+    "bytes": 7719680116,
+    "sha256": "0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2",
+    "node_path": "/tmp/emender-e97-seed-5080469/checkpoint-step-2300930.pt",
+    "nodes_verified_offline": 2,
+    "network_fetches": 0,
+    "bootstrap_attestation_sha256": "27e234891df02b64b9db77fc784c341e5a3ae6e87418b8f1af167776d1d710bb",
+    "frontier03074_attestation_sha256": "f8fc8432cbeb3aad08a20199adc93414740f2c23bd342511461c07704b377e01",
+    "frontier03144_attestation_sha256": "08c127ea6ddf198a472f8c53a0096a7b423d3d223564fba9b76e4ccb5132069d"
+  },
+  "failure": {
+    "generation": 0,
+    "reason": "all_eight_apply_deadline",
+    "real_trainers": 16,
+    "healthy_trainers_at_failure": 16,
+    "checkpoints": 1,
+    "atomic_commits": 1,
+    "complete_atomic_apply_cohorts": 0,
+    "restarts": 0,
+    "manager_progress_fix_proven_live": true,
+    "manager_owner_transport_to_checkpoint_commit_seconds": [
+      128.16,
+      131.1
+    ],
+    "native_result_applied_ranks_per_node": [
+      3,
+      3
+    ],
+    "native_applied_ranks_per_node": [
+      1,
+      1
+    ],
+    "cause": "The manager began the reviewed 60-second all-eight transaction when rank zero crossed the safe boundary, but the one-reader shared-result chain had only background-prepared ranks zero through two and ranks one and two still needed roughly 43-49 seconds each. Rank one could not reach the live receipt before the manager deadline and ranks three through seven could not begin.",
+    "observed_background_materialization_seconds": {
+      "node_0_ranks_0_to_2": [
+        42.83,
+        49.08,
+        43.06
+      ],
+      "node_1_ranks_0_to_2": [
+        43.18,
+        48.16,
+        44.62
+      ]
+    }
+  },
+  "partial_progress": {
+    "all_roles_started": true,
+    "trainers_advancing_k_at_failure": 16,
+    "completed_windows": 82,
+    "windows_per_trainer_minimum": 5,
+    "windows_per_trainer_maximum": 6,
+    "steady_k40_median_seconds": 67.32339283049805,
+    "steady_k40_maximum_seconds": 69.79031882889103,
+    "k_boundary_cadence_median_seconds": 67.2150263604708,
+    "k_boundary_cadence_maximum_seconds": 69.86184140492696,
+    "cadence_multiple": 0.9983903593465634,
+    "inter_window_gap_median_seconds": 0.0015700520016252995,
+    "inter_window_gap_maximum_seconds": 0.0715225760359317,
+    "foreground_idle_fraction": 0.00009691070591496506,
+    "minimum_required_commits_met": false,
+    "minimum_required_windows_met": false,
+    "performance_reason": "Inclusive preliminary metrics only; the run reached one commit and five to six windows per trainer, not ten commits and twelve windows."
+  },
+  "checkpoint": {
+    "path": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/2ad87c9a8b3d70f9316ad51cb2100c751242f0e1/clean/clean-overlap/checkpoints/generation-00000001-fence-05080469.pt",
+    "generation": 1,
+    "bytes": 2753437091,
+    "sha256": "933ba061cb53210069f2191b8f0e1013add0dfca4dc8f05e2a091738a1424086"
+  },
+  "artifacts": {
+    "run_root": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/2ad87c9a8b3d70f9316ad51cb2100c751242f0e1/clean/clean-overlap",
+    "acceptance_manifest": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/2ad87c9a8b3d70f9316ad51cb2100c751242f0e1/clean-qualification-plan.json",
+    "slurm_stdout_sha256": "14fc1d8facc0bc1864d89210dffa892c2bb76050a33b682d48e6b9cee704113e",
+    "slurm_stderr_sha256": "0b65c5e8bf9732aac701e6d3411c73e04c3a360695c64fba647cc4b187744317",
+    "supervision_events_sha256": "cd0a8bdfb3469dd1d862fc6ddf4743576b600ca3e03d51a8eddb489b0880cd",
+    "runtime_identity_sha256": "5c0fa27593fa1b173a57512eaee13e8dcb8bfadfb1c1b3783fae4457e02c6805",
+    "native_launch_attestation_sha256": "b8a342047099ef783864da380ccfe63458b8a60a86f8d4cb767809eccbaf5765"
+  },
+  "commands": {
+    "submit": "\"$EMENDER_PYTHON\" \"$SNAPSHOT/scripts/frontier/run_async_v21_qualification.py\" --gate clean --nodes 2 --repo \"$SNAPSHOT\" --seed-config \"$SNAPSHOT/configs/frontier/e97_async_256.yaml\" --native-build-manifest \"$BUILD_MANIFEST\" --full-layout-gate \"$G2_GATE\" --run-root \"$RUN_ROOT\" --state \"$STATE_JSON\" --output \"$MANIFEST_JSON\" --submit",
+    "queued_running": [
+      "squeue -h -j 5080469 -o '%i|%T|%P|%q'",
+      "scontrol show job -dd 5080469"
+    ],
+    "terminal": "sacct -n -X -j 5080469 --format=JobIDRaw,State,ExitCode,NNodes,Partition,QOS,Start,End,Elapsed -P"
+  },
+  "authority": {
+    "compute_pool_requirements": [
+      "R01", "R02", "R03", "R04", "R05", "R06", "R07", "R08",
+      "R09", "R10", "R11", "R12", "R13", "R14", "R15", "R16"
+    ],
+    "native_requirements": [
+      "NDP01", "NDP02", "NDP03", "NDP04", "NDP05", "NDP06",
+      "NDP07", "NDP08", "NDP09", "NDP10", "NDP11", "NDP12",
+      "NDP13", "NDP14", "NDP15", "NDP16", "NDP17"
+    ],
+    "async_v21_requirements": [
+      "V21S01", "V21S02", "V21S03", "V21S04", "V21S05", "V21S06",
+      "V21S07", "V21S08", "V21S09", "V21S10", "V21S11", "V21S12",
+      "V21S13", "V21S14", "V21S15", "V21S16", "V21S17"
+    ],
+    "snapshot_requirements": [
+      "ISP01", "ISP02", "ISP03", "ISP04", "ISP05", "ISP06", "ISP07"
+    ],
+    "nonpassing_requirements": [
+      "R14", "NDP13", "NDP15", "NDP16", "V21S03", "V21S11",
+      "V21S13", "V21S15", "ISP05"
+    ]
+  },
+  "disposition": {
+    "clean_gate_passed": false,
+    "fault_gate_authorized": false,
+    "scale_authorized": false,
+    "smallest_fix": "Prepare independently verified candidate states concurrently in the background, retain node-zero leader priority, collect eight authenticated ready receipts, and only then emit one release that begins the unchanged 60-second foreground apply clock.",
+    "regression": "test_native_all_eight_apply_releases_only_after_background_preparation"
+  }
+}

@@ -1,0 +1,19 @@
+Eight-node scale-rung Slurm accounting (all task attempts)
+
+Times below are Slurm's America/New_York timestamps. The authoritative 4n
+gate reached Done at 2026-07-20T04:16:40Z; the first 8n submission was
+2026-07-20T01:08:48-04:00 = 2026-07-20T05:08:48Z.
+
+JobID   Submit               Start                End                  State               ExitCode  Elapsed  Nodes  Durable result
+5034361 2026-07-20T01:08:48  2026-07-20T01:09:06  2026-07-20T01:10:13  FAILED              143:0     00:01:07 8      fence 10; no commit
+5034380 2026-07-20T01:14:17  2026-07-20T01:14:55  2026-07-20T01:22:24  FAILED              1:0       00:07:29 8      fence 11; no commit
+5034531 2026-07-20T02:06:08  2026-07-20T02:09:53  2026-07-20T02:10:14  CANCELLED by 19032 0:0       00:00:21 8      no fence/model/commit
+5034633 2026-07-20T02:50:36  2026-07-20T03:01:08  2026-07-20T03:08:15  FAILED              1:0       00:07:07 8      fence 12; no commit
+5034692 2026-07-20T03:33:56  2026-07-20T03:34:14  2026-07-20T03:40:57  FAILED              1:0       00:06:43 8      fence 13; no commit
+5034745 2026-07-20T03:59:21  2026-07-20T04:00:05  2026-07-20T04:14:56  FAILED              1:0       00:14:51 8      generations 12 and 13; fence 14
+5034865 2026-07-20T04:38:30  2026-07-20T04:38:39  2026-07-20T04:44:50  FAILED              1:0       00:06:11 8      injected owner loss; fence 15; no generation 14 publication
+5034875 2026-07-20T04:49:43  2026-07-20T04:50:06  2026-07-20T04:57:10  COMPLETED           0:0       00:07:04 8      generation 14; fence 16
+
+All attempts used partition=batch, QOS=debug, walltime=00:30:00,
+network=job_vni, eight GPUs per node, and exactly eight nodes. No 32-node or
+larger job was submitted by this task.

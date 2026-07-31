@@ -1,0 +1,127 @@
+{
+  "schema": "emender.frontier.async_diloco_refreshed_seed.v1",
+  "task_id": "register-refreshed-e97-seed-runner",
+  "created_utc": "2026-07-06T09:30:48Z",
+  "status": "registered",
+  "no_slurm_job_submitted": true,
+  "origin_main_reconfirmation": {
+    "checked_utc": "2026-07-06T09:27:00Z",
+    "origin_main_commit": "8a9688f3d6017add300ac8dbd07eae8ed779c7b9",
+    "checkpoint_retention_fix_commit": "caa952e",
+    "checkpoint_retention_fix_summary": "train.py saves latest.pt atomically and prunes checkpoint_step_*.pt by numeric training step rather than lexicographic filename order.",
+    "async_entrypoint_update_commit": "6e254f9",
+    "async_entrypoint_update_summary": "scripts/frontier/async_diloco_e97_multinode.py exists and both 2n/8n debug and 256n12h wrappers default ASYNC_ENTRYPOINT to it."
+  },
+  "source": {
+    "s3_checkpoint_uri": "s3://spinozans/emender/e97-diloco/emender_E97_1.3B_20260702_111457/step_1065000/checkpoint_step_1065000_loss_2.5386.pt",
+    "s3_checkpoint_https_url": "https://spinozans.s3.amazonaws.com/emender/e97-diloco/emender_E97_1.3B_20260702_111457/step_1065000/checkpoint_step_1065000_loss_2.5386.pt",
+    "metadata_pointer_uri": "s3://spinozans/emender/e97-diloco/latest_emender_E97_1.3B.json",
+    "metadata_pointer_https_url": "https://spinozans.s3.amazonaws.com/emender/e97-diloco/latest_emender_E97_1.3B.json",
+    "s3_prefix": "s3://spinozans/emender/e97-diloco/emender_E97_1.3B_20260702_111457/step_1065000",
+    "s3_sha256_uri": "s3://spinozans/emender/e97-diloco/emender_E97_1.3B_20260702_111457/step_1065000/checkpoint_step_1065000_loss_2.5386.pt.sha256"
+  },
+  "local": {
+    "checkpoint_directory": "/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000",
+    "checkpoint_path": "/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/checkpoint_step_1065000_loss_2.5386.pt",
+    "latest_path": "/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt",
+    "latest_kind": "relative symlink",
+    "latest_resolved_path": "/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/checkpoint_step_1065000_loss_2.5386.pt",
+    "metadata_pointer_copy": "/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest_emender_E97_1.3B.json",
+    "run_root_seed_manifest": "/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/seed_manifest.json"
+  },
+  "checkpoint": {
+    "run": "emender_E97_1.3B_20260702_111457",
+    "step": 1065000,
+    "loss": 2.5386,
+    "estimated_bpb": 0.9681,
+    "estimated_bpb_from_pointer": 0.9681273145120526,
+    "tokens_seen": 69796000000,
+    "tokens_seen_b": 69.796,
+    "tokens_seen_estimate_from_pointer": 69795840000,
+    "tokens_seen_estimate_b_from_pointer": 69.79584,
+    "tokens_per_step": 65536,
+    "size_bytes": 7719679924,
+    "sha256": "c68ea2d95f2721f1f52664f71c1453e4f30a5520b33eb1cf54974185e5a100a4"
+  },
+  "verification": {
+    "local_readability": "passed",
+    "size_check": {
+      "command": "stat -c '%n|%s|%A|%U|%G' /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/checkpoint_step_1065000_loss_2.5386.pt",
+      "observed_size_bytes": 7719679924,
+      "expected_size_bytes": 7719679924,
+      "passed": true
+    },
+    "sha256_check": {
+      "command": "sha256sum /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/checkpoint_step_1065000_loss_2.5386.pt",
+      "observed_sha256": "c68ea2d95f2721f1f52664f71c1453e4f30a5520b33eb1cf54974185e5a100a4",
+      "expected_sha256": "c68ea2d95f2721f1f52664f71c1453e4f30a5520b33eb1cf54974185e5a100a4",
+      "passed": true
+    },
+    "latest_check": {
+      "command": "readlink -f /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt",
+      "resolved_path": "/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/checkpoint_step_1065000_loss_2.5386.pt",
+      "resolved_size_bytes": 7719679924,
+      "passed": true
+    },
+    "metadata_pointer_copy_sha256": "79a498b06fce2f01c4c2878b5311bf08c2ad82099f67e81ca003749f9660193c"
+  },
+  "metadata_pointer_contents": {
+    "checkpoint_loss": 2.5386,
+    "checkpoint_sha256": "c68ea2d95f2721f1f52664f71c1453e4f30a5520b33eb1cf54974185e5a100a4",
+    "checkpoint_size_bytes": 7719679924,
+    "checkpoint_step": 1065000,
+    "created_utc": "2026-07-06T07:54:00Z",
+    "estimated_bpb": 0.9681273145120526,
+    "local_checkpoint": "/mnt/nvme1n1/erikg/diloco_8gpu/emender/runs/emender_E97_1.3B_20260702_111457/checkpoint_step_1065000_loss_2.5386.pt",
+    "notes": [
+      "Fresh post-retention-workaround checkpoint from active 8-GPU E97 DiLoCo run.",
+      "Use args.json/run_manifest.json/launch_manifest.json in this prefix for resume context."
+    ],
+    "run": "emender_E97_1.3B_20260702_111457",
+    "s3_checkpoint_uri": "s3://spinozans/emender/e97-diloco/emender_E97_1.3B_20260702_111457/step_1065000/checkpoint_step_1065000_loss_2.5386.pt",
+    "s3_prefix": "s3://spinozans/emender/e97-diloco/emender_E97_1.3B_20260702_111457/step_1065000",
+    "s3_sha256_uri": "s3://spinozans/emender/e97-diloco/emender_E97_1.3B_20260702_111457/step_1065000/checkpoint_step_1065000_loss_2.5386.pt.sha256",
+    "tokens_per_step": 65536,
+    "tokens_seen_estimate": 69795840000,
+    "tokens_seen_estimate_b": 69.79584
+  },
+  "downstream_env": {
+    "common": {
+      "REFRESHED_E97_SEED_LATEST": "/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt",
+      "E97_CHECKPOINT": "/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt",
+      "SEED_LATEST_PATH": "/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt",
+      "REFRESHED_E97_SEED_MANIFEST": "reports/frontier/async_diloco_refreshed_seed_20260706.json"
+    },
+    "validate-refreshed-seed-4n20m": {
+      "wrapper": "scripts/frontier/async_diloco_e97_2n8n_debug.sbatch",
+      "sbatch_shape": "sbatch -N 4 --time=00:20:00 --export=ALL scripts/frontier/async_diloco_e97_2n8n_debug.sbatch",
+      "WG_TASK_ID": "validate-refreshed-seed-4n20m",
+      "TRAINING_TARGET": "E97_1.3B_step1065000_async_diloco_debug_4n20m_20260706",
+      "OUTPUT_ROOT": "/lustre/orion/bif148/proj-shared/emender/frontier_runs/debug/async_diloco_e97_refreshed_seed_4n20m",
+      "ASYNC_NODE_COUNT": "4",
+      "ASYNC_GLOBAL_QUORUM": "4",
+      "ASYNC_LOCAL_QUORUM": "8",
+      "ASYNC_RECOVERY_EVERY_GENERATIONS": "1",
+      "ASYNC_RESUME_CHECK": "1"
+    },
+    "submit-refreshed-e97-async-256n12h": {
+      "wrapper": "scripts/frontier/async_diloco_e97_256n12h_launch.sbatch",
+      "sbatch_shape": "sbatch -N 256 --time=12:00:00 --export=ALL scripts/frontier/async_diloco_e97_256n12h_launch.sbatch",
+      "WG_TASK_ID": "submit-refreshed-e97-async-256n12h",
+      "TRAINING_TARGET": "E97_1.3B_step1065000_async_diloco_256n12h_20260706",
+      "SCALEOUT_VARIANT": "E97_1.3B_step1065000_async_quorum_b4_k40_256n12h",
+      "OUTPUT_ROOT": "/lustre/orion/bif148/proj-shared/emender/frontier_runs/async_diloco",
+      "ASYNC_NODE_COUNT": "256",
+      "ASYNC_GLOBAL_QUORUM": "240",
+      "SEED_LATEST_PATH": "/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt",
+      "E97_CHECKPOINT": "/lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt",
+      "ASYNC_DILOCO_HUMAN_APPROVED": "0"
+    }
+  },
+  "provenance": {
+    "materialization_method": "curl HTTPS download from public S3 endpoint because aws CLI was not installed in the task environment",
+    "metadata_pointer_fetch_command": "curl -fL --retry 5 --retry-delay 10 --connect-timeout 30 --max-time 300 -o /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest_emender_E97_1.3B.json https://spinozans.s3.amazonaws.com/emender/e97-diloco/latest_emender_E97_1.3B.json",
+    "checkpoint_fetch_command": "curl -fL -C - --retry 20 --retry-delay 15 --connect-timeout 30 -o /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/checkpoint_step_1065000_loss_2.5386.pt https://spinozans.s3.amazonaws.com/emender/e97-diloco/emender_E97_1.3B_20260702_111457/step_1065000/checkpoint_step_1065000_loss_2.5386.pt",
+    "latest_creation_command": "ln -sfn checkpoint_step_1065000_loss_2.5386.pt /lustre/orion/bif148/proj-shared/emender/checkpoints/emender_E97_1.3B_20260702_111457_step_1065000/latest.pt"
+  }
+}

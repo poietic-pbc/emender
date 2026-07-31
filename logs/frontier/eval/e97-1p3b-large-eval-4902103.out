@@ -1,0 +1,63 @@
+{
+  "bytes_per_token": 3.7530445772058822,
+  "scored_tokens": 69632,
+  "total_utf8_bytes": 261332,
+  "chunk_size": 2048,
+  "n_chunks": 34,
+  "tokenizer": "p50k_base",
+  "source": "/lustre/orion/bif148/scratch/erikgarrison/emender/data/commapile_mainmix_val_smoke.txt",
+  "source_bytes": 262144,
+  "source_sha256": "f39aa4af301782bd605fe25a838866759112aa06e35c9e063c83f8465764cc57",
+  "construction": "contiguous non-overlapping full 2048-token chunks from start of validation file",
+  "tensor_path": "/lustre/orion/bif148/proj-shared/emender/frontier_runs/fixed_eval/20260625/e97-1p3b-pretrained-larger/4902103-20260625T210836Z/artifacts/commapile_mainmix_val_p50k_2048_x128.pt",
+  "tensor_sha256": "0f392cb89500b7b76009bf9f456cc9ceb6f343e994de14248f1fe5b505f62509",
+  "max_chunks_requested": 128
+}
+=== scoring source: /lustre/orion/bif148/proj-shared/emender/checkpoints/E97_1.3B_diloco_20260623_103742_step260500/checkpoint_E97_1.3B_diloco_20260623_103742_step260500_loss_2.7481.pt
+[eval_checkpoint] loading checkpoint: /lustre/orion/bif148/proj-shared/emender/checkpoints/E97_1.3B_diloco_20260623_103742_step260500/checkpoint_E97_1.3B_diloco_20260623_103742_step260500_loss_2.7481.pt
+[eval_checkpoint] strict load OK step=260500; schedulefree_y_swap=False; level=E97 params=1,286,589,072
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[eval_checkpoint] scored split=primary step=260500 ce=26.837471 bpb=10.316500 -> /lustre/orion/bif148/proj-shared/emender/frontier_runs/fixed_eval/20260625/e97-1p3b-pretrained-larger/4902103-20260625T210836Z/artifacts/source_k40_k160_larger_eval.csv
+=== scoring k40: /lustre/orion/bif148/proj-shared/emender/frontier_runs/scaleout/20260625/E97_1.3B_pretrained_8n_k40/4900838-20260625T180815Z/train/emender_E97_1.3B_20260625_140940/latest.pt
+[eval_checkpoint] loading checkpoint: /lustre/orion/bif148/proj-shared/emender/frontier_runs/scaleout/20260625/E97_1.3B_pretrained_8n_k40/4900838-20260625T180815Z/train/emender_E97_1.3B_20260625_140940/checkpoint_step_263082_loss_2.6645.pt
+[eval_checkpoint] strict load OK step=263082; schedulefree_y_swap=False; level=E97 params=1,286,589,072
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[eval_checkpoint] scored split=primary step=263082 ce=26.855148 bpb=10.323296 -> /lustre/orion/bif148/proj-shared/emender/frontier_runs/fixed_eval/20260625/e97-1p3b-pretrained-larger/4902103-20260625T210836Z/artifacts/source_k40_k160_larger_eval.csv
+=== scoring k160: /lustre/orion/bif148/proj-shared/emender/frontier_runs/scaleout/20260625/E97_1.3B_pretrained_k160_8node/4900869-20260625T183437Z/train/emender_E97_1.3B_20260625_143545/latest.pt
+[eval_checkpoint] loading checkpoint: /lustre/orion/bif148/proj-shared/emender/frontier_runs/scaleout/20260625/E97_1.3B_pretrained_k160_8node/4900869-20260625T183437Z/train/emender_E97_1.3B_20260625_143545/checkpoint_step_263840_loss_2.6368.pt
+[eval_checkpoint] strict load OK step=263840; schedulefree_y_swap=False; level=E97 params=1,286,589,072
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[e97-runtime] backend=hip path=e88-sequential-split-edit-triton use_triton=True use_chunked_e97=False e97_chunk_size=32 linear_state=False raw_write=False use_split_edit=True log_decay=True
+[eval_checkpoint] scored split=primary step=263840 ce=27.082812 bpb=10.410811 -> /lustre/orion/bif148/proj-shared/emender/frontier_runs/fixed_eval/20260625/e97-1p3b-pretrained-larger/4902103-20260625T210836Z/artifacts/source_k40_k160_larger_eval.csv
+RESULT_CSV=/lustre/orion/bif148/proj-shared/emender/frontier_runs/fixed_eval/20260625/e97-1p3b-pretrained-larger/4902103-20260625T210836Z/artifacts/source_k40_k160_larger_eval.csv
+TENSOR_META=/lustre/orion/bif148/proj-shared/emender/frontier_runs/fixed_eval/20260625/e97-1p3b-pretrained-larger/4902103-20260625T210836Z/artifacts/commapile_mainmix_val_p50k_2048_x128.json
+MANIFEST=/lustre/orion/bif148/proj-shared/emender/frontier_runs/fixed_eval/20260625/e97-1p3b-pretrained-larger/4902103-20260625T210836Z/artifacts/manifest.json

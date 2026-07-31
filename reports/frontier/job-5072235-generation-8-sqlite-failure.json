@@ -1,0 +1,48 @@
+{
+  "schema": "emender-frontier-failure-evidence-v1",
+  "job_id": 5072235,
+  "source_commit": "3b8a6530ac38f98b197b26d656037b3b53fd5afc",
+  "allocation": {
+    "nodes": 2,
+    "partition": "batch",
+    "qos": "debug",
+    "started_at": "2026-07-25T15:57:54-04:00",
+    "ended_at": "2026-07-25T16:49:40-04:00",
+    "elapsed": "00:51:46",
+    "state": "FAILED",
+    "exit_code": "143:0"
+  },
+  "last_immutable_generation": {
+    "generation": 8,
+    "step": 2301250,
+    "accepted_tokens": 150872430080,
+    "outer_step": 8,
+    "checkpoint_bytes": 2753437091,
+    "checkpoint_sha256": "882df65974155f3cbb6766d8a8f6f22dbbfdc8b1170259d0f8b5ed21018eb8d5",
+    "manifest_sha256": "aed69e211857c950103bebcd4799b86013fd960e614982744fc9b61658f08ee3",
+    "result_root": "f624cb17aa67282e0127143ee8dc2f9a94f9c3fc912a1fc2d1cfad70b50ac82b",
+    "membership": [
+      "node-0",
+      "node-1"
+    ]
+  },
+  "failure": {
+    "exception": "sqlite3.OperationalError: database is locked",
+    "operation": "SQLiteFencedControlStore construction executed PRAGMA synchronous=FULL",
+    "supervisor_path": "_deadline_reason -> _durable_generation -> SQLiteFencedControlStore",
+    "trainer_path": "_reload_verified_async_v2_latest -> assert_current -> SQLiteFencedControlStore._transaction",
+    "database_path": "clean/clean-overlap/control/pool-v1.sqlite3",
+    "database_bytes": 61440,
+    "database_on_lustre": true,
+    "stderr_sha256": "d210bb9ee9525bb377203b6b62f4f91ea9200ee00bc60ad48cc7c4505e73c428"
+  },
+  "retained_source_paths": {
+    "root": "/lustre/orion/bif148/scratch/erikgarrison/emender-qualification/qualify-simple-async-v21-2n-clean/3b8a6530ac38f98b197b26d656037b3b53fd5afc/clean/clean-overlap",
+    "stderr": "slurm-5072235.err",
+    "trainer_stderr": "logs/node-0-trainer-1.err",
+    "manifest": "handoff/generation-00000008-fence-00000001.json",
+    "latest_compatibility_pointer": "handoff/latest.json",
+    "scheduler_terminal": "scheduler-evidence/terminal-failed-20260725T164940-0400.txt"
+  },
+  "interpretation": "Generation 8 was completely checkpointed and manifested before shared-Lustre SQLite access killed both the diagnostic supervisor path and a trainer boundary check. The evidence is retained to prevent reclassifying this as a native transport or numerical failure."
+}

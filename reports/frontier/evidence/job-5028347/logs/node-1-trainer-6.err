@@ -1,0 +1,14 @@
+[pin-autotune] pinned mode: 18 kernels / 30 (name,key) configs from registry (set NDM_PIN_TRITON_AUTOTUNE=0 to restore sweep)
+Traceback (most recent call last):
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/scripts/frontier/resilient_e97_role.py", line 761, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/scripts/frontier/resilient_e97_role.py", line 757, in main
+    return manager(args) if args.role == "manager" else trainer(args)
+                                                        ^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/scripts/frontier/resilient_e97_role.py", line 687, in trainer
+    manifest, aggregate = spool.wait_aggregate(
+                          ^^^^^^^^^^^^^^^^^^^^^
+  File "/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-1263/ndm/resilient_e97_roles.py", line 308, in wait_aggregate
+    raise TimeoutError("aggregate apply deadline expired")
+TimeoutError: aggregate apply deadline expired
