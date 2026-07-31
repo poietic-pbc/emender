@@ -1,36 +1,38 @@
 # Resilient DiLoCo Compute Pool
 
 **Status:** Architecture decision and design authority. Version 1
-(2026-07-17) remains the strict fresh-only compatibility policy; reviewed
-bounded asynchronous behavior is defined only by
-[ADR-002: simple asynchronous DiLoCo v2.1](ASYNC_DECOUPLED_DILOCO_V2.md)
-(2026-07-25).
-**Authority:** Changes to resilient training behavior MUST conform to this
-document and, when v2.1 asynchronous mode is selected, ADR-002. The normative compiled
-transport, local handoff, wire protocol, and Python/native ABI specialization
-is [Native resilient DiLoCo data plane v1](NATIVE_RESILIENT_DILOCO_DATAPLANE.md).
-Detailed implementation evidence and gaps live in
-[the companion matrix](RESILIENT_DILOCO_GAP_MATRIX.md). An implementation must
-satisfy all applicable authorities; the native specialization cannot weaken
-the admission, membership, weighting, fencing, atomicity, or recovery rules here.
-Existing experiments may finish; these documents do not authorize cancelling
-or mutating jobs.
+(2026-07-17) and the 2026-07-25 async-v2.1 amendment are retained as the
+elastic-compute-pool research design. The **production E97 recovery path** was
+amended on 2026-07-31 to use fixed-world same-allocation execution epochs, as
+specified below.
+**Authority:** Production E97 launchers MUST follow the 2026-07-31 decision in
+this document and the applicable/retired crosswalk in
+[the companion matrix](RESILIENT_DILOCO_GAP_MATRIX.md). Bounded async-v2.1
+research additionally conforms to
+[ADR-002: simple asynchronous DiLoCo v2.1](ASYNC_DECOUPLED_DILOCO_V2.md), and
+native elastic research conforms to
+[Native resilient DiLoCo data plane v1](NATIVE_RESILIENT_DILOCO_DATAPLANE.md).
+Those research specializations remain normative for work claiming their
+identities, but are not production E97 launch dependencies. Existing evidence
+is retained; this decision does not authorize cancelling or relabeling it.
 
-Async-v2.1 qualification and scale submission additionally use the reviewed
+Async-v2.1 research qualification and scale submission additionally use the
+reviewed
 [execution-source identity and durable scheduler transaction](ASYNC_V21_EXECUTION_SOURCE_IDENTITY.md).
 Evidence-only commits may advance without changing that immutable execution
 identity, but every operational tracked byte and every separately bound
 native/data/tokenizer/seed identity remains fail closed.
 
-The practical Frontier MVP is one Slurm allocation of any supported size. It
+The elastic research MVP is one Slurm allocation of any supported size. It
 binds a monotonically increasing scheduler fence to an immutable allocation
 claim before model load. The in-memory native peer-control protocol owns live
 membership, incarnation fencing, generation/commit state, and recovery
 handshakes for the allocation. Peers become contributors only after
 synchronizing and advertising READY; they may appear late, disappear, and
 return without defining a fixed world size or imposing an all-rank barrier.
-The same protocol applies to a future very large, potentially system-scale,
-single allocation.
+This remains the research design for a future elastic, potentially
+system-scale allocation; ADR-003, not this protocol, is the selected production
+E97 path.
 
 **2026-07-25 no-database amendment.** “Lease” below denotes the logical,
 deadline-bounded READY/incarnation relationship maintained by native peer
@@ -45,6 +47,72 @@ receipts are durable evidence, not a live coordination store. A compatibility
 offline submit-side migration tool and is not a production launch dependency.
 
 Normative words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** have their RFC 2119 meanings.
+
+## ADR-003: production same-allocation execution epochs (2026-07-31)
+
+**Decision evidence.** Frontier job **5125415** physically proved the selected
+failure boundary on the actual `train.py` path: a 16-rank, two-node child
+completed hierarchical 67,108,864-element-bucket merges and atomically
+published/reloaded a checkpoint; a subsequently damaged child terminated
+nonzero in a bounded 99 seconds without publishing a checkpoint; the parent
+batch allocation survived; and a fresh 8-rank child on one whole node, with a
+new process group and `MASTER_PORT`, resumed the committed checkpoint and
+merged successfully. The retained report is
+[`validation/direct-same-allocation-trainpy-restart-5125415.md`](validation/direct-same-allocation-trainpy-restart-5125415.md).
+The report correctly called the experiment nonconforming research when it ran;
+this reviewed amendment uses it as decision evidence rather than retroactively
+claiming v1, v2.1, native-data-plane, or overlap conformance.
+
+Production E97 now uses one Slurm batch parent and a sequence of fixed-world
+`train.py` **execution epochs**:
+
+1. A caller supplies a stable `RUN_ID`; its run directory MUST NOT contain the
+   Slurm job ID. The same exact checkpoint directory and atomic
+   `train/latest.pt` survive an
+   in-place restart, Slurm requeue, and a replacement job ID.
+2. Each epoch is a new child `srun`, process set, distributed process group, and
+   `MASTER_PORT`. It resumes only the stable atomic `latest.pt`. It MUST NOT
+   reuse a damaged communicator, unfinished tensors, a partial checkpoint, or
+   any failed process.
+3. `train.py` remains the data plane: singleton GPU islands, hierarchical RCCL
+   merges in 67,108,864-element buckets, an exact output directory shared by
+   every supervised epoch (so retention applies across restarts), and synchronous rank-0 checkpoint
+   publication by temporary file, `os.replace`, temporary symlink, and
+   `os.replace`. The launcher may advance its stable pointer only from a
+   readable epoch `latest.pt`; temporary or bare checkpoint files are never
+   candidates.
+4. `srun --kill-on-bad-exit` plus finite wait/TERM/KILL deadlines bounds failed
+   step teardown. The batch allocation uses `--no-kill`. After teardown the
+   parent re-evaluates allocation nodes, excludes whole nodes that Slurm marks
+   unusable, and relaunches a smaller fixed world when at least `MIN_NODES`
+   remains. There is no rank-level elasticity or communicator shrink.
+5. Loss or exhaustion of the batch parent/allocation is not repaired by a new
+   control protocol. `#SBATCH --requeue` is the fallback; an attended batch
+   signal requests scheduler requeue after bounded child termination. The next
+   attempt uses only the stable `RUN_ID` directory and atomic `latest.pt`.
+6. Default E97 policy is synchronous **K40**, `save_every=200` local steps
+   (five outer merges), and `keep_checkpoints=2`, while retaining `train.py`'s
+   final and pre-walltime checkpoint behavior. These values have explicit
+   launcher overrides, but every periodic save MUST remain K-aligned.
+
+The approved production systems ladder is **8 -> 32 -> 128**. Job 5125415 is
+the direct two-node decision observation; it is not relabeled as an async-v2.1
+qualification rung. Each production rung requires an immutable exact-source
+pass from its immediate predecessor, and 256 or another topology requires a
+new human review. No scale submission is authorized merely by editing this
+architecture.
+
+**Retired from the production path, retained as research.** Dynamic leased
+READY membership, async-v2.1/V21S01–V21S17, ISP01–ISP07 background snapshot and
+apply, cell layouts, owner-tree aggregation, the elastic native service, and
+communicator shrink are not production E97 requirements. No evidence is
+deleted. In particular, production does **not** claim R02–R06/R08–R11 dynamic
+pool semantics, NDP02's no-all-rank property, NDP15 background checkpointing,
+NDP17's native G2–G6 chain, or any V21S/ISP overlap gate. The applicable safety
+intent is R07/R12 atomic committed restart, R14/NDP13 bounded termination,
+R16 evidence discipline, and NDP15 checkpoint atomicity; their elastic/native
+clauses are explicitly unclaimed. ADR-003 adds no hashing, background
+checkpointing, database, membership service, or coordination protocol.
 
 ## Scope and decisions
 
@@ -284,15 +352,21 @@ authorize nor block this systems ladder.
 
 ### Conformance checklist (required in every implementation/runner/scale task Validation)
 
-- Cite this document/version and name the requirement IDs from the companion matrix.
-- Show peer-owned READY membership, bounded waits, and no launched-rank/all-rank invariant.
+- Cite this document/version/decision and name the applicable and explicitly
+  retired requirement IDs from the companion matrix. Production ADR-003 tasks
+  MUST NOT claim elastic/native/v2.1 requirements that the fixed-world path
+  intentionally retires.
+- Elastic research must show peer-owned READY membership, bounded waits, and no
+  launched-rank/all-rank invariant. Production ADR-003 instead shows a bounded
+  fixed-world child boundary, fresh process-group relaunch, whole-node
+  reduction, and no attempt to preserve a broken all-rank communicator.
 - Prove the rendered compute-role closure has no SQLite import, connection,
   database path, store construction, filesystem lock, or metadata heartbeat.
 - Show fenced generation identity, deterministic weighted math, idempotence, stale/corrupt rejection, and atomic committed evidence.
 - Show bounded non-Lustre hot-path transport, backpressure/release, and no central full-model broker.
 - Exercise the applicable failure/deadline and recovery path; state the minimum progress floor.
 - Report exact validation commands and committed-generation/checkpoint artifacts; scale tasks must pass every prior rung.
-- A bounded asynchronous task must additionally cite ADR-002 and
+- A bounded asynchronous **research** task must additionally cite ADR-002 and
   V21S01–V21S17 and ISP01–ISP07, report commit/applied-anchor/result/speculative
   clocks honestly, and provide causally matched per-phase timing for
   freeze/snapshot, admission, publish/network, aggregation, checkpoint, result
@@ -352,7 +426,7 @@ prerequisite.
 
 ## Native data-plane binding
 
-The production elastic dense path is bound to
+The elastic dense research path is bound to
 [`NATIVE_RESILIENT_DILOCO_DATAPLANE.md`](NATIVE_RESILIENT_DILOCO_DATAPLANE.md),
 version 1 (requirements NDP01–NDP17). One pure deterministic transition kernel
 in the persistent model-free native service owns the allocation
@@ -363,7 +437,8 @@ policy and publication, explicit effect execution, and Slurm supervision. A
 persistent model-free C++17 service on every node also owns local XPMEM/memfd
 handoff, exact native reduction, libfabric `FI_EP_RDM`/Frontier `cxi` payload
 movement, bounded replay, and redistribution. Python TCP and Python object
-serialization MUST NOT carry production dense contributions or aggregates.
+serialization MUST NOT carry dense contributions or aggregates on a path
+claiming this native elastic identity.
 
 The native service is the sole peer-coordination committer, but it cannot
 infer membership, closure, expiry, or recovery from transport reachability.
@@ -384,17 +459,17 @@ replace the sequential lifecycle/failure/restart ladder above.
 
 ## Backend mapping and decision record
 
-Frontier/Slurm supplies a fixed allocation envelope; the supervisor publishes
-one immutable scheduler-fenced claim, launches independent node
-managers/trainers and one persistent native data service per node, and reacts
-to Slurm shutdown signals. Native peer control maps shard owners
+For the elastic research path, Frontier/Slurm supplies a fixed allocation
+envelope; the supervisor publishes one immutable scheduler-fenced claim,
+launches independent node managers/trainers and one persistent native data
+service per node, and reacts to Slurm shutdown signals. Native peer control maps shard owners
 deterministically among available peers and exchanges opaque service endpoints.
 The native services select libfabric `FI_EP_RDM` with exact provider `cxi`.
 Slurm node count is capacity only. Other backends map an authenticated
 monotonic allocation fence, host agents, and local/network transports to the
 same identities and protocol.
 
-**ADR-001 (amended 2026-07-25):** The MVP chooses exactly one
+**ADR-001 (amended 2026-07-25, research after ADR-003):** The elastic MVP chooses exactly one
 scheduler-fenced allocation claim for operational simplicity and safe
 continuation across queued jobs. Simultaneous independent allocations do not
 join one live run. The native peer protocol, not a shared database, owns live
@@ -402,12 +477,11 @@ control. A future federation requires a separately reviewed highly available
 control service, cross-allocation authentication, shard-owner placement, and
 partition semantics while preserving every fence and commit invariant.
 
-Unresolved decisions are intentionally explicit: v1 production `Q_min`,
-`T_min`, optional
-fraction and retry deadlines per model size; v1 outer optimizer and checkpoint
-cadence; production shard placement/reassignment; and whether trainer inner
-state is ever checkpointed. ADR-002 fixes asynchronous math for v2.1 and
-authorizes scale only through the exact direct systems policy above; broader
-promotion remains gated by its acceptance criteria, immediate-predecessor
-machine pass, and scale-closure review. Until resolved by a reviewed ADR/config,
-implementations fail closed or use test-only values.
+Unresolved **elastic research** decisions are intentionally explicit: v1
+`Q_min`, `T_min`, optional fraction and retry deadlines per model size; v1
+outer optimizer and checkpoint cadence; shard placement/reassignment; and
+whether trainer inner state is ever checkpointed. ADR-002 fixes asynchronous
+math only for v2.1 research. None of these gaps blocks ADR-003 production,
+whose fixed-world K40/save-200/keep-2 policy and 8 -> 32 -> 128 ladder are
+selected above. A path claiming v1/v2.1/native identity still fails closed or
+uses test-only values until its own reviewed decisions are resolved.

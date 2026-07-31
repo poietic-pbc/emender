@@ -1,3 +1,4 @@
+from argparse import Namespace
 from pathlib import Path
 
 import torch
@@ -34,6 +35,25 @@ def test_slurm_env_fallback_preserves_exported_world_size(monkeypatch):
     assert status == "world-size-present"
     assert train.os.environ["RANK"] == "5"
     assert train.os.environ["LOCAL_RANK"] == "0"
+
+
+def test_exact_output_dir_is_stable_across_supervised_execution_epochs(tmp_path):
+    exact = tmp_path / "stable-run" / "train"
+    args = Namespace(
+        output=str(tmp_path / "unused"),
+        exact_output_dir=str(exact),
+        level="E97",
+        params="100m",
+        resume=str(exact / "latest.pt"),
+        diloco_bootstrap_outer_state="none",
+    )
+
+    first_epoch = train.setup_output_dir(args)
+    second_epoch = train.setup_output_dir(args)
+
+    assert first_epoch == second_epoch == exact
+    assert (exact / "args.json").is_file()
+    assert (exact / "run_manifest.json").is_file()
 
 
 def test_save_checkpoint_atomically_updates_latest_and_keeps_newest(tmp_path):
