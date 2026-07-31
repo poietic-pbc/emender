@@ -44,6 +44,28 @@ def _ns(**kw):
     return SimpleNamespace(**base)
 
 
+def test_diloco_fault_injection_exits_only_exact_collective(monkeypatch, capsys):
+    import train
+
+    monkeypatch.setenv('EMENDER_DILOCO_EXIT_RANK', '3')
+    monkeypatch.setenv('EMENDER_DILOCO_EXIT_MERGE', '2')
+    monkeypatch.setenv('EMENDER_DILOCO_EXIT_BUCKET', '1')
+    monkeypatch.setenv('EMENDER_DILOCO_EXIT_LABEL', 'model')
+    monkeypatch.setenv('EMENDER_DILOCO_EXIT_CODE', '86')
+    monkeypatch.setenv('EMENDER_DILOCO_EXIT_DELAY_SECONDS', '0')
+    monkeypatch.setattr(train.dist, 'get_rank', lambda: 3)
+    exits = []
+    monkeypatch.setattr(train.os, '_exit', lambda code: exits.append(code))
+
+    train._maybe_inject_diloco_collective_rank_exit(
+        label='model', bucket_index=0, merge_index=2)
+    assert exits == []
+    train._maybe_inject_diloco_collective_rank_exit(
+        label='model', bucket_index=1, merge_index=2)
+    assert exits == [86]
+    assert 'DILOCO_FAULT_INJECTION' in capsys.readouterr().out
+
+
 def _build():
     """Tiny but real model + real ScheduleFree optimizer (seed-identical across ranks)."""
     import schedulefree
