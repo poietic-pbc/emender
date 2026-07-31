@@ -420,6 +420,10 @@ def parse_args():
     # Checkpointing
     parser.add_argument('--output', type=str, default='./output',
                         help='Output directory')
+    parser.add_argument('--exact_output_dir', type=str, default=None,
+                        help='Use this exact run/checkpoint directory instead of creating a '
+                             'timestamped child. Intended for externally supervised restart '
+                             'epochs that must share one atomic latest.pt and retention set.')
     parser.add_argument('--save_every', type=int, default=1000,
                         help='Save checkpoint every N steps')
     parser.add_argument('--log_every', type=int, default=10,
@@ -936,8 +940,13 @@ def setup_output_dir(args, model_metadata=None):
         prefix = model_metadata.get('run_label_prefix')
     if prefix is None:
         prefix = f"level{args.level}_{args.params}"
-    run_name = f"{prefix}_{timestamp}"
-    output_dir = Path(args.output) / run_name
+    exact_output_dir = getattr(args, 'exact_output_dir', None)
+    if exact_output_dir:
+        output_dir = Path(exact_output_dir)
+        run_name = output_dir.name
+    else:
+        run_name = f"{prefix}_{timestamp}"
+        output_dir = Path(args.output) / run_name
 
     output_dir.mkdir(parents=True, exist_ok=True)
 

@@ -11,11 +11,41 @@ definition/crosswalk matrix for V21S01–V21S17 and the immutable-snapshot
 pipeline namespace ISP01–ISP07. Status is **present**,
 **partial**, or **gap**. Line numbers are avoided because implementation paths
 move; paths and test names are stable review anchors. “Present” means wired and
-locally exercised, never that a Frontier or promotion gate passed. R01–R16,
-NDP01–NDP17, and V21S01–V21S17 remain independently normative; an ISP mapping
-cannot weaken or replace them.
+locally exercised, never that a Frontier or promotion gate passed. After the
+2026-07-31 ADR-003 decision, these namespaces remain independently normative
+for elastic/native/async research that claims them; they are not implicitly
+production E97 launch requirements.
 
-## Requirements-to-current-harness matrix
+## ADR-003 production fixed-world crosswalk (2026-07-31)
+
+Frontier job **5125415** is the decision evidence for the selected
+same-allocation execution-epoch boundary; see
+[`validation/direct-same-allocation-trainpy-restart-5125415.md`](validation/direct-same-allocation-trainpy-restart-5125415.md).
+It proved 64M-bucket hierarchical `train.py` merge, atomic checkpoint reload,
+bounded failed-child teardown, allocation survival, and fresh smaller-world
+relaunch. It remains honestly `v1_conformance=false` and
+`v21_conformance=false`; this crosswalk does not relabel it.
+
+| ID / set | ADR-003 production disposition | Implementation / remaining evidence |
+|---|---|---|
+| R07 | **Applicable safety intent, elastic receipt-chain clause unclaimed.** A child checkpoint and `latest.pt` are synchronously published with temp-file/rename and temp-symlink/rename. The parent advances only a readable atomic epoch `latest.pt`; partial files are never selected. | `train.save_checkpoint`; `samealloc_promote_epoch_latest`; checkpoint and launcher tests. No native peer receipt chain is claimed. |
+| R12 | **Applicable safety intent.** Every fresh child receives the stable run-level `latest.pt` through `--resume`, restoring model, inner optimizer, and recorded DiLoCo outer state. Stable `RUN_ID` and pointer survive Slurm job-ID changes/requeue. | `scripts/frontier/e97_same_allocation_restart.sbatch`; restart/outer-state tests. No allocation claim or native recovery handshake is claimed. |
+| R14 / NDP13 | **Applicable after translation to an execution-epoch boundary.** `timeout` TERM/KILL bounds the epoch, `srun --kill-on-bad-exit --wait` bounds rank-failure cleanup, and existing final/pre-walltime checkpoint controls remain enabled. | Job 5125415 terminated the damaged step in 99 seconds; launcher syntax/contract tests cover configured bounds. Async phase/foreground-wait telemetry is retired, not satisfied. |
+| R16 | **Replaced production ladder.** The attended approval plus job 5125415 selects immutable exact-source `8 -> 32 -> 128`, each rung requiring its immediate predecessor. 256 remains review-only. | The dependent immutable 8-node acceptance consumes the production launcher commit. The historical native G2–G6 authorization is research-only. |
+| NDP02 | **Retired/incompatible for production.** Each child deliberately uses fixed-world RCCL collectives. Failure safety comes from terminating the entire child and constructing a fresh process group, never from continuing or shrinking its communicator. | Job 5125415 is the physical containment evidence. No no-all-rank claim is made. |
+| NDP15 | **Checkpoint atomicity retained; background/apply clauses retired.** Production checkpoints synchronously at K-aligned step 200, retains two, and keeps final/pre-walltime publication. | Atomic `train.py` tests plus launcher promotion tests. No hashing, background checkpoint I/O, mailbox, or later apply is added or claimed. |
+| NDP17 | **Retired/replaced for production.** The full-layout native CXI G2–G6 chain remains research evidence. Job 5125415 and the approved exact-source fixed-world ladder are the production gate. | No native-bundle or communicator-shrink claim; each production rung must retain its immutable predecessor pass. |
+| R02–R06, R08–R11; NDP01, NDP03–NDP12, NDP14, NDP16 | **Retired from production, retained as elastic/native research.** | Their matrices and artifacts below remain unchanged evidence; ADR-003 adds no cell, owner-tree, service, database, or new coordination protocol. |
+| V21S01–V21S17; ISP01–ISP07 | **Entirely retired from production, retained as non-production async-v2.1 research.** | No overlap, distinct lag clocks, background immutable-snapshot pipeline, cell/owner-tree, or communicator-shrink conformance is claimed. Existing gaps remain honest research gaps. |
+
+Production defaults are `DILOCO_K=40`, `SAVE_EVERY=200` (five outer merges),
+and `KEEP_CHECKPOINTS=2`, all explicit overrides with K-alignment enforced.
+The launcher preserves hierarchical `DILOCO_MERGE_BUCKET_NUMEL=67108864`, uses
+a stable run directory independent of `SLURM_JOB_ID`, records a monotonically
+advanced execution epoch and fresh port, and delegates batch-shell loss to
+Slurm `--requeue`.
+
+## Elastic research requirements-to-current-harness matrix
 
 | ID | Requirement | Current code / evidence | Tests | Status and bounded gap |
 |---|---|---|---|---|
@@ -163,15 +193,22 @@ substitution:
 
 ## Current architecture boundaries
 
-The legacy `train.py` DiLoCo merge and compiled MPICH scale path remain numerical/performance references, but their process groups/collectives and launched-rank assumptions are nonconforming for resilient global membership. The split-role Python TCP/file implementation remains an explicit small debug fixture. Production selects the separate native branches: one persistent compiled service, one model-free manager, eight direct-memfd trainers and compiled point-to-point owner transfer per node. `QuorumTransportServer` and its node-0 transport remain adjacent legacy/reference code and are not production backends.
+Production E97 selects ADR-003's fixed-world `train.py` hierarchy. Its
+launched-rank collectives are intentionally bounded by the whole child
+execution epoch; they do not claim resilient global membership. The split-role
+Python TCP/file implementation, native service/manager/direct-memfd path,
+cell/owner-tree variants, and communicator-shrink ideas remain non-production
+research or debug fixtures. `QuorumTransportServer` and its node-0 transport
+remain adjacent legacy/reference code and are not production backends.
 
 `docs/ASYNC_QUORUM_DILOCO.md`, `LocalAsyncDilocoConfig`, and the existing core
 tests remain v1 stale-reject reference/scaffolding, not authority for v2.1.
-ADR-002 is the policy authority. The rendered production path uses the
-`async-decoupled-v2.1-simple` policy, versioned ABI/wire/checkpoint identities,
-exact-token eta-one math, max-lag-two admission, atomic node-apply evidence, and
-the v2.1 semantic validator. Historical v2.0 records remain readable only as
-explicit rejection/reference fixtures and cannot cross a v2.1 boundary.
+ADR-002 remains the policy authority only for work claiming async-v2.1. Its
+versioned ABI/wire/checkpoint identities, exact-token eta-one math, lag
+admission, atomic node apply, snapshot pipeline, and semantic validator are
+research requirements, not ADR-003 dependencies. Historical v2.0 records
+remain readable only as explicit rejection/reference fixtures and cannot cross
+a v2.1 boundary.
 Current v1 implementation evidence is
 `reports/integrate-resilient-pool-v1-20260718.md` plus its committed metrics
 JSON. The retained job 5062348 report is in Git commit `20c9d1be`; it is
@@ -179,11 +216,12 @@ evidence of five atomic generations and a failed overlap/cadence/idle gate, not
 v2.1 acceptance. Failed v2.0 jobs 5066495 and 5068873 are retained as
 non-qualifying failure evidence.
 
-## Bounded successor tasks
+## Bounded elastic-research successor tasks
 
-The v2.1 implementation is locally exercised without a Slurm mutation. The
-remaining work is bounded and must keep the full conformance checklist in every
-task's `## Validation`.
+The following backlog is retained for non-production v2.1 research and does
+not gate or authorize ADR-003 production. The v2.1 implementation is locally
+exercised without a Slurm mutation. Remaining research work must keep the full
+elastic conformance checklist in every task's `## Validation`.
 
 1. **Implement the immutable snapshot gate (ISP01–ISP07).** Add the named
    unit/integration/semantic-validator evidence, including coherent capture,
@@ -208,7 +246,7 @@ task's `## Validation`.
 
 | Decision | Owner/evidence required | Safe default now |
 |---|---|---|
-| Frontier allocation fencing/restart authority | Scheduler-fence monotonicity, immutable receipt-lineage and fresh-allocation recovery tests | Slurm fence plus immutable claims/receipts/checkpoint manifests; every shared-database path is forbidden and fatal in the compute closure. |
+| Frontier allocation fencing/restart authority | Production: stable run identity, atomic latest selection, bounded child restart and scheduler requeue. Research: scheduler-fence monotonicity, immutable receipt lineage and fresh-allocation recovery. | ADR-003 uses one parent allocation plus Slurm requeue and no database/protocol. A path claiming elastic identity still requires immutable claims/receipts/manifests. |
 | v1 `Q_min`, `T_min`, optional READY fraction and retry limits | Training + reliability results per model/config | V1 uses test-only explicit values. V2.1 is fixed at `Q_min=2`, `T_min=3,934,080`, fraction disabled, zero retry for its two-node gate. |
 | v1 outer optimizer and recovery/export cadence | Numerical parity and measured checkpoint cost | V2.1 is fixed to stateless exact-token `eta_outer=1.0`; restore its outer step/token clock and fail closed if unavailable. |
 | Shard count and production byte bounds | Full E97 network/memory measurements at the 2-node rung | Deterministic full-layout mapping and bounded defaults; do not scale before telemetry is accepted. |
