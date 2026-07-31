@@ -109,8 +109,8 @@ bash -n "$launcher" "$payload_root"/{payload.sh,collector.sh}
 
 run_id="e97-32n-clean-$(date -u +%Y%m%dT%H%M%SZ)-${payload_digest:0:12}"
 run_dir="$BASE/runs/$run_id"
-# ac0c90a9 writes launch.env before its in-loop mkdir; precreate the sole clean epoch.
-mkdir -p "$run_dir"/{identity,logs,supervisor,monitor} "$run_dir/epochs/epoch-000001"
+# The production launcher owns creation of every execution-epoch directory.
+mkdir -p "$run_dir"/{identity,logs,supervisor,monitor}
 printf '%s\n' "$payload_digest" > "$run_dir/identity/payload-digest.txt"
 cp "$payload_root/config.env" "$run_dir/identity/config.env"
 cp "$payload_root/SHA256SUMS" "$run_dir/identity/payload-SHA256SUMS"
