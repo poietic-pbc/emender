@@ -1920,6 +1920,42 @@ def _warm_diloco_hierarchical_merge_groups(args, device):
     dist.barrier()
 
 
+def _maybe_inject_diloco_collective_rank_exit(*, label, bucket_index,
+                                               merge_index):
+    """Test-only, fail-closed rank exit immediately before a DiLoCo collective.
+
+    The surrounding ``srun`` owns failure containment.  Exiting here strands the
+    other ranks inside the collective, exercising the real RCCL failure path;
+    the batch-shell supervisor must terminate that step and start a fresh one.
+    No handler or communicator recovery is attempted in this process.
+    """
+    requested_rank = os.environ.get('EMENDER_DILOCO_EXIT_RANK')
+    if requested_rank is None:
+        return
+    try:
+        rank = dist.get_rank()
+        target_rank = int(requested_rank)
+        target_merge = int(os.environ['EMENDER_DILOCO_EXIT_MERGE'])
+        target_bucket = int(os.environ.get('EMENDER_DILOCO_EXIT_BUCKET', '0'))
+        exit_code = int(os.environ.get('EMENDER_DILOCO_EXIT_CODE', '86'))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError('invalid EMENDER_DILOCO_EXIT_* fault injection') from exc
+    if not 1 <= exit_code <= 255:
+        raise RuntimeError('EMENDER_DILOCO_EXIT_CODE must be in [1,255]')
+    if (rank != target_rank or merge_index != target_merge
+            or bucket_index != target_bucket
+            or label != os.environ.get('EMENDER_DILOCO_EXIT_LABEL', 'model')):
+        return
+    print('DILOCO_FAULT_INJECTION ' + json.dumps({
+        'rank': rank, 'merge_index': merge_index, 'bucket_index': bucket_index,
+        'label': label, 'exit_code': exit_code,
+    }, sort_keys=True), flush=True)
+    # Give peers a bounded head start into the same collective, making this a
+    # communicator/process-failure experiment rather than a pre-collective stop.
+    time.sleep(float(os.environ.get('EMENDER_DILOCO_EXIT_DELAY_SECONDS', '0.25')))
+    os._exit(exit_code)
+
+
 def _diloco_allreduce_average_flat(flat, world_size, args, label, step=None,
                                    merge_index=None):
     topology = str(getattr(args, 'diloco_merge_topology', 'global') or 'global').lower()
@@ -1945,6 +1981,8 @@ def _diloco_allreduce_average_flat(flat, world_size, args, label, step=None,
         _diloco_merge_log(args, step, merge_index, label, bucket_index,
                           int(chunk.numel()), chunk.dtype, 'enter')
         t0 = time.time()
+        _maybe_inject_diloco_collective_rank_exit(
+            label=label, bucket_index=bucket_index, merge_index=merge_index)
         if topology == 'hierarchical':
             _diloco_hierarchical_sum_average_flat(chunk, world_size, args)
         elif topology == 'global':
