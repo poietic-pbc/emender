@@ -12,14 +12,14 @@ BASE=${DIRECT_RESTART_BASE:-/lustre/orion/bif148/proj-shared/emender/frontier_ru
 mkdir -p "$BASE/attempts" "$BASE/collectors"
 [[ -z $(git status --porcelain --untracked-files=no) ]] || { echo "tracked source must be clean" >&2; exit 64; }
 SOURCE_SHA=$(git rev-parse HEAD)
-PAYLOAD_DIGEST=$(sha256sum train.py "$PAYLOAD" "$COLLECTOR" | sha256sum | awk '{print $1}')
+PAYLOAD_DIGEST=$(sha256sum train.py "$PAYLOAD" "$COLLECTOR" "$0" | sha256sum | awk '{print $1}')
 SENTINEL="$BASE/attempts/$PAYLOAD_DIGEST"
 ( set -o noclobber; printf '%s|%s|%s\n' "$SOURCE_SHA" "$(date -u +%FT%TZ)" "$PAYLOAD_DIGEST" > "$SENTINEL" ) 2>/dev/null || {
   echo "unchanged payload already attempted: $PAYLOAD_DIGEST" >&2; exit 65;
 }
 PAYLOAD_ID=""
 trap 'if [[ -z $PAYLOAD_ID ]]; then rm -f "$SENTINEL"; fi' EXIT
-PAYLOAD_ID=$(sbatch --parsable --hold --no-kill -A bif148 -p batch -q debug -N2 -t 00:30:00 \
+PAYLOAD_ID=$(sbatch --parsable --hold --no-kill -A bif148 -p batch -q debug -N2 -t 00:20:00 \
   --export=ALL,REPO="$REPO",PYTHON_BIN="$EMENDER_PYTHON" "$PAYLOAD")
 ROOT="$BASE/$PAYLOAD_ID"
 mkdir -p "$ROOT/identity"

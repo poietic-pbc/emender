@@ -4,7 +4,7 @@
 #SBATCH -p batch
 #SBATCH -q debug
 #SBATCH -N 2
-#SBATCH -t 00:30:00
+#SBATCH -t 00:20:00
 #SBATCH --ntasks-per-node=8
 #SBATCH --cpus-per-task=7
 #SBATCH --gpus-per-task=1
