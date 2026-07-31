@@ -31,21 +31,109 @@ set -euo pipefail
 
 samealloc_bad_node_state() {
   local state=${1^^}
-  [[ "$state" =~ (^|[+~,])(DOWN|DRAIN|DRAINING|DRAINED|FAIL|FAILING|FAILED|NO_RESPOND|NOT_RESPONDING|POWER_DOWN|POWERED_DOWN)([+~,]|$) ]]
+  [[ "$state" =~ (^|[^A-Z_])(DOWN|DRAIN|DRAINING|DRAINED|FAIL|FAILING|FAILED|NO_RESPOND|NOT_RESPONDING|INVALID_REG|INVAL|POWER_DOWN|POWERED_DOWN)([^A-Z_]|$) ]]
 }
 
-samealloc_usable_nodes() {
-  local allocation_nodelist=$1 node record state
+samealloc_select_usable_nodes() {
+  local allocation_nodelist=$1 excluded_name=$2 usable_name=$3 hard_bad_name=$4
+  local -n excluded_ref=$excluded_name usable_ref=$usable_name hard_bad_ref=$hard_bad_name
+  local hostnames node record state
+  usable_ref=()
+  hard_bad_ref=()
+  hostnames=$(scontrol show hostnames "$allocation_nodelist" 2>/dev/null) || return 69
   while IFS= read -r node; do
     [[ -n "$node" ]] || continue
-    record=$(scontrol show node "$node" -o 2>/dev/null) || continue
+    if [[ -n ${excluded_ref[$node]-} ]]; then
+      continue
+    fi
+    if ! record=$(scontrol show node "$node" -o 2>/dev/null); then
+      hard_bad_ref[$node]=SLURM_QUERY_FAILED
+      excluded_ref[$node]=slurm-nonresponsive
+      continue
+    fi
     if [[ "$record" =~ State=([^[:space:]]+) ]]; then
       state=${BASH_REMATCH[1]}
     else
+      hard_bad_ref[$node]=SLURM_STATE_MISSING
+      excluded_ref[$node]=slurm-nonresponsive
       continue
     fi
-    samealloc_bad_node_state "$state" || printf '%s\n' "$node"
-  done < <(scontrol show hostnames "$allocation_nodelist")
+    if samealloc_bad_node_state "$state"; then
+      hard_bad_ref[$node]=$state
+      excluded_ref[$node]="slurm-$state"
+    else
+      usable_ref+=("$node")
+    fi
+  done <<< "$hostnames"
+}
+
+samealloc_usable_nodes() {
+  local allocation_nodelist=$1
+  local -a selected=()
+  local -A excluded=() hard_bad=()
+  samealloc_select_usable_nodes "$allocation_nodelist" excluded selected hard_bad || return
+  (( ${#selected[@]} == 0 )) || printf '%s\n' "${selected[@]}"
+}
+
+samealloc_direct_failure_host() {
+  local log_file=$1
+  shift
+  local line host
+  local -A allowed=() attributed=()
+  for host in "$@"; do
+    allowed[$host]=1
+  done
+  [[ -r "$log_file" ]] || return 1
+  while IFS= read -r line; do
+    # Only Slurm's explicit task-exit attribution is trusted. Rank-prefixed
+    # tracebacks and collective error reporters are deliberately ignored.
+    if [[ "$line" =~ ^srun:\ error:\ ([A-Za-z0-9._-]+):\ task\ [0-9]+:\ Exited\ with\ exit\ code\ [1-9][0-9]*[[:space:]]*$ ]]; then
+      host=${BASH_REMATCH[1]}
+      [[ -n ${allowed[$host]-} ]] && attributed[$host]=1
+    fi
+  done < "$log_file"
+  (( ${#attributed[@]} == 1 )) || return 1
+  printf '%s\n' "${!attributed[@]}"
+}
+
+samealloc_record_direct_failure() {
+  local host=$1 strikes_name=$2 excluded_name=$3
+  local -n strikes_ref=$strikes_name excluded_ref=$excluded_name
+  local count=$(( ${strikes_ref[$host]:-0} + 1 ))
+  strikes_ref[$host]=$count
+  if (( count >= 2 )); then
+    excluded_ref[$host]="direct-failure-strike-$count"
+  fi
+}
+
+samealloc_update_no_progress() {
+  local previous_step=$1 observed_step=$2 count_name=$3 step_name=$4
+  local -n count_ref=$count_name step_ref=$step_name
+  if [[ "$observed_step" =~ ^[0-9]+$ ]] && (( observed_step > previous_step )); then
+    step_ref=$observed_step
+    count_ref=0
+  else
+    count_ref=$((count_ref + 1))
+  fi
+}
+
+samealloc_reset_allocation_policy() {
+  local new_identity=$1 identity_name=$2 strikes_name=$3 excluded_name=$4 count_name=$5
+  local -n identity_ref=$identity_name strikes_ref=$strikes_name excluded_ref=$excluded_name count_ref=$count_name
+  if [[ "$identity_ref" != "$new_identity" ]]; then
+    identity_ref=$new_identity
+    strikes_ref=()
+    excluded_ref=()
+    count_ref=0
+  fi
+}
+
+samealloc_checkpoint_step() {
+  local latest=$1 resolved base
+  resolved=$(readlink -f "$latest") || return 1
+  base=$(basename "$resolved")
+  [[ "$base" =~ ^checkpoint_step_([0-9]+)_ ]] || return 1
+  printf '%s\n' "$((10#${BASH_REMATCH[1]}))"
 }
 
 samealloc_atomic_latest() {
@@ -133,7 +221,10 @@ samealloc_main() {
   CPUS_PER_TASK=${CPUS_PER_TASK:-7}
   TARGET_NODES=${TARGET_NODES:-$SLURM_JOB_NUM_NODES}
   MIN_NODES=${MIN_NODES:-1}
-  MAX_EXECUTION_EPOCHS_PER_ATTEMPT=${MAX_EXECUTION_EPOCHS_PER_ATTEMPT:-3}
+  # The legacy total-epoch variable remains a compatibility input for accepted
+  # wrappers, but now bounds only consecutive failures without checkpoint
+  # progress. Epochs that promote a newer atomic checkpoint reset the bound.
+  MAX_CONSECUTIVE_NO_PROGRESS_FAILURES=${MAX_CONSECUTIVE_NO_PROGRESS_FAILURES:-${MAX_EXECUTION_EPOCHS_PER_ATTEMPT:-3}}
   EXECUTION_EPOCH_TIMEOUT_SECONDS=${EXECUTION_EPOCH_TIMEOUT_SECONDS:-86400}
   FAILED_STEP_WAIT_SECONDS=${FAILED_STEP_WAIT_SECONDS:-60}
   FAILED_STEP_KILL_GRACE_SECONDS=${FAILED_STEP_KILL_GRACE_SECONDS:-60}
@@ -165,6 +256,7 @@ samealloc_main() {
   }
   [[ "$RUN_DIR" == /* ]] || { echo "RUN_DIR must be absolute" >&2; return 64; }
   [[ "$TARGET_NODES" =~ ^[1-9][0-9]*$ && "$MIN_NODES" =~ ^[1-9][0-9]*$ ]] || return 64
+  [[ "$MAX_CONSECUTIVE_NO_PROGRESS_FAILURES" =~ ^[1-9][0-9]*$ ]] || return 64
   (( TARGET_NODES <= SLURM_JOB_NUM_NODES && MIN_NODES <= TARGET_NODES )) || {
     echo "invalid TARGET_NODES/MIN_NODES for allocation" >&2; return 64;
   }
@@ -268,8 +360,20 @@ samealloc_main() {
   }
   trap samealloc_batch_signal TERM HUP INT
 
-  local -a usable=()
-  mapfile -t usable < <(samealloc_usable_nodes "$SLURM_JOB_NODELIST")
+  local allocation_identity="${SLURM_JOB_ID}:${SLURM_RESTART_COUNT:-0}:${SLURM_JOB_NODELIST}"
+  local active_allocation_identity=""
+  local consecutive_no_progress=0 committed_step
+  local -a usable=() launched_nodes=() filtered=()
+  local -A node_strikes=() excluded_nodes=() hard_bad_nodes=()
+  samealloc_reset_allocation_policy "$allocation_identity" active_allocation_identity \
+    node_strikes excluded_nodes consecutive_no_progress
+  printf '%s|%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$allocation_identity" \
+    >> "$RUN_DIR/supervisor/allocation-identities.tsv"
+
+  if ! samealloc_select_usable_nodes "$SLURM_JOB_NODELIST" excluded_nodes usable hard_bad_nodes; then
+    samealloc_request_requeue "batch allocation node list is unavailable at startup"
+    return 0
+  fi
   (( ${#usable[@]} >= MIN_NODES )) || {
     samealloc_request_requeue "fewer than MIN_NODES healthy at startup"
     return 0
@@ -277,24 +381,32 @@ samealloc_main() {
   local current_nodes=$TARGET_NODES
   (( current_nodes <= ${#usable[@]} )) || current_nodes=${#usable[@]}
   usable=("${usable[@]:0:current_nodes}")
+  committed_step=$(samealloc_checkpoint_step "$stable_latest") || {
+    echo "stable latest.pt does not encode an exact checkpoint step" >&2
+    return 65
+  }
 
-  local local_attempt epoch epoch_dir epoch_output master_host master_port prior_port=""
-  local node_csv tasks rc promoted
-  for ((local_attempt=1; local_attempt<=MAX_EXECUTION_EPOCHS_PER_ATTEMPT; local_attempt++)); do
+  local epoch epoch_dir epoch_output master_host master_port prior_port=""
+  local node_csv tasks rc promoted observed_step direct_host strike_count node health_query_failed
+  while true; do
     epoch=$(samealloc_next_epoch "$RUN_DIR/supervisor/execution-epoch.txt")
     epoch_dir=$(printf '%s/epochs/epoch-%06d' "$RUN_DIR" "$epoch")
     epoch_output="$RUN_DIR/train"
-    mkdir -p "$epoch_output"
+    # The epoch directory is owned by the production launcher and must exist
+    # before launch.env, command, stdout, or stderr are opened.
+    mkdir -p "$epoch_dir" "$epoch_output"
     master_host=${usable[0]}
     master_port=$(samealloc_master_port "$epoch" "$prior_port")
     prior_port=$master_port
     node_csv=$(IFS=,; echo "${usable[*]}")
     tasks=$((current_nodes * TASKS_PER_NODE))
+    launched_nodes=("${usable[@]}")
 
     {
       echo "run_id=$RUN_ID"
       echo "slurm_job_id=$SLURM_JOB_ID"
       echo "slurm_restart_count=${SLURM_RESTART_COUNT:-0}"
+      echo "allocation_identity=$allocation_identity"
       echo "execution_epoch=$epoch"
       echo "nodes=$current_nodes"
       echo "tasks=$tasks"
@@ -302,6 +414,7 @@ samealloc_main() {
       echo "master_addr=$master_host"
       echo "master_port=$master_port"
       echo "resume=$stable_latest"
+      echo "resume_step=$committed_step"
       echo "diloco_k=$DILOCO_K"
       echo "save_every=$SAVE_EVERY"
       echo "keep_checkpoints=$KEEP_CHECKPOINTS"
@@ -312,6 +425,9 @@ samealloc_main() {
     printf '\n' >> "$epoch_dir/train-command.txt"
 
     echo "[samealloc] epoch=$epoch nodes=$current_nodes tasks=$tasks port=$master_port resume=$stable_latest"
+    # Real Slurm receives these through --export below; exporting them in the
+    # parent also makes the execution identity explicit to step shims/tests.
+    export MASTER_ADDR=$master_host MASTER_PORT=$master_port EMENDER_EXECUTION_EPOCH=$epoch
     set +e
     setsid timeout --signal=TERM --kill-after="${FAILED_STEP_KILL_GRACE_SECONDS}s" \
       "${EXECUTION_EPOCH_TIMEOUT_SECONDS}s" \
@@ -328,11 +444,22 @@ samealloc_main() {
     CHILD_PID=""
     set -e
 
+    # Slurm is the first node-health authority consulted after a failed child.
+    # Its hard-bad states are installed in excluded_nodes immediately.
+    health_query_failed=0
+    if (( rc != 0 )); then
+      hard_bad_nodes=()
+      if ! samealloc_select_usable_nodes "$SLURM_JOB_NODELIST" excluded_nodes usable hard_bad_nodes; then
+        health_query_failed=1
+      fi
+    fi
+
     promoted=0
     if samealloc_promote_epoch_latest "$epoch_output" "$stable_latest"; then
       promoted=1
     fi
-    printf '%s|%s|%s|%s|%s|%s\n' "$epoch" "$rc" "$current_nodes" "$tasks" "$master_port" "$promoted" \
+    observed_step=$(samealloc_checkpoint_step "$stable_latest") || observed_step=$committed_step
+    printf '%s|%s|%s|%s|%s|%s|%s\n' "$epoch" "$rc" "$current_nodes" "$tasks" "$master_port" "$promoted" "$observed_step" \
       >> "$RUN_DIR/supervisor/execution-epochs.tsv"
 
     if (( REQUEUE_REQUESTED )); then
@@ -344,25 +471,56 @@ samealloc_main() {
       return 0
     fi
 
-    echo "[samealloc] execution epoch $epoch failed rc=$rc; latest_promoted=$promoted" >&2
-    mapfile -t usable < <(samealloc_usable_nodes "$SLURM_JOB_NODELIST")
-    if (( ${#usable[@]} < MIN_NODES )); then
-      samealloc_request_requeue "healthy whole-node count ${#usable[@]} below MIN_NODES"
+    echo "[samealloc] execution epoch $epoch failed rc=$rc; latest_promoted=$promoted step=$observed_step" >&2
+    samealloc_update_no_progress "$committed_step" "$observed_step" consecutive_no_progress committed_step
+
+    if (( health_query_failed )); then
+      samealloc_request_requeue "batch allocation node list was lost after epoch $epoch"
       return 0
     fi
-    if (( ${#usable[@]} < current_nodes )); then
-      current_nodes=${#usable[@]}
+    for node in "${!hard_bad_nodes[@]}"; do
+      printf '%s|%s|exclude|slurm|%s\n' "$epoch" "$node" "${hard_bad_nodes[$node]}" \
+        >> "$RUN_DIR/supervisor/node-policy.tsv"
+      echo "[samealloc] excluding Slurm-unusable node $node state=${hard_bad_nodes[$node]}" >&2
+    done
+
+    direct_host=""
+    if direct_host=$(samealloc_direct_failure_host "$epoch_dir/train.err" "${launched_nodes[@]}"); then
+      samealloc_record_direct_failure "$direct_host" node_strikes excluded_nodes
+      strike_count=${node_strikes[$direct_host]}
+      printf '%s|%s|strike|direct-task-exit|%s\n' "$epoch" "$direct_host" "$strike_count" \
+        >> "$RUN_DIR/supervisor/node-policy.tsv"
+      echo "[samealloc] direct failure attribution host=$direct_host strike=$strike_count" >&2
+    else
+      printf '%s|-|ambiguous|no-strike|-\n' "$epoch" >> "$RUN_DIR/supervisor/node-policy.tsv"
+      echo "[samealloc] no unique direct hostname attribution; no node strike" >&2
+    fi
+
+    filtered=()
+    for node in "${usable[@]}"; do
+      [[ -n ${excluded_nodes[$node]-} ]] || filtered+=("$node")
+    done
+    usable=("${filtered[@]}")
+    if (( ${#usable[@]} < MIN_NODES )); then
+      samealloc_request_requeue "no usable fixed-world step: ${#usable[@]} healthy nodes below MIN_NODES"
+      return 0
+    fi
+    current_nodes=$TARGET_NODES
+    (( current_nodes <= ${#usable[@]} )) || current_nodes=${#usable[@]}
+    usable=("${usable[@]:0:current_nodes}")
+    if (( current_nodes < ${#launched_nodes[@]} )); then
       echo "[samealloc] reducing next fixed world to $current_nodes whole nodes" >&2
     fi
-    usable=("${usable[@]:0:current_nodes}")
-  done
 
-  if [[ "$REQUEUE_ON_EXHAUSTION" == "1" ]]; then
-    samealloc_request_requeue "execution epoch limit exhausted"
-    return 0
-  fi
-  echo "execution epoch limit exhausted; requeue disabled" >&2
-  return 70
+    if (( consecutive_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS_FAILURES )); then
+      if [[ "$REQUEUE_ON_EXHAUSTION" == "1" ]]; then
+        samealloc_request_requeue "bounded consecutive failures made no checkpoint progress ($consecutive_no_progress)"
+        return 0
+      fi
+      echo "bounded consecutive failures made no checkpoint progress; requeue disabled" >&2
+      return 70
+    fi
+  done
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

@@ -107,11 +107,8 @@ bash -n "$launcher" "$shim_bin/srun" "$shim_bin/scontrol" "$payload_root/collect
 run_id="e97-8n-acceptance-$(date -u +%Y%m%dT%H%M%SZ)-${payload_digest:0:12}"
 run_dir="$BASE/runs/$run_id"
 state_dir="$run_dir/supervisor/acceptance"
-# The immutable ac0c90a9 launcher writes each epoch's identity files before its
-# in-loop mkdir. Precreate only the two finite epoch directories; this changes
-# the acceptance payload bytes without modifying the production source.
-mkdir -p "$run_dir"/{identity,logs,supervisor} "$state_dir" \
-  "$run_dir/epochs/epoch-000001" "$run_dir/epochs/epoch-000002"
+# The production launcher owns creation of every execution-epoch directory.
+mkdir -p "$run_dir"/{identity,logs,supervisor} "$state_dir"
 printf '%s\n' "$payload_digest" > "$run_dir/identity/payload-digest.txt"
 cp "$payload_root/config.env" "$run_dir/identity/config.env"
 cp "$payload_root/SHA256SUMS" "$run_dir/identity/payload-SHA256SUMS"
