@@ -1,8 +1,8 @@
 # Frontier all-reduce resilience: a second look
 
 **Status:** Research assessment and recommendation; no production-code change,
-Slurm submission, or scale authorization  
-**Date:** 2026-07-30  
+Slurm submission, or scale authorization
+**Date:** 2026-07-30
 **Authorities reviewed:** [Compute Pool v1](RESILIENT_DILOCO_COMPUTE_POOL.md),
 [ADR-002 async v2.1](ASYNC_DECOUPLED_DILOCO_V2.md), the
 [gap matrix](RESILIENT_DILOCO_GAP_MATRIX.md), and
@@ -80,6 +80,18 @@ fragments (`Q_min=1`, explicitly not v2.1) and P2 finite-quorum streaming owner
 trees over eight-GPU local-SGD islands. It conflicts with ADR-003 if interpreted
 as permission to keep an outer collective across cells, scale a full cohort,
 weaken atomic all-eight island apply, or claim that P1/P2 is already selected.
+
+Two operational conclusions are intentionally conservative. First, launching a
+new `srun` step inside an allocation that remains alive is a plausible cell
+restart mechanism, but **no repository artifact or experiment reviewed here
+verifies intra-allocation relaunch after a Frontier rank or node loss**. Slurm's
+step and `--no-kill` facilities do not supply replacement hardware or repair a
+communicator. Second, the measured `2.650–6.629 s` collective merges do not by
+themselves justify the elaborate overlap machinery that later produced
+approximately 200-second stalls. Retain coherent `OWNED` handoff and background
+inter-cell publication as a resilience boundary, but treat communication
+*overlap* as an optional optimization: E0 must show material cadence/tail value
+against the simpler synchronous cell baseline.
 
 ## What was proven, exactly
 
@@ -299,6 +311,16 @@ whether one bad task kills the step, not communicator repair. Slurm
 batch script; the application must load its own checkpoint. Preallocated spare
 nodes/ranks or a later allocation are required for replacement capacity.
 
+A fresh `srun` can generally create another step on resources that remain in a
+live allocation, so process-only cell restart on healthy nodes is a reasonable
+prototype. It is **not yet a verified Frontier recovery path in Emender**: this
+review did not inject a failure, test whether Frontier's step/launcher policy
+preserves the allocation, or relaunch any rank. After physical node loss the
+failed node is unavailable and Slurm does not grow the allocation, so relaunch
+requires surviving reserved resources (usually a preallocated spare cell) or a
+new/requeued allocation. E1 therefore treats allocation survival and relaunch
+as measured outcomes, not assumptions.
+
 ## Recovery choices
 
 | Approach | Simplicity | Failure blast radius | No-fault performance | Maturity on Frontier/PyTorch | Principal cost/risk |
@@ -385,8 +407,10 @@ one stable cell (initially one Frontier node / eight GPUs)
 ## Requirement disposition
 
 This recommendation is a **research specialization**, not current v1/v2.1
-conformance. The existing conformance checklist remains mandatory: cite all
-applicable authorities/IDs; prove leased READY membership and bounded waits;
+conformance. The Compute Pool v1
+[conformance checklist](RESILIENT_DILOCO_COMPUTE_POOL.md#conformance-checklist-required-in-every-implementationrunnerscale-task-validation)
+remains mandatory: cite all applicable authorities/IDs; prove leased READY
+membership and bounded waits;
 keep the compute closure SQLite/database/lock-free; show fencing, deterministic
 math, idempotence, rejection, and atomic evidence; keep bounded non-Lustre
 transport and no full-model broker; exercise failure/recovery and state the
