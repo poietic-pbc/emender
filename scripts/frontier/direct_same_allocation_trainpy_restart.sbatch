@@ -5,6 +5,10 @@
 #SBATCH -q debug
 #SBATCH -N 2
 #SBATCH -t 00:30:00
+#SBATCH --ntasks-per-node=8
+#SBATCH --cpus-per-task=7
+#SBATCH --gpus-per-task=1
+#SBATCH --gpu-bind=closest
 #SBATCH --no-kill
 #SBATCH -o /lustre/orion/bif148/proj-shared/emender/frontier_runs/direct-same-allocation/payload-%j.out
 #SBATCH -e /lustre/orion/bif148/proj-shared/emender/frontier_runs/direct-same-allocation/payload-%j.err
