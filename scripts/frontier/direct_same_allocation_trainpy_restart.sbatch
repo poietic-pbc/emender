@@ -22,6 +22,10 @@ ROOT=${DIRECT_RESTART_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_ru
 mkdir -p "$ROOT"/{identity,logs,steps,checkpoint}
 exec > >(tee -a "$ROOT/logs/supervisor.out") 2> >(tee -a "$ROOT/logs/supervisor.err" >&2)
 cd "$REPO"
+# The runtime loader must see this opt-in before it resolves modules; setting it
+# after frontier_load_default_modules silently omits the OLCF RCCL plugin.
+export FRONTIER_RCCL_ENV=recommended FRONTIER_ENABLE_OLCF_RCCL_PLUGIN=1
+export FRONTIER_RUNTIME_PROFILE=olcf-rccl-debug REQUIRE_RCCL_NET_PLUGIN=1
 source scripts/frontier/frontier_runtime_env.sh
 frontier_load_default_modules
 frontier_activate_emender_conda_env
@@ -48,8 +52,6 @@ stat --printf='%n|%s|%y\n' "$SEED" "$DATA" "$VAL_DATA" > "$ROOT/identity/inputs.
 
 export TIKTOKEN_CACHE_DIR=${TIKTOKEN_CACHE_DIR:-/lustre/orion/bif148/proj-shared/tiktoken_cache}
 export MPICH_GPU_SUPPORT_ENABLED=1 OMP_NUM_THREADS=7 NDM_PIN_TRITON_AUTOTUNE=1
-export FRONTIER_RCCL_ENV=recommended FRONTIER_ENABLE_OLCF_RCCL_PLUGIN=1
-export FRONTIER_RUNTIME_PROFILE=olcf-rccl-debug REQUIRE_RCCL_NET_PLUGIN=1
 export FI_MR_CACHE_MONITOR=kdreg2 FI_CXI_DEFAULT_CQ_SIZE=131072 FI_CXI_DEFAULT_TX_SIZE=2048
 export FI_CXI_RX_MATCH_MODE=hybrid FI_CXI_RDZV_PROTO=alt_read
 export NCCL_NET_GDR_LEVEL=3 NCCL_CROSS_NIC=1 NCCL_SOCKET_IFNAME=hsn0,hsn1,hsn2,hsn3
