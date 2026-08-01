@@ -16,6 +16,7 @@ SEED_SHA256=0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2
 SEED_URI=s3://spinozans/emender/e97-diloco/emender_E97_1.3B_20260709_084606/step_2300930/checkpoint_step_2300930_loss_2.4365.pt
 
 cd "$PROJECT_ROOT"
+export EMENDER_CONDA_ENV=${EMENDER_CONDA_ENV:-/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312}
 source scripts/frontier/activate_emender_frontier.sh
 : "${EMENDER_PYTHON:?canonical activation did not set EMENDER_PYTHON}"
 PYTHON_BIN=$EMENDER_PYTHON

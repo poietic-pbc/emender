@@ -35,6 +35,7 @@ def test_256n_snapshot_binds_clean_final_seed_and_all_immutable_assets():
 
     assert "RUN_ID=${E97_256N_RUN_ID:-e97-final-seed-production-256n}" in text
     assert "RUN_DIR=${E97_256N_RUN_DIR:-$BASE/runs/$RUN_ID}" in text
+    assert "EMENDER_CONDA_ENV=${EMENDER_CONDA_ENV:-/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312}" in text
     assert "SOURCE_SHA=$(git rev-parse HEAD)" in text
     assert '"$SOURCE_SHA" == "$ORIGIN_MAIN_SHA"' in text
     assert '"$SOURCE_SHA" == "$LOCAL_MAIN_SHA"' in text
