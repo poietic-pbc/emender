@@ -350,7 +350,10 @@ PY
   local job_seed_dir="/tmp/emender-e97-seed-$SLURM_JOB_ID"
   local job_seed="$job_seed_dir/checkpoint-step-$final_seed_step.pt"
   local job_attestation="$job_seed_dir/seed-bootstrap-attestation.json"
-  local seed_evidence_dir="$RUN_DIR/seed-materialization/job-$SLURM_JOB_ID"
+  # A requeued job retains SLURM_JOB_ID but gets a new allocation attempt and
+  # may receive a different node set. Never overwrite the prior attempt's
+  # per-node offline verification receipts.
+  local seed_evidence_dir="$RUN_DIR/seed-materialization/job-${SLURM_JOB_ID}-restart-${SLURM_RESTART_COUNT:-0}"
   mkdir -p "$seed_evidence_dir"
   srun --nodes="$SLURM_JOB_NUM_NODES" --ntasks="$SLURM_JOB_NUM_NODES" \
     --ntasks-per-node=1 --cpus-per-task=1 --gpus-per-task=0 \

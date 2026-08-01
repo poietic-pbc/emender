@@ -58,6 +58,7 @@ def test_production_defaults_and_fixed_world_data_plane_are_explicit():
     assert "sbcast" in text
     assert "--verify-local" in text
     assert "samealloc_bind_restart_authority" in text
+    assert 'job-${SLURM_JOB_ID}-restart-${SLURM_RESTART_COUNT:-0}' in text
     assert "INITIAL_CHECKPOINT" not in text
 
 
@@ -72,7 +73,9 @@ def test_exact_two_node_final_seed_runner_is_held_collected_and_debug_bound():
     assert "CANONICAL_BASE=c625cede2b97ad43af6e1e47a5fd4d58e1dbafcb" in submitted
     assert "--parsable --hold" in submitted
     assert '-p batch -q debug' in submitted
-    assert ' -N2 -t 00:20:00' in submitted
+    assert ' -N2 -t 00:30:00' in submitted
+    assert "FAULT_MERGE=3" in submitted
+    assert "TRAIN_MINUTES=4" in submitted
     assert 'dependency="afterany:$payload_id"' in submitted
     assert "scontrol release \"$payload_id\"" in submitted
     assert "materialize_e97_s3_seed.py" in submitted and "--prefetch" in submitted
@@ -81,7 +84,9 @@ def test_exact_two_node_final_seed_runner_is_held_collected_and_debug_bound():
     assert '"checkpoint_reloaded"' in collected
     assert '"post_retry_checkpoint_advanced"' in collected
     assert 'fields["full_pass"]' in collected
-    assert "ambiguous|no-strike" in collected
+    assert '"direct_failure_first_strike_no_exclusion"' in collected
+    assert '"ambiguous_no_strike_deterministic_test_covered"' in collected
+    assert 'job-{job}-restart-' in collected
     assert "fault_environment_removed=true" in observed
     assert "unchanged_failed_payload_retried=false" in observed
 
