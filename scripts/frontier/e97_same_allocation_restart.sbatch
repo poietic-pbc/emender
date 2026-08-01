@@ -8,9 +8,9 @@
 # smaller fixed world.  Batch-shell/allocation loss is handled by Slurm requeue,
 # not by an in-process membership or communicator-shrink protocol.
 #
-# Example (submission is intentionally not performed by this file):
-#   RUN_ID=e97-8n-acceptance-... INITIAL_CHECKPOINT=/.../latest.pt \
-#     sbatch scripts/frontier/e97_same_allocation_restart.sbatch
+# Submission is intentionally not performed by this file. The submitter must
+# export the canonical content-addressed E97_SEED_CACHE plus its authority
+# attestation and digest; no shared legacy latest.pt seed is accepted.
 
 #SBATCH -A bif148
 #SBATCH -J e97-samealloc
@@ -132,8 +132,13 @@ samealloc_checkpoint_step() {
   local latest=$1 resolved base
   resolved=$(readlink -f "$latest") || return 1
   base=$(basename "$resolved")
-  [[ "$base" =~ ^checkpoint_step_([0-9]+)_ ]] || return 1
-  printf '%s\n' "$((10#${BASH_REMATCH[1]}))"
+  if [[ "$base" =~ ^checkpoint_step_([0-9]+)_ ]]; then
+    printf '%s\n' "$((10#${BASH_REMATCH[1]}))"
+  elif [[ "$base" =~ ^checkpoint-step-([0-9]+)\.pt$ ]]; then
+    printf '%s\n' "$((10#${BASH_REMATCH[1]}))"
+  else
+    return 1
+  fi
 }
 
 samealloc_atomic_latest() {
@@ -144,6 +149,33 @@ samealloc_atomic_latest() {
   rm -f "$tmp"
   ln -s "$(readlink -f "$target")" "$tmp"
   mv -Tf "$tmp" "$link"
+}
+
+samealloc_is_final_seed_target() {
+  [[ $1 =~ ^/tmp/emender-e97-seed-[0-9]+/checkpoint-step-2300930\.pt$ ]]
+}
+
+samealloc_bind_restart_authority() {
+  local stable_latest=$1 verified_job_seed=$2 target
+  if [[ -L "$stable_latest" ]]; then
+    target=$(readlink "$stable_latest") || return 65
+    if samealloc_is_final_seed_target "$target"; then
+      # A pre-first-checkpoint Slurm requeue leaves a shared symlink to the
+      # prior job's /tmp. Rebind only that recognized bootstrap pointer after
+      # this allocation independently verified its own identical seed bytes.
+      samealloc_atomic_latest "$stable_latest" "$verified_job_seed"
+    else
+      [[ -r "$stable_latest" && -f "$stable_latest" ]] || {
+        echo "stable latest.pt is dangling and is not a recognized final-seed bootstrap pointer" >&2
+        return 65
+      }
+    fi
+  elif [[ -e "$stable_latest" ]]; then
+    echo "stable latest.pt exists but is not an atomic symlink" >&2
+    return 65
+  else
+    samealloc_atomic_latest "$stable_latest" "$verified_job_seed"
+  fi
 }
 
 samealloc_promote_epoch_latest() {
@@ -216,7 +248,10 @@ samealloc_main() {
   REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
   RUN_ROOT=${RUN_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/same-allocation}
   RUN_DIR=${RUN_DIR:-${RUN_ROOT%/}/$RUN_ID}
-  INITIAL_CHECKPOINT=${INITIAL_CHECKPOINT:-}
+  E97_SEED_CONFIG=${E97_SEED_CONFIG:-$REPO/configs/frontier/e97_async_256.yaml}
+  : "${E97_SEED_CACHE:?submit side must export the verified content-addressed final E97 seed cache}"
+  : "${E97_SEED_ATTESTATION:?submit side must export the final E97 seed authority attestation}"
+  : "${E97_SEED_ATTESTATION_SHA256:?submit side must bind the authority attestation digest}"
   TASKS_PER_NODE=${TASKS_PER_NODE:-8}
   CPUS_PER_TASK=${CPUS_PER_TASK:-7}
   TARGET_NODES=${TARGET_NODES:-$SLURM_JOB_NUM_NODES}
@@ -282,6 +317,59 @@ samealloc_main() {
   [[ $(readlink -f "$PYTHON_BIN") == $(readlink -f "$EMENDER_PYTHON") ]] || return 66
   frontier_require_requested_rccl_net_plugin "same-allocation batch parent" >/dev/null
 
+  local final_seed_step=2300930
+  local final_seed_tokens=150793748480
+  local final_seed_size=7719680116
+  local final_seed_sha256=0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2
+  local final_seed_uri=s3://spinozans/emender/e97-diloco/emender_E97_1.3B_20260709_084606/step_2300930/checkpoint_step_2300930_loss_2.4365.pt
+  [[ $(readlink -f "$E97_SEED_CONFIG") == $(readlink -f "$REPO/configs/frontier/e97_async_256.yaml") ]] || {
+    echo "same-allocation seed config must be the canonical Frontier config" >&2; return 64;
+  }
+  readarray -t canonical_seed < <("$PYTHON_BIN" - "$E97_SEED_CONFIG" <<'PY'
+import json, sys
+seed = json.load(open(sys.argv[1], encoding="utf-8"))["seed"]
+for key in ("step", "tokens", "size", "sha256", "uri"):
+    print(seed[key])
+PY
+  )
+  [[ ${canonical_seed[0]-} == "$final_seed_step"
+    && ${canonical_seed[1]-} == "$final_seed_tokens"
+    && ${canonical_seed[2]-} == "$final_seed_size"
+    && ${canonical_seed[3]-} == "$final_seed_sha256"
+    && ${canonical_seed[4]-} == "$final_seed_uri" ]] || {
+    echo "canonical final E97 seed identity mismatch" >&2; return 64;
+  }
+  [[ $(basename "$E97_SEED_CACHE") == "sha256-$final_seed_sha256.pt"
+    && -f "$E97_SEED_CACHE" && -f "$E97_SEED_ATTESTATION" ]] || {
+    echo "submit-side final seed artifacts are missing or not content addressed" >&2; return 64;
+  }
+  [[ $(sha256sum "$E97_SEED_ATTESTATION" | awk '{print $1}') == "$E97_SEED_ATTESTATION_SHA256" ]] || {
+    echo "submit-side final seed authority attestation digest mismatch" >&2; return 64;
+  }
+
+  local job_seed_dir="/tmp/emender-e97-seed-$SLURM_JOB_ID"
+  local job_seed="$job_seed_dir/checkpoint-step-$final_seed_step.pt"
+  local job_attestation="$job_seed_dir/seed-bootstrap-attestation.json"
+  local seed_evidence_dir="$RUN_DIR/seed-materialization/job-$SLURM_JOB_ID"
+  mkdir -p "$seed_evidence_dir"
+  srun --nodes="$SLURM_JOB_NUM_NODES" --ntasks="$SLURM_JOB_NUM_NODES" \
+    --ntasks-per-node=1 --cpus-per-task=1 --gpus-per-task=0 \
+    bash -c 'set -euo pipefail; rm -rf -- "$1"; mkdir -m 700 "$1"' bash "$job_seed_dir"
+  local sbcast_bin
+  sbcast_bin=$(command -v sbcast) || { echo "sbcast is required for final seed bootstrap" >&2; return 64; }
+  "$sbcast_bin" -f "$E97_SEED_CACHE" "$job_seed"
+  "$sbcast_bin" -f "$E97_SEED_ATTESTATION" "$job_attestation"
+  srun --nodes="$SLURM_JOB_NUM_NODES" --ntasks="$SLURM_JOB_NUM_NODES" \
+    --ntasks-per-node=1 --cpus-per-task=1 --gpus-per-task=0 \
+    bash -c 'set -euo pipefail
+node=${SLURMD_NODENAME:-$(hostname)}
+exec "$1" "$2" --verify-local --seed-config "$3" --destination "$4" \
+  --attestation "$5" --expected-job-id "$6" --runtime-manifest "$7/$node.json" \
+  --expected-attestation-sha256 "$8"' bash "$PYTHON_BIN" \
+    "$REPO/scripts/frontier/materialize_e97_s3_seed.py" "$E97_SEED_CONFIG" \
+    "$job_seed" "$job_attestation" "$SLURM_JOB_ID" "$seed_evidence_dir" \
+    "$E97_SEED_ATTESTATION_SHA256"
+
   export MPICH_GPU_SUPPORT_ENABLED=${MPICH_GPU_SUPPORT_ENABLED:-1}
   export OMP_NUM_THREADS=${OMP_NUM_THREADS:-7}
   export NDM_PIN_TRITON_AUTOTUNE=${NDM_PIN_TRITON_AUTOTUNE:-1}
@@ -297,21 +385,7 @@ samealloc_main() {
   export NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS=${NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS:-240}
 
   local stable_latest="$RUN_DIR/train/latest.pt"
-  if [[ -e "$stable_latest" && ! -L "$stable_latest" ]]; then
-    echo "stable latest.pt exists but is not an atomic symlink" >&2
-    return 65
-  fi
-  if [[ -L "$stable_latest" ]]; then
-    [[ -r "$stable_latest" ]] || { echo "stable latest.pt is dangling" >&2; return 65; }
-  else
-    [[ -z "$INITIAL_CHECKPOINT" || $(basename "$INITIAL_CHECKPOINT") == latest.pt ]] || {
-      echo "INITIAL_CHECKPOINT must name an atomically published latest.pt" >&2; return 64;
-    }
-    [[ -n "$INITIAL_CHECKPOINT" && -L "$INITIAL_CHECKPOINT" && -r "$INITIAL_CHECKPOINT" ]] || {
-      echo "first attempt requires a readable latest.pt symlink in INITIAL_CHECKPOINT" >&2; return 64;
-    }
-    samealloc_atomic_latest "$stable_latest" "$INITIAL_CHECKPOINT"
-  fi
+  samealloc_bind_restart_authority "$stable_latest" "$job_seed"
 
   local identity_file="$RUN_DIR/identity/run-id.txt"
   if [[ -e "$identity_file" ]]; then
@@ -414,7 +488,13 @@ samealloc_main() {
       echo "master_addr=$master_host"
       echo "master_port=$master_port"
       echo "resume=$stable_latest"
+      echo "resume_target=$(readlink "$stable_latest")"
       echo "resume_step=$committed_step"
+      echo "final_seed_step=$final_seed_step"
+      echo "final_seed_tokens=$final_seed_tokens"
+      echo "final_seed_size=$final_seed_size"
+      echo "final_seed_sha256=$final_seed_sha256"
+      echo "final_seed_attestation_sha256=$E97_SEED_ATTESTATION_SHA256"
       echo "diloco_k=$DILOCO_K"
       echo "save_every=$SAVE_EVERY"
       echo "keep_checkpoints=$KEEP_CHECKPOINTS"
