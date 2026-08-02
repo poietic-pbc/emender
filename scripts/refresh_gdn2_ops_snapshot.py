@@ -37,6 +37,12 @@ STEP_RE = re.compile(
     r".*?\|\s+time\s+(?P<time>\S+)"
 )
 CKPT_RE = re.compile(r"checkpoint_step_(?P<step>\d+)_loss_(?P<loss>[0-9.]+)\.pt$")
+SAVE_RE = re.compile(r"saved checkpoint:\s+(?P<name>checkpoint_step_(?P<step>\d+)_loss_(?P<loss>[0-9.]+)\.pt)")
+MERGE_RE = re.compile(
+    r"\[DiLoCo\]\s+merge\s+#(?P<merge>\d+)\s+at\s+step\s+(?P<step>\d+):"
+    r".*?\s+in\s+(?P<ms>\d+)\s+ms"
+)
+ERROR_RE = re.compile(r"\b(fatal|error|oom|out of memory|nan|traceback|exception)\b", re.IGNORECASE)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -88,6 +94,100 @@ def load_json(path: Path) -> dict:
 
 def check_output(cmd: list[str]) -> str:
     return subprocess.check_output(cmd, text=True).strip()
+
+
+def summarize_pmon(output: str) -> list[dict[str, object]]:
+    rows = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.split()
+        if len(parts) < 5:
+            continue
+        try:
+            rows.append(
+                {
+                    "gpu": int(parts[0]),
+                    "pid": int(parts[1]),
+                    "type": parts[2],
+                    "sm_percent": int(parts[3]) if parts[3] != "-" else None,
+                    "mem_percent": int(parts[4]) if parts[4] != "-" else None,
+                    "command": parts[-1],
+                }
+            )
+        except ValueError:
+            continue
+    return rows
+
+
+def inspect_gpu_temperatures() -> dict:
+    try:
+        out = check_output(["nvidia-smi", "--query-gpu=index,temperature.gpu", "--format=csv,noheader,nounits"])
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        return {"available": False, "error": str(exc), "temperatures_c": {}}
+    temps: dict[str, int] = {}
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        gpu, temp = [part.strip() for part in line.split(",", 1)]
+        temps[f"GPU{gpu}"] = int(temp)
+    return {"available": True, "temperatures_c": temps}
+
+
+def inspect_recent_log_status(snapshot: Path, run_dir: Path) -> dict:
+    latest_merge = None
+    latest_checkpoint_marker = None
+    error_hits = []
+    for line_no, line in enumerate(snapshot.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
+        merge = MERGE_RE.search(line)
+        if merge:
+            latest_merge = {
+                "merge": int(merge.group("merge")),
+                "step": int(merge.group("step")),
+                "milliseconds": int(merge.group("ms")),
+                "line": line.strip(),
+                "source_line": line_no,
+            }
+        save = SAVE_RE.search(line)
+        if save:
+            latest_checkpoint_marker = {
+                "name": save.group("name"),
+                "step": int(save.group("step")),
+                "loss": float(save.group("loss")),
+                "line": line.strip(),
+                "source_line": line_no,
+            }
+        if ERROR_RE.search(line):
+            error_hits.append({"source_line": line_no, "line_prefix": line[:240]})
+
+    checkpoint_files = []
+    for path in sorted(run_dir.glob("checkpoint_step_*_loss_*.pt")):
+        match = CKPT_RE.match(path.name)
+        if not match:
+            continue
+        stat = path.stat()
+        checkpoint_files.append(
+            {
+                "name": path.name,
+                "step": int(match.group("step")),
+                "loss": float(match.group("loss")),
+                "size_bytes": stat.st_size,
+                "mtime_utc": iso_z(dt.datetime.fromtimestamp(stat.st_mtime, dt.timezone.utc)),
+            }
+        )
+    latest_checkpoint_file = checkpoint_files[-1] if checkpoint_files else None
+    return {
+        "latest_diloco_merge": latest_merge,
+        "latest_checkpoint_marker": latest_checkpoint_marker,
+        "latest_checkpoint_file": latest_checkpoint_file,
+        "error_scan": {
+            "pattern": ERROR_RE.pattern,
+            "hit_count": len(error_hits),
+            "latest_hits": error_hits[-10:],
+            "status": "none_found_no_fatal_error_oom_nan_evidence" if not error_hits else "evidence_found_review_latest_hits",
+        },
+    }
 
 
 def snapshot_prefix(source: Path, dest: Path) -> dict:
@@ -303,6 +403,7 @@ def inspect_health(run_root: Path) -> dict:
         "status": "torchrun active with 8 worker ranks" if len(worker_ranks) == 8 else "not all expected ranks active",
         "ps_matches": {"torchrun": torchrun, "launch_wrappers": launch_wrappers, "worker_ranks": worker_ranks},
         "nvidia_smi_pmon": gpu,
+        "gpu_occupancy": summarize_pmon(gpu) if isinstance(gpu, str) else [],
         "run_log_exists": (run_root / "run.log").exists(),
     }
 
@@ -473,6 +574,14 @@ def publish_collision_safe(local: Path, remote: str, target_path: str, url: str,
     }
 
 
+def publish_plot(local: Path, remote: str, target_path: str, url: str, tag: str, mode: str) -> dict:
+    if mode == "overwrite":
+        return publish_overwrite(local, remote, target_path, url, tag)
+    if mode == "collision-safe":
+        return publish_collision_safe(local, remote, target_path, url, tag)
+    raise SystemExit(f"unknown publish mode: {mode}")
+
+
 def throughput_window(points: list[Point], seconds: int | None) -> dict:
     latest = points[-1]
     if seconds is None:
@@ -539,17 +648,51 @@ def target_eta(current: Point, target: int, rates: dict[str, dict]) -> dict:
     }
 
 
+def compact_gpu_occupancy(rows: list[dict[str, object]]) -> str:
+    if not rows:
+        return "unavailable"
+    parts = []
+    for row in sorted(rows, key=lambda item: int(item["gpu"])):
+        parts.append(f"GPU {row['gpu']}: pid {row['pid']} sm={row['sm_percent']} mem={row['mem_percent']}")
+    return "; ".join(parts)
+
+
+def compact_gpu_temperatures(status: dict) -> str:
+    if not status.get("available"):
+        return f"unavailable:{status.get('error')}"
+    return " ".join(f"{name}={temp}C" for name, temp in sorted(status["temperatures_c"].items()))
+
+
+def compact_merge(status: dict) -> str:
+    merge = status.get("latest_diloco_merge")
+    if not merge:
+        return "none_found"
+    return f"merge_{merge['merge']}_step_{merge['step']}_{merge['milliseconds']}ms"
+
+
+def compact_checkpoint(status: dict) -> str:
+    ckpt = status.get("latest_checkpoint_file") or status.get("latest_checkpoint_marker")
+    if not ckpt:
+        return "none_found"
+    return ckpt["name"]
+
+
 def build_report(summary: dict) -> str:
     g = summary["gdn2"]
     c = summary["comparison"]
     t = summary["throughput_eta"]
     pub = summary["publication"]
     lines = [
-        "# GDN2 Ops Snapshot - 2026-07-28",
+        f"# GDN2 Ops Snapshot - {summary['ops_label']}",
         "",
         f"- Snapshot UTC: `{summary['snapshot_utc']}`",
         f"- Run ID: `{summary['run_id']}`",
         f"- Health: `{summary['health']['status']}`; torchrun PIDs `{summary['health']['torchrun_pids']}`, worker rank PIDs `{summary['health']['worker_rank_pids']}`.",
+        f"- GPU occupancy: `{summary['health']['gpu_occupancy_compact']}`.",
+        f"- GPU temperatures: `{summary['runtime_status']['gpu_temperatures_compact']}`.",
+        f"- Latest DiLoCo merge: `{summary['runtime_status']['latest_diloco_merge_compact']}`.",
+        f"- Latest checkpoint: `{summary['runtime_status']['latest_checkpoint_compact']}`.",
+        f"- Fatal/error/OOM/NaN scan: `{summary['runtime_status']['error_scan']['status']}` with `{summary['runtime_status']['error_scan']['hit_count']}` hits.",
         f"- Source policy: `{summary['source_policy']}`",
         f"- Token validation: `{summary['token_semantics']['formula']} = {summary['token_semantics']['tokens_per_step']}` aggregate tokens/optimizer step.",
         "",
@@ -618,10 +761,11 @@ def compact_result(summary: dict) -> str:
     t = summary["throughput_eta"]
     pub = summary["publication"]
     protected = summary["protected_artifacts"]
+    runtime = summary["runtime_status"]
     return (
         "RESULT: "
         f"snapshot_utc={summary['snapshot_utc']}; run_id={summary['run_id']}; "
-        f"run_health={summary['health']['status']} torchrun_pids={summary['health']['torchrun_pids']} launch_wrapper_pids={summary['health']['launch_wrapper_pids']} worker_rank_count={summary['health']['worker_rank_count']} worker_rank_pids={summary['health']['worker_rank_pids']}; "
+        f"run_health={summary['health']['status']} torchrun_pids={summary['health']['torchrun_pids']} launch_wrapper_pids={summary['health']['launch_wrapper_pids']} worker_rank_count={summary['health']['worker_rank_count']} worker_rank_pids={summary['health']['worker_rank_pids']} nvidia_smi_pmon=\"{summary['health']['gpu_occupancy_compact']}\"; "
         f"tokens_per_step={summary['token_semantics']['tokens_per_step']} validated_formula={summary['token_semantics']['formula']}; "
         f"gdn2_snapshot={g['snapshot']['snapshot']} snapshot_sha256={g['snapshot']['sha256']} size={g['snapshot']['snapshot_size_bytes']} source_size_bound={g['snapshot']['source_size_bound_bytes']}; "
         f"gdn2_records raw/effective={g['records']['raw_points']}/{g['records']['effective_points']} duplicates_removed={g['records']['duplicates_removed']} malformed={g['records']['malformed_step_like_lines']} dropped_final_partial={g['records']['dropped_final_partial_line']} finite={g['records']['finite']} monotonic_steps={g['records']['strictly_increasing_steps']} monotonic_tokens={g['records']['strictly_increasing_tokens']} step_range={g['records']['step_range'][0]}..{g['records']['step_range'][1]} token_range={g['records']['token_range'][0]}..{g['records']['token_range'][1]} cadence={g['records']['cadence_optimizer_steps']}; "
@@ -642,6 +786,7 @@ def compact_result(summary: dict) -> str:
         f"throughput_since_launch bounds={t['rates']['since_launch']['bounds_utc'][0]} step={t['rates']['since_launch']['bounds_step'][0]}..{t['rates']['since_launch']['bounds_utc'][1]} step={t['rates']['since_launch']['bounds_step'][1]} samples={t['rates']['since_launch']['sample_count']} steps_per_sec={t['rates']['since_launch']['steps_per_sec']:.9f} tokens_per_sec={t['rates']['since_launch']['tokens_per_sec']:.3f}; "
         f"eta_150b percent={t['targets']['target_150b']['percent_complete']:.9f} remaining_tokens={t['targets']['target_150b']['remaining_tokens']} remaining_steps={t['targets']['target_150b']['remaining_steps_exact']:.6f} step_at_or_above={t['targets']['target_150b']['step_at_or_above_target']} overshoot={t['targets']['target_150b']['token_overshoot_at_step']} primary_duration={t['targets']['target_150b']['primary_eta']['duration']} primary_utc={t['targets']['target_150b']['primary_eta']['completion_utc']} range_utc={t['targets']['target_150b']['range_completion_utc'][0]}..{t['targets']['target_150b']['range_completion_utc'][1]}; "
         f"eta_e97_parity percent={t['targets']['target_e97_parity']['percent_complete']:.9f} target=150793748480 remaining_tokens={t['targets']['target_e97_parity']['remaining_tokens']} remaining_steps={t['targets']['target_e97_parity']['remaining_steps_exact']:.6f} step_at_or_above={t['targets']['target_e97_parity']['step_at_or_above_target']} overshoot={t['targets']['target_e97_parity']['token_overshoot_at_step']} primary_duration={t['targets']['target_e97_parity']['primary_eta']['duration']} primary_utc={t['targets']['target_e97_parity']['primary_eta']['completion_utc']} range_utc={t['targets']['target_e97_parity']['range_completion_utc'][0]}..{t['targets']['target_e97_parity']['range_completion_utc'][1]}; "
+        f"latest_diloco_merge={runtime['latest_diloco_merge_compact']}; latest_checkpoint={runtime['latest_checkpoint_compact']}; gpu_temperatures={runtime['gpu_temperatures_compact']}; error_scan={runtime['error_scan']['status']}; "
         f"protected_artifacts={json.dumps(protected, sort_keys=True)}; "
         "assumptions=no_downtime,unchanged_8gpu_rate,65536_tokens_per_step; no_training_control=true no_checkpoint_write_or_modification=true no_s3_command=true"
     )
@@ -654,14 +799,26 @@ def main() -> None:
     ap.add_argument("--e97-root", type=Path, default=Path("/mnt/nvme1n1/erikg/diloco_8gpu/emender"))
     ap.add_argument("--e97-args", type=Path, default=Path("/mnt/nvme1n1/erikg/diloco_8gpu/emender/runs/emender_E97_1.3B_20260722_055730/args.json"))
     ap.add_argument("--remote", default="erik@hypervolu.me")
+    ap.add_argument("--ops-label", default="20260728")
+    ap.add_argument("--gdn2-output-name", default=None)
+    ap.add_argument("--comparison-output-name", default=None)
+    ap.add_argument("--gdn2-remote-path", default="www/emender/gdn2_mlp_diloco_loss_curve_20260722.png")
+    ap.add_argument("--gdn2-url", default="http://hypervolu.me/~erik/emender/gdn2_mlp_diloco_loss_curve_20260722.png")
+    ap.add_argument("--comparison-remote-path", default=None)
+    ap.add_argument("--comparison-url", default=None)
+    ap.add_argument("--comparison-publish-mode", choices=["overwrite", "collision-safe"], default="collision-safe")
     ap.add_argument("--report", type=Path, default=Path("docs/GDN2_OPS_SNAPSHOT_20260728.md"))
     args = ap.parse_args()
 
     snapshot_time = utc_now()
     stamp = snapshot_time.strftime("%Y%m%dT%H%M%SZ")
-    ops_dir = args.run_root / "ops" / f"refresh-gdn2-ops_20260728_{stamp}"
+    ops_dir = args.run_root / "ops" / f"refresh-gdn2-ops_{args.ops_label}_{stamp}"
     snapshots_dir = ops_dir / "snapshots"
     ops_dir.mkdir(parents=True, exist_ok=False)
+    gdn2_output_name = args.gdn2_output_name or f"gdn2_mlp_diloco_loss_curve_{stamp}.png"
+    comparison_output_name = args.comparison_output_name or f"gdn2_vs_e97_matched_tokens_{args.ops_label}.png"
+    comparison_remote_path = args.comparison_remote_path or f"www/emender/gdn2_vs_e97_matched_tokens_{args.ops_label}.png"
+    comparison_url = args.comparison_url or f"http://hypervolu.me/~erik/emender/gdn2_vs_e97_matched_tokens_{args.ops_label}.png"
 
     run_id = load_json(args.run_root / "launch_manifest.json")["name"]
     health_before = inspect_health(args.run_root)
@@ -670,9 +827,9 @@ def main() -> None:
 
     protected_names = {
         "E97_standalone": ("www/emender/e97_diloco_loss_curve_20260623.png", "http://hypervolu.me/~erik/emender/e97_diloco_loss_curve_20260623.png"),
-        "GDN2_standalone": ("www/emender/gdn2_mlp_diloco_loss_curve_20260722.png", "http://hypervolu.me/~erik/emender/gdn2_mlp_diloco_loss_curve_20260722.png"),
-        "prior_5p118B_comparison": ("www/emender/gdn2_vs_e97_matched_5p118b_tokens_20260723.png", "http://hypervolu.me/~erik/emender/gdn2_vs_e97_matched_5p118b_tokens_20260723.png"),
         "prior_20260724_comparison": ("www/emender/gdn2_vs_e97_matched_tokens_20260724.png", "http://hypervolu.me/~erik/emender/gdn2_vs_e97_matched_tokens_20260724.png"),
+        "prior_20260728_comparison": ("www/emender/gdn2_vs_e97_matched_tokens_20260728.png", "http://hypervolu.me/~erik/emender/gdn2_vs_e97_matched_tokens_20260728.png"),
+        "prior_20260729_comparison": ("www/emender/gdn2_vs_e97_matched_tokens_20260729.png", "http://hypervolu.me/~erik/emender/gdn2_vs_e97_matched_tokens_20260729.png"),
     }
     protected_before = {
         name: {"ssh_sha256": ssh_hash(args.remote, path), "http": http_artifact(url), "path": path, "url": url}
@@ -687,7 +844,7 @@ def main() -> None:
     cutoff_tokens = gdn2_points[-1].token
     window = min(80, max(5, len(gdn2_points) // 40))
     gdn2_smoothed = moving_average([p.loss for p in gdn2_points], window)
-    gdn2_plot = plot_gdn2(gdn2_points, gdn2_smoothed, window, ops_dir / f"gdn2_mlp_diloco_loss_curve_{stamp}.png")
+    gdn2_plot = plot_gdn2(gdn2_points, gdn2_smoothed, window, ops_dir / gdn2_output_name)
 
     gdn2_records = series_summary(gdn2_raw, gdn2_points, gdn2_superseded, [gdn2_snapshot["dropped_final_partial_line"], gdn2_dropped_parse], gdn2_malformed)
     latest = gdn2_points[-1]
@@ -737,7 +894,7 @@ def main() -> None:
     gdn2_aligned = [gdn2_by_step[step] for step in common_steps]
     e97_smoothed = moving_average([p.loss for p in e97_aligned], window)
     gdn2_aligned_smoothed = moving_average([p.loss for p in gdn2_aligned], window)
-    overlay_plot = plot_overlay(aligned, e97_smoothed, gdn2_aligned_smoothed, window, ops_dir / "gdn2_vs_e97_matched_tokens_20260728.png")
+    overlay_plot = plot_overlay(aligned, e97_smoothed, gdn2_aligned_smoothed, window, ops_dir / comparison_output_name)
     comparison_intervals = {}
     for width in (100, 1000):
         e97_int = interval_summary(e97_aligned, cutoff_step, width)
@@ -795,20 +952,21 @@ def main() -> None:
     gdn2_pub = publish_overwrite(
         Path(gdn2_plot["path"]),
         args.remote,
-        "www/emender/gdn2_mlp_diloco_loss_curve_20260722.png",
-        "http://hypervolu.me/~erik/emender/gdn2_mlp_diloco_loss_curve_20260722.png",
-        "refresh-gdn2-ops-20260728",
+        args.gdn2_remote_path,
+        args.gdn2_url,
+        f"refresh-gdn2-ops-{args.ops_label}",
     )
     protected_after_gdn2 = {
         name: {"ssh_sha256": ssh_hash(args.remote, path), "http": http_artifact(url), "path": path, "url": url}
         for name, (path, url) in protected_names.items()
     }
-    overlay_pub = publish_collision_safe(
+    overlay_pub = publish_plot(
         Path(overlay_plot["path"]),
         args.remote,
-        "www/emender/gdn2_vs_e97_matched_tokens_20260728.png",
-        "http://hypervolu.me/~erik/emender/gdn2_vs_e97_matched_tokens_20260728.png",
-        "refresh-gdn2-ops-20260728",
+        comparison_remote_path,
+        comparison_url,
+        f"refresh-gdn2-ops-{args.ops_label}",
+        args.comparison_publish_mode,
     )
     protected_after_overlay = {
         name: {"ssh_sha256": ssh_hash(args.remote, path), "http": http_artifact(url), "path": path, "url": url}
@@ -826,7 +984,7 @@ def main() -> None:
             "after_overlay_ssh_sha256": protected_after_overlay[name]["ssh_sha256"],
             "after_overlay_http_sha256": protected_after_overlay[name]["http"]["sha256"],
             "unchanged_after_overlay_vs_after_gdn2": protected_after_overlay[name]["ssh_sha256"] == protected_after_gdn2[name]["ssh_sha256"] == protected_after_overlay[name]["http"]["sha256"] == protected_after_gdn2[name]["http"]["sha256"],
-        }
+    }
     protected["E97_standalone"]["unchanged_from_initial"] = (
         protected["E97_standalone"]["before_refresh_ssh_sha256"]
         == protected["E97_standalone"]["after_gdn2_publish_ssh_sha256"]
@@ -835,15 +993,33 @@ def main() -> None:
         == protected["E97_standalone"]["after_gdn2_publish_http_sha256"]
         == protected["E97_standalone"]["after_overlay_http_sha256"]
     )
+    for name in protected_names:
+        protected[name]["unchanged"] = (
+            protected[name]["before_refresh_ssh_sha256"]
+            == protected[name]["after_gdn2_publish_ssh_sha256"]
+            == protected[name]["after_overlay_ssh_sha256"]
+            == protected[name]["before_refresh_http_sha256"]
+            == protected[name]["after_gdn2_publish_http_sha256"]
+            == protected[name]["after_overlay_http_sha256"]
+        )
+
+    runtime_status = inspect_recent_log_status(Path(gdn2_snapshot["snapshot"]), args.run_dir)
+    runtime_status["gpu_temperatures"] = inspect_gpu_temperatures()
+    runtime_status["gpu_temperatures_compact"] = compact_gpu_temperatures(runtime_status["gpu_temperatures"])
+    runtime_status["latest_diloco_merge_compact"] = compact_merge(runtime_status)
+    runtime_status["latest_checkpoint_compact"] = compact_checkpoint(runtime_status)
+    health_after["gpu_occupancy_compact"] = compact_gpu_occupancy(health_after.get("gpu_occupancy", []))
 
     summary = {
         "snapshot_utc": iso_z(snapshot_time),
+        "ops_label": args.ops_label,
         "run_id": run_id,
         "source_policy": "rank-0/main stdout, finite complete records only, dedupe by optimizer step keeping latest timestamp/order, no interpolation",
         "token_semantics": token_semantics,
         "e97_token_semantics": e97_token_semantics,
         "health": health_after,
         "health_before": health_before,
+        "runtime_status": runtime_status,
         "gdn2": gdn2_summary,
         "comparison": comparison,
         "throughput_eta": throughput_eta,
@@ -851,7 +1027,7 @@ def main() -> None:
         "protected_artifacts": protected,
         "confirmations": {"no_training_control": True, "no_checkpoint_write_or_modification": True, "no_s3_command": True},
     }
-    summary_path = ops_dir / "refresh_gdn2_ops_20260728_summary.json"
+    summary_path = ops_dir / f"refresh_gdn2_ops_{args.ops_label}_summary.json"
     summary["summary_json"] = str(summary_path)
     summary["report"] = str(args.report)
     summary["result_log"] = compact_result(summary)
