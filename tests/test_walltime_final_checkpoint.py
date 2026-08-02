@@ -203,6 +203,7 @@ def test_save_checkpoint_metadata_and_latest_roundtrip(tmp_path: Path):
         output_dir=tmp_path,
         keep_n=1,
         metadata=metadata,
+        total_tokens=123456,
     )
 
     latest = tmp_path / 'latest.pt'
@@ -210,6 +211,7 @@ def test_save_checkpoint_metadata_and_latest_roundtrip(tmp_path: Path):
     assert latest.resolve() == ckpt_path.resolve()
 
     loaded = torch.load(ckpt_path, map_location='cpu')
-    assert loaded['checkpoint_metadata'] == metadata
+    assert loaded['checkpoint_metadata'] == metadata | {'total_tokens': 123456}
+    assert loaded['total_tokens'] == 123456
     assert loaded['step'] == 12
     assert loaded['loss'] == math.pi

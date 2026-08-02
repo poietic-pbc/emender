@@ -14,6 +14,8 @@ SEED_ACCEPTED_TOKENS=150793748480
 SEED_BYTES=7719680116
 SEED_SHA256=0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2
 SEED_URI=s3://spinozans/emender/e97-diloco/emender_E97_1.3B_20260709_084606/step_2300930/checkpoint_step_2300930_loss_2.4365.pt
+TOKEN_MIGRATION_RECEIPT_REL=docs/validation/e97-total-token-migration-step2303840.json
+TOKEN_MIGRATION_RECEIPT="$PROJECT_ROOT/$TOKEN_MIGRATION_RECEIPT_REL"
 
 cd "$PROJECT_ROOT"
 export EMENDER_CONDA_ENV=${EMENDER_CONDA_ENV:-/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312}
@@ -96,6 +98,11 @@ SEED_SHA256=$SEED_SHA256
 SEED_URI=$SEED_URI
 SEED_CACHE=$seed_cache
 SEED_ATTESTATION_SHA256=$seed_attestation_sha256
+TOKEN_MIGRATION_RECEIPT=$TOKEN_MIGRATION_RECEIPT_REL
+TOKEN_MIGRATION_STEP=2303840
+TOKEN_MIGRATION_TOTAL_TOKENS=199615447040
+TOKEN_MIGRATION_SOURCE_JOB=5134243
+TOKEN_MIGRATION_CHECKPOINT_BYTES=7719680116
 FAULT_INJECTION=none
 ACCEPTANCE_SHIM=none
 REQUEUE=true
@@ -108,6 +115,8 @@ asset_hashes=$(
     scripts/frontier/e97_256n_final_seed_payload.sh \
     scripts/frontier/e97_same_allocation_restart.sbatch \
     scripts/frontier/materialize_e97_s3_seed.py \
+    scripts/frontier/validate_total_token_migration_receipt.py \
+    "$TOKEN_MIGRATION_RECEIPT_REL" \
     configs/frontier/e97_async_256.yaml train.py "$seed_attestation"; do
     printf '%s  %s\n' "$(sha256sum "$asset" | awk '{print $1}')" "${asset#$PROJECT_ROOT/}"
   done
@@ -151,7 +160,9 @@ git -C "$repo_exact" checkout --detach "$SOURCE_SHA"
 launcher="$repo_exact/scripts/frontier/e97_same_allocation_restart.sbatch"
 sha256sum "$payload_root"/{config.env,source-assets.sha256,payload.sh,submit.sh,seed-bootstrap-attestation.json} \
   "$launcher" "$repo_exact/train.py" "$repo_exact/configs/frontier/e97_async_256.yaml" \
-  "$repo_exact/scripts/frontier/materialize_e97_s3_seed.py" > "$payload_root/SHA256SUMS"
+  "$repo_exact/scripts/frontier/materialize_e97_s3_seed.py" \
+  "$repo_exact/scripts/frontier/validate_total_token_migration_receipt.py" \
+  "$repo_exact/$TOKEN_MIGRATION_RECEIPT_REL" > "$payload_root/SHA256SUMS"
 
 # Canonical Frontier environment is re-sourced from the immutable checkout for
 # every preflight and is the exact environment exported to the payload.
@@ -162,7 +173,8 @@ source "$repo_exact/scripts/frontier/activate_emender_frontier.sh"
 PYTHON_BIN=$EMENDER_PYTHON
 export PYTHON_BIN REPO="$repo_exact"
 "$EMENDER_PYTHON" -m py_compile "$repo_exact/train.py" \
-  "$repo_exact/scripts/frontier/materialize_e97_s3_seed.py"
+  "$repo_exact/scripts/frontier/materialize_e97_s3_seed.py" \
+  "$repo_exact/scripts/frontier/validate_total_token_migration_receipt.py"
 bash -n "$launcher" "$payload_root"/{payload.sh,submit.sh}
 
 # The stable run directory deliberately contains neither a timestamp nor a
@@ -186,6 +198,14 @@ if [[ -e "$RUN_DIR/train/latest.pt" || -L "$RUN_DIR/train/latest.pt" ]]; then
   (( resume_step > SEED_STEP )) || {
     echo "existing stable checkpoint authority is not newer than the cold seed" >&2; exit 66;
   }
+  if (( resume_step == 2303840 )); then
+    "$EMENDER_PYTHON" scripts/frontier/validate_total_token_migration_receipt.py \
+      --receipt "$TOKEN_MIGRATION_RECEIPT" \
+      --checkpoint "$RUN_DIR/train/latest.pt" --run-id "$RUN_ID" \
+      --run-dir "$RUN_DIR" --latest "$RUN_DIR/train/latest.pt" \
+      --expected-step 2303840 --expected-total-tokens 199615447040 \
+      --expected-source-job-id 5134243 --expected-size-bytes 7719680116 >/dev/null
+  fi
 fi
 printf '%s\n' "$payload_digest" > "$RUN_DIR/identity/payload-digest.txt"
 printf '%s\n' "$config" > "$RUN_DIR/identity/config.env"
@@ -208,6 +228,7 @@ export WALLTIME_FINAL_CHECKPOINT_MARGIN_SECONDS=900 WALLTIME_CHECK_EVERY=40 DIST
 export E97_SEED_CONFIG="$repo_exact/configs/frontier/e97_async_256.yaml"
 export E97_SEED_CACHE="$seed_cache" E97_SEED_ATTESTATION="$seed_attestation"
 export E97_SEED_ATTESTATION_SHA256="$seed_attestation_sha256"
+export TOTAL_TOKEN_MIGRATION_RECEIPT="$repo_exact/$TOKEN_MIGRATION_RECEIPT_REL"
 export FRONTIER_RCCL_ENV=recommended FRONTIER_ENABLE_OLCF_RCCL_PLUGIN=1
 export FRONTIER_RUNTIME_PROFILE=olcf-rccl-debug REQUIRE_RCCL_NET_PLUGIN=1
 export NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET
@@ -228,6 +249,8 @@ v={'schema':'e97-final-seed-production-256n-submission-v2','payload_job_id':'$pa
 'nodes':256,'world_size':2048,'tasks_per_node':8,'partition':'batch','qos':'debug','time_limit':'02:00:00',
 'submitted_unheld':True,'collector_job_id':None,'seed_step':2300930,
 'seed_accepted_tokens':150793748480,'seed_bytes':7719680116,'seed_sha256':'$SEED_SHA256',
+'token_migration_receipt':'$TOKEN_MIGRATION_RECEIPT_REL','token_migration_step':2303840,
+'token_migration_total_tokens':199615447040,'token_migration_source_job_id':5134243,
 'seed_cache':'$seed_cache','seed_attestation':'$seed_attestation',
 'seed_attestation_sha256':'$seed_attestation_sha256','python_bin':'$EMENDER_PYTHON',
 'fault_injection':'none','acceptance_shim':'none','unchanged_payload_retried':False}

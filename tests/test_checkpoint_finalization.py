@@ -60,9 +60,12 @@ def test_save_checkpoint_atomically_updates_latest_and_keeps_newest(tmp_path):
     model = torch.nn.Linear(2, 2)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
 
-    first = train.save_checkpoint(model, optimizer, 1, 3.0, tmp_path, keep_n=2)
-    second = train.save_checkpoint(model, optimizer, 2, 2.0, tmp_path, keep_n=2)
-    third = train.save_checkpoint(model, optimizer, 3, 1.0, tmp_path, keep_n=2)
+    first = train.save_checkpoint(
+        model, optimizer, 1, 3.0, tmp_path, keep_n=2, total_tokens=10)
+    second = train.save_checkpoint(
+        model, optimizer, 2, 2.0, tmp_path, keep_n=2, total_tokens=20)
+    third = train.save_checkpoint(
+        model, optimizer, 3, 1.0, tmp_path, keep_n=2, total_tokens=30)
 
     latest = tmp_path / "latest.pt"
     assert latest.is_symlink()
