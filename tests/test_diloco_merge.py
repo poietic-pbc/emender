@@ -1141,7 +1141,7 @@ def test_diloco_checkpoint_roundtrip_preserves_outer_and_inner_sf_state(monkeypa
     with tempfile.TemporaryDirectory() as d:
         path = train.save_checkpoint(
             model, opt, step=123, loss=4.5, output_dir=Path(d),
-            keep_n=2, outer_state=outer_state)
+            keep_n=2, outer_state=outer_state, total_tokens=123000)
         model2, opt2 = _build()
         real_torch_load = torch.load
         load_calls = []
@@ -1364,7 +1364,7 @@ def test_checkpoint_metadata_records_outer_bootstrap():
     with tempfile.TemporaryDirectory() as d:
         path = train.save_checkpoint(
             model, opt, step=100, loss=1.25, output_dir=Path(d), keep_n=2,
-            outer_state=outer_state, metadata=metadata)
+            outer_state=outer_state, metadata=metadata, total_tokens=100000)
         ckpt = torch.load(path, map_location='cpu')
     block = ckpt['checkpoint_metadata']['diloco_outer_state_bootstrap']
     assert block['performed'] is True

@@ -58,6 +58,13 @@ def test_production_defaults_and_fixed_world_data_plane_are_explicit():
     assert "sbcast" in text
     assert "--verify-local" in text
     assert "samealloc_bind_restart_authority" in text
+    assert "samealloc_resume_token_bootstrap" in text
+    assert "validate_total_token_migration_receipt.py" in text
+    assert "--expected-total-tokens 199615447040" in text
+    assert "--expected-source-job-id 5134243" in text
+    assert "--expected-size-bytes 7719680116" in text
+    assert 'token_args=(--total_tokens "$resume_total_tokens")' in text
+    assert "embedded-checkpoint" in text
     assert 'job-${SLURM_JOB_ID}-restart-${SLURM_RESTART_COUNT:-0}' in text
     assert "INITIAL_CHECKPOINT" not in text
 
@@ -382,6 +389,13 @@ frontier_require_requested_rccl_net_plugin() { return 0; }
         (REPO / "configs/frontier/e97_async_256.yaml").read_text()
     )
     (repo / "scripts/frontier/materialize_e97_s3_seed.py").write_text("# mocked by srun\n")
+    (repo / "scripts/frontier/validate_total_token_migration_receipt.py").write_text(
+        (REPO / "scripts/frontier/validate_total_token_migration_receipt.py").read_text()
+    )
+    (repo / "docs/validation").mkdir(parents=True)
+    (repo / "docs/validation/e97-total-token-migration-step2303840.json").write_text(
+        (REPO / "docs/validation/e97-total-token-migration-step2303840.json").read_text()
+    )
     cache = tmp_path / (
         "sha256-0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2.pt"
     )
@@ -464,6 +478,9 @@ exit 0
     records = [line.split("|", 4) for line in launches]
     assert [record[1] for record in records] == ["1", "2", "3"]
     assert len({record[2] for record in records}) == 3
+    assert "--total_tokens 150793748480" in (run_dir / "epochs/epoch-000001/train-command.txt").read_text()
+    assert "--total_tokens" not in (run_dir / "epochs/epoch-000002/train-command.txt").read_text()
+    assert "--total_tokens" not in (run_dir / "epochs/epoch-000003/train-command.txt").read_text()
     assert "--nodelist=n0,n1" in records[0][3]
     assert "--nodelist=n0,n1" in records[1][3]
     assert "--nodelist=n0" in records[2][3]

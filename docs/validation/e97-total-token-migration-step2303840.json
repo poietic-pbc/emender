@@ -1,0 +1,27 @@
+{
+  "authority": "One-time trusted bootstrap only for this exact legacy checkpoint. Newly published checkpoints use their embedded top-level total_tokens as sole authority.",
+  "checkpoint": {
+    "basename": "checkpoint_step_2303840_loss_2.3178.pt",
+    "resolved_path": "/lustre/orion/bif148/proj-shared/emender/frontier_runs/final-seed-production-256n/runs/e97-final-seed-production-256n/train/checkpoint_step_2303840_loss_2.3178.pt",
+    "size_bytes": 7719680116,
+    "source_job_id": 5134243,
+    "step": 2303840
+  },
+  "run_identity": {
+    "latest_path": "/lustre/orion/bif148/proj-shared/emender/frontier_runs/final-seed-production-256n/runs/e97-final-seed-production-256n/train/latest.pt",
+    "run_dir": "/lustre/orion/bif148/proj-shared/emender/frontier_runs/final-seed-production-256n/runs/e97-final-seed-production-256n",
+    "run_id": "e97-final-seed-production-256n"
+  },
+  "schema": "emender-total-token-legacy-migration-v1",
+  "token_accounting": {
+    "batch_size": 4,
+    "chunk_size": 2048,
+    "completed_steps": 2910,
+    "grad_accum": 1,
+    "seed_step": 2300930,
+    "seed_total_tokens": 150793748480,
+    "tokens_per_step": 16777216,
+    "total_tokens": 199615447040,
+    "world_size": 2048
+  }
+}

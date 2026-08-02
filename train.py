@@ -486,6 +486,11 @@ def parse_args():
                         help='Random seed')
     parser.add_argument('--resume', type=str, default=None,
                         help='Resume from checkpoint')
+    parser.add_argument('--total_tokens', type=int, default=None,
+                        help='Trusted total-token bootstrap for a legacy --resume checkpoint. '
+                             'For checkpoints with embedded total_tokens this is optional and '
+                             'must match exactly; newly written checkpoints use the embedded '
+                             'value as sole authority.')
     parser.add_argument('--tbptt', action='store_true',
                         help='Enable TBPTT (carry hidden state across chunks)')
     parser.add_argument('--orth_reg', type=float, default=0.0,
@@ -1056,20 +1061,93 @@ def resolve_distributed_env_from_slurm(device_count=None):
     return 'derived-from-slurm'
 
 
+def _validated_total_tokens(value, source):
+    if type(value) is not int:  # bool is intentionally not an integer authority.
+        raise TypeError(f"{source} total_tokens must be an integer")
+    if value < 0:
+        raise ValueError(f"{source} total_tokens must be nonnegative")
+    return value
+
+
+def tokens_per_global_optimizer_step(world_size, batch_size, chunk_size, grad_accum):
+    """Return authoritative fixed-world tokens committed by one optimizer step."""
+    values = {
+        'world_size': world_size,
+        'batch_size': batch_size,
+        'chunk_size': chunk_size,
+        'grad_accum': grad_accum,
+    }
+    for name, value in values.items():
+        if type(value) is not int or value <= 0:
+            raise ValueError(f"{name} must be a positive integer for token accounting")
+    return world_size * batch_size * chunk_size * grad_accum
+
+
+def advance_total_tokens(total_tokens, world_size, batch_size, chunk_size, grad_accum):
+    """Advance the in-memory clock after one successfully completed optimizer step."""
+    current = _validated_total_tokens(total_tokens, 'current')
+    return current + tokens_per_global_optimizer_step(
+        world_size, batch_size, chunk_size, grad_accum)
+
+
+def resolve_checkpoint_total_tokens(checkpoint, explicit_total_tokens=None,
+                                    checkpoint_path=None):
+    """Resolve the restart clock, rejecting ambiguity or contradictory input.
+
+    Legacy checkpoints have no authoritative clock and therefore require one
+    explicit trusted bootstrap.  Once a checkpoint embeds the clock, that
+    embedded value is authoritative across changed-world restarts and requeues.
+    """
+    source = str(checkpoint_path or '<checkpoint>')
+    explicit = None
+    if explicit_total_tokens is not None:
+        explicit = _validated_total_tokens(explicit_total_tokens, 'explicit')
+
+    if 'total_tokens' not in checkpoint:
+        if explicit is None:
+            raise ValueError(
+                f"legacy checkpoint {source} lacks total_tokens; "
+                "provide trusted --total_tokens explicitly"
+            )
+        return explicit
+
+    embedded = _validated_total_tokens(checkpoint['total_tokens'], 'embedded checkpoint')
+    metadata = checkpoint.get('checkpoint_metadata')
+    if isinstance(metadata, dict) and 'total_tokens' in metadata:
+        mirrored = _validated_total_tokens(metadata['total_tokens'], 'checkpoint metadata')
+        if mirrored != embedded:
+            raise ValueError(
+                f"checkpoint metadata total_tokens {mirrored} contradicts "
+                f"top-level total_tokens {embedded} in {source}"
+            )
+    if explicit is not None and explicit != embedded:
+        raise ValueError(
+            f"explicit total_tokens {explicit} contradicts embedded "
+            f"total_tokens {embedded} in {source}"
+        )
+    return embedded
+
+
 def save_checkpoint(model, optimizer, step, loss, output_dir, keep_n=5, outer_state=None,
-                    metadata=None):
-    """Save checkpoint and clean up old ones."""
+                    metadata=None, *, total_tokens):
+    """Atomically save model/optimizer state and its authoritative token clock."""
+    total_tokens = _validated_total_tokens(total_tokens, 'checkpoint')
     output_dir.mkdir(parents=True, exist_ok=True)
     ckpt_path = output_dir / f'checkpoint_step_{step:06d}_loss_{loss:.4f}.pt'
 
+    checkpoint_metadata = dict(metadata or {})
+    if ('total_tokens' in checkpoint_metadata
+            and checkpoint_metadata['total_tokens'] != total_tokens):
+        raise ValueError("checkpoint metadata total_tokens contradicts checkpoint authority")
+    checkpoint_metadata['total_tokens'] = total_tokens
     payload = {
         'step': step,
+        'total_tokens': total_tokens,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'loss': loss,
+        'checkpoint_metadata': checkpoint_metadata,
     }
-    if metadata:
-        payload['checkpoint_metadata'] = metadata
     if outer_state is not None:
         payload['diloco_outer_state'] = outer_state
 
@@ -2935,6 +3013,7 @@ def train(args):
     loaded_outer_state = None
     loaded_checkpoint = None
     loaded_optimizer_state = False
+    total_tokens = 0
     if args.resume:
         print(f"Resuming from {args.resume}")
         start_step, _, ckpt = load_checkpoint(
@@ -2942,11 +3021,20 @@ def train(args):
         loaded_checkpoint = ckpt
         loaded_outer_state = ckpt.get('diloco_outer_state')
         loaded_optimizer_state = 'optimizer_state_dict' in ckpt
+        total_tokens = resolve_checkpoint_total_tokens(
+            ckpt, args.total_tokens, args.resume)
         # Optimizer state dicts carry their original param-group LR. For
         # continuation runs we want the explicit CLI LR to be authoritative.
         for param_group in optimizer.param_groups:
             param_group['lr'] = args.lr
-        print(f"Resumed at step {start_step}")
+        print(f"Resumed at step {start_step} with total_tokens={total_tokens}")
+    elif args.total_tokens is not None:
+        explicit_fresh_tokens = _validated_total_tokens(args.total_tokens, 'explicit')
+        if explicit_fresh_tokens != 0:
+            raise ValueError(
+                "nonzero --total_tokens requires --resume so model state and token "
+                "authority cannot diverge"
+            )
 
     # DDP data sharding: each rank reads a DISTINCT stream so the world processes
     # different real tokens every step (true data parallelism, not replicated work).
@@ -3294,6 +3382,13 @@ def train(args):
             optimizer.zero_grad()
 
             step += 1
+            total_tokens = advance_total_tokens(
+                total_tokens,
+                world_size,
+                args.batch_size,
+                args.chunk_size,
+                args.grad_accum,
+            )
             accumulated_steps = 0
 
             # DiLoCo inter-worker sync: every K local optimizer steps, average the
@@ -3399,17 +3494,17 @@ def train(args):
                 if train_loss_for_curve is None:
                     denom = max(1, step - start_step)
                     train_loss_for_curve = running_loss / denom if running_loss else float('nan')
-                total_tokens = step * args.batch_size * (args.chunk_size + 1) * world_size
+                heldout_curve_total_tokens = total_tokens
                 wall_time = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')
                 with open(heldout_curve_path, 'a') as f:
                     f.write(
-                        f"{step},{total_tokens},{train_loss_for_curve:.6f},"
+                        f"{step},{heldout_curve_total_tokens},{train_loss_for_curve:.6f},"
                         f"{heldout_ce:.6f},{heldout_bpb:.6f},{heldout_tokens},"
                         f"{heldout_curve['bytes_per_token']:.6f},"
                         f"{heldout_eval_mode_label(args)},{wall_time}\n"
                     )
                 print(f"  >>> heldout_curve mode={heldout_eval_mode_label(args)} step={step} "
-                      f"tokens={total_tokens} train_loss={train_loss_for_curve:.4f} "
+                      f"tokens={heldout_curve_total_tokens} train_loss={train_loss_for_curve:.4f} "
                       f"heldout_bpb={heldout_bpb:.4f}", flush=True)
 
             # Validation (rank 0 only; uses unwrapped core_model, no DDP collectives)
@@ -3429,6 +3524,7 @@ def train(args):
                 ckpt_path = save_checkpoint(
                     core_model, optimizer, step, avg_loss, output_dir,
                     args.keep_checkpoints, outer_state=outer_state,
+                    total_tokens=total_tokens,
                     metadata=checkpoint_metadata_with_diloco_bootstrap({
                         'kind': 'periodic',
                         'model_variant': args._model_variant,
@@ -3445,7 +3541,8 @@ def train(args):
                         ),
                     }, diloco_bootstrap_metadata),
                 )
-                print(f"  >>> saved checkpoint: {ckpt_path.name}")
+                print(f"  >>> saved checkpoint: {ckpt_path.name} "
+                      f"step={step} total_tokens={total_tokens}")
                 if args.optimizer == 'schedulefree':
                     optimizer.train()  # Back to training mode
 
@@ -3532,16 +3629,18 @@ def train(args):
         remaining = final_metadata['walltime_remaining_s']
         rem_text = 'unknown' if remaining is None else f"{remaining:.1f}"
         print(f"[final-checkpoint] START kind=final reason={final_metadata['reason']} "
-              f"step={step} loss={last_100_avg:.4f} remaining_s={rem_text} "
+              f"step={step} total_tokens={total_tokens} loss={last_100_avg:.4f} remaining_s={rem_text} "
               f"model_variant={args._model_variant} rank={rank}/{world_size} "
               f"is_head={is_main}", flush=True)
         ckpt_path = save_checkpoint(
             core_model, optimizer, step, last_100_avg, output_dir,
             args.keep_checkpoints, outer_state=outer_state,
+            total_tokens=total_tokens,
             metadata=checkpoint_metadata_with_diloco_bootstrap(
                 final_metadata, diloco_bootstrap_metadata),
         )
         print(f"[final-checkpoint] END path={ckpt_path} latest={output_dir / 'latest.pt'} "
+              f"step={step} total_tokens={total_tokens} "
               f"model_variant={args._model_variant} rank={rank}/{world_size} "
               f"is_head={is_main}", flush=True)
 
@@ -3619,6 +3718,7 @@ def train(args):
               f"RESERVED_MEMORY_MB: {reserved_mb:.0f}", flush=True)
     if _run_final:
         print(f"\nTraining complete! Final step: {step}")
+        print(f"TOTAL_TOKENS: {total_tokens}")
         print(f"FINAL_LOSS_LAST100: {last_100_avg:.4f}")
         if torch.cuda.is_available():
             print(f"PEAK_MEMORY_MB: {peak_mb:.0f}")

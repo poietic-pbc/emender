@@ -44,12 +44,23 @@ def test_256n_snapshot_binds_clean_final_seed_and_all_immutable_assets():
     assert "SEED_ACCEPTED_TOKENS=150793748480" in text
     assert "SEED_BYTES=7719680116" in text
     assert "SEED_SHA256=0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2" in text
+    assert "TOKEN_MIGRATION_RECEIPT_REL=docs/validation/e97-total-token-migration-step2303840.json" in text
+    assert "TOKEN_MIGRATION_STEP=2303840" in text
+    assert "TOKEN_MIGRATION_TOTAL_TOKENS=199615447040" in text
+    assert "TOKEN_MIGRATION_SOURCE_JOB=5134243" in text
+    assert "TOKEN_MIGRATION_CHECKPOINT_BYTES=7719680116" in text
+    assert "--expected-step 2303840" in text
+    assert "--expected-total-tokens 199615447040" in text
+    assert "--expected-source-job-id 5134243" in text
+    assert "--expected-size-bytes 7719680116" in text
     assert "--prefetch" in text
     assert "verified_seed_bytes" in text and "verified_seed_sha" in text
     for asset in (
         "e97_256n_final_seed_payload.sh",
         "e97_same_allocation_restart.sbatch",
         "materialize_e97_s3_seed.py",
+        "validate_total_token_migration_receipt.py",
+        "e97-total-token-migration-step2303840.json",
         "e97_async_256.yaml",
         "train.py",
         "seed_attestation",
@@ -97,6 +108,8 @@ def test_256n_runtime_preserves_atomic_continuing_authority_and_seed_broadcast()
     assert "--verify-local" in launcher
     assert 'job-${SLURM_JOB_ID}-restart-${SLURM_RESTART_COUNT:-0}' in launcher
     assert "samealloc_update_no_progress" in launcher
+    assert "samealloc_resume_token_bootstrap" in launcher
+    assert 'token_args=(--total_tokens "$resume_total_tokens")' in launcher
 
 
 def test_256n_batch_writes_durable_live_and_terminal_state_for_interactive_monitoring():

@@ -239,6 +239,28 @@ samealloc_request_requeue() {
   scontrol requeue "$SLURM_JOB_ID"
 }
 
+samealloc_resume_token_bootstrap() {
+  local stable_latest=$1 receipt=$2 target base total
+  target=$(readlink -f "$stable_latest") || return 65
+  if samealloc_is_final_seed_target "$target"; then
+    printf '%s|%s\n' 150793748480 final-seed-bootstrap
+    return 0
+  fi
+  base=$(basename "$target")
+  if [[ "$base" == checkpoint_step_2303840_loss_2.3178.pt ]]; then
+    total=$("$PYTHON_BIN" "$REPO/scripts/frontier/validate_total_token_migration_receipt.py" \
+      --receipt "$receipt" --checkpoint "$target" --run-id "$RUN_ID" \
+      --run-dir "$RUN_DIR" --latest "$stable_latest" \
+      --expected-step 2303840 --expected-total-tokens 199615447040 \
+      --expected-source-job-id 5134243 --expected-size-bytes 7719680116) || return 65
+    printf '%s|%s\n' "$total" legacy-migration-receipt
+    return 0
+  fi
+  # Any checkpoint published by this source must carry its own clock. Passing no
+  # duplicate CLI value makes that embedded field the sole restart authority.
+  return 3
+}
+
 samealloc_main() {
   : "${SLURM_JOB_ID:?must run inside a Slurm allocation}"
   : "${SLURM_JOB_NODELIST:?Slurm allocation nodelist is missing}"
@@ -249,6 +271,7 @@ samealloc_main() {
   RUN_ROOT=${RUN_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/same-allocation}
   RUN_DIR=${RUN_DIR:-${RUN_ROOT%/}/$RUN_ID}
   E97_SEED_CONFIG=${E97_SEED_CONFIG:-$REPO/configs/frontier/e97_async_256.yaml}
+  TOTAL_TOKEN_MIGRATION_RECEIPT=${TOTAL_TOKEN_MIGRATION_RECEIPT:-$REPO/docs/validation/e97-total-token-migration-step2303840.json}
   : "${E97_SEED_CACHE:?submit side must export the verified content-addressed final E97 seed cache}"
   : "${E97_SEED_ATTESTATION:?submit side must export the final E97 seed authority attestation}"
   : "${E97_SEED_ATTESTATION_SHA256:?submit side must bind the authority attestation digest}"
@@ -315,6 +338,9 @@ samealloc_main() {
   TRAIN_PYTHON_BIN=$EMENDER_PYTHON
   export REPO PYTHON_BIN TRAIN_PYTHON_BIN TIKTOKEN_CACHE_DIR
   [[ $(readlink -f "$PYTHON_BIN") == $(readlink -f "$EMENDER_PYTHON") ]] || return 66
+  [[ -r "$TOTAL_TOKEN_MIGRATION_RECEIPT" ]] || {
+    echo "total-token migration receipt is unreadable" >&2; return 64;
+  }
   frontier_require_requested_rccl_net_plugin "same-allocation batch parent" >/dev/null
 
   local final_seed_step=2300930
@@ -465,6 +491,8 @@ exec "$1" "$2" --verify-local --seed-config "$3" --destination "$4" \
 
   local epoch epoch_dir epoch_output master_host master_port prior_port=""
   local node_csv tasks rc promoted observed_step direct_host strike_count node health_query_failed
+  local token_bootstrap resume_total_tokens resume_token_source token_rc
+  local -a token_args=()
   while true; do
     epoch=$(samealloc_next_epoch "$RUN_DIR/supervisor/execution-epoch.txt")
     epoch_dir=$(printf '%s/epochs/epoch-%06d' "$RUN_DIR" "$epoch")
@@ -478,6 +506,17 @@ exec "$1" "$2" --verify-local --seed-config "$3" --destination "$4" \
     node_csv=$(IFS=,; echo "${usable[*]}")
     tasks=$((current_nodes * TASKS_PER_NODE))
     launched_nodes=("${usable[@]}")
+    token_args=()
+    resume_total_tokens=""
+    resume_token_source=embedded-checkpoint
+    if token_bootstrap=$(samealloc_resume_token_bootstrap \
+        "$stable_latest" "$TOTAL_TOKEN_MIGRATION_RECEIPT"); then
+      IFS='|' read -r resume_total_tokens resume_token_source <<< "$token_bootstrap"
+      token_args=(--total_tokens "$resume_total_tokens")
+    else
+      token_rc=$?
+      (( token_rc == 3 )) || return "$token_rc"
+    fi
 
     {
       echo "run_id=$RUN_ID"
@@ -493,6 +532,9 @@ exec "$1" "$2" --verify-local --seed-config "$3" --destination "$4" \
       echo "resume=$stable_latest"
       echo "resume_target=$(readlink "$stable_latest")"
       echo "resume_step=$committed_step"
+      echo "resume_total_tokens=${resume_total_tokens:-embedded}"
+      echo "resume_token_authority=$resume_token_source"
+      echo "total_token_migration_receipt=$TOTAL_TOKEN_MIGRATION_RECEIPT"
       echo "final_seed_step=$final_seed_step"
       echo "final_seed_tokens=$final_seed_tokens"
       echo "final_seed_size=$final_seed_size"
@@ -504,7 +546,8 @@ exec "$1" "$2" --verify-local --seed-config "$3" --destination "$4" \
       echo "diloco_merge_bucket_numel=$DILOCO_MERGE_BUCKET_NUMEL"
     } > "$epoch_dir/launch.env"
     printf '%q ' "$PYTHON_BIN" -u train.py "${common_args[@]}" "${model_args[@]}" \
-      --resume "$stable_latest" --output "$RUN_DIR" --exact_output_dir "$epoch_output" > "$epoch_dir/train-command.txt"
+      "${token_args[@]}" --resume "$stable_latest" --output "$RUN_DIR" \
+      --exact_output_dir "$epoch_output" > "$epoch_dir/train-command.txt"
     printf '\n' >> "$epoch_dir/train-command.txt"
 
     echo "[samealloc] epoch=$epoch nodes=$current_nodes tasks=$tasks port=$master_port resume=$stable_latest"
@@ -519,7 +562,8 @@ exec "$1" "$2" --verify-local --seed-config "$3" --destination "$4" \
         -c"$CPUS_PER_TASK" --gpus-per-task=1 --gpu-bind=closest --nodelist="$node_csv" \
         --export=ALL,MASTER_ADDR="$master_host",MASTER_PORT="$master_port",EMENDER_EXECUTION_EPOCH="$epoch" \
         bash -lc 'source "$REPO/scripts/frontier/frontier_runtime_env.sh"; frontier_activate_emender_conda_env; frontier_assert_emender_conda_env; frontier_require_requested_rccl_net_plugin "same-allocation child rank ${SLURM_PROCID}" >/dev/null; export RANK=$SLURM_PROCID WORLD_SIZE=$SLURM_NTASKS LOCAL_RANK=0; exec "$TRAIN_PYTHON_BIN" -u train.py "$@"' \
-        bash "${common_args[@]}" "${model_args[@]}" --resume "$stable_latest" --output "$RUN_DIR" --exact_output_dir "$epoch_output" \
+        bash "${common_args[@]}" "${model_args[@]}" "${token_args[@]}" \
+        --resume "$stable_latest" --output "$RUN_DIR" --exact_output_dir "$epoch_output" \
         > "$epoch_dir/train.out" 2> "$epoch_dir/train.err" &
     CHILD_PID=$!
     wait "$CHILD_PID"
