@@ -25,6 +25,7 @@ from .e88_triton_backward import (
 from .e88_triton_optimized import (
     e88_triton_optimized_apply,
 )
+from .e97_sequential import e97_split_edit_triton_apply
 from .unified_cell_forward import (
     unified_cell_forward,
     unified_cell_torch_reference,
@@ -49,6 +50,7 @@ __all__ = [
     "e88_triton",
     "E88TritonFunction",
     "e88_triton_optimized_apply",
+    "e97_split_edit_triton_apply",
     "unified_cell_forward",
     "unified_cell_torch_reference",
     "unified_cell_backward",

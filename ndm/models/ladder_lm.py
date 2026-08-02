@@ -105,6 +105,7 @@ from .e74_v2 import E74v2
 from .e75_gated_delta import E75GatedDelta
 from .e75_multihead import E75MultiHead
 from .e88_fla_hybrid import E88FLAHybrid
+from .e97 import E97SplitEditLayer
 from .unified_cell import UnifiedCellLayer
 from .typed_head_mixture import TypedHeadMixtureLayer
 from .phi_shell import PhiShellLayer
@@ -593,15 +594,15 @@ def get_ladder_level(level):
             'spread_init': True, 'split_gate': True, **kw})),
         # E97: E88/NDM with GDN-2-inspired split edit gates.
         # Use --use_triton 1 for the split-edit Triton recurrence.
-        'E97': lambda **kw: E88FLAHybrid(**{**kw, 'use_split_edit': True}),
-        97: lambda **kw: E88FLAHybrid(**{**kw, 'use_split_edit': True}),
+        'E97': E97SplitEditLayer,
+        97: E97SplitEditLayer,
         # E97-M2: M2 multi-query readout (paper/review/STATE_AWARE_MLP_DESIGN.md §3).
         # The state UPDATE is the unchanged E97 split-edit delta; only the READ is
         # rank-R (multiquery_r queries/head). Built on the fused chunked split-edit
         # path (linear state, GDN-2-class throughput). Pass the rank via
         # layer_kwargs, e.g. --layer_kwargs '{"multiquery_r": 4}' (default R=2 here).
-        'E97-M2': lambda **kw: E88FLAHybrid(**{
-            'multiquery_r': 2, **kw, 'use_split_edit': True, 'use_triton': True,
+        'E97-M2': lambda **kw: E97SplitEditLayer(**{
+            'multiquery_r': 2, **kw, 'use_triton': True,
             'use_chunked_e97': True, 'linear_state': True}),
         'E91': E91MatMat,
         91: E91MatMat,

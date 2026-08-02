@@ -83,6 +83,7 @@ LEVEL_85_AVAILABLE = True
 
 # Language model wrapper
 from .ladder_lm import LadderLM, create_ladder_model
+from .e97 import E97SplitEditLayer
 
 # Mamba2 baseline for comparison
 try:
@@ -162,7 +163,7 @@ __all__ = [
     # E85: Input-As-Matrix
     'E85InputAsMatrixLayer', 'E85InputAsMatrixCell', 'E85InputAsMatrix', 'LEVEL_85_AVAILABLE', 'E85_CUDA_AVAILABLE',
     # Language model wrapper
-    'LadderLM', 'create_ladder_model',
+    'LadderLM', 'create_ladder_model', 'E97SplitEditLayer',
     # Mamba2 baseline
     'Mamba2LM', 'create_mamba2_model', 'MAMBA2_AVAILABLE',
     # FLA GatedDeltaNet baseline

@@ -135,8 +135,11 @@ and must run a sequential scan; when **off** (`e97-linear`), the recurrence is a
 *affine asymmetric gated-delta* form `S_t = (decay_t·I − k_t·read_key_t^T)·S_{t-1} +
 k_t·write_val_t^T`, which admits a **chunked-parallel** kernel (intra-chunk matmuls,
 recurrent state threaded across chunks — the same trick FLA uses for GDN-2). The fused
-Triton kernel `ndm/triton/e97_chunked.py` implements the chunked form; the sequential
-fused path lives in `ndm/models/e88_fused.py`.
+Triton kernel `ndm/triton/e97_chunked.py` implements the chunked form; the nonlinear
+sequential fused path routes through `ndm/triton/e88_triton_optimized.py` into the
+shared E88-derived Triton forward/backward engine with `SPLIT_EDIT=True`. See
+[`E97_E88_KERNEL_NAMING_CLARIFICATION_20260802.md`](E97_E88_KERNEL_NAMING_CLARIFICATION_20260802.md)
+for the historical naming issue and compatibility-preserving cleanup plan.
 
 ### 1.3 The lead configuration: `emender-mlp`
 
@@ -639,7 +642,7 @@ parallelism becomes available; prototype before betting budget on it.
 | **Training data — releasable (legal)** | `commapile_mainmix_v0.1_1tb.txt` (+`.zst` 251.7 GB, `.manifest.json` sources=31) at `/mnt/nvme1n1/erikg/comma_v0.1_training_dataset/`; intended `s3://garrisonlab/commapile/` | **MANDATORY on Frontier**; license-clean, 31-source main-stage mix, interleaved |
 | **Training data — local gate only** | `/mnt/nvme2n1/erikg/pile.txt` (symlink `/home/erikg/elman/data/pile.txt`) | the `<1 bpb` race gate corpus; **NOT license-clean → not for the releasable Frontier model** |
 | **The cell (source)** | `ndm/models/e88_fla_hybrid.py` (`use_split_edit=True`); ablations via `--e88_raw_write` / `--linear_state` | E97 split-edit delta |
-| **Fused E97 kernel** | `ndm/triton/e97_chunked.py` (chunked), `ndm/models/e88_fused.py` (sequential); tests `tests/test_e97_chunked.py` | bf16-only; the ROCm port target |
+| **Fused E97 kernel** | `ndm/triton/e97_chunked.py` (linear-state chunked); `ndm/triton/e88_triton_optimized.py` + `e88_triton_{forward,backward}.py` with `SPLIT_EDIT=True` (nonlinear sequential); tests `tests/test_e97_chunked.py`, `tests/test_e88_triton.py` | Shared E88-derived sequential core; see the [naming clarification](E97_E88_KERNEL_NAMING_CLARIFICATION_20260802.md) |
 | **Model wiring (SwiGLU MLP, GDN-2 control)** | `ndm/models/ladder_lm.py` (`SwiGLUMLP`, `MixerMLPWrapper`, `gdn2-mlp`) | the fair MLP counterpart |
 | **Trainer (DDP + DiLoCo opt-in)** | `train.py` (`--level`, `--use_triton`, `--diloco`, `--diloco_k/outer_lr/outer_beta`, `--warmup_steps`, `--min_lr_frac`, `--heldout_tensor`, `--data_rank/--data_world_size`) | single-GPU path byte-identical |
 | **CMA driver (standard HPO)** | `scripts/cmaes_search_v2.py` (`build_train_command`, search spaces) | use this, full geometry, ≥96 evals — not bespoke searches |

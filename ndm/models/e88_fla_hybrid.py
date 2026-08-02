@@ -1368,13 +1368,22 @@ class E88FLAHybrid(nn.Module):
         if x.is_cuda:
             backend = "hip" if getattr(torch.version, "hip", None) else "cuda"
         path = "eager-reference"
+        kernel_core = "python-reference"
         if use_chunked:
             path = "e97-chunked-triton"
+            kernel_core = "e97-chunked-triton"
         elif self.use_triton and use_optimized:
-            path = "e88-sequential-split-edit-triton"
+            path = "e97-sequential-split-edit-triton"
+            kernel_core = "e88-shared-triton"
+        recurrence = "chunked" if use_chunked else "sequential"
+        state_map = "linear" if self.linear_state else "tanh"
+        eager_fallback = path == "eager-reference"
         print(
             "[e97-runtime] "
-            f"backend={backend} path={path} use_triton={self.use_triton} "
+            f"model=emender/nonlin historical_level=E97 backend={backend} "
+            f"path={path} kernel_api={path} kernel_core={kernel_core} "
+            f"recurrence={recurrence} state={state_map} eager_fallback={eager_fallback} "
+            f"use_triton={self.use_triton} "
             f"use_chunked_e97={self.use_chunked_e97} e97_chunk_size={self.e97_chunk_size} "
             f"linear_state={self.linear_state} raw_write={self.raw_write} "
             f"use_split_edit={self.use_split_edit} log_decay={log_decay}",
@@ -1862,18 +1871,32 @@ class E88FLAHybrid(nn.Module):
                         )
                         output = out_ungated * F.silu(g)
                 elif self.use_triton:
-                    from ndm.triton.e88_triton_optimized import e88_triton_optimized_apply
-                    S_final, output = e88_triton_optimized_apply(
-                        self.training,
-                        k_norm, v.to(input_dtype), q_norm, decay.to(input_dtype),
-                        g, S0.to(input_dtype), H, True, use_fused_l2,
-                        self.checkpoint_interval,
-                        apply_silu_qkv=qkv_silu_in_kernel,
-                        raw_write=self.raw_write,
-                        linear_state=self.linear_state,
-                        erase_gate=erase_for_kernel,
-                        value_write_gate=value_write_for_kernel,
-                    )
+                    if self.use_split_edit:
+                        from ndm.triton.e97_sequential import e97_split_edit_triton_apply
+                        S_final, output = e97_split_edit_triton_apply(
+                            self.training,
+                            k_norm, v.to(input_dtype), q_norm, decay.to(input_dtype),
+                            g, S0.to(input_dtype), H, True, use_fused_l2,
+                            self.checkpoint_interval,
+                            apply_silu_qkv=qkv_silu_in_kernel,
+                            raw_write=self.raw_write,
+                            linear_state=self.linear_state,
+                            erase_gate=erase_for_kernel,
+                            value_write_gate=value_write_for_kernel,
+                        )
+                    else:
+                        from ndm.triton.e88_triton_optimized import e88_triton_optimized_apply
+                        S_final, output = e88_triton_optimized_apply(
+                            self.training,
+                            k_norm, v.to(input_dtype), q_norm, decay.to(input_dtype),
+                            g, S0.to(input_dtype), H, True, use_fused_l2,
+                            self.checkpoint_interval,
+                            apply_silu_qkv=qkv_silu_in_kernel,
+                            raw_write=self.raw_write,
+                            linear_state=self.linear_state,
+                            erase_gate=erase_for_kernel,
+                            value_write_gate=value_write_for_kernel,
+                        )
                 else:
                     # Call optimized kernel (auto-selects warp vs coalesced based on n_state)
                     S_final, output = E88OptimizedCUDAFunction.apply(
