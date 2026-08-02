@@ -1,3 +1,4 @@
+import hashlib
 import os
 import re
 import subprocess
@@ -50,6 +51,44 @@ def test_production_defaults_and_fixed_world_data_plane_are_explicit():
     assert 'tasks=$((current_nodes * TASKS_PER_NODE))' in text
     assert "source \"$REPO/scripts/frontier/activate_emender_frontier.sh\"" in text
     assert "PYTHON_BIN=$EMENDER_PYTHON" in text
+    assert "final_seed_step=2300930" in text
+    assert "final_seed_tokens=150793748480" in text
+    assert "final_seed_size=7719680116" in text
+    assert "0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2" in text
+    assert "sbcast" in text
+    assert "--verify-local" in text
+    assert "samealloc_bind_restart_authority" in text
+    assert 'job-${SLURM_JOB_ID}-restart-${SLURM_RESTART_COUNT:-0}' in text
+    assert "INITIAL_CHECKPOINT" not in text
+
+
+def test_exact_two_node_final_seed_runner_is_held_collected_and_debug_bound():
+    submitter = REPO / "scripts/frontier/submit_e97_2n_final_seed_retry.sh"
+    collector = REPO / "scripts/frontier/e97_2n_final_seed_retry_collector.sh"
+    shim = REPO / "scripts/frontier/e97_2n_final_seed_retry_srun_shim.sh"
+    submitted = submitter.read_text()
+    collected = collector.read_text()
+    observed = shim.read_text()
+
+    assert "CANONICAL_BASE=c625cede2b97ad43af6e1e47a5fd4d58e1dbafcb" in submitted
+    assert "--parsable --hold" in submitted
+    assert '-p batch -q debug' in submitted
+    assert ' -N2 -t 00:30:00' in submitted
+    assert "FAULT_MERGE=3" in submitted
+    assert "TRAIN_MINUTES=4" in submitted
+    assert 'dependency="afterany:$payload_id"' in submitted
+    assert "scontrol release \"$payload_id\"" in submitted
+    assert "materialize_e97_s3_seed.py" in submitted and "--prefetch" in submitted
+    assert "unchanged payload bytes already attempted" in submitted
+    assert '"same_node_set_retried"' in collected
+    assert '"checkpoint_reloaded"' in collected
+    assert '"post_retry_checkpoint_advanced"' in collected
+    assert 'fields["full_pass"]' in collected
+    assert '"direct_failure_first_strike_no_exclusion"' in collected
+    assert '"ambiguous_no_strike_deterministic_test_covered"' in collected
+    assert 'job-{job}-restart-' in collected
+    assert "fault_environment_removed=true" in observed
+    assert "unchanged_failed_payload_retried=false" in observed
 
 
 def test_atomic_promotion_selects_only_complete_epoch_latest(tmp_path: Path):
@@ -86,6 +125,60 @@ def test_partial_checkpoint_without_latest_is_never_promoted(tmp_path: Path):
 
     assert result.returncode != 0
     assert not stable.exists()
+
+
+def test_first_attempt_binds_verified_final_seed_without_legacy_pointer(tmp_path: Path):
+    seed = tmp_path / "emender-e97-seed-7001" / "checkpoint-step-2300930.pt"
+    seed.parent.mkdir()
+    seed.write_bytes(b"verified-final-seed")
+    stable = tmp_path / "run" / "train" / "latest.pt"
+
+    result = _bash(
+        'samealloc_bind_restart_authority "$STABLE" "$SEED"; readlink "$STABLE"',
+        env={"STABLE": str(stable), "SEED": str(seed), "SLURM_JOB_ID": "7001"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(seed.resolve())
+    assert stable.resolve() == seed
+
+
+def test_pre_first_checkpoint_requeue_rebinds_prior_job_tmp_seed(tmp_path: Path):
+    seed = tmp_path / "emender-e97-seed-7002" / "checkpoint-step-2300930.pt"
+    seed.parent.mkdir()
+    seed.write_bytes(b"same-verified-final-seed")
+    stable = tmp_path / "run" / "train" / "latest.pt"
+    stable.parent.mkdir(parents=True)
+    stable.symlink_to(
+        "/tmp/emender-e97-seed-7001/checkpoint-step-2300930.pt")
+
+    result = _bash(
+        'samealloc_bind_restart_authority "$STABLE" "$SEED"; readlink "$STABLE"',
+        env={"STABLE": str(stable), "SEED": str(seed), "SLURM_JOB_ID": "7002"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(seed.resolve())
+    assert stable.resolve() == seed
+
+
+def test_requeue_never_replaces_newer_committed_run_checkpoint(tmp_path: Path):
+    seed = tmp_path / "emender-e97-seed-7002" / "checkpoint-step-2300930.pt"
+    seed.parent.mkdir()
+    seed.write_bytes(b"verified-final-seed")
+    committed = tmp_path / "run" / "train" / "checkpoint_step_2301130_loss_2.4.pt"
+    committed.parent.mkdir(parents=True)
+    committed.write_bytes(b"newer-run-checkpoint")
+    stable = committed.parent / "latest.pt"
+    stable.symlink_to(committed.name)
+
+    result = _bash(
+        'samealloc_bind_restart_authority "$STABLE" "$SEED"; readlink -f "$STABLE"',
+        env={"STABLE": str(stable), "SEED": str(seed), "SLURM_JOB_ID": "7002"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert Path(result.stdout.strip()) == committed
 
 
 def test_execution_epoch_and_master_port_change_across_slurm_job_ids(tmp_path: Path):
@@ -284,7 +377,22 @@ frontier_require_requested_rccl_net_plugin() { return 0; }
 """,
     )
     _write_executable(repo / "scripts/frontier/frontier_runtime_env.sh", "#!/bin/bash\n")
+    (repo / "configs/frontier").mkdir(parents=True)
+    (repo / "configs/frontier/e97_async_256.yaml").write_text(
+        (REPO / "configs/frontier/e97_async_256.yaml").read_text()
+    )
+    (repo / "scripts/frontier/materialize_e97_s3_seed.py").write_text("# mocked by srun\n")
+    cache = tmp_path / (
+        "sha256-0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2.pt"
+    )
+    cache.write_bytes(b"fixture")
+    attestation = tmp_path / "seed-attestation.json"
+    attestation.write_text("{}\n")
     _write_executable(bindir / "git", "#!/bin/bash\necho fake-source-sha\n")
+    _write_executable(
+        bindir / "sbcast",
+        "#!/bin/bash\nset -e\nmkdir -p \"$(dirname \"$3\")\"\ncp \"$2\" \"$3\"\n",
+    )
     _write_executable(
         bindir / "scontrol",
         """#!/bin/bash
@@ -298,12 +406,13 @@ exit 2
         bindir / "srun",
         """#!/bin/bash
 set -euo pipefail
+[[ $* == *--gpus-per-task=0* ]] && exit 0
 count_file=$TEST_STATE/count
 count=0; [[ ! -r $count_file ]] || read -r count < "$count_file"; count=$((count+1)); echo "$count" > "$count_file"
 printf '%s|%s|%s|%s|%s\\n' "$count" "$EMENDER_EXECUTION_EPOCH" "$MASTER_PORT" "$*" "$(readlink -f "$RUN_DIR/train/latest.pt")" >> "$TEST_STATE/launches.tsv"
 if (( count == 1 )); then
-  printf step200 > "$RUN_DIR/train/checkpoint_step_000200_loss_0.9.pt"
-  ln -sfn checkpoint_step_000200_loss_0.9.pt "$RUN_DIR/train/latest.pt"
+  printf step2301130 > "$RUN_DIR/train/checkpoint_step_2301130_loss_2.4.pt"
+  ln -sfn checkpoint_step_2301130_loss_2.4.pt "$RUN_DIR/train/latest.pt"
   echo 'srun: error: n1: task 8: Exited with exit code 86' >&2
   exit 86
 fi
@@ -312,8 +421,8 @@ if (( count == 2 )); then
   exit 86
 fi
 [[ $* == *--nodelist=n0* && $* != *--nodelist=n0,n1* ]] || exit 91
-printf step400 > "$RUN_DIR/train/checkpoint_step_000400_loss_0.8.pt"
-ln -sfn checkpoint_step_000400_loss_0.8.pt "$RUN_DIR/train/latest.pt"
+printf step2301330 > "$RUN_DIR/train/checkpoint_step_2301330_loss_2.3.pt"
+ln -sfn checkpoint_step_2301330_loss_2.3.pt "$RUN_DIR/train/latest.pt"
 exit 0
 """,
     )
@@ -340,6 +449,12 @@ exit 0
         "VAL_DATA": str(val_data),
         "TEST_STATE": str(tmp_path),
         "TEST_EMENDER_PYTHON": os.environ.get("EMENDER_PYTHON", os.sys.executable),
+        "E97_SEED_CONFIG": str(repo / "configs/frontier/e97_async_256.yaml"),
+        "E97_SEED_CACHE": str(cache),
+        "E97_SEED_ATTESTATION": str(attestation),
+        "E97_SEED_ATTESTATION_SHA256": hashlib.sha256(
+            attestation.read_bytes()
+        ).hexdigest(),
     }
     result = _bash('samealloc_main', env=integration_env)
 
@@ -352,9 +467,9 @@ exit 0
     assert "--nodelist=n0,n1" in records[0][3]
     assert "--nodelist=n0,n1" in records[1][3]
     assert "--nodelist=n0" in records[2][3]
-    assert records[0][4].endswith("checkpoint_step_000100_loss_1.0.pt")
-    assert records[1][4].endswith("checkpoint_step_000200_loss_0.9.pt")
-    assert records[2][4].endswith("checkpoint_step_000200_loss_0.9.pt")
+    assert records[0][4].endswith("checkpoint-step-2300930.pt")
+    assert records[1][4].endswith("checkpoint_step_2301130_loss_2.4.pt")
+    assert records[2][4].endswith("checkpoint_step_2301130_loss_2.4.pt")
     ports = [int(record[2]) for record in records]
     assert all(20000 <= port < 60000 for port in ports)
     assert not (tmp_path / "requeue.log").exists()
@@ -373,6 +488,7 @@ exit 0
         bindir / "srun",
         """#!/bin/bash
 set -euo pipefail
+[[ $* == *--gpus-per-task=0* ]] && exit 0
 count_file=$TEST_STATE/count
 count=0; [[ ! -r $count_file ]] || read -r count < "$count_file"; count=$((count+1)); echo "$count" > "$count_file"
 printf '%s|%s|%s|%s\\n' "$count" "$EMENDER_EXECUTION_EPOCH" "$MASTER_PORT" "$*" >> "$TEST_STATE/launches.tsv"
@@ -429,7 +545,6 @@ def test_launcher_has_no_async_or_communicator_shrink_protocol():
 
     forbidden = (
         "sqlite",
-        "sha256sum",
         "ncclcommshrink",
         "shrink_communicator",
         "owner-tree",
