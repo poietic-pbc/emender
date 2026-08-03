@@ -4,6 +4,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 SUBMIT = REPO / "scripts/frontier/submit_e97_256n_final_seed_2h.sh"
+SUBMIT_7H = REPO / "scripts/frontier/submit_e97_256n_final_seed_7h_normal.sh"
 PAYLOAD = REPO / "scripts/frontier/e97_256n_final_seed_payload.sh"
 LAUNCHER = REPO / "scripts/frontier/e97_same_allocation_restart.sbatch"
 
@@ -27,6 +28,24 @@ def test_256n_submit_is_exactly_one_unheld_payload_and_no_collector_job():
     assert "TimeLimit=02:00:00" in text
     assert "unchanged payload bytes already attempted" in text
     assert "scancel" not in text
+    assert "collector_job_id=none" in text
+
+
+def test_256n_seven_hour_normal_submit_preserves_production_recipe():
+    text = SUBMIT_7H.read_text()
+
+    assert text.count("payload_id=$(sbatch") == 1
+    assert text.count("$(sbatch") == 1
+    assert "--dependency=" not in text
+    assert "--hold" not in text
+    assert "scancel" not in text
+    assert "-p batch -q normal -J e97-final-seed-256n-7h -N256 -t 07:00:00" in text
+    assert "QOS=normal" in text
+    assert "TimeLimit=07:00:00" in text
+    assert "EXECUTION_EPOCH_TIMEOUT_SECONDS=28800" in text
+    assert "TRAIN_MINUTES=480" in text
+    assert "DILOCO_K=40 SAVE_EVERY=200 KEEP_CHECKPOINTS=2" in text
+    assert "DILOCO_MERGE_BUCKET_NUMEL=67108864" in text
     assert "collector_job_id=none" in text
 
 
@@ -80,9 +99,12 @@ def test_256n_payload_is_clean_envelope_not_a_fault_or_acceptance_shim():
     assert "samealloc_main" in payload
     assert "NumNodes=256" in payload
     assert "NumTasks=2048" in payload
-    assert "Partition=batch" in payload
-    assert "QOS=debug" in payload
-    assert "TimeLimit=02:00:00" in payload
+    assert "EXPECTED_PARTITION=${EXPECTED_PARTITION:-batch}" in payload
+    assert "EXPECTED_QOS=${EXPECTED_QOS:-debug}" in payload
+    assert "EXPECTED_TIME_LIMIT=${EXPECTED_TIME_LIMIT:-02:00:00}" in payload
+    assert 'Partition=$EXPECTED_PARTITION' in payload
+    assert 'QOS=$EXPECTED_QOS' in payload
+    assert 'TimeLimit=$EXPECTED_TIME_LIMIT' in payload
     assert "e97_256n_final_seed_retry_srun_shim" not in payload
     assert "FINAL_SEED_RETRY_STATE_DIR" not in payload
     assert "EMENDER_DILOCO_EXIT_RANK" in payload  # fail-closed absence check
