@@ -18,7 +18,9 @@ def test_256n_submit_is_exactly_one_unheld_payload_and_no_collector_job():
     assert "--dependency=" not in text
     assert "scontrol release" not in text
     assert "--hold" not in text
-    assert "--parsable --no-kill --requeue" in text
+    assert "--parsable --no-requeue" in text
+    assert "--no-kill" not in text
+    assert "Requeue=0" in text
     assert "-p batch -q debug -J e97-final-seed-256n -N256 -t 02:00:00" in text
     assert "--ntasks-per-node=8" in text
     assert "NumNodes=256" in text
@@ -43,6 +45,10 @@ def test_256n_seven_hour_normal_submit_preserves_production_recipe():
     assert "QOS=normal" in text
     assert "TimeLimit=07:00:00" in text
     assert "EXECUTION_EPOCH_TIMEOUT_SECONDS=28800" in text
+    assert "--parsable --no-requeue" in text
+    assert "FAIL_STOP_SINGLE_EPOCH=1 ENABLE_VALIDATION=0 REQUEUE_ON_EXHAUSTION=0" in text
+    assert "unset VAL_DATA VAL_EVERY" in text
+    assert "Requeue=0" in text
     assert "TRAIN_MINUTES=480" in text
     assert "DILOCO_K=40 SAVE_EVERY=200 KEEP_CHECKPOINTS=2" in text
     assert "DILOCO_MERGE_BUCKET_NUMEL=67108864" in text
@@ -105,6 +111,8 @@ def test_256n_payload_is_clean_envelope_not_a_fault_or_acceptance_shim():
     assert 'Partition=$EXPECTED_PARTITION' in payload
     assert 'QOS=$EXPECTED_QOS' in payload
     assert 'TimeLimit=$EXPECTED_TIME_LIMIT' in payload
+    assert '"Requeue=0"' in payload
+    assert "production requires one epoch, validation disabled, and no requeue" in payload
     assert "e97_256n_final_seed_retry_srun_shim" not in payload
     assert "FINAL_SEED_RETRY_STATE_DIR" not in payload
     assert "EMENDER_DILOCO_EXIT_RANK" in payload  # fail-closed absence check
@@ -117,7 +125,9 @@ def test_256n_runtime_preserves_atomic_continuing_authority_and_seed_broadcast()
     launcher = LAUNCHER.read_text()
 
     assert "TARGET_NODES=256 MIN_NODES=256 TASKS_PER_NODE=8" in submit
-    assert "MAX_CONSECUTIVE_NO_PROGRESS_FAILURES=2 REQUEUE_ON_EXHAUSTION=1" in submit
+    assert "FAIL_STOP_SINGLE_EPOCH=1 ENABLE_VALIDATION=0 REQUEUE_ON_EXHAUSTION=0" in submit
+    assert "VAL_EVERY=" not in submit
+    assert "--no-requeue" in submit
     assert "DILOCO_K=40 SAVE_EVERY=200 KEEP_CHECKPOINTS=2" in submit
     assert "DILOCO_MERGE_BUCKET_NUMEL=67108864" in submit
     assert "TRAIN_MINUTES=180" in submit
@@ -129,7 +139,8 @@ def test_256n_runtime_preserves_atomic_continuing_authority_and_seed_broadcast()
     assert "sbcast" in launcher
     assert "--verify-local" in launcher
     assert 'job-${SLURM_JOB_ID}-restart-${SLURM_RESTART_COUNT:-0}' in launcher
-    assert "samealloc_update_no_progress" in launcher
+    assert 'single execution epoch $epoch failed rc=$rc; no retry or requeue' in launcher
+    assert 'if [[ "$ENABLE_VALIDATION" == 1 ]]; then' in launcher
     assert "samealloc_resume_token_bootstrap" in launcher
     assert 'token_args=(--total_tokens "$resume_total_tokens")' in launcher
 

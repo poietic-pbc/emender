@@ -26,8 +26,8 @@ def _bash(script: str, *, env: dict[str, str] | None = None) -> subprocess.Compl
 def test_production_defaults_and_fixed_world_data_plane_are_explicit():
     text = LAUNCHER.read_text()
 
-    assert "#SBATCH --no-kill" in text
-    assert "#SBATCH --requeue" in text
+    assert "#SBATCH --no-requeue" in text
+    assert "#SBATCH --no-kill" not in text
     assert "#SBATCH --signal=B:TERM@300" in text
     assert "DILOCO_K=${DILOCO_K:-40}" in text
     assert "SAVE_EVERY=${SAVE_EVERY:-200}" in text
@@ -45,6 +45,11 @@ def test_production_defaults_and_fixed_world_data_plane_are_explicit():
     assert 'RUN_DIR=${RUN_DIR:-${RUN_ROOT%/}/$RUN_ID}' in text
     assert 'samealloc_next_epoch "$RUN_DIR/supervisor/execution-epoch.txt"' in text
     assert "MAX_CONSECUTIVE_NO_PROGRESS_FAILURES" in text
+    assert "REQUEUE_ON_EXHAUSTION=${REQUEUE_ON_EXHAUSTION:-0}" in text
+    assert "FAIL_STOP_SINGLE_EPOCH=${FAIL_STOP_SINGLE_EPOCH:-1}" in text
+    assert "ENABLE_VALIDATION=${ENABLE_VALIDATION:-0}" in text
+    assert 'single execution epoch $epoch failed rc=$rc; no retry or requeue' in text
+    assert 'common_args+=(--val_data "$VAL_DATA" --val_every "$VAL_EVERY")' in text
     assert "samealloc_direct_failure_host" in text
     assert "samealloc_record_direct_failure" in text
     assert "samealloc_update_no_progress" in text
@@ -456,6 +461,9 @@ exit 0
         "TASKS_PER_NODE": "1",
         "CPUS_PER_TASK": "1",
         "MAX_CONSECUTIVE_NO_PROGRESS_FAILURES": "3",
+        "FAIL_STOP_SINGLE_EPOCH": "0",
+        "ENABLE_VALIDATION": "1",
+        "REQUEUE_ON_EXHAUSTION": "1",
         "EXECUTION_EPOCH_TIMEOUT_SECONDS": "30",
         "FAILED_STEP_WAIT_SECONDS": "1",
         "FAILED_STEP_KILL_GRACE_SECONDS": "1",
@@ -533,6 +541,33 @@ exit 1
         "1|-|ambiguous|no-strike|-",
         "2|-|ambiguous|no-strike|-",
     ]
+
+    # Accepted production mode launches once, omits validation completely, and
+    # returns the first child failure without --no-kill, retry, or requeue.
+    strict_state = tmp_path / "strict-state"
+    strict_state.mkdir()
+    strict_run = tmp_path / "strict-run"
+    strict_env = integration_env | {
+        "RUN_ID": "strict",
+        "RUN_DIR": str(strict_run),
+        "SLURM_JOB_ID": "7003",
+        "MIN_NODES": "2",
+        "FAIL_STOP_SINGLE_EPOCH": "1",
+        "ENABLE_VALIDATION": "0",
+        "REQUEUE_ON_EXHAUSTION": "0",
+        "TEST_STATE": str(strict_state),
+    }
+    strict = _bash("samealloc_main", env=strict_env)
+
+    assert strict.returncode == 1, strict.stderr
+    strict_launches = (strict_state / "launches.tsv").read_text().splitlines()
+    assert len(strict_launches) == 1
+    assert "--no-kill" not in strict_launches[0]
+    command = (strict_run / "epochs/epoch-000001/train-command.txt").read_text()
+    assert "--val_data" not in command
+    assert "--val_every" not in command
+    assert not (strict_state / "requeue.log").exists()
+    assert "no retry or requeue" in strict.stderr
 
 
 def test_repeated_no_progress_failures_request_bounded_requeue():

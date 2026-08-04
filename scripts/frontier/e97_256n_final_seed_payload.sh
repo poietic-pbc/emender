@@ -1,7 +1,7 @@
 #!/bin/bash
-# Clean production envelope for the immutable ADR-003 same-allocation launcher.
-# This records the live scheduler binding but does not alter train.py, inject a
-# fault, interpose on srun/scontrol, or provide an acceptance shim.
+# Clean production envelope for one immutable, fail-stop execution epoch.
+# This records the live scheduler binding, forbids validation/retry/requeue,
+# and does not alter train.py, inject a fault, or provide an acceptance shim.
 set -euo pipefail
 : "${REPO:?exact immutable source checkout required}"
 : "${RUN_ID:?stable production run identity required}" "${RUN_DIR:?stable production run directory required}"
@@ -22,8 +22,9 @@ printf '%s\n' "$job_record" > "$RUN_DIR/identity/scontrol-live.txt"
    && "$job_record" == *"NumTasks=2048"* \
    && "$job_record" == *"Partition=$EXPECTED_PARTITION"* \
    && "$job_record" == *"QOS=$EXPECTED_QOS"* \
-   && "$job_record" == *"TimeLimit=$EXPECTED_TIME_LIMIT"* ]] || {
-  echo "fail closed: live binding is not Nodes=256 Tasks=2048 Partition=$EXPECTED_PARTITION QOS=$EXPECTED_QOS TimeLimit=$EXPECTED_TIME_LIMIT" >&2
+   && "$job_record" == *"TimeLimit=$EXPECTED_TIME_LIMIT"* \
+   && "$job_record" == *"Requeue=0"* ]] || {
+  echo "fail closed: live binding is not Nodes=256 Tasks=2048 Partition=$EXPECTED_PARTITION QOS=$EXPECTED_QOS TimeLimit=$EXPECTED_TIME_LIMIT Requeue=0" >&2
   exit 67
 }
 for name in EMENDER_DILOCO_EXIT_RANK EMENDER_DILOCO_EXIT_MERGE \
@@ -31,9 +32,18 @@ for name in EMENDER_DILOCO_EXIT_RANK EMENDER_DILOCO_EXIT_MERGE \
   EMENDER_DILOCO_EXIT_DELAY_SECONDS; do
   [[ -z ${!name+x} ]] || { echo "fault injection variable is set: $name" >&2; exit 68; }
 done
+[[ ${FAIL_STOP_SINGLE_EPOCH:-} == 1 && ${ENABLE_VALIDATION:-} == 0 \
+   && ${REQUEUE_ON_EXHAUSTION:-} == 0 ]] || {
+  echo "fail closed: production requires one epoch, validation disabled, and no requeue" >&2
+  exit 68
+}
+[[ -z ${VAL_DATA+x} && -z ${VAL_EVERY+x} ]] || {
+  echo "fail closed: validation variables are present" >&2
+  exit 68
+}
 
-# The exact launcher remains the only execution authority. Its stable
-# RUN_DIR/train/latest.pt is shared by all execution epochs and requeues.
+# The exact launcher remains the only execution authority. It launches one
+# child srun and exits after either success or the first failure.
 # shellcheck disable=SC1090
 source "$launcher"
 set +e

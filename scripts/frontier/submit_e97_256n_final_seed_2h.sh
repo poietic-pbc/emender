@@ -105,8 +105,10 @@ TOKEN_MIGRATION_SOURCE_JOB=5134243
 TOKEN_MIGRATION_CHECKPOINT_BYTES=7719680116
 FAULT_INJECTION=none
 ACCEPTANCE_SHIM=none
-REQUEUE=true
-NO_KILL=true
+REQUEUE=false
+NO_KILL=false
+EXECUTION_EPOCHS=1
+VALIDATION=disabled
 EOF
 )
 asset_hashes=$(
@@ -217,13 +219,14 @@ printf 'HEAD=%s\nmain=%s\norigin/main=%s\n' "$SOURCE_SHA" "$LOCAL_MAIN_SHA" "$OR
 
 export RUN_ID RUN_DIR
 export TARGET_NODES=256 MIN_NODES=256 TASKS_PER_NODE=8 CPUS_PER_TASK=7
-export MAX_CONSECUTIVE_NO_PROGRESS_FAILURES=2 REQUEUE_ON_EXHAUSTION=1
+export FAIL_STOP_SINGLE_EPOCH=1 ENABLE_VALIDATION=0 REQUEUE_ON_EXHAUSTION=0
 export EXECUTION_EPOCH_TIMEOUT_SECONDS=9000 FAILED_STEP_WAIT_SECONDS=60 FAILED_STEP_KILL_GRACE_SECONDS=60
 export DILOCO_K=40 SAVE_EVERY=200 KEEP_CHECKPOINTS=2
 export DILOCO_MERGE_BUCKET_NUMEL=67108864 DILOCO_MERGE_TOPOLOGY=hierarchical
 export DILOCO_MERGE_GROUP_SIZE=4 DILOCO_MERGE_GROUP_CREATE_BARRIER_EVERY=8
 export DILOCO_MERGE_COMPLETION_BARRIER=1 TRAIN_MINUTES=180 BATCH_SIZE=4 CHUNK_SIZE=2048
-export LOG_EVERY=10 VAL_EVERY=10000 COMPILE_WARMUP_STEPS=1
+export LOG_EVERY=10 COMPILE_WARMUP_STEPS=1
+unset VAL_DATA VAL_EVERY
 export WALLTIME_FINAL_CHECKPOINT_MARGIN_SECONDS=900 WALLTIME_CHECK_EVERY=40 DISTRIBUTED_HEALTH_CHECK_EVERY=40
 export E97_SEED_CONFIG="$repo_exact/configs/frontier/e97_async_256.yaml"
 export E97_SEED_CACHE="$seed_cache" E97_SEED_ATTESTATION="$seed_attestation"
@@ -235,7 +238,7 @@ export NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET
 unset EMENDER_DILOCO_EXIT_RANK EMENDER_DILOCO_EXIT_MERGE EMENDER_DILOCO_EXIT_BUCKET
 unset EMENDER_DILOCO_EXIT_LABEL EMENDER_DILOCO_EXIT_CODE EMENDER_DILOCO_EXIT_DELAY_SECONDS
 
-payload_id=$(sbatch --parsable --no-kill --requeue --signal=B:TERM@300 \
+payload_id=$(sbatch --parsable --no-requeue --signal=B:TERM@300 \
   -A bif148 -p batch -q debug -J e97-final-seed-256n -N256 -t 02:00:00 \
   --ntasks-per-node=8 --cpus-per-task=7 --gpus-per-task=1 --gpu-bind=closest \
   --output="$RUN_DIR/logs/batch-%j.out" --error="$RUN_DIR/logs/batch-%j.err" \
@@ -253,7 +256,8 @@ v={'schema':'e97-final-seed-production-256n-submission-v2','payload_job_id':'$pa
 'token_migration_total_tokens':199615447040,'token_migration_source_job_id':5134243,
 'seed_cache':'$seed_cache','seed_attestation':'$seed_attestation',
 'seed_attestation_sha256':'$seed_attestation_sha256','python_bin':'$EMENDER_PYTHON',
-'fault_injection':'none','acceptance_shim':'none','unchanged_payload_retried':False}
+'fault_injection':'none','acceptance_shim':'none','unchanged_payload_retried':False,
+'validation':'disabled','execution_epochs':1,'requeue':False}
 open('$submission','w').write(json.dumps(v,sort_keys=True,indent=2)+'\n')
 PY
 squeue -j "$payload_id" -h -o '%i|%T|%D|%N|%P|%q|%l|%R' \
@@ -262,7 +266,7 @@ payload_record=$(scontrol show job "$payload_id" -o)
 printf '%s\n' "$payload_record" > "$RUN_DIR/identity/scontrol-submitted.txt"
 [[ $payload_record == *"NumNodes=256"* && $payload_record == *"NumTasks=2048"* \
    && $payload_record == *"Partition=batch"* && $payload_record == *"QOS=debug"* \
-   && $payload_record == *"TimeLimit=02:00:00"* ]] || {
+   && $payload_record == *"TimeLimit=02:00:00"* && $payload_record == *"Requeue=0"* ]] || {
   # The user explicitly requires that a submitted training payload remain
   # intact even if post-submit inspection fails.
   echo "submitted payload binding inspection failed; payload left intact: $payload_record" >&2
