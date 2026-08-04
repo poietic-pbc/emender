@@ -4,6 +4,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 SUBMIT = REPO / "scripts/frontier/submit_e97_256n_final_seed_2h.sh"
+SUBMIT_4H = REPO / "scripts/frontier/submit_e97_256n_final_seed_4h_normal.sh"
 SUBMIT_7H = REPO / "scripts/frontier/submit_e97_256n_final_seed_7h_normal.sh"
 PAYLOAD = REPO / "scripts/frontier/e97_256n_final_seed_payload.sh"
 LAUNCHER = REPO / "scripts/frontier/e97_same_allocation_restart.sbatch"
@@ -34,6 +35,32 @@ def test_256n_submit_is_exactly_one_unheld_payload_and_no_collector_job():
     assert "explicitly approved resume authority" in text
     assert "mmap=True" in text
     assert "scancel" not in text
+    assert "collector_job_id=none" in text
+
+
+def test_256n_four_hour_normal_submit_is_fail_stop_and_resume_bound():
+    text = SUBMIT_4H.read_text()
+
+    assert text.count("payload_id=$(sbatch") == 1
+    assert text.count("$(sbatch") == 1
+    assert "--dependency=" not in text
+    assert "--hold" not in text
+    assert "scancel" not in text
+    assert "-p batch -q normal -J e97-final-seed-256n-4h -N256 -t 04:00:00" in text
+    assert "QOS=normal" in text
+    assert "TIME_LIMIT=04:00:00" in text
+    assert "EXPECTED_QOS=normal EXPECTED_TIME_LIMIT=04:00:00" in text
+    assert "EXECUTION_EPOCH_TIMEOUT_SECONDS=18000" in text
+    assert "TRAIN_MINUTES=300" in text
+    assert "FAIL_STOP_SINGLE_EPOCH=1 ENABLE_VALIDATION=0 REQUEUE_ON_EXHAUSTION=0" in text
+    assert "unset VAL_DATA VAL_EVERY" in text
+    assert "--parsable --no-requeue" in text
+    assert "Requeue=0" in text
+    assert "E97_EXPECTED_RESUME_STEP" in text
+    assert "E97_EXPECTED_RESUME_TOTAL_TOKENS" in text
+    assert "explicitly approved resume authority" in text
+    assert "DILOCO_K=40 SAVE_EVERY=200 KEEP_CHECKPOINTS=2" in text
+    assert "DILOCO_MERGE_BUCKET_NUMEL=67108864" in text
     assert "collector_job_id=none" in text
 
 
