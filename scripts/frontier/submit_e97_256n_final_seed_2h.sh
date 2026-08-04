@@ -16,6 +16,13 @@ SEED_SHA256=0239706e1f67e4823008a3a2754894b5b94dc1663580d2e40c1c74f7dd6a72b2
 SEED_URI=s3://spinozans/emender/e97-diloco/emender_E97_1.3B_20260709_084606/step_2300930/checkpoint_step_2300930_loss_2.4365.pt
 TOKEN_MIGRATION_RECEIPT_REL=docs/validation/e97-total-token-migration-step2303840.json
 TOKEN_MIGRATION_RECEIPT="$PROJECT_ROOT/$TOKEN_MIGRATION_RECEIPT_REL"
+EXPECTED_RESUME_STEP=${E97_EXPECTED_RESUME_STEP:-}
+EXPECTED_RESUME_TOTAL_TOKENS=${E97_EXPECTED_RESUME_TOTAL_TOKENS:-}
+[[ -z "$EXPECTED_RESUME_STEP" && -z "$EXPECTED_RESUME_TOTAL_TOKENS" \
+   || "$EXPECTED_RESUME_STEP" =~ ^[0-9]+$ && "$EXPECTED_RESUME_TOTAL_TOKENS" =~ ^[0-9]+$ ]] || {
+  echo "expected resume step and total tokens must be supplied together as nonnegative integers" >&2
+  exit 64
+}
 
 cd "$PROJECT_ROOT"
 export EMENDER_CONDA_ENV=${EMENDER_CONDA_ENV:-/lustre/orion/bif148/scratch/erikgarrison/emender/.envs/olcf-rocm711-torch210-py312}
@@ -109,6 +116,8 @@ REQUEUE=false
 NO_KILL=false
 EXECUTION_EPOCHS=1
 VALIDATION=disabled
+EXPECTED_RESUME_STEP=${EXPECTED_RESUME_STEP:-none}
+EXPECTED_RESUME_TOTAL_TOKENS=${EXPECTED_RESUME_TOTAL_TOKENS:-none}
 EOF
 )
 asset_hashes=$(
@@ -200,6 +209,25 @@ if [[ -e "$RUN_DIR/train/latest.pt" || -L "$RUN_DIR/train/latest.pt" ]]; then
   (( resume_step > SEED_STEP )) || {
     echo "existing stable checkpoint authority is not newer than the cold seed" >&2; exit 66;
   }
+  read -r embedded_step embedded_tokens metadata_tokens < <(
+    "$EMENDER_PYTHON" - "$RUN_DIR/train/latest.pt" <<'PY'
+import sys, torch
+checkpoint = torch.load(sys.argv[1], map_location='cpu', mmap=True, weights_only=False)
+print(checkpoint.get('step'), checkpoint.get('total_tokens'),
+      checkpoint.get('checkpoint_metadata', {}).get('total_tokens'))
+PY
+  )
+  [[ "$embedded_step" == "$resume_step" && "$embedded_tokens" =~ ^[0-9]+$ \
+     && "$metadata_tokens" == "$embedded_tokens" ]] || {
+    echo "existing checkpoint embedded step/token authority is invalid" >&2; exit 66;
+  }
+  if [[ -n "$EXPECTED_RESUME_STEP" ]]; then
+    [[ "$resume_step" == "$EXPECTED_RESUME_STEP" \
+       && "$embedded_tokens" == "$EXPECTED_RESUME_TOTAL_TOKENS" ]] || {
+      echo "existing checkpoint does not match the explicitly approved resume authority" >&2
+      exit 66
+    }
+  fi
   if (( resume_step == 2303840 )); then
     "$EMENDER_PYTHON" scripts/frontier/validate_total_token_migration_receipt.py \
       --receipt "$TOKEN_MIGRATION_RECEIPT" \
@@ -257,7 +285,9 @@ v={'schema':'e97-final-seed-production-256n-submission-v2','payload_job_id':'$pa
 'seed_cache':'$seed_cache','seed_attestation':'$seed_attestation',
 'seed_attestation_sha256':'$seed_attestation_sha256','python_bin':'$EMENDER_PYTHON',
 'fault_injection':'none','acceptance_shim':'none','unchanged_payload_retried':False,
-'validation':'disabled','execution_epochs':1,'requeue':False}
+'validation':'disabled','execution_epochs':1,'requeue':False,
+'expected_resume_step':${EXPECTED_RESUME_STEP:-None},
+'expected_resume_total_tokens':${EXPECTED_RESUME_TOTAL_TOKENS:-None}}
 open('$submission','w').write(json.dumps(v,sort_keys=True,indent=2)+'\n')
 PY
 squeue -j "$payload_id" -h -o '%i|%T|%D|%N|%P|%q|%l|%R' \

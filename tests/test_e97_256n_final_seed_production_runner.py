@@ -29,6 +29,10 @@ def test_256n_submit_is_exactly_one_unheld_payload_and_no_collector_job():
     assert "QOS=debug" in text
     assert "TimeLimit=02:00:00" in text
     assert "unchanged payload bytes already attempted" in text
+    assert "E97_EXPECTED_RESUME_STEP" in text
+    assert "E97_EXPECTED_RESUME_TOTAL_TOKENS" in text
+    assert "explicitly approved resume authority" in text
+    assert "mmap=True" in text
     assert "scancel" not in text
     assert "collector_job_id=none" in text
 
@@ -74,6 +78,8 @@ def test_256n_snapshot_binds_clean_final_seed_and_all_immutable_assets():
     assert "TOKEN_MIGRATION_TOTAL_TOKENS=199615447040" in text
     assert "TOKEN_MIGRATION_SOURCE_JOB=5134243" in text
     assert "TOKEN_MIGRATION_CHECKPOINT_BYTES=7719680116" in text
+    assert "EXPECTED_RESUME_STEP=${EXPECTED_RESUME_STEP:-none}" in text
+    assert "EXPECTED_RESUME_TOTAL_TOKENS=${EXPECTED_RESUME_TOTAL_TOKENS:-none}" in text
     assert "--expected-step 2303840" in text
     assert "--expected-total-tokens 199615447040" in text
     assert "--expected-source-job-id 5134243" in text
