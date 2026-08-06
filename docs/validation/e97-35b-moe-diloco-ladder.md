@@ -43,10 +43,11 @@ actual training at every scale and sequential fail-closed promotion.
 | One-node RCCL dispatch/return | PASS | job 5181970: exact 51-row send/receive round trip on ranks 0..7, node `frontier00388`, `batch`/`debug`, exit 0; job 5181922 retained as the corrected device-binding failure |
 | Packed local-expert fused compute + backward | MACHINE PASS | job 5181981: differentiable pack/all-to-all/eight-local-expert/return chain and finite gradients on all ranks, `batch`/`debug`, exit 0 |
 | End-to-end node-local MoE layer | MACHINE PASS | job 5182030: fused 64-way router, dispatch, local experts, shared expert, return, combine, auxiliary losses, and backward on eight ranks; `batch`/`debug`, exit 0 |
-| Shared/backbone node reduction | MACHINE PENDING | exact node-local RCCL gradient averaging implemented; upgraded machine check next |
-| Fused ScheduleFree optimizer | LOCAL PASS | BF16/FP32 same-dtype state, train/eval basis transforms, no master weights; machine layer step pending |
+| Shared/backbone node reduction | MACHINE PASS | job 5182096: router/shared gradients averaged only over proven node group and equal on ranks 0..7 |
+| Fused ScheduleFree optimizer | MACHINE LAYER PASS | job 5182096: BF16/FP32 same-dtype state, fused step, finite parameters, no master weights |
 | Sharded 513B-seed conversion/restart | PENDING | no 35B single-GCD materialization |
-| 1 node, >=20 min training | PENDING | prerequisite before scale |
+| Full 513B-seed packed-model step | PENDING | exact 5,750,016,656-parameter rank shard runner ready for compile/HBM preflight |
+| 1 node, >=20 min training | PENDING | prerequisite after full-model preflight and checkpoint/restart |
 | 2 nodes, >=20 min qualification | PENDING | non-production observation |
 | 4 nodes, >=20 min qualification | PENDING | non-production observation |
 | 8 nodes, >=20 min ADR-003 rung | PENDING | requires reviewed exact-source acceptance |
