@@ -74,7 +74,10 @@ def main() -> None:
         topology = assert_node_local_ep_group(groups.node_group)
         torch.manual_seed(970035)
         torch.cuda.manual_seed_all(970035)
-        emit(args.log_jsonl, "load_start", commit=os.popen("git rev-parse HEAD").read().strip(),
+        source_commit = os.environ.get("EMENDER_SOURCE_COMMIT")
+        if not source_commit:
+            source_commit = os.popen("git rev-parse HEAD").read().strip()
+        emit(args.log_jsonl, "load_start", commit=source_commit,
              seed_checkpoint=str(args.seed_checkpoint), hostname=topology.hostname)
         loaded = load_e97_checkpoint(
             args.seed_checkpoint, device="cuda", dtype=torch.bfloat16,
