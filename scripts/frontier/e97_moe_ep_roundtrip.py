@@ -8,6 +8,7 @@ import os
 import torch
 import torch.distributed as dist
 
+from ndm.e97_moe_optimizer import FusedScheduleFreeAdamW
 from ndm.e97_moe_ep import (
     assert_node_local_ep_group,
     average_replicated_gradients_,
@@ -88,6 +89,15 @@ def main() -> None:
         torch.testing.assert_close(
             checksum_matrix, checksum_matrix[0].expand_as(checksum_matrix),
             rtol=2e-6, atol=2e-6)
+        optimizer = FusedScheduleFreeAdamW(
+            (router, gate, up, down, shared_gate, shared_up, shared_down),
+            lr=2.5e-3, weight_decay=0.1)
+        optimizer.train()
+        optimizer.step()
+        optimizer.assert_no_master_weights()
+        for parameter in (router, gate, up, down, shared_gate, shared_up, shared_down):
+            if not torch.isfinite(parameter).all():
+                raise RuntimeError("nonfinite parameter after fused optimizer step")
 
         if sum(exchange.send_splits) != tokens * 3:
             raise RuntimeError("send assignment total mismatch")
@@ -108,6 +118,7 @@ def main() -> None:
                 "autograd_transport_local_experts_return": "pass",
                 "end_to_end_node_local_moe_layer": "pass",
                 "replicated_gradient_average_scope": "one-node-eight-rank-group-only",
+                "fused_schedulefree_step_no_master_weights": "pass",
             }, sort_keys=True))
     finally:
         dist.destroy_process_group()
