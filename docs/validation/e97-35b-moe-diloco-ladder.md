@@ -46,7 +46,7 @@ actual training at every scale and sequential fail-closed promotion.
 | Shared/backbone node reduction | MACHINE PASS | job 5182096: router/shared gradients averaged only over proven node group and equal on ranks 0..7 |
 | Fused ScheduleFree optimizer | MACHINE LAYER PASS | job 5182096: BF16/FP32 same-dtype state, fused step, finite parameters, no master weights |
 | Sharded 513B-seed conversion/restart | PENDING | no 35B single-GCD materialization |
-| Full 513B-seed packed-model step | RETRY | job 5182349 loaded the exact shard and completed full-context forward/backward, then failed at the replicated-gradient completeness guard; exact missing names are being collected. Job 5182344 proved 11.54 GB model HBM then exposed the offline tokenizer-cache requirement; 5182195 was the import failure; 5182120 was cancelled at zero runtime after source advanced |
+| Full 513B-seed packed-model step | RETRY | job 5182352 proved the only missing gradients were all 11 preserved `mixer.dt_bias` tensors; the shared decay autograd kernel had explicitly returned `None` and now performs a fused row reduction for `dt_bias`. Job 5182349 exposed the guard; 5182344 proved 11.54 GB model HBM/offline cache; 5182195 was the import failure; 5182120 was cancelled at zero runtime after source advanced |
 | 1 node, >=20 min training | PENDING | prerequisite after full-model preflight and checkpoint/restart |
 | 2 nodes, >=20 min qualification | PENDING | non-production observation |
 | 4 nodes, >=20 min qualification | PENDING | non-production observation |

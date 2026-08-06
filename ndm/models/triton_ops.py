@@ -178,7 +178,7 @@ def _mamba2_decay_kernel(
 @triton.jit
 def _mamba2_decay_bwd_kernel(
     grad_decay_ptr, alpha_ptr, A_log_ptr, dt_bias_ptr, decay_ptr,
-    grad_alpha_ptr, grad_A_log_ptr,
+    grad_alpha_ptr, grad_A_log_ptr, grad_dt_bias_ptr,
     N,
     stride_grad_decay, stride_alpha, stride_decay, stride_grad_alpha,
     BLOCK: tl.constexpr,
@@ -213,6 +213,9 @@ def _mamba2_decay_bwd_kernel(
     # d(decay)/d(A_log) = decay * (-softplus_x) * exp(A_log)
     grad_A_log_local = grad_decay * decay * (-softplus_x) * exp_A_log
     tl.atomic_add(grad_A_log_ptr + col_offsets, grad_A_log_local, mask=mask)
+    # dt_bias enters through the same x = alpha + dt_bias term, so its
+    # per-row derivative equals grad_alpha and must reduce over all rows.
+    tl.atomic_add(grad_dt_bias_ptr + col_offsets, grad_alpha, mask=mask)
 
 
 class Mamba2Decay(torch.autograd.Function):
@@ -243,7 +246,7 @@ class Mamba2Decay(torch.autograd.Function):
         )
 
         # Save for backward
-        if alpha.requires_grad or A_log.requires_grad:
+        if alpha.requires_grad or A_log.requires_grad or dt_bias.requires_grad:
             ctx.save_for_backward(alpha_flat, A_log, dt_bias, out)
             ctx.H = H
             ctx.BLOCK = BLOCK
@@ -263,16 +266,17 @@ class Mamba2Decay(torch.autograd.Function):
 
         grad_alpha = torch.empty_like(alpha_flat)
         grad_A_log = torch.zeros_like(A_log)
+        grad_dt_bias = torch.zeros_like(dt_bias)
 
         _mamba2_decay_bwd_kernel[(B,)](
             grad_decay_flat, alpha_flat, A_log, dt_bias, decay,
-            grad_alpha, grad_A_log,
+            grad_alpha, grad_A_log, grad_dt_bias,
             H,
             grad_decay_flat.stride(0), alpha_flat.stride(0), decay.stride(0), grad_alpha.stride(0),
             BLOCK=BLOCK,
         )
 
-        return grad_alpha.reshape(ctx.original_shape), grad_A_log, None
+        return grad_alpha.reshape(ctx.original_shape), grad_A_log, grad_dt_bias
 
 
 def mamba2_decay(alpha, A_log, dt_bias):

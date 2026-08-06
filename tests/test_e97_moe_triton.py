@@ -10,6 +10,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+from ndm.models.triton_ops import mamba2_decay as triton_mamba2_decay
 from ndm.triton.e97_moe_fused import (
     FUSED_E97_MOE_ABI,
     fused_routed_swiglu_forward,
@@ -61,6 +62,24 @@ def test_fused_source_has_no_eager_hot_path_and_all_required_forward_kernels():
     ):
         assert f"def {kernel}(" in source
     assert "EMENDER_E97_MOE_ALLOW_EAGER" in source
+
+
+def test_e97_decay_backward_preserves_dt_bias_gradient():
+    alpha = torch.randn(2, 7, 16, device="cuda", dtype=torch.bfloat16).requires_grad_(True)
+    a_log = torch.randn(16, device="cuda", dtype=torch.float32).mul(0.1).requires_grad_(True)
+    dt_bias = torch.randn(16, device="cuda", dtype=torch.float32).mul(0.1).requires_grad_(True)
+    grad = torch.randn_like(alpha)
+    decay = triton_mamba2_decay(alpha, a_log, dt_bias)
+    actual = torch.autograd.grad(decay, (alpha, a_log, dt_bias), grad)
+
+    oa = alpha.float().detach().requires_grad_(True)
+    olog = a_log.detach().requires_grad_(True)
+    odt = dt_bias.detach().requires_grad_(True)
+    expected_decay = torch.exp(-torch.exp(olog) * F.softplus(oa + odt))
+    expected = torch.autograd.grad(expected_decay, (oa, olog, odt), grad.float())
+    assert actual[2] is not None
+    for actual_grad, expected_grad in zip(actual, expected):
+        torch.testing.assert_close(actual_grad.float(), expected_grad, rtol=2e-2, atol=3e-3)
 
 
 def test_real_fused_triton_forward_matches_assertion_oracle():
