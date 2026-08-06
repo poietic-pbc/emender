@@ -20,7 +20,7 @@ mkdir -p logs/frontier/e97_moe
 NODES=$SLURM_JOB_NUM_NODES
 RUN_ROOT=${RUN_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-35b-moe/${NODES}-node-20m-${SLURM_JOB_ID}}
 mkdir -p "$RUN_ROOT"
-SNAPSHOT=/tmp/emender-e97-moe-source-${SLURM_JOB_ID}
+SNAPSHOT=$RUN_ROOT/source-$SOURCE_COMMIT
 rm -rf "$SNAPSHOT"; mkdir -p "$SNAPSHOT"; git archive "$SOURCE_COMMIT" | tar -xf - -C "$SNAPSHOT"
 squeue -j "$SLURM_JOB_ID" -h -o 'JobID=%i|Partition=%P|QOS=%q|State=%T|NodeList=%N'
 scontrol show job -dd "$SLURM_JOB_ID" | tr ' ' '\n' | grep -E '^(JobId|Partition|QOS|JobState|NodeList)=' || true
