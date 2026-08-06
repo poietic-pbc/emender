@@ -39,12 +39,14 @@ export EMENDER_SOURCE_COMMIT=$SOURCE_COMMIT
 srun --label --kill-on-bad-exit=1 bash -lc '
   set -euo pipefail
   source "'"$REPO"'/scripts/frontier/activate_emender_frontier.sh" >/dev/null
-  cd "'"$SNAPSHOT"'"; export PYTHONPATH="'"$SNAPSHOT"'${PYTHONPATH:+:$PYTHONPATH}"
-  export RANK=$SLURM_PROCID LOCAL_RANK=$SLURM_LOCALID
+  cd "'"$SNAPSHOT"'"
+  export PYTHONPATH="'"$SNAPSHOT"'${PYTHONPATH:+:$PYTHONPATH}"
+  export RANK=$SLURM_PROCID
+  export LOCAL_RANK=$SLURM_LOCALID
   export TRITON_CACHE_DIR="/tmp/e97-35b-moe-ckpt-${SLURM_JOB_ID}-${SLURM_PROCID}"
   rm -rf "$TRITON_CACHE_DIR"
   "$EMENDER_PYTHON" scripts/frontier/e97_35b_moe_train.py \
     --max-steps 1 --minutes 0 --batch-size 1 --chunk-size 2048 \
-    --checkpoint-root "'"$RUN_ROOT"'/checkpoints" \
-    --log-jsonl "'"$RUN_ROOT"'/training.jsonl
+    --checkpoint-root "'"$RUN_ROOT"'"/checkpoints \
+    --log-jsonl "'"$RUN_ROOT"'"/training.jsonl
 '
