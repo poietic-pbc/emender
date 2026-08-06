@@ -23,7 +23,9 @@ scontrol show job -dd "$SLURM_JOB_ID" | tr ' ' '\n' | grep -E '^(JobId|Partition
 echo "commit=$(git rev-parse HEAD)"
 
 source scripts/frontier/activate_emender_frontier.sh
-export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -1)
+MASTER_HOST=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -1)
+export MASTER_ADDR=$(getent ahostsv4 "$MASTER_HOST" | awk 'NR==1 {print $1}')
+[[ -n "$MASTER_ADDR" ]] || { echo "cannot resolve IPv4 rendezvous address for $MASTER_HOST" >&2; exit 70; }
 export MASTER_PORT=$((24000 + SLURM_JOB_ID % 10000))
 export WORLD_SIZE=$SLURM_NTASKS
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-7}

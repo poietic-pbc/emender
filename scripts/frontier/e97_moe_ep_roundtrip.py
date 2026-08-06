@@ -17,7 +17,9 @@ from ndm.e97_moe_ep import (
 
 def main() -> None:
     local_rank = int(os.environ["SLURM_LOCALID"])
-    torch.cuda.set_device(local_rank)
+    # Slurm --gpus-per-task=1 exposes exactly one process-local device. The
+    # physical lane remains SLURM_LOCALID, but its visible torch ordinal is 0.
+    torch.cuda.set_device(0)
     dist.init_process_group("nccl", init_method="env://")
     try:
         topology = assert_node_local_ep_group()
