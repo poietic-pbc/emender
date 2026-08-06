@@ -12,6 +12,10 @@ import torch.distributed as dist
 
 from ndm.data.tokenized_dataset import TokenizedStreamDataset
 from ndm.e97 import load_e97_checkpoint
+from ndm.e97_moe_checkpoint import (
+    load_node_sharded_checkpoint,
+    save_node_sharded_checkpoint,
+)
 from ndm.e97_moe_ep import (
     assert_node_local_ep_group,
     average_replicated_gradients_,
@@ -47,6 +51,8 @@ def parse_args():
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--diloco-k", type=int, default=40)
     parser.add_argument("--log-jsonl", type=Path, required=True)
+    parser.add_argument("--checkpoint-root", type=Path)
+    parser.add_argument("--resume-root", type=Path)
     return parser.parse_args()
 
 
@@ -110,6 +116,12 @@ def main() -> None:
         optimizer = FusedScheduleFreeAdamW(
             model.parameters(), lr=args.lr, weight_decay=args.weight_decay,
             betas=(0.9, 0.95), warmup_steps=0)
+        if args.resume_root is not None:
+            manifest = load_node_sharded_checkpoint(
+                args.resume_root / f"node-{groups.node_index}",
+                model, optimizer, node_group=groups.node_group)
+            emit(args.log_jsonl, "restart_loaded", checkpoint_step=manifest["step"],
+                 checkpoint_tokens=manifest["accepted_tokens"])
         optimizer.train()
         replicated = tuple(node_replicated_parameters(model))
         start = None
@@ -166,10 +178,18 @@ def main() -> None:
             if start is None:
                 start = time.monotonic()
             step += 1
+        measured_seconds = 0.0 if start is None else time.monotonic() - start
         emit(args.log_jsonl, "complete", steps=step, accepted_tokens=accepted_tokens,
-             measured_training_seconds=(0.0 if start is None else time.monotonic() - start),
+             measured_training_seconds=measured_seconds,
              hbm_allocated=torch.cuda.memory_allocated(),
              max_hbm_allocated=torch.cuda.max_memory_allocated())
+        if args.checkpoint_root is not None:
+            checkpoint = save_node_sharded_checkpoint(
+                args.checkpoint_root / f"node-{groups.node_index}",
+                model, optimizer, step=step, accepted_tokens=accepted_tokens,
+                source_commit=source_commit, node_group=groups.node_group)
+            emit(args.log_jsonl, "checkpoint_complete", path=str(checkpoint), step=step,
+                 accepted_tokens=accepted_tokens)
     finally:
         dist.destroy_process_group()
 
