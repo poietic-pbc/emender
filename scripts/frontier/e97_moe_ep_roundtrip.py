@@ -10,6 +10,7 @@ import torch.distributed as dist
 
 from ndm.e97_moe_ep import (
     assert_node_local_ep_group,
+    average_replicated_gradients_,
     exchange_expert_assignments,
     node_local_fused_moe_autograd,
     return_expert_outputs,
@@ -79,6 +80,14 @@ def main() -> None:
         ):
             if tensor.grad is None or not torch.isfinite(tensor.grad).all():
                 raise RuntimeError(f"missing or nonfinite distributed gradient for {name}")
+        replicated = (router, shared_gate, shared_up, shared_down)
+        average_replicated_gradients_(replicated, topology=topology)
+        checksums = torch.stack([parameter.grad.float().sum() for parameter in replicated])
+        checksum_matrix = torch.empty((8, len(replicated)), device="cuda", dtype=torch.float32)
+        dist.all_gather_into_tensor(checksum_matrix, checksums)
+        torch.testing.assert_close(
+            checksum_matrix, checksum_matrix[0].expand_as(checksum_matrix),
+            rtol=2e-6, atol=2e-6)
 
         if sum(exchange.send_splits) != tokens * 3:
             raise RuntimeError("send assignment total mismatch")
@@ -98,6 +107,7 @@ def main() -> None:
                 "expert_traffic_scope": "one-node-eight-rank-group-only",
                 "autograd_transport_local_experts_return": "pass",
                 "end_to_end_node_local_moe_layer": "pass",
+                "replicated_gradient_average_scope": "one-node-eight-rank-group-only",
             }, sort_keys=True))
     finally:
         dist.destroy_process_group()

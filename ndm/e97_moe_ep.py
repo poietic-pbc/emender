@@ -146,6 +146,36 @@ def exchange_expert_assignments(
     )
 
 
+def average_replicated_gradients_(
+    parameters,
+    *,
+    group=None,
+    topology: NodeLocalEPTopology | None = None,
+) -> None:
+    """RCCL-average replicated gradients over exactly one proven node group."""
+    if topology is None:
+        topology = assert_node_local_ep_group(group)
+    if len(topology.global_ranks) != EP_SIZE:
+        raise RuntimeError("invalid cached expert topology evidence")
+    for parameter in parameters:
+        if parameter.grad is None:
+            raise RuntimeError("replicated parameter is missing a gradient")
+        dist.all_reduce(parameter.grad, op=dist.ReduceOp.AVG, group=group)
+
+
+def node_replicated_parameters(model):
+    """Yield replicated parameters, excluding packed rank-owned expert shards."""
+    local_ids = set()
+    for module in model.modules():
+        for attribute in ("local_gate_weight", "local_up_weight", "local_down_weight"):
+            parameter = getattr(module, attribute, None)
+            if isinstance(parameter, torch.nn.Parameter):
+                local_ids.add(id(parameter))
+    for parameter in model.parameters():
+        if parameter.requires_grad and id(parameter) not in local_ids:
+            yield parameter
+
+
 def node_local_fused_moe_autograd(
     x: torch.Tensor,
     router_weight: torch.Tensor,

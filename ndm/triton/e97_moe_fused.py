@@ -625,6 +625,16 @@ def _pack_aux_grad_kernel(GRAD_LOAD_BALANCE, GRAD_Z, GRAD_AUX):
 
 
 @triton.jit
+def _schedulefree_lerp_kernel(PARAM, Z, N: tl.constexpr,
+                              WEIGHT: tl.constexpr, BLOCK: tl.constexpr):
+    offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    mask = offsets < N
+    parameter = tl.load(PARAM + offsets, mask=mask, other=0.0).to(tl.float32)
+    z = tl.load(Z + offsets, mask=mask, other=0.0).to(tl.float32)
+    tl.store(PARAM + offsets, parameter + WEIGHT * (z - parameter), mask=mask)
+
+
+@triton.jit
 def _schedulefree_adamw_update_kernel(
     PARAM, GRAD, Z, EXP_AVG_SQ,
     N: tl.constexpr,
@@ -1319,6 +1329,20 @@ def fused_shared_routed_swiglu_autograd_parity(
         routed_down_weight, shared_gate_weight, shared_up_weight,
         shared_down_weight,
     )
+
+
+def fused_schedulefree_lerp_(parameter: torch.Tensor, z: torch.Tensor, *,
+                             weight: float) -> None:
+    """Fused ScheduleFree train/eval basis interpolation."""
+    _require_hip_triton(parameter)
+    if (z.shape != parameter.shape or z.dtype != parameter.dtype or
+            not z.is_contiguous() or not parameter.is_contiguous()):
+        raise ValueError("parameter and z must be matching contiguous tensors")
+    if not -1.0 <= weight <= 1.0:
+        raise ValueError("ScheduleFree interpolation weight must be in [-1, 1]")
+    count = parameter.numel()
+    _schedulefree_lerp_kernel[(triton.cdiv(count, 256),)](
+        parameter, z, count, WEIGHT=float(weight), BLOCK=256, num_warps=4)
 
 
 def fused_schedulefree_adamw_update_(

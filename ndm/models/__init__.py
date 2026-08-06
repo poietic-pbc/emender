@@ -87,9 +87,11 @@ from .e97 import E97SplitEditLayer
 from .e97_moe import (
     E97MoEConfig,
     E97MoEParameterRecipe,
+    NodeLocalSharedRoutedMoE,
     SharedRoutedMoE,
     calculate_e97_moe_recipe,
     convert_e97_ffns_to_moe,
+    convert_e97_ffns_to_node_local_moe,
     e97_moe_auxiliary_loss,
     expert_owner,
     experts_for_rank,
@@ -174,8 +176,10 @@ __all__ = [
     'E85InputAsMatrixLayer', 'E85InputAsMatrixCell', 'E85InputAsMatrix', 'LEVEL_85_AVAILABLE', 'E85_CUDA_AVAILABLE',
     # Language model wrapper and explicit E97 identity
     'LadderLM', 'create_ladder_model', 'E97SplitEditLayer',
-    'E97MoEConfig', 'E97MoEParameterRecipe', 'SharedRoutedMoE',
+    'E97MoEConfig', 'E97MoEParameterRecipe',
+    'NodeLocalSharedRoutedMoE', 'SharedRoutedMoE',
     'calculate_e97_moe_recipe', 'convert_e97_ffns_to_moe',
+    'convert_e97_ffns_to_node_local_moe',
     'e97_moe_auxiliary_loss', 'expert_owner', 'experts_for_rank',
     # Mamba2 baseline
     'Mamba2LM', 'create_mamba2_model', 'MAMBA2_AVAILABLE',

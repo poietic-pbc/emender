@@ -5,9 +5,11 @@ import torch
 
 from ndm.models.e97_moe import (
     E97MoEConfig,
+    NodeLocalSharedRoutedMoE,
     SharedRoutedMoE,
     calculate_e97_moe_recipe,
     convert_e97_ffns_to_moe,
+    convert_e97_ffns_to_node_local_moe,
     expert_owner,
     experts_for_rank,
     widen_swiglu_function_preserving,
@@ -143,6 +145,37 @@ def test_tiny_full_e97_conversion_preserves_loss_logits_layers_and_recurrent_sta
         torch.testing.assert_close(actual, expected, rtol=3e-6, atol=3e-7)
     for actual, expected in zip(moe_states, dense_states):
         torch.testing.assert_close(actual, expected, rtol=3e-6, atol=3e-7)
+
+
+def test_packed_node_local_conversion_materializes_only_eight_experts_per_rank():
+    seed = _seed_ffn()
+    config = E97MoEConfig(hidden_dim=20, routed_experts=64, top_k=3,
+                          expert_parallel_size=8)
+    shard = NodeLocalSharedRoutedMoE.from_dense(
+        seed, config, local_expert_rank=5)
+    assert shard.local_gate_weight.shape == (8, 20, 8)
+    assert shard.local_up_weight.shape == (8, 20, 8)
+    assert shard.local_down_weight.shape == (8, 8, 20)
+    assert shard.router.weight.shape == (64, 8)
+    assert shard.local_expert_rank == 5
+    x = torch.randn(7, 8)
+    shared = shard.shared_expert(x)
+    gate = torch.nn.functional.silu(x @ shard.local_gate_weight[0].T)
+    up = x @ shard.local_up_weight[0].T
+    routed_clone = (gate * up) @ shard.local_down_weight[0].T
+    torch.testing.assert_close(shared + routed_clone, seed(x), rtol=3e-6, atol=3e-7)
+
+    model = LadderLM(
+        vocab_size=32, dim=8, depth=2, level="E97", expansion=1.0,
+        n_state=4, n_heads=2, use_gate=True, gate_activation="sigmoid",
+        linear_state=True, use_triton=False, mlp_ratio=2.0, mlp_multiple=4)
+    protected = {name: parameter for name, parameter in model.named_parameters()
+                 if ".mlp." not in name}
+    convert_e97_ffns_to_node_local_moe(
+        model, E97MoEConfig(hidden_dim=20), local_expert_rank=2)
+    assert all(isinstance(layer.mlp, NodeLocalSharedRoutedMoE) for layer in model.layers)
+    for name, parameter in protected.items():
+        assert dict(model.named_parameters())[name] is parameter
 
 
 def test_recipe_uses_instantiated_graph_and_conversion_touches_only_ffns():

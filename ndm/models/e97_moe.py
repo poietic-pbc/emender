@@ -114,6 +114,83 @@ def widen_swiglu_function_preserving(
     return widened
 
 
+class NodeLocalSharedRoutedMoE(nn.Module):
+    """Production packed shard for one rank of an eight-GCD E97 MoE island."""
+
+    def __init__(self, dim: int, config: E97MoEConfig, *,
+                 local_expert_rank: int, expert_template: SwiGLUMLP,
+                 expert_group=None):
+        super().__init__()
+        config.validate()
+        if config.routed_experts != 64 or config.top_k != 3 or config.expert_parallel_size != 8:
+            raise ValueError("production E97 MoE requires 64 experts, top-3, and EP size 8")
+        if not 0 <= local_expert_rank < 8:
+            raise ValueError("local expert rank must be in [0, 8)")
+        if expert_template.w1.out_features != config.hidden_dim:
+            raise ValueError("expert template hidden width mismatch")
+        self.dim = int(dim)
+        self.config = config
+        self.local_expert_rank = int(local_expert_rank)
+        self.expert_group = expert_group
+        self.router = nn.Linear(
+            dim, 64, bias=False, dtype=torch.float32,
+            device=expert_template.w1.weight.device)
+        nn.init.normal_(self.router.weight, mean=0.0, std=config.router_init_std)
+        self.shared_expert = copy.deepcopy(expert_template)
+        self.local_gate_weight = nn.Parameter(
+            expert_template.w1.weight.detach().unsqueeze(0).expand(8, -1, -1).clone())
+        self.local_up_weight = nn.Parameter(
+            expert_template.w2.weight.detach().unsqueeze(0).expand(8, -1, -1).clone())
+        self.local_down_weight = nn.Parameter(
+            expert_template.w3.weight.detach().unsqueeze(0).expand(8, -1, -1).clone())
+        self._load_balance_loss: torch.Tensor | None = None
+        self._z_loss: torch.Tensor | None = None
+        self.last_metrics: dict[str, torch.Tensor | int | str] = {}
+        self._topology = None
+
+    @classmethod
+    def from_dense(cls, seed: SwiGLUMLP, config: E97MoEConfig, *,
+                   local_expert_rank: int, expert_group=None):
+        widened = widen_swiglu_function_preserving(seed, config.hidden_dim)
+        with torch.no_grad():
+            widened.w3.weight.mul_(0.5)
+        return cls(seed.dim, config, local_expert_rank=local_expert_rank,
+                   expert_template=widened, expert_group=expert_group)
+
+    @property
+    def auxiliary_loss(self) -> torch.Tensor:
+        if self._load_balance_loss is None or self._z_loss is None:
+            return self.router.weight.new_zeros(())
+        return (self.config.load_balance_coefficient * self._load_balance_loss
+                + self.config.z_loss_coefficient * self._z_loss)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not x.is_cuda:
+            raise RuntimeError("production node-local E97 MoE requires ROCm/HIP")
+        if x.shape[-1] != self.dim:
+            raise ValueError(f"expected input width {self.dim}, got {x.shape[-1]}")
+        from ndm.e97_moe_ep import assert_node_local_ep_group, node_local_fused_moe_autograd
+        if self._topology is None:
+            self._topology = assert_node_local_ep_group(self.expert_group)
+        flat = x.reshape(-1, self.dim).contiguous()
+        result = node_local_fused_moe_autograd(
+            flat, self.router.weight,
+            self.local_gate_weight, self.local_up_weight, self.local_down_weight,
+            self.shared_expert.w1.weight, self.shared_expert.w2.weight,
+            self.shared_expert.w3.weight,
+            group=self.expert_group, topology=self._topology)
+        self._load_balance_loss = result.load_balance_loss
+        self._z_loss = result.z_loss
+        self.last_metrics = {
+            "expert_token_counts": result.expert_counts.detach(),
+            "expert_traffic_scope": "one-node-eight-rank-group-only",
+            "hostname": result.topology.hostname,
+            "local_expert_rank": self.local_expert_rank,
+            "dropped_tokens": 0,
+        }
+        return result.output.reshape_as(x)
+
+
 class SharedRoutedMoE(nn.Module):
     """Dropless token-level top-k reference MoE for one E97 FFN.
 
@@ -331,6 +408,22 @@ def calculate_e97_moe_recipe(
     )
 
 
+def convert_e97_ffns_to_node_local_moe(
+    model: nn.Module,
+    config: E97MoEConfig,
+    *,
+    local_expert_rank: int,
+    expert_group=None,
+) -> nn.Module:
+    """Replace only E97 FFNs with packed eight-expert production shards."""
+    ffns = _dense_ffns(model)
+    for layer, seed_ffn in zip(model.layers, ffns):
+        layer.mlp = NodeLocalSharedRoutedMoE.from_dense(
+            seed_ffn, config, local_expert_rank=local_expert_rank,
+            expert_group=expert_group)
+    return model
+
+
 def convert_e97_ffns_to_moe(model: nn.Module, config: E97MoEConfig) -> nn.Module:
     """Replace only the instantiated post-mixer FFNs, in place."""
     ffns = _dense_ffns(model)  # validates the complete graph before mutation
@@ -339,10 +432,10 @@ def convert_e97_ffns_to_moe(model: nn.Module, config: E97MoEConfig) -> nn.Module
     return model
 
 
-def iter_e97_moe_layers(model: nn.Module) -> Iterable[SharedRoutedMoE]:
+def iter_e97_moe_layers(model: nn.Module) -> Iterable[SharedRoutedMoE | NodeLocalSharedRoutedMoE]:
     for layer in getattr(model, "layers", ()):
         moe = getattr(layer, "mlp", None)
-        if isinstance(moe, SharedRoutedMoE):
+        if isinstance(moe, (SharedRoutedMoE, NodeLocalSharedRoutedMoE)):
             yield moe
 
 
