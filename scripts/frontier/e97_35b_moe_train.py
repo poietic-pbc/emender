@@ -7,11 +7,10 @@ import json
 import os
 from pathlib import Path
 import time
-from types import SimpleNamespace
-
 import torch
 import torch.distributed as dist
 
+from ndm.data.tokenized_dataset import TokenizedStreamDataset
 from ndm.e97 import load_e97_checkpoint
 from ndm.e97_moe_ep import (
     assert_node_local_ep_group,
@@ -26,7 +25,6 @@ from ndm.models.e97_moe import (
     convert_e97_ffns_to_node_local_moe,
     e97_moe_auxiliary_loss,
 )
-from train import build_training_dataset, get_training_batch
 
 
 DEFAULT_SEED = Path(
@@ -102,11 +100,10 @@ def main() -> None:
              hbm_allocated=torch.cuda.memory_allocated(),
              hbm_reserved=torch.cuda.memory_reserved())
 
-        data_args = SimpleNamespace(
-            seed=42, tbptt=False, tokenizer="p50k_base",
-            data=str(args.data), chunk_size=args.chunk_size,
-            batch_size=args.batch_size)
-        dataset = build_training_dataset(data_args, rank=dist.get_rank(), dist_enabled=True)
+        dataset = TokenizedStreamDataset(
+            data_path=str(args.data), chunk_size=args.chunk_size + 1,
+            rank=dist.get_rank(), world_size=dist.get_world_size(),
+            seed=42, tokenizer_name="p50k_base")
         optimizer = FusedScheduleFreeAdamW(
             model.parameters(), lr=args.lr, weight_decay=args.weight_decay,
             betas=(0.9, 0.95), warmup_steps=0)
@@ -121,7 +118,8 @@ def main() -> None:
             if start is not None and args.minutes > 0 and time.monotonic() - start >= args.minutes * 60:
                 break
             optimizer.zero_grad(set_to_none=True)
-            chunks, _, actual_lengths = get_training_batch(dataset, data_args, torch.device("cuda"))
+            chunks, _, actual_lengths = dataset.get_batch(
+                args.batch_size, device=torch.device("cuda"))
             step_start = time.monotonic()
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 loss = model(chunks, return_loss=True)

@@ -46,7 +46,7 @@ actual training at every scale and sequential fail-closed promotion.
 | Shared/backbone node reduction | MACHINE PASS | job 5182096: router/shared gradients averaged only over proven node group and equal on ranks 0..7 |
 | Fused ScheduleFree optimizer | MACHINE LAYER PASS | job 5182096: BF16/FP32 same-dtype state, fused step, finite parameters, no master weights |
 | Sharded 513B-seed conversion/restart | PENDING | no 35B single-GCD materialization |
-| Full 513B-seed packed-model step | PENDING | exact 5,750,016,656-parameter rank shard runner ready; pending job 5182120 was cancelled at zero runtime after source advanced, preserving exact-source discipline |
+| Full 513B-seed packed-model step | RETRY | job 5182195 failed before load because a direct runner cannot import top-level `train.py`; runner now binds directly to `TokenizedStreamDataset`. Job 5182120 was cancelled at zero runtime after source advanced |
 | 1 node, >=20 min training | PENDING | prerequisite after full-model preflight and checkpoint/restart |
 | 2 nodes, >=20 min qualification | PENDING | non-production observation |
 | 4 nodes, >=20 min qualification | PENDING | non-production observation |
