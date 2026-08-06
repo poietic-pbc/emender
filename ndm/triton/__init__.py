@@ -42,6 +42,15 @@ from .e97_multiquery_autograd import (
     e97_multiquery_chunked_triton,
     E97MultiQueryChunkedFn,
 )
+from .e97_moe_ep import (
+    EP_SIZE,
+    EXPERTS_PER_RANK,
+    EPSendPlan,
+    EPLocalPlan,
+    build_ep_send_plan,
+    build_local_expert_plan,
+    unpack_local_expert_rows,
+)
 from .e97_moe_fused import (
     FUSED_E97_MOE_ABI,
     FusedMoEForwardResult,
@@ -69,6 +78,13 @@ __all__ = [
     "e97_delta_chunked_triton",
     "e97_multiquery_chunked_triton",
     "E97MultiQueryChunkedFn",
+    "EP_SIZE",
+    "EXPERTS_PER_RANK",
+    "EPSendPlan",
+    "EPLocalPlan",
+    "build_ep_send_plan",
+    "build_local_expert_plan",
+    "unpack_local_expert_rows",
     "FUSED_E97_MOE_ABI",
     "FusedMoEForwardResult",
     "fused_routed_swiglu_forward",
