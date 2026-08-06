@@ -54,8 +54,8 @@ not an E88-derived estimate.
 
 Observed graph:
 
-- recurrent mixer: `ndm.models.e88_fla_hybrid.E88FLAHybrid` instantiated in E97
-  split-edit mode
+- recurrent mixer: `ndm.models.e97.E97SplitEditLayer`, the explicit E97 wrapper
+  over the shared E88-derived fused implementation core
 - layers: 11, uniform
 - model width: 1,792
 - seed FFN: bias-free `SwiGLUMLP`, hidden width 4,032
