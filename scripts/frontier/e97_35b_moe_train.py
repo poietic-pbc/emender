@@ -188,7 +188,7 @@ def main() -> None:
                 args.checkpoint_root / f"node-{groups.node_index}",
                 model, optimizer, step=step, accepted_tokens=accepted_tokens,
                 source_commit=source_commit, node_group=groups.node_group)
-            emit(args.log_jsonl, "checkpoint_complete", path=str(checkpoint), step=step,
+            emit(args.log_jsonl, "checkpoint_complete", checkpoint_path=str(checkpoint), step=step,
                  accepted_tokens=accepted_tokens)
     finally:
         dist.destroy_process_group()
