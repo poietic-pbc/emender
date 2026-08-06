@@ -3,7 +3,11 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from ndm.triton.e97_moe_fused import fused_packed_local_experts_autograd
+from ndm.triton.e97_moe_fused import (
+    fused_packed_local_experts_autograd,
+    fused_shared_expert_autograd,
+    fused_top3_router_autograd,
+)
 from ndm.triton.e97_moe_ep import (
     EP_SIZE,
     EXPERTS_PER_RANK,
@@ -82,6 +86,44 @@ def test_send_and_local_permutations_preserve_autograd_exactly():
     unpacked.backward(grad)
     torch.testing.assert_close(unpacked, received, rtol=0, atol=0)
     torch.testing.assert_close(received.grad, grad, rtol=0, atol=0)
+
+
+def test_production_router_and_shared_expert_custom_autograd_match_oracle():
+    tokens, dim, hidden = 9, 64, 128
+    x = torch.randn(tokens, dim, device="cuda", dtype=torch.bfloat16).requires_grad_(True)
+    router = torch.randn(64, dim, device="cuda", dtype=torch.float32).mul(1e-3).requires_grad_(True)
+    gate = torch.randn(hidden, dim, device="cuda", dtype=torch.bfloat16).mul(0.01).requires_grad_(True)
+    up = torch.randn(hidden, dim, device="cuda", dtype=torch.bfloat16).mul(0.01).requires_grad_(True)
+    down = torch.randn(dim, hidden, device="cuda", dtype=torch.bfloat16).mul(0.01).requires_grad_(True)
+    indices, weights, counts, balance, z_loss = fused_top3_router_autograd(x, router)
+    shared = fused_shared_expert_autograd(x, gate, up, down)
+    grad_output = torch.randn_like(shared)
+    grad_weights = torch.randn_like(weights)
+    objective = ((shared * grad_output).float().sum() + (weights * grad_weights).sum()
+                 + 0.07 * balance + 0.03 * z_loss)
+    actual = torch.autograd.grad(objective, (x, router, gate, up, down))
+
+    ox, orouter, ogate, oup, odown = [
+        tensor.float().detach().requires_grad_(True)
+        for tensor in (x, router, gate, up, down)]
+    logits = ox @ orouter.T
+    expected_indices = logits.topk(3, dim=-1).indices
+    expected_weights = logits.gather(1, expected_indices).softmax(dim=-1)
+    expected_counts = torch.bincount(expected_indices.reshape(-1), minlength=64).float()
+    probabilities = logits.softmax(dim=-1)
+    expected_balance = 64 * torch.sum(expected_counts / (tokens * 3) * probabilities.mean(0))
+    expected_z = torch.logsumexp(logits, -1).square().mean()
+    activation = F.silu(ox @ ogate.T) * (ox @ oup.T)
+    expected_shared = activation @ odown.T
+    expected_objective = ((expected_shared * grad_output.float()).sum()
+                          + (expected_weights * grad_weights).sum()
+                          + 0.07 * expected_balance + 0.03 * expected_z)
+    expected = torch.autograd.grad(expected_objective, (ox, orouter, ogate, oup, odown))
+    assert torch.equal(indices.long(), expected_indices)
+    assert torch.equal(counts.long(), expected_counts.long())
+    torch.testing.assert_close(weights, expected_weights, rtol=2e-6, atol=2e-7)
+    for actual_grad, expected_grad in zip(actual, expected):
+        torch.testing.assert_close(actual_grad.float(), expected_grad, rtol=3e-2, atol=3e-4)
 
 
 def test_fused_eight_local_experts_forward_and_backward_match_oracle():

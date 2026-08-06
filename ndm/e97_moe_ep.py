@@ -15,7 +15,19 @@ import torch
 import torch.distributed as dist
 import torch.distributed.nn.functional as dist_nn
 
-from .triton.e97_moe_ep import EP_SIZE, EPSendPlan, build_ep_send_plan
+from .triton.e97_moe_ep import (
+    EP_SIZE,
+    EPSendPlan,
+    build_ep_send_plan,
+    build_local_expert_plan,
+    unpack_local_expert_rows,
+)
+from .triton.e97_moe_fused import (
+    fused_packed_local_experts_autograd,
+    fused_shared_expert_autograd,
+    fused_shared_top3_combine_autograd,
+    fused_top3_router_autograd,
+)
 
 
 @dataclass(frozen=True)
@@ -34,6 +46,15 @@ class EPExchange:
     received_local_expert: torch.Tensor
     send_splits: tuple[int, ...]
     receive_splits: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class NodeLocalMoEResult:
+    output: torch.Tensor
+    expert_counts: torch.Tensor
+    load_balance_loss: torch.Tensor
+    z_loss: torch.Tensor
+    topology: NodeLocalEPTopology
 
 
 def _hostname_fingerprint(hostname: str) -> int:
@@ -122,6 +143,47 @@ def exchange_expert_assignments(
         received_local_expert=received_local_expert,
         send_splits=send_splits,
         receive_splits=receive_splits,
+    )
+
+
+def node_local_fused_moe_autograd(
+    x: torch.Tensor,
+    router_weight: torch.Tensor,
+    local_gate_weight: torch.Tensor,
+    local_up_weight: torch.Tensor,
+    local_down_weight: torch.Tensor,
+    shared_gate_weight: torch.Tensor,
+    shared_up_weight: torch.Tensor,
+    shared_down_weight: torch.Tensor,
+    *,
+    group=None,
+    topology: NodeLocalEPTopology | None = None,
+) -> NodeLocalMoEResult:
+    """Execute one complete shared+routed MoE layer across one eight-GCD node."""
+    if topology is None:
+        topology = assert_node_local_ep_group(group)
+    top_indices, top_weights, counts, load_balance, z_loss = (
+        fused_top3_router_autograd(x, router_weight))
+    exchange = exchange_expert_assignments(
+        x, top_indices, group=group, topology=topology)
+    local_plan = build_local_expert_plan(
+        exchange.received_x, exchange.received_local_expert)
+    local_packed_output = fused_packed_local_experts_autograd(
+        local_plan.packed_x, local_plan.expert_offsets,
+        local_gate_weight, local_up_weight, local_down_weight)
+    received_output = unpack_local_expert_rows(local_packed_output, local_plan)
+    returned_output = return_expert_outputs(exchange, received_output, group=group)
+    shared_output = fused_shared_expert_autograd(
+        x, shared_gate_weight, shared_up_weight, shared_down_weight)
+    output = fused_shared_top3_combine_autograd(
+        returned_output, exchange.send_plan.assignment_to_send_row,
+        top_weights, shared_output)
+    return NodeLocalMoEResult(
+        output=output,
+        expert_counts=counts,
+        load_balance_loss=load_balance,
+        z_loss=z_loss,
+        topology=topology,
     )
 
 

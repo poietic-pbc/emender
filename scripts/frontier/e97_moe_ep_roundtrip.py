@@ -11,10 +11,9 @@ import torch.distributed as dist
 from ndm.e97_moe_ep import (
     assert_node_local_ep_group,
     exchange_expert_assignments,
+    node_local_fused_moe_autograd,
     return_expert_outputs,
 )
-from ndm.triton.e97_moe_ep import build_local_expert_plan, unpack_local_expert_rows
-from ndm.triton.e97_moe_fused import fused_packed_local_experts_autograd
 
 
 def main() -> None:
@@ -46,11 +45,10 @@ def main() -> None:
         returned = return_expert_outputs(exchange, exchange.received_x)
         torch.testing.assert_close(returned, exchange.send_plan.send_x, rtol=0, atol=0)
 
-        # Exercise the complete differentiable transport -> local fused experts
-        # -> return transport chain with one tiny expert shard per rank.
+        # Exercise the complete production layer path: fused 64-way router,
+        # differentiable transport, eight local experts, shared expert, return,
+        # fused combine, auxiliary losses, and backward.
         hidden = 128
-        local_plan = build_local_expert_plan(
-            exchange.received_x, exchange.received_local_expert)
         base = rank * 8 * hidden * dim
         gate = (torch.arange(base, base + 8 * hidden * dim, device="cuda", dtype=torch.float32)
                 .reshape(8, hidden, dim).remainder(31).sub(15).mul(0.001)
@@ -61,12 +59,24 @@ def main() -> None:
         down = (torch.arange(base, base + 8 * dim * hidden, device="cuda", dtype=torch.float32)
                 .reshape(8, dim, hidden).remainder(19).sub(9).mul(0.001)
                 .to(torch.bfloat16).contiguous().requires_grad_(True))
-        packed_output = fused_packed_local_experts_autograd(
-            local_plan.packed_x, local_plan.expert_offsets, gate, up, down)
-        received_output = unpack_local_expert_rows(packed_output, local_plan)
-        source_output = return_expert_outputs(exchange, received_output)
-        source_output.float().square().mean().backward()
-        for name, tensor in (("x", x), ("gate", gate), ("up", up), ("down", down)):
+        router = (torch.arange(64 * dim, device="cuda", dtype=torch.float32)
+                  .reshape(64, dim).remainder(37).sub(18).mul(1.0e-4)
+                  .contiguous().requires_grad_(True))
+        shared_gate = gate[0].detach().clone().requires_grad_(True)
+        shared_up = up[1].detach().clone().requires_grad_(True)
+        shared_down = down[2].detach().clone().requires_grad_(True)
+        result = node_local_fused_moe_autograd(
+            x, router, gate, up, down,
+            shared_gate, shared_up, shared_down, topology=topology)
+        objective = (result.output.float().square().mean()
+                     + 1.0e-3 * result.load_balance_loss
+                     + 1.0e-4 * result.z_loss)
+        objective.backward()
+        for name, tensor in (
+            ("x", x), ("router", router), ("gate", gate), ("up", up), ("down", down),
+            ("shared_gate", shared_gate), ("shared_up", shared_up),
+            ("shared_down", shared_down),
+        ):
             if tensor.grad is None or not torch.isfinite(tensor.grad).all():
                 raise RuntimeError(f"missing or nonfinite distributed gradient for {name}")
 
@@ -87,6 +97,7 @@ def main() -> None:
                 "per_rank_send_receive": gathered.cpu().tolist(),
                 "expert_traffic_scope": "one-node-eight-rank-group-only",
                 "autograd_transport_local_experts_return": "pass",
+                "end_to_end_node_local_moe_layer": "pass",
             }, sort_keys=True))
     finally:
         dist.destroy_process_group()

@@ -577,6 +577,23 @@ def _dense_weight_backward_kernel(
 
 
 @triton.jit
+def _router_input_backward_kernel(
+    GRAD_LOGITS, ROUTER_W, GRAD_X,
+    M: tl.constexpr, D: tl.constexpr, E: tl.constexpr,
+    BLOCK_D: tl.constexpr, BLOCK_E: tl.constexpr,
+):
+    token, pd = tl.program_id(0), tl.program_id(1)
+    d = pd * BLOCK_D + tl.arange(0, BLOCK_D)
+    e = tl.arange(0, BLOCK_E)
+    mask_d = d < D
+    grad = tl.load(GRAD_LOGITS + token * E + e, mask=e < E, other=0.0)
+    weight = tl.load(ROUTER_W + e[:, None] * D + d[None, :],
+                     mask=(e[:, None] < E) & mask_d[None, :], other=0.0)
+    tl.store(GRAD_X + token * D + d, tl.sum(grad[:, None] * weight, axis=0),
+             mask=mask_d)
+
+
+@triton.jit
 def _router_input_and_unpack_kernel(
     GRAD_LOGITS, ROUTER_W, GRAD_PACKED_X, ROUTED_INVERSE, GRAD_SHARED_X, GRAD_X,
     M: tl.constexpr, D: tl.constexpr, E: tl.constexpr,
@@ -977,6 +994,185 @@ def fused_shared_routed_swiglu_forward_backward_parity(
     )
     return forward, gradients
 
+
+
+class _FusedTop3RouterFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, router_weight):
+        _require_hip_triton(x)
+        if x.ndim != 2 or x.dtype != torch.bfloat16 or not x.is_contiguous():
+            raise ValueError("router input must be contiguous BF16 [tokens, dim]")
+        if (router_weight.shape != (64, x.shape[1]) or
+                router_weight.dtype != torch.float32 or not router_weight.is_contiguous()):
+            raise ValueError("production router weight must be contiguous FP32 [64, dim]")
+        M, D = x.shape
+        E = 64
+        logits = torch.empty((M, E), device=x.device, dtype=torch.float32)
+        _router_fp32_kernel[(triton.cdiv(M, 16), 4)](
+            x, router_weight, logits, M, D, E,
+            x.stride(0), x.stride(1), router_weight.stride(0), router_weight.stride(1),
+            logits.stride(0), logits.stride(1), BM=16, BE=16, BK=32,
+            num_warps=4, num_stages=1)
+        indices = torch.empty((M, 3), device=x.device, dtype=torch.int32)
+        weights = torch.empty((M, 3), device=x.device, dtype=torch.float32)
+        counts = torch.zeros(E, device=x.device, dtype=torch.int32)
+        probability_sums = torch.zeros(E, device=x.device, dtype=torch.float32)
+        z_per_token = torch.empty(M, device=x.device, dtype=torch.float32)
+        entropy = torch.empty_like(z_per_token)
+        max_probability = torch.empty_like(z_per_token)
+        _top3_softmax_metrics_kernel[(M,)](
+            logits, indices, weights, counts, probability_sums,
+            z_per_token, entropy, max_probability, M, E, BLOCK_E=64, num_warps=1)
+        load_balance = torch.zeros((), device=x.device, dtype=torch.float32)
+        z_loss = torch.zeros((), device=x.device, dtype=torch.float32)
+        _router_aux_metrics_kernel[(max(M, E),)](
+            counts, probability_sums, z_per_token, load_balance, z_loss, M, E,
+            num_warps=1)
+        ctx.mark_non_differentiable(indices, counts)
+        ctx.save_for_backward(x, router_weight, logits, counts, indices, weights)
+        return indices, weights, counts, load_balance, z_loss
+
+    @staticmethod
+    def backward(ctx, _grad_indices, grad_weights, _grad_counts,
+                 grad_load_balance, grad_z):
+        x, router_weight, logits, counts, indices, weights = ctx.saved_tensors
+        M, D = x.shape
+        if grad_weights is None:
+            grad_weights = torch.zeros_like(weights)
+        if grad_load_balance is None:
+            grad_load_balance = torch.zeros((), device=x.device, dtype=torch.float32)
+        if grad_z is None:
+            grad_z = torch.zeros((), device=x.device, dtype=torch.float32)
+        grad_aux = torch.empty(2, device=x.device, dtype=torch.float32)
+        _pack_aux_grad_kernel[(1,)](grad_load_balance, grad_z, grad_aux, num_warps=1)
+        grad_logits = torch.empty_like(logits)
+        _top3_router_backward_kernel[(M,)](
+            logits, counts, indices, weights, grad_weights.contiguous(), grad_aux,
+            grad_logits, M, 64, BLOCK_E=64, num_warps=1)
+        grad_router = torch.empty_like(router_weight)
+        _dense_weight_backward_kernel[(2, triton.cdiv(D, 32))](
+            grad_logits, x, grad_router, M, 64, D,
+            BM=16, BN=32, BK=32, num_warps=4, num_stages=1)
+        grad_x = torch.empty_like(x)
+        _router_input_backward_kernel[(M, triton.cdiv(D, 128))](
+            grad_logits, router_weight, grad_x, M, D, 64,
+            BLOCK_D=128, BLOCK_E=64, num_warps=4)
+        return grad_x, grad_router
+
+
+def fused_top3_router_autograd(
+    x: torch.Tensor, router_weight: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Fused production 64-expert top-3 router with auxiliary gradients."""
+    return _FusedTop3RouterFunction.apply(x, router_weight)
+
+
+class _FusedSharedExpertFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, gate_weight, up_weight, down_weight):
+        _require_hip_triton(x)
+        if x.ndim != 2 or x.dtype != torch.bfloat16 or not x.is_contiguous():
+            raise ValueError("shared expert input must be contiguous BF16 [tokens, dim]")
+        M, D = x.shape
+        if gate_weight.ndim != 2:
+            raise ValueError("shared gate weight must be [hidden, dim]")
+        H = gate_weight.shape[0]
+        if (gate_weight.shape[1] != D or up_weight.shape != gate_weight.shape or
+                down_weight.shape != (D, H)):
+            raise ValueError("shared expert weight shape mismatch")
+        if any(weight.dtype != torch.bfloat16 or not weight.is_contiguous()
+               for weight in (gate_weight, up_weight, down_weight)):
+            raise ValueError("shared expert weights must be contiguous BF16")
+        act = torch.empty((M, H), device=x.device, dtype=x.dtype)
+        _dense_gate_up_silu_kernel[(triton.cdiv(M, 16), triton.cdiv(H, 64))](
+            x, gate_weight, up_weight, act, M, D, H,
+            BM=16, BN=64, BK=32, num_warps=4, num_stages=1)
+        output = torch.empty_like(x)
+        _dense_down_kernel[(triton.cdiv(M, 16), triton.cdiv(D, 64))](
+            act, down_weight, output, M, D, H,
+            BM=16, BN=64, BK=32, num_warps=4, num_stages=1)
+        ctx.save_for_backward(x, gate_weight, up_weight, down_weight, act)
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, gate_weight, up_weight, down_weight, act = ctx.saved_tensors
+        M, D = x.shape
+        H = gate_weight.shape[0]
+        offsets = torch.tensor([0, M], device=x.device, dtype=torch.int32)
+        BM, BN, BK = 16, 32, 32
+        grad_act = torch.empty_like(act)
+        _grouped_down_input_backward_kernel[(triton.cdiv(M, BM), triton.cdiv(H, BN))](
+            grad_output.contiguous(), down_weight, offsets, grad_act,
+            M, D, H, 1, BLOCK_E=1, BM=BM, BN=BN, BK=BK,
+            num_warps=4, num_stages=1)
+        grad_down = torch.empty_like(down_weight)
+        _grouped_down_weight_backward_kernel[(1, triton.cdiv(D, BN), triton.cdiv(H, BK))](
+            grad_output.contiguous(), act, offsets, grad_down,
+            M, D, H, 1, BM=BM, BN=BN, BK=BK, num_warps=4, num_stages=1)
+        gate = torch.empty_like(act)
+        up = torch.empty_like(act)
+        _grouped_gate_up_kernel[(triton.cdiv(M, BM), triton.cdiv(H, 64))](
+            x, gate_weight, up_weight, offsets, gate, up,
+            M, D, H, 1, BLOCK_E=1, BM=BM, BN=64, BK=32,
+            num_warps=4, num_stages=1)
+        grad_gate_values = torch.empty_like(gate)
+        grad_up_values = torch.empty_like(up)
+        _silu_backward_kernel[(triton.cdiv(M * H, 256),)](
+            gate, up, grad_act, grad_gate_values, grad_up_values,
+            M * H, BLOCK=256, num_warps=4)
+        grad_x = torch.empty_like(x)
+        _grouped_gate_up_input_backward_kernel[(triton.cdiv(M, BM), triton.cdiv(D, BN))](
+            grad_gate_values, grad_up_values, gate_weight, up_weight, offsets, grad_x,
+            M, D, H, 1, BLOCK_E=1, BM=BM, BN=BN, BK=BK,
+            num_warps=4, num_stages=1)
+        grad_gate = torch.empty_like(gate_weight)
+        grad_up = torch.empty_like(up_weight)
+        _grouped_gate_up_weight_backward_kernel[(1, triton.cdiv(H, BN), triton.cdiv(D, BK))](
+            grad_gate_values, grad_up_values, x, offsets, grad_gate, grad_up,
+            M, D, H, 1, BM=BM, BN=BN, BK=BK,
+            num_warps=4, num_stages=1)
+        return grad_x, grad_gate, grad_up, grad_down
+
+
+def fused_shared_expert_autograd(x, gate_weight, up_weight, down_weight):
+    """Fused always-active shared SwiGLU expert."""
+    return _FusedSharedExpertFunction.apply(x, gate_weight, up_weight, down_weight)
+
+
+class _FusedMoECombineFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, returned_expert_output, assignment_to_send_row,
+                top_weights, shared_output):
+        M = top_weights.shape[0]
+        D = shared_output.shape[1]
+        output = torch.empty_like(shared_output)
+        _combine_shared_top3_kernel[(M, triton.cdiv(D, 256))](
+            shared_output, returned_expert_output, assignment_to_send_row,
+            top_weights, output, M, D, BLOCK_D=256, num_warps=4)
+        ctx.save_for_backward(
+            returned_expert_output, assignment_to_send_row, top_weights)
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        returned, inverse, weights = ctx.saved_tensors
+        M, D = grad_output.shape
+        grad_returned = torch.zeros_like(returned)
+        grad_weights = torch.empty_like(weights)
+        _combine_backward_kernel[(M * 3,)](
+            grad_output.contiguous(), returned, inverse, weights,
+            grad_returned, grad_weights, M * 3, D,
+            BLOCK_D=_next_power_of_two(D), num_warps=4)
+        return grad_returned, None, grad_weights, grad_output
+
+
+def fused_shared_top3_combine_autograd(
+    returned_expert_output, assignment_to_send_row, top_weights, shared_output,
+):
+    """Combine returned expert rows and the shared expert with fused backward."""
+    return _FusedMoECombineFunction.apply(
+        returned_expert_output, assignment_to_send_row, top_weights, shared_output)
 
 
 class _FusedPackedLocalExpertsFunction(torch.autograd.Function):
