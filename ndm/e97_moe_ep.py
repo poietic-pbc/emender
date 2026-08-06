@@ -57,6 +57,63 @@ class NodeLocalMoEResult:
     topology: NodeLocalEPTopology
 
 
+@dataclass(frozen=True)
+class MoEProcessGroups:
+    node_group: object
+    diloco_lane_group: object
+    node_index: int
+    local_rank: int
+    node_count: int
+
+
+def create_moe_process_groups() -> MoEProcessGroups:
+    """Create node EP groups and corresponding-rank cross-node DiLoCo lanes."""
+    if not dist.is_initialized():
+        raise RuntimeError("distributed process group is not initialized")
+    world = dist.get_world_size()
+    if world % EP_SIZE:
+        raise RuntimeError("global world size must be a multiple of eight GCDs")
+    node_count = world // EP_SIZE
+    rank = dist.get_rank()
+    node_index, local_rank = divmod(rank, EP_SIZE)
+    node_group = None
+    for node in range(node_count):
+        group = dist.new_group(tuple(range(node * EP_SIZE, (node + 1) * EP_SIZE)), backend="nccl")
+        if node == node_index:
+            node_group = group
+    lane_group = None
+    for lane in range(EP_SIZE):
+        ranks = tuple(node * EP_SIZE + lane for node in range(node_count))
+        group = dist.new_group(ranks, backend="nccl")
+        if lane == local_rank:
+            lane_group = group
+    if node_group is None or lane_group is None:
+        raise RuntimeError("failed to construct MoE process-group hierarchy")
+    return MoEProcessGroups(
+        node_group=node_group, diloco_lane_group=lane_group,
+        node_index=node_index, local_rank=local_rank, node_count=node_count)
+
+
+def diloco_average_schedulefree_(model, optimizer, *, lane_group) -> None:
+    """Average ScheduleFree x/z between corresponding node shards.
+
+    Only model and optimizer tensors cross nodes. Expert-token dispatch is not
+    accepted by this API and remains confined to each node group.
+    """
+    lane_world = dist.get_world_size(lane_group)
+    if lane_world <= 1:
+        return
+    optimizer.eval()
+    for parameter in model.parameters():
+        dist.all_reduce(parameter.data, op=dist.ReduceOp.AVG, group=lane_group)
+        state = optimizer.state.get(parameter, {})
+        z = state.get("z")
+        if z is not None:
+            dist.all_reduce(z, op=dist.ReduceOp.AVG, group=lane_group)
+    optimizer.train()
+    optimizer.assert_no_master_weights()
+
+
 def _hostname_fingerprint(hostname: str) -> int:
     digest = hashlib.sha256(hostname.encode("utf-8")).digest()
     return int.from_bytes(digest[:8], "little") & ((1 << 63) - 1)

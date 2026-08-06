@@ -16,6 +16,8 @@ from ndm.e97 import load_e97_checkpoint
 from ndm.e97_moe_ep import (
     assert_node_local_ep_group,
     average_replicated_gradients_,
+    create_moe_process_groups,
+    diloco_average_schedulefree_,
     node_replicated_parameters,
 )
 from ndm.e97_moe_optimizer import FusedScheduleFreeAdamW
@@ -45,6 +47,7 @@ def parse_args():
     parser.add_argument("--chunk-size", type=int, default=2048)
     parser.add_argument("--lr", type=float, default=1.007e-3)
     parser.add_argument("--weight-decay", type=float, default=0.01)
+    parser.add_argument("--diloco-k", type=int, default=40)
     parser.add_argument("--log-jsonl", type=Path, required=True)
     return parser.parse_args()
 
@@ -67,9 +70,10 @@ def main() -> None:
     torch.cuda.set_device(0)
     dist.init_process_group("nccl", init_method="env://")
     try:
-        if dist.get_world_size() != 8:
-            raise RuntimeError("this runner is the mandatory one-node/eight-rank gate")
-        topology = assert_node_local_ep_group()
+        groups = create_moe_process_groups()
+        if groups.local_rank != local_rank:
+            raise RuntimeError("Slurm rank ordering does not match contiguous node islands")
+        topology = assert_node_local_ep_group(groups.node_group)
         torch.manual_seed(970035)
         torch.cuda.manual_seed_all(970035)
         emit(args.log_jsonl, "load_start", commit=os.popen("git rev-parse HEAD").read().strip(),
@@ -84,7 +88,7 @@ def main() -> None:
             model,
             E97MoEConfig(hidden_dim=8832, routed_experts=64, shared_experts=1,
                          top_k=3, expert_parallel_size=8),
-            local_expert_rank=local_rank, expert_group=None)
+            local_expert_rank=local_rank, expert_group=groups.node_group)
         model.train()
         parameter_count_local = sum(parameter.numel() for parameter in model.parameters())
         local_expert_count = sum(
@@ -126,16 +130,24 @@ def main() -> None:
             if not torch.isfinite(objective):
                 raise FloatingPointError(f"nonfinite objective at step {step}")
             objective.backward()
-            average_replicated_gradients_(replicated, topology=topology)
+            average_replicated_gradients_(
+                replicated, group=groups.node_group, topology=topology)
             optimizer.step()
             optimizer.assert_no_master_weights()
-            dist.all_reduce(loss, op=dist.ReduceOp.AVG)
-            dist.all_reduce(auxiliary, op=dist.ReduceOp.AVG)
+            merge_seconds = 0.0
+            if groups.node_count > 1 and (step + 1) % args.diloco_k == 0:
+                merge_start = time.monotonic()
+                diloco_average_schedulefree_(
+                    model, optimizer, lane_group=groups.diloco_lane_group)
+                merge_seconds = time.monotonic() - merge_start
+            dist.all_reduce(loss, op=dist.ReduceOp.AVG, group=groups.node_group)
+            dist.all_reduce(auxiliary, op=dist.ReduceOp.AVG, group=groups.node_group)
             step_seconds = time.monotonic() - step_start
             tokens = int(actual_lengths.sum().item()) - args.batch_size
             accepted_tokens += tokens * dist.get_world_size()
             emit(args.log_jsonl, "step", step=step, loss=float(loss.item()),
                  auxiliary_loss=float(auxiliary.item()), step_seconds=step_seconds,
+                 diloco_merge_seconds=merge_seconds, node_count=groups.node_count,
                  accepted_tokens=accepted_tokens,
                  tokens_per_second=(tokens * dist.get_world_size() / step_seconds),
                  hbm_allocated=torch.cuda.memory_allocated(),
