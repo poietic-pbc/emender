@@ -5,10 +5,11 @@ allocates bounded buffers and launches kernels; routing, packing, expert
 SwiGLU, and deterministic top-k combination execute in ``@triton.jit``
 kernels.  There is deliberately no eager fallback.
 
-The current public entry point is forward-only while the fused backward and
-optimizer kernels are completed.  ``require_training=True`` therefore fails
-closed: it is impossible to mistake this implementation for a training-ready
-system or submit a parity/training job prematurely.
+The production forward includes both the always-active shared expert and the
+routed experts.  It remains forward-only while fused backward and optimizer
+kernels are completed.  ``require_training=True`` therefore fails closed: it
+is impossible to mistake this implementation for a training-ready system or
+submit a parity/training job prematurely.
 """
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ import triton
 import triton.language as tl
 
 
-FUSED_E97_MOE_ABI = "emender-e97-moe-triton-v1"
+FUSED_E97_MOE_ABI = "emender-e97-moe-triton-v2"
 
 
 def _next_power_of_two(value: int) -> int:
@@ -103,6 +104,20 @@ def _top3_softmax_metrics_kernel(
 
 
 @triton.jit
+def _router_aux_metrics_kernel(
+    COUNTS, PROB_SUM, Z_PER_TOKEN, LOAD_BALANCE, Z_MEAN,
+    M: tl.constexpr, E: tl.constexpr,
+):
+    index = tl.program_id(0)
+    if index < E:
+        count = tl.load(COUNTS + index).to(tl.float32)
+        probability_sum = tl.load(PROB_SUM + index).to(tl.float32)
+        tl.atomic_add(LOAD_BALANCE, E * count * probability_sum / (3.0 * M * M))
+    if index < M:
+        tl.atomic_add(Z_MEAN, tl.load(Z_PER_TOKEN + index).to(tl.float32) / M)
+
+
+@triton.jit
 def _padded_prefix_kernel(COUNTS, OFFSETS, CURSOR, TOTAL,
                           E: tl.constexpr, BLOCK_E: tl.constexpr,
                           BLOCK_M: tl.constexpr):
@@ -151,12 +166,14 @@ def _grouped_gate_up_kernel(
     row0 = pm * BM
     ev = tl.arange(0, BLOCK_E)
     ends = tl.load(OFFSETS + ev + 1, mask=ev < E, other=PADDED_M + 1)
-    expert = tl.sum(tl.where((ev < E) & (row0 >= ends), 1, 0), axis=0)
+    raw_expert = tl.sum(tl.where((ev < E) & (row0 >= ends), 1, 0), axis=0)
+    valid_block = raw_expert < E
+    expert = tl.minimum(raw_expert, E - 1)
     rows = row0 + tl.arange(0, BM)
     cols = pn * BN + tl.arange(0, BN)
     start = tl.load(OFFSETS + expert)
     end = tl.load(OFFSETS + expert + 1)
-    row_mask = (rows >= start) & (rows < end) & (rows < PADDED_M)
+    row_mask = valid_block & (rows >= start) & (rows < end) & (rows < PADDED_M)
     gate = tl.zeros((BM, BN), tl.float32)
     up = tl.zeros((BM, BN), tl.float32)
     for k0 in range(0, D, BK):
@@ -165,14 +182,81 @@ def _grouped_gate_up_kernel(
                     mask=row_mask[:, None] & (k[None, :] < D), other=0.0)
         base = expert * HIDDEN * D
         wg = tl.load(W_GATE + base + cols[None, :] * D + k[:, None],
-                     mask=(cols[None, :] < HIDDEN) & (k[:, None] < D), other=0.0)
+                     mask=valid_block & (cols[None, :] < HIDDEN) &
+                     (k[:, None] < D), other=0.0)
         wu = tl.load(W_UP + base + cols[None, :] * D + k[:, None],
-                     mask=(cols[None, :] < HIDDEN) & (k[:, None] < D), other=0.0)
+                     mask=valid_block & (cols[None, :] < HIDDEN) &
+                     (k[:, None] < D), other=0.0)
         gate += tl.dot(x, wg)
         up += tl.dot(x, wu)
     out_mask = row_mask[:, None] & (cols[None, :] < HIDDEN)
     tl.store(GATE + rows[:, None] * HIDDEN + cols[None, :], gate, mask=out_mask)
     tl.store(UP + rows[:, None] * HIDDEN + cols[None, :], up, mask=out_mask)
+
+
+@triton.jit
+def _grouped_gate_up_silu_kernel(
+    X, W_GATE, W_UP, OFFSETS, ACT,
+    PADDED_M: tl.constexpr, D: tl.constexpr, HIDDEN: tl.constexpr,
+    E: tl.constexpr, BLOCK_E: tl.constexpr,
+    BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr,
+):
+    """Grouped gate/up GEMMs with SiLU multiplication fused into the store."""
+    pm, pn = tl.program_id(0), tl.program_id(1)
+    row0 = pm * BM
+    ev = tl.arange(0, BLOCK_E)
+    ends = tl.load(OFFSETS + ev + 1, mask=ev < E, other=PADDED_M + 1)
+    raw_expert = tl.sum(tl.where((ev < E) & (row0 >= ends), 1, 0), axis=0)
+    valid_block = raw_expert < E
+    expert = tl.minimum(raw_expert, E - 1)
+    rows = row0 + tl.arange(0, BM)
+    cols = pn * BN + tl.arange(0, BN)
+    start = tl.load(OFFSETS + expert)
+    end = tl.load(OFFSETS + expert + 1)
+    row_mask = valid_block & (rows >= start) & (rows < end) & (rows < PADDED_M)
+    gate = tl.zeros((BM, BN), tl.float32)
+    up = tl.zeros((BM, BN), tl.float32)
+    for k0 in range(0, D, BK):
+        k = k0 + tl.arange(0, BK)
+        x = tl.load(X + rows[:, None] * D + k[None, :],
+                    mask=row_mask[:, None] & (k[None, :] < D), other=0.0)
+        base = expert * HIDDEN * D
+        wg = tl.load(W_GATE + base + cols[None, :] * D + k[:, None],
+                     mask=valid_block & (cols[None, :] < HIDDEN) &
+                     (k[:, None] < D), other=0.0)
+        wu = tl.load(W_UP + base + cols[None, :] * D + k[:, None],
+                     mask=valid_block & (cols[None, :] < HIDDEN) &
+                     (k[:, None] < D), other=0.0)
+        gate += tl.dot(x, wg)
+        up += tl.dot(x, wu)
+    value = (gate * tl.sigmoid(gate)) * up
+    out_mask = row_mask[:, None] & (cols[None, :] < HIDDEN)
+    tl.store(ACT + rows[:, None] * HIDDEN + cols[None, :], value, mask=out_mask)
+
+
+@triton.jit
+def _dense_gate_up_silu_kernel(
+    X, W_GATE, W_UP, ACT,
+    M: tl.constexpr, D: tl.constexpr, HIDDEN: tl.constexpr,
+    BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr,
+):
+    rm = tl.program_id(0) * BM + tl.arange(0, BM)
+    rn = tl.program_id(1) * BN + tl.arange(0, BN)
+    gate = tl.zeros((BM, BN), tl.float32)
+    up = tl.zeros((BM, BN), tl.float32)
+    for k0 in range(0, D, BK):
+        rk = k0 + tl.arange(0, BK)
+        x = tl.load(X + rm[:, None] * D + rk[None, :],
+                    mask=(rm[:, None] < M) & (rk[None, :] < D), other=0.0)
+        wg = tl.load(W_GATE + rn[None, :] * D + rk[:, None],
+                     mask=(rn[None, :] < HIDDEN) & (rk[:, None] < D), other=0.0)
+        wu = tl.load(W_UP + rn[None, :] * D + rk[:, None],
+                     mask=(rn[None, :] < HIDDEN) & (rk[:, None] < D), other=0.0)
+        gate += tl.dot(x, wg)
+        up += tl.dot(x, wu)
+    value = (gate * tl.sigmoid(gate)) * up
+    tl.store(ACT + rm[:, None] * HIDDEN + rn[None, :], value,
+             mask=(rm[:, None] < M) & (rn[None, :] < HIDDEN))
 
 
 @triton.jit
@@ -195,12 +279,14 @@ def _grouped_down_kernel(
     row0 = pm * BM
     ev = tl.arange(0, BLOCK_E)
     ends = tl.load(OFFSETS + ev + 1, mask=ev < E, other=PADDED_M + 1)
-    expert = tl.sum(tl.where((ev < E) & (row0 >= ends), 1, 0), axis=0)
+    raw_expert = tl.sum(tl.where((ev < E) & (row0 >= ends), 1, 0), axis=0)
+    valid_block = raw_expert < E
+    expert = tl.minimum(raw_expert, E - 1)
     rows = row0 + tl.arange(0, BM)
     cols = pn * BN + tl.arange(0, BN)
     start = tl.load(OFFSETS + expert)
     end = tl.load(OFFSETS + expert + 1)
-    row_mask = (rows >= start) & (rows < end) & (rows < PADDED_M)
+    row_mask = valid_block & (rows >= start) & (rows < end) & (rows < PADDED_M)
     acc = tl.zeros((BM, BN), tl.float32)
     for k0 in range(0, HIDDEN, BK):
         k = k0 + tl.arange(0, BK)
@@ -208,10 +294,31 @@ def _grouped_down_kernel(
                     mask=row_mask[:, None] & (k[None, :] < HIDDEN), other=0.0)
         base = expert * D * HIDDEN
         w = tl.load(W_DOWN + base + cols[None, :] * HIDDEN + k[:, None],
-                    mask=(cols[None, :] < D) & (k[:, None] < HIDDEN), other=0.0)
+                    mask=valid_block & (cols[None, :] < D) &
+                    (k[:, None] < HIDDEN), other=0.0)
         acc += tl.dot(a, w)
     mask = row_mask[:, None] & (cols[None, :] < D)
     tl.store(OUT + rows[:, None] * D + cols[None, :], acc, mask=mask)
+
+
+@triton.jit
+def _dense_down_kernel(
+    ACT, W_DOWN, OUT,
+    M: tl.constexpr, D: tl.constexpr, HIDDEN: tl.constexpr,
+    BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr,
+):
+    rm = tl.program_id(0) * BM + tl.arange(0, BM)
+    rn = tl.program_id(1) * BN + tl.arange(0, BN)
+    acc = tl.zeros((BM, BN), tl.float32)
+    for k0 in range(0, HIDDEN, BK):
+        rk = k0 + tl.arange(0, BK)
+        act = tl.load(ACT + rm[:, None] * HIDDEN + rk[None, :],
+                      mask=(rm[:, None] < M) & (rk[None, :] < HIDDEN), other=0.0)
+        weight = tl.load(W_DOWN + rn[None, :] * HIDDEN + rk[:, None],
+                         mask=(rn[None, :] < D) & (rk[:, None] < HIDDEN), other=0.0)
+        acc += tl.dot(act, weight)
+    tl.store(OUT + rm[:, None] * D + rn[None, :], acc,
+             mask=(rm[:, None] < M) & (rn[None, :] < D))
 
 
 @triton.jit
@@ -231,6 +338,301 @@ def _combine_top3_kernel(PACKED_OUT, INVERSE, TOP_WEIGHT, OUT,
     tl.store(OUT + m * D + d, w0*y0 + w1*y1 + w2*y2, mask=d < D)
 
 
+@triton.jit
+def _combine_shared_top3_kernel(
+    SHARED_OUT, PACKED_OUT, INVERSE, TOP_WEIGHT, OUT,
+    M: tl.constexpr, D: tl.constexpr, BLOCK_D: tl.constexpr,
+):
+    m, pd = tl.program_id(0), tl.program_id(1)
+    d = pd * BLOCK_D + tl.arange(0, BLOCK_D)
+    mask = d < D
+    p0 = tl.load(INVERSE + m * 3 + 0)
+    p1 = tl.load(INVERSE + m * 3 + 1)
+    p2 = tl.load(INVERSE + m * 3 + 2)
+    w0 = tl.load(TOP_WEIGHT + m * 3 + 0).to(tl.float32)
+    w1 = tl.load(TOP_WEIGHT + m * 3 + 1).to(tl.float32)
+    w2 = tl.load(TOP_WEIGHT + m * 3 + 2).to(tl.float32)
+    shared = tl.load(SHARED_OUT + m * D + d, mask=mask, other=0.0).to(tl.float32)
+    y0 = tl.load(PACKED_OUT + p0 * D + d, mask=mask, other=0.0).to(tl.float32)
+    y1 = tl.load(PACKED_OUT + p1 * D + d, mask=mask, other=0.0).to(tl.float32)
+    y2 = tl.load(PACKED_OUT + p2 * D + d, mask=mask, other=0.0).to(tl.float32)
+    tl.store(OUT + m * D + d, shared + w0*y0 + w1*y1 + w2*y2, mask=mask)
+
+
+@triton.jit
+def _combine_backward_kernel(
+    GRAD_OUT, PACKED_OUT, INVERSE, TOP_WEIGHT, GRAD_PACKED_OUT, GRAD_TOP_WEIGHT,
+    ASSIGNMENTS: tl.constexpr, D: tl.constexpr, BLOCK_D: tl.constexpr,
+):
+    assignment = tl.program_id(0)
+    d = tl.arange(0, BLOCK_D)
+    mask = d < D
+    token = assignment // 3
+    row = tl.load(INVERSE + assignment)
+    weight = tl.load(TOP_WEIGHT + assignment).to(tl.float32)
+    grad = tl.load(GRAD_OUT + token * D + d, mask=mask, other=0.0).to(tl.float32)
+    expert_out = tl.load(PACKED_OUT + row * D + d, mask=mask, other=0.0).to(tl.float32)
+    tl.store(GRAD_PACKED_OUT + row * D + d, weight * grad, mask=mask)
+    tl.store(GRAD_TOP_WEIGHT + assignment, tl.sum(grad * expert_out, axis=0))
+
+
+@triton.jit
+def _grouped_down_input_backward_kernel(
+    GRAD_OUT, W_DOWN, OFFSETS, GRAD_ACT,
+    PADDED_M: tl.constexpr, D: tl.constexpr, HIDDEN: tl.constexpr,
+    E: tl.constexpr, BLOCK_E: tl.constexpr,
+    BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr,
+):
+    pm, pn = tl.program_id(0), tl.program_id(1)
+    row0 = pm * BM
+    ev = tl.arange(0, BLOCK_E)
+    ends = tl.load(OFFSETS + ev + 1, mask=ev < E, other=PADDED_M + 1)
+    raw_expert = tl.sum(tl.where((ev < E) & (row0 >= ends), 1, 0), axis=0)
+    valid_block = raw_expert < E
+    expert = tl.minimum(raw_expert, E - 1)
+    rows = row0 + tl.arange(0, BM)
+    hidden = pn * BN + tl.arange(0, BN)
+    start = tl.load(OFFSETS + expert)
+    end = tl.load(OFFSETS + expert + 1)
+    row_mask = valid_block & (rows >= start) & (rows < end) & (rows < PADDED_M)
+    acc = tl.zeros((BM, BN), tl.float32)
+    for k0 in range(0, D, BK):
+        k = k0 + tl.arange(0, BK)
+        grad = tl.load(GRAD_OUT + rows[:, None] * D + k[None, :],
+                       mask=row_mask[:, None] & (k[None, :] < D), other=0.0)
+        base = expert * D * HIDDEN
+        weight = tl.load(W_DOWN + base + k[:, None] * HIDDEN + hidden[None, :],
+                         mask=valid_block & (k[:, None] < D) &
+                         (hidden[None, :] < HIDDEN), other=0.0)
+        acc += tl.dot(grad, weight)
+    tl.store(GRAD_ACT + rows[:, None] * HIDDEN + hidden[None, :], acc,
+             mask=row_mask[:, None] & (hidden[None, :] < HIDDEN))
+
+
+@triton.jit
+def _grouped_down_weight_backward_kernel(
+    GRAD_OUT, ACT, OFFSETS, GRAD_W,
+    PADDED_M, D: tl.constexpr, HIDDEN: tl.constexpr,
+    E: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr,
+):
+    expert, pn, pk = tl.program_id(0), tl.program_id(1), tl.program_id(2)
+    n = pn * BN + tl.arange(0, BN)
+    k = pk * BK + tl.arange(0, BK)
+    start = tl.load(OFFSETS + expert)
+    end = tl.load(OFFSETS + expert + 1)
+    acc = tl.zeros((BN, BK), tl.float32)
+    for m0 in range(0, PADDED_M, BM):
+        m = m0 + tl.arange(0, BM)
+        row_mask = (m >= start) & (m < end)
+        grad = tl.load(GRAD_OUT + m[:, None] * D + n[None, :],
+                       mask=row_mask[:, None] & (n[None, :] < D), other=0.0)
+        act = tl.load(ACT + m[:, None] * HIDDEN + k[None, :],
+                      mask=row_mask[:, None] & (k[None, :] < HIDDEN), other=0.0)
+        acc += tl.dot(tl.trans(grad), act)
+    base = expert * D * HIDDEN
+    tl.store(GRAD_W + base + n[:, None] * HIDDEN + k[None, :], acc,
+             mask=(n[:, None] < D) & (k[None, :] < HIDDEN))
+
+
+@triton.jit
+def _silu_backward_kernel(
+    GATE, UP, GRAD_ACT, GRAD_GATE, GRAD_UP,
+    N: tl.constexpr, BLOCK: tl.constexpr,
+):
+    offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    mask = offsets < N
+    gate = tl.load(GATE + offsets, mask=mask, other=0.0).to(tl.float32)
+    up = tl.load(UP + offsets, mask=mask, other=0.0).to(tl.float32)
+    grad = tl.load(GRAD_ACT + offsets, mask=mask, other=0.0).to(tl.float32)
+    sigmoid = tl.sigmoid(gate)
+    silu = gate * sigmoid
+    tl.store(GRAD_GATE + offsets, grad * up * sigmoid * (1.0 + gate * (1.0 - sigmoid)), mask=mask)
+    tl.store(GRAD_UP + offsets, grad * silu, mask=mask)
+
+
+@triton.jit
+def _grouped_gate_up_input_backward_kernel(
+    GRAD_GATE, GRAD_UP, W_GATE, W_UP, OFFSETS, GRAD_X,
+    PADDED_M: tl.constexpr, D: tl.constexpr, HIDDEN: tl.constexpr,
+    E: tl.constexpr, BLOCK_E: tl.constexpr,
+    BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr,
+):
+    pm, pn = tl.program_id(0), tl.program_id(1)
+    row0 = pm * BM
+    ev = tl.arange(0, BLOCK_E)
+    ends = tl.load(OFFSETS + ev + 1, mask=ev < E, other=PADDED_M + 1)
+    raw_expert = tl.sum(tl.where((ev < E) & (row0 >= ends), 1, 0), axis=0)
+    valid_block = raw_expert < E
+    expert = tl.minimum(raw_expert, E - 1)
+    rows = row0 + tl.arange(0, BM)
+    dim = pn * BN + tl.arange(0, BN)
+    start = tl.load(OFFSETS + expert)
+    end = tl.load(OFFSETS + expert + 1)
+    row_mask = valid_block & (rows >= start) & (rows < end) & (rows < PADDED_M)
+    acc = tl.zeros((BM, BN), tl.float32)
+    for k0 in range(0, HIDDEN, BK):
+        hidden = k0 + tl.arange(0, BK)
+        dg = tl.load(GRAD_GATE + rows[:, None] * HIDDEN + hidden[None, :],
+                     mask=row_mask[:, None] & (hidden[None, :] < HIDDEN), other=0.0)
+        du = tl.load(GRAD_UP + rows[:, None] * HIDDEN + hidden[None, :],
+                     mask=row_mask[:, None] & (hidden[None, :] < HIDDEN), other=0.0)
+        base = expert * HIDDEN * D
+        wg = tl.load(W_GATE + base + hidden[:, None] * D + dim[None, :],
+                     mask=valid_block & (hidden[:, None] < HIDDEN) &
+                     (dim[None, :] < D), other=0.0)
+        wu = tl.load(W_UP + base + hidden[:, None] * D + dim[None, :],
+                     mask=valid_block & (hidden[:, None] < HIDDEN) &
+                     (dim[None, :] < D), other=0.0)
+        acc += tl.dot(dg, wg) + tl.dot(du, wu)
+    tl.store(GRAD_X + rows[:, None] * D + dim[None, :], acc,
+             mask=row_mask[:, None] & (dim[None, :] < D))
+
+
+@triton.jit
+def _grouped_gate_up_weight_backward_kernel(
+    GRAD_GATE, GRAD_UP, X, OFFSETS, GRAD_W_GATE, GRAD_W_UP,
+    PADDED_M, D: tl.constexpr, HIDDEN: tl.constexpr,
+    E: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr,
+):
+    expert, pn, pk = tl.program_id(0), tl.program_id(1), tl.program_id(2)
+    n = pn * BN + tl.arange(0, BN)
+    k = pk * BK + tl.arange(0, BK)
+    start = tl.load(OFFSETS + expert)
+    end = tl.load(OFFSETS + expert + 1)
+    acc_gate = tl.zeros((BN, BK), tl.float32)
+    acc_up = tl.zeros((BN, BK), tl.float32)
+    for m0 in range(0, PADDED_M, BM):
+        m = m0 + tl.arange(0, BM)
+        row_mask = (m >= start) & (m < end)
+        dg = tl.load(GRAD_GATE + m[:, None] * HIDDEN + n[None, :],
+                     mask=row_mask[:, None] & (n[None, :] < HIDDEN), other=0.0)
+        du = tl.load(GRAD_UP + m[:, None] * HIDDEN + n[None, :],
+                     mask=row_mask[:, None] & (n[None, :] < HIDDEN), other=0.0)
+        x = tl.load(X + m[:, None] * D + k[None, :],
+                    mask=row_mask[:, None] & (k[None, :] < D), other=0.0)
+        acc_gate += tl.dot(tl.trans(dg), x)
+        acc_up += tl.dot(tl.trans(du), x)
+    base = expert * HIDDEN * D
+    mask = (n[:, None] < HIDDEN) & (k[None, :] < D)
+    tl.store(GRAD_W_GATE + base + n[:, None] * D + k[None, :], acc_gate, mask=mask)
+    tl.store(GRAD_W_UP + base + n[:, None] * D + k[None, :], acc_up, mask=mask)
+
+
+@triton.jit
+def _top3_router_backward_kernel(
+    LOGITS, COUNTS, TOP_INDEX, TOP_WEIGHT, GRAD_TOP_WEIGHT, GRAD_AUX, GRAD_LOGITS,
+    M: tl.constexpr, E: tl.constexpr, BLOCK_E: tl.constexpr,
+):
+    token = tl.program_id(0)
+    e = tl.arange(0, BLOCK_E)
+    mask = e < E
+    logits = tl.load(LOGITS + token * E + e, mask=mask, other=-float("inf")).to(tl.float32)
+    maximum = tl.max(logits, axis=0)
+    exponent = tl.exp(logits - maximum)
+    denominator = tl.sum(tl.where(mask, exponent, 0.0), axis=0)
+    probability = exponent / denominator
+    i0 = tl.load(TOP_INDEX + token * 3 + 0)
+    i1 = tl.load(TOP_INDEX + token * 3 + 1)
+    i2 = tl.load(TOP_INDEX + token * 3 + 2)
+    w0 = tl.load(TOP_WEIGHT + token * 3 + 0).to(tl.float32)
+    w1 = tl.load(TOP_WEIGHT + token * 3 + 1).to(tl.float32)
+    w2 = tl.load(TOP_WEIGHT + token * 3 + 2).to(tl.float32)
+    g0 = tl.load(GRAD_TOP_WEIGHT + token * 3 + 0).to(tl.float32)
+    g1 = tl.load(GRAD_TOP_WEIGHT + token * 3 + 1).to(tl.float32)
+    g2 = tl.load(GRAD_TOP_WEIGHT + token * 3 + 2).to(tl.float32)
+    mean = w0 * g0 + w1 * g1 + w2 * g2
+    value = tl.where(e == i0, w0 * (g0 - mean), 0.0)
+    value += tl.where(e == i1, w1 * (g1 - mean), 0.0)
+    value += tl.where(e == i2, w2 * (g2 - mean), 0.0)
+    grad_load_balance = tl.load(GRAD_AUX + 0).to(tl.float32)
+    grad_z = tl.load(GRAD_AUX + 1).to(tl.float32)
+    counts = tl.load(COUNTS + e, mask=mask, other=0).to(tl.float32)
+    expected_count = tl.sum(tl.where(mask, probability * counts, 0.0), axis=0)
+    value += (grad_load_balance * E / (3.0 * M * M)
+              * probability * (counts - expected_count))
+    logsumexp = tl.log(denominator) + maximum
+    value += grad_z * (2.0 / M) * logsumexp * probability
+    tl.store(GRAD_LOGITS + token * E + e, value, mask=mask)
+
+
+@triton.jit
+def _dense_weight_backward_kernel(
+    GRAD_OUT, X, GRAD_W,
+    M, OUT: tl.constexpr, IN: tl.constexpr,
+    BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr,
+):
+    pn, pk = tl.program_id(0), tl.program_id(1)
+    n = pn * BN + tl.arange(0, BN)
+    k = pk * BK + tl.arange(0, BK)
+    acc = tl.zeros((BN, BK), tl.float32)
+    for m0 in range(0, M, BM):
+        m = m0 + tl.arange(0, BM)
+        grad = tl.load(GRAD_OUT + m[:, None] * OUT + n[None, :],
+                       mask=(m[:, None] < M) & (n[None, :] < OUT), other=0.0).to(tl.float32)
+        x = tl.load(X + m[:, None] * IN + k[None, :],
+                    mask=(m[:, None] < M) & (k[None, :] < IN), other=0.0).to(tl.float32)
+        acc += tl.dot(tl.trans(grad), x, input_precision="ieee")
+    tl.store(GRAD_W + n[:, None] * IN + k[None, :], acc,
+             mask=(n[:, None] < OUT) & (k[None, :] < IN))
+
+
+@triton.jit
+def _router_input_and_unpack_kernel(
+    GRAD_LOGITS, ROUTER_W, GRAD_PACKED_X, ROUTED_INVERSE, GRAD_SHARED_X, GRAD_X,
+    M: tl.constexpr, D: tl.constexpr, E: tl.constexpr,
+    BLOCK_D: tl.constexpr, BLOCK_E: tl.constexpr,
+):
+    token, pd = tl.program_id(0), tl.program_id(1)
+    d = pd * BLOCK_D + tl.arange(0, BLOCK_D)
+    e = tl.arange(0, BLOCK_E)
+    mask_d = d < D
+    logits_grad = tl.load(GRAD_LOGITS + token * E + e, mask=e < E, other=0.0)
+    router_w = tl.load(ROUTER_W + e[:, None] * D + d[None, :],
+                       mask=(e[:, None] < E) & mask_d[None, :], other=0.0)
+    router_dx = tl.sum(logits_grad[:, None] * router_w, axis=0)
+    p0 = tl.load(ROUTED_INVERSE + token * 3 + 0)
+    p1 = tl.load(ROUTED_INVERSE + token * 3 + 1)
+    p2 = tl.load(ROUTED_INVERSE + token * 3 + 2)
+    dx0 = tl.load(GRAD_PACKED_X + p0 * D + d, mask=mask_d, other=0.0).to(tl.float32)
+    dx1 = tl.load(GRAD_PACKED_X + p1 * D + d, mask=mask_d, other=0.0).to(tl.float32)
+    dx2 = tl.load(GRAD_PACKED_X + p2 * D + d, mask=mask_d, other=0.0).to(tl.float32)
+    shared_dx = tl.load(GRAD_SHARED_X + token * D + d, mask=mask_d, other=0.0).to(tl.float32)
+    tl.store(GRAD_X + token * D + d, router_dx + dx0 + dx1 + dx2 + shared_dx,
+             mask=mask_d)
+
+
+@triton.jit
+def _pack_aux_grad_kernel(GRAD_LOAD_BALANCE, GRAD_Z, GRAD_AUX):
+    tl.store(GRAD_AUX + 0, tl.load(GRAD_LOAD_BALANCE).to(tl.float32))
+    tl.store(GRAD_AUX + 1, tl.load(GRAD_Z).to(tl.float32))
+
+
+@triton.jit
+def _schedulefree_adamw_update_kernel(
+    PARAM, GRAD, Z, EXP_AVG_SQ,
+    N: tl.constexpr,
+    LR: tl.constexpr, BETA1: tl.constexpr, BETA2: tl.constexpr,
+    BIAS_CORRECTION2: tl.constexpr, EPS: tl.constexpr,
+    WEIGHT_DECAY: tl.constexpr, CKP1: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    mask = offsets < N
+    y = tl.load(PARAM + offsets, mask=mask, other=0.0).to(tl.float32)
+    grad = tl.load(GRAD + offsets, mask=mask, other=0.0).to(tl.float32)
+    z = tl.load(Z + offsets, mask=mask, other=0.0).to(tl.float32)
+    variance = tl.load(EXP_AVG_SQ + offsets, mask=mask, other=0.0).to(tl.float32)
+    variance = BETA2 * variance + (1.0 - BETA2) * grad * grad
+    normalized = grad / (tl.sqrt(variance / BIAS_CORRECTION2) + EPS)
+    normalized += WEIGHT_DECAY * y
+    y += CKP1 * (z - y)
+    y += LR * (BETA1 * (1.0 - CKP1) - 1.0) * normalized
+    z -= LR * normalized
+    tl.store(PARAM + offsets, y, mask=mask)
+    tl.store(Z + offsets, z, mask=mask)
+    tl.store(EXP_AVG_SQ + offsets, variance, mask=mask)
+
+
 @dataclass
 class FusedMoEForwardResult:
     output: torch.Tensor
@@ -241,7 +643,11 @@ class FusedMoEForwardResult:
     router_z_per_token: torch.Tensor
     router_entropy_per_token: torch.Tensor
     router_max_probability_per_token: torch.Tensor
+    load_balance_loss: torch.Tensor
+    z_loss: torch.Tensor
     kernel_abi: str = FUSED_E97_MOE_ABI
+    # Private parity/backward payload. Production callers must not consume it.
+    _intermediates: tuple[torch.Tensor, ...] | None = None
 
 
 def fused_routed_swiglu_forward(
@@ -251,13 +657,22 @@ def fused_routed_swiglu_forward(
     up_weight: torch.Tensor,
     down_weight: torch.Tensor,
     *,
+    shared_gate_weight: torch.Tensor | None = None,
+    shared_up_weight: torch.Tensor | None = None,
+    shared_down_weight: torch.Tensor | None = None,
     require_training: bool = False,
+    _capture_intermediates: bool = False,
 ) -> FusedMoEForwardResult:
     """Execute the fused, dropless top-3 routed expert forward.
 
-    Shapes are ``x[M,D]``, router ``[E,D]``, gate/up ``[E,H,D]`` and down
-    ``[E,D,H]``.  All expert tensors must be BF16 and contiguous.  The router
-    weights/logits are FP32.  No CPU/eager fallback exists.
+    Shapes are ``x[M,D]``, router ``[E,D]``, routed gate/up ``[E,H,D]`` and
+    routed down ``[E,D,H]``.  When supplied, shared gate/up are ``[H,D]`` and
+    shared down is ``[D,H]``.  All expert tensors must be BF16 and contiguous.
+    The router weights/logits are FP32.  No CPU/eager fallback exists.
+
+    This routed-only entry point remains available as a kernel oracle.  The
+    admissible E97 architecture calls :func:`fused_shared_routed_swiglu_forward`,
+    which makes the shared expert mandatory.
     """
     _require_hip_triton(x)
     if require_training:
@@ -283,6 +698,21 @@ def fused_routed_swiglu_forward(
     HIDDEN = gate_weight.shape[1]
     if down_weight.shape != (E, D, HIDDEN):
         raise ValueError("down weights must be [experts, dim, hidden]")
+    shared_weights = (shared_gate_weight, shared_up_weight, shared_down_weight)
+    has_shared = all(weight is not None for weight in shared_weights)
+    if any(weight is not None for weight in shared_weights) and not has_shared:
+        raise ValueError("shared gate, up, and down weights must be supplied together")
+    if has_shared:
+        assert shared_gate_weight is not None
+        assert shared_up_weight is not None
+        assert shared_down_weight is not None
+        if any(weight.dtype != torch.bfloat16 or not weight.is_contiguous()
+               for weight in shared_weights):
+            raise ValueError("shared expert weights must be contiguous BF16 tensors")
+        if shared_gate_weight.shape != (HIDDEN, D) or shared_up_weight.shape != (HIDDEN, D):
+            raise ValueError("shared gate/up weights must be [hidden, dim]")
+        if shared_down_weight.shape != (D, HIDDEN):
+            raise ValueError("shared down weight must be [dim, hidden]")
 
     logits = torch.empty((M, E), device=x.device, dtype=torch.float32)
     _router_fp32_kernel[(triton.cdiv(M, 16), triton.cdiv(E, 16))](
@@ -302,6 +732,11 @@ def fused_routed_swiglu_forward(
         logits, top_indices, top_weights, counts, probability_sums,
         z, entropy, max_probability, M, E, BLOCK_E=_next_power_of_two(E),
         num_warps=1)
+    load_balance_loss = torch.zeros((), device=x.device, dtype=torch.float32)
+    z_loss = torch.zeros((), device=x.device, dtype=torch.float32)
+    _router_aux_metrics_kernel[(max(M, E),)](
+        counts, probability_sums, z, load_balance_loss, z_loss, M, E,
+        num_warps=1)
 
     BM = 16
     offsets = torch.empty(E + 1, device=x.device, dtype=torch.int32)
@@ -320,28 +755,342 @@ def fused_routed_swiglu_forward(
     _pack_tokens_kernel[(assignments, triton.cdiv(D, 256))](
         x, inverse, packed, M, D, BLOCK_D=256, num_warps=4)
 
-    gate = torch.empty((padded_max, HIDDEN), device=x.device, dtype=x.dtype)
-    up = torch.empty_like(gate)
+    act = torch.empty((padded_max, HIDDEN), device=x.device, dtype=x.dtype)
     grid = (triton.cdiv(padded_max, BM), triton.cdiv(HIDDEN, 64))
-    _grouped_gate_up_kernel[grid](
-        packed, gate_weight, up_weight, offsets, gate, up,
+    _grouped_gate_up_silu_kernel[grid](
+        packed, gate_weight, up_weight, offsets, act,
         padded_max, D, HIDDEN, E, BLOCK_E=_next_power_of_two(E),
         BM=BM, BN=64, BK=32, num_warps=4, num_stages=1)
-    act = torch.empty_like(gate)
-    n_act = padded_max * HIDDEN
-    _silu_mul_kernel[(triton.cdiv(n_act, 256),)](
-        gate, up, act, n_act, BLOCK=256, num_warps=4)
     packed_out = torch.empty((padded_max, D), device=x.device, dtype=x.dtype)
     _grouped_down_kernel[(triton.cdiv(padded_max, BM), triton.cdiv(D, 64))](
         act, down_weight, offsets, packed_out,
         padded_max, D, HIDDEN, E, BLOCK_E=_next_power_of_two(E),
         BM=BM, BN=64, BK=32, num_warps=4, num_stages=1)
     output = torch.empty_like(x)
-    _combine_top3_kernel[(M, triton.cdiv(D, 256))](
-        packed_out, inverse, top_weights, output, M, D, BLOCK_D=256,
-        num_warps=4)
+    shared_act: torch.Tensor | None = None
+    if has_shared:
+        assert shared_gate_weight is not None
+        assert shared_up_weight is not None
+        assert shared_down_weight is not None
+        shared_act = torch.empty((M, HIDDEN), device=x.device, dtype=x.dtype)
+        dense_grid = (triton.cdiv(M, BM), triton.cdiv(HIDDEN, 64))
+        _dense_gate_up_silu_kernel[dense_grid](
+            x, shared_gate_weight, shared_up_weight, shared_act,
+            M, D, HIDDEN, BM=BM, BN=64, BK=32, num_warps=4, num_stages=1)
+        shared_out = torch.empty_like(x)
+        _dense_down_kernel[(triton.cdiv(M, BM), triton.cdiv(D, 64))](
+            shared_act, shared_down_weight, shared_out,
+            M, D, HIDDEN, BM=BM, BN=64, BK=32, num_warps=4, num_stages=1)
+        _combine_shared_top3_kernel[(M, triton.cdiv(D, 256))](
+            shared_out, packed_out, inverse, top_weights, output,
+            M, D, BLOCK_D=256, num_warps=4)
+    else:
+        _combine_top3_kernel[(M, triton.cdiv(D, 256))](
+            packed_out, inverse, top_weights, output, M, D, BLOCK_D=256,
+            num_warps=4)
     return FusedMoEForwardResult(
         output=output, top_indices=top_indices, top_weights=top_weights,
         expert_counts=counts, probability_sums=probability_sums,
         router_z_per_token=z, router_entropy_per_token=entropy,
-        router_max_probability_per_token=max_probability)
+        router_max_probability_per_token=max_probability,
+        load_balance_loss=load_balance_loss, z_loss=z_loss,
+        _intermediates=(logits, packed, offsets, inverse, act, packed_out, shared_act)
+        if _capture_intermediates and shared_act is not None else None)
+
+
+def fused_shared_routed_swiglu_backward(
+    grad_output: torch.Tensor,
+    forward: FusedMoEForwardResult,
+    x: torch.Tensor,
+    router_weight: torch.Tensor,
+    routed_gate_weight: torch.Tensor,
+    routed_up_weight: torch.Tensor,
+    routed_down_weight: torch.Tensor,
+    shared_gate_weight: torch.Tensor,
+    shared_up_weight: torch.Tensor,
+    shared_down_weight: torch.Tensor,
+    grad_aux: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, ...]:
+    """Parity API for the fused output-gradient backward.
+
+    This computes gradients from the MoE output through the shared expert,
+    routed experts, normalized top-3 weights, and router. Auxiliary-router
+    gradients and optimizer updates are separate gates, so this function does
+    not make the module training-ready.
+    """
+    _require_hip_triton(grad_output)
+    if forward._intermediates is None:
+        raise RuntimeError("forward intermediates were not captured for fused backward")
+    if grad_output.dtype != torch.bfloat16 or not grad_output.is_contiguous():
+        raise ValueError("grad_output must be contiguous BF16")
+    logits, packed, offsets, inverse, routed_act, packed_out, shared_act = forward._intermediates
+    M, D = x.shape
+    E = router_weight.shape[0]
+    HIDDEN = routed_gate_weight.shape[1]
+    padded_max = packed.shape[0]
+    assignments = M * 3
+    BM, BN, BK = 16, 32, 32
+    if grad_aux is None:
+        grad_aux = torch.zeros(2, device=x.device, dtype=torch.float32)
+    if (grad_aux.shape != (2,) or grad_aux.dtype != torch.float32 or
+            grad_aux.device != x.device or not grad_aux.is_contiguous()):
+        raise ValueError("grad_aux must be contiguous FP32 [load_balance, z_loss]")
+
+    grad_packed_out = torch.zeros_like(packed_out)
+    grad_top_weight = torch.empty_like(forward.top_weights)
+    _combine_backward_kernel[(assignments,)](
+        grad_output, packed_out, inverse, forward.top_weights,
+        grad_packed_out, grad_top_weight,
+        assignments, D, BLOCK_D=_next_power_of_two(D), num_warps=4)
+
+    grad_routed_act = torch.empty_like(routed_act)
+    _grouped_down_input_backward_kernel[
+        (triton.cdiv(padded_max, BM), triton.cdiv(HIDDEN, BN))
+    ](
+        grad_packed_out, routed_down_weight, offsets, grad_routed_act,
+        padded_max, D, HIDDEN, E, BLOCK_E=_next_power_of_two(E),
+        BM=BM, BN=BN, BK=BK, num_warps=4, num_stages=1)
+    grad_routed_down = torch.empty_like(routed_down_weight)
+    _grouped_down_weight_backward_kernel[
+        (E, triton.cdiv(D, BN), triton.cdiv(HIDDEN, BK))
+    ](
+        grad_packed_out, routed_act, offsets, grad_routed_down,
+        padded_max, D, HIDDEN, E, BM=BM, BN=BN, BK=BK,
+        num_warps=4, num_stages=1)
+
+    routed_gate = torch.empty_like(routed_act)
+    routed_up = torch.empty_like(routed_act)
+    _grouped_gate_up_kernel[
+        (triton.cdiv(padded_max, BM), triton.cdiv(HIDDEN, 64))
+    ](
+        packed, routed_gate_weight, routed_up_weight, offsets,
+        routed_gate, routed_up, padded_max, D, HIDDEN, E,
+        BLOCK_E=_next_power_of_two(E), BM=BM, BN=64, BK=32,
+        num_warps=4, num_stages=1)
+    grad_routed_gate = torch.empty_like(routed_gate)
+    grad_routed_up = torch.empty_like(routed_up)
+    _silu_backward_kernel[(triton.cdiv(padded_max * HIDDEN, 256),)](
+        routed_gate, routed_up, grad_routed_act, grad_routed_gate, grad_routed_up,
+        padded_max * HIDDEN, BLOCK=256, num_warps=4)
+    grad_packed_x = torch.empty_like(packed)
+    _grouped_gate_up_input_backward_kernel[
+        (triton.cdiv(padded_max, BM), triton.cdiv(D, BN))
+    ](
+        grad_routed_gate, grad_routed_up, routed_gate_weight, routed_up_weight,
+        offsets, grad_packed_x, padded_max, D, HIDDEN, E,
+        BLOCK_E=_next_power_of_two(E), BM=BM, BN=BN, BK=BK,
+        num_warps=4, num_stages=1)
+    grad_routed_gate_weight = torch.empty_like(routed_gate_weight)
+    grad_routed_up_weight = torch.empty_like(routed_up_weight)
+    _grouped_gate_up_weight_backward_kernel[
+        (E, triton.cdiv(HIDDEN, BN), triton.cdiv(D, BK))
+    ](
+        grad_routed_gate, grad_routed_up, packed, offsets,
+        grad_routed_gate_weight, grad_routed_up_weight,
+        padded_max, D, HIDDEN, E, BM=BM, BN=BN, BK=BK,
+        num_warps=4, num_stages=1)
+
+    # The shared expert is the E=1 grouped case over unpadded token rows.
+    shared_offsets = torch.tensor([0, M], device=x.device, dtype=torch.int32)
+    grad_shared_act = torch.empty_like(shared_act)
+    _grouped_down_input_backward_kernel[(triton.cdiv(M, BM), triton.cdiv(HIDDEN, BN))](
+        grad_output, shared_down_weight, shared_offsets, grad_shared_act,
+        M, D, HIDDEN, 1, BLOCK_E=1, BM=BM, BN=BN, BK=BK,
+        num_warps=4, num_stages=1)
+    grad_shared_down = torch.empty_like(shared_down_weight)
+    _grouped_down_weight_backward_kernel[
+        (1, triton.cdiv(D, BN), triton.cdiv(HIDDEN, BK))
+    ](
+        grad_output, shared_act, shared_offsets, grad_shared_down,
+        M, D, HIDDEN, 1, BM=BM, BN=BN, BK=BK, num_warps=4, num_stages=1)
+    shared_gate = torch.empty_like(shared_act)
+    shared_up = torch.empty_like(shared_act)
+    _grouped_gate_up_kernel[(triton.cdiv(M, BM), triton.cdiv(HIDDEN, 64))](
+        x, shared_gate_weight, shared_up_weight, shared_offsets,
+        shared_gate, shared_up, M, D, HIDDEN, 1, BLOCK_E=1,
+        BM=BM, BN=64, BK=32, num_warps=4, num_stages=1)
+    grad_shared_gate = torch.empty_like(shared_gate)
+    grad_shared_up = torch.empty_like(shared_up)
+    _silu_backward_kernel[(triton.cdiv(M * HIDDEN, 256),)](
+        shared_gate, shared_up, grad_shared_act, grad_shared_gate, grad_shared_up,
+        M * HIDDEN, BLOCK=256, num_warps=4)
+    grad_shared_x = torch.empty_like(x)
+    _grouped_gate_up_input_backward_kernel[(triton.cdiv(M, BM), triton.cdiv(D, BN))](
+        grad_shared_gate, grad_shared_up, shared_gate_weight, shared_up_weight,
+        shared_offsets, grad_shared_x, M, D, HIDDEN, 1, BLOCK_E=1,
+        BM=BM, BN=BN, BK=BK, num_warps=4, num_stages=1)
+    grad_shared_gate_weight = torch.empty_like(shared_gate_weight)
+    grad_shared_up_weight = torch.empty_like(shared_up_weight)
+    _grouped_gate_up_weight_backward_kernel[
+        (1, triton.cdiv(HIDDEN, BN), triton.cdiv(D, BK))
+    ](
+        grad_shared_gate, grad_shared_up, x, shared_offsets,
+        grad_shared_gate_weight, grad_shared_up_weight,
+        M, D, HIDDEN, 1, BM=BM, BN=BN, BK=BK,
+        num_warps=4, num_stages=1)
+
+    grad_logits = torch.empty((M, E), device=x.device, dtype=torch.float32)
+    _top3_router_backward_kernel[(M,)](
+        logits, forward.expert_counts, forward.top_indices, forward.top_weights,
+        grad_top_weight, grad_aux, grad_logits,
+        M, E, BLOCK_E=_next_power_of_two(E), num_warps=1)
+    grad_router_weight = torch.empty_like(router_weight)
+    _dense_weight_backward_kernel[(triton.cdiv(E, BN), triton.cdiv(D, BK))](
+        grad_logits, x, grad_router_weight, M, E, D,
+        BM=BM, BN=BN, BK=BK, num_warps=4, num_stages=1)
+    grad_x = torch.empty_like(x)
+    _router_input_and_unpack_kernel[(M, triton.cdiv(D, 128))](
+        grad_logits, router_weight, grad_packed_x, inverse, grad_shared_x, grad_x,
+        M, D, E, BLOCK_D=128, BLOCK_E=_next_power_of_two(E), num_warps=4)
+    return (
+        grad_x, grad_router_weight,
+        grad_routed_gate_weight, grad_routed_up_weight, grad_routed_down,
+        grad_shared_gate_weight, grad_shared_up_weight, grad_shared_down,
+    )
+
+
+def fused_shared_routed_swiglu_forward_backward_parity(
+    x: torch.Tensor,
+    router_weight: torch.Tensor,
+    routed_gate_weight: torch.Tensor,
+    routed_up_weight: torch.Tensor,
+    routed_down_weight: torch.Tensor,
+    shared_gate_weight: torch.Tensor,
+    shared_up_weight: torch.Tensor,
+    shared_down_weight: torch.Tensor,
+    grad_output: torch.Tensor,
+    grad_aux: torch.Tensor | None = None,
+) -> tuple[FusedMoEForwardResult, tuple[torch.Tensor, ...]]:
+    """Run fused forward and output-gradient backward for kernel parity tests."""
+    forward = fused_routed_swiglu_forward(
+        x, router_weight, routed_gate_weight, routed_up_weight, routed_down_weight,
+        shared_gate_weight=shared_gate_weight,
+        shared_up_weight=shared_up_weight,
+        shared_down_weight=shared_down_weight,
+        _capture_intermediates=True,
+    )
+    gradients = fused_shared_routed_swiglu_backward(
+        grad_output, forward, x, router_weight,
+        routed_gate_weight, routed_up_weight, routed_down_weight,
+        shared_gate_weight, shared_up_weight, shared_down_weight,
+        grad_aux,
+    )
+    return forward, gradients
+
+
+
+class _FusedSharedRoutedSwiGLUParityFunction(torch.autograd.Function):
+    """Custom autograd bridge kept private until all runtime gates are complete."""
+
+    @staticmethod
+    def forward(ctx, x, router_weight, routed_gate_weight, routed_up_weight,
+                routed_down_weight, shared_gate_weight, shared_up_weight,
+                shared_down_weight):
+        ctx.set_materialize_grads(False)
+        result = fused_routed_swiglu_forward(
+            x, router_weight, routed_gate_weight, routed_up_weight, routed_down_weight,
+            shared_gate_weight=shared_gate_weight,
+            shared_up_weight=shared_up_weight,
+            shared_down_weight=shared_down_weight,
+            _capture_intermediates=True,
+        )
+        ctx.result = result
+        ctx.save_for_backward(
+            x, router_weight, routed_gate_weight, routed_up_weight,
+            routed_down_weight, shared_gate_weight, shared_up_weight,
+            shared_down_weight,
+        )
+        return result.output, result.load_balance_loss, result.z_loss
+
+    @staticmethod
+    def backward(ctx, grad_output, grad_load_balance, grad_z):
+        tensors = ctx.saved_tensors
+        x = tensors[0]
+        if grad_output is None:
+            grad_output = torch.zeros_like(x)
+        if grad_load_balance is None:
+            grad_load_balance = torch.zeros((), device=x.device, dtype=torch.float32)
+        if grad_z is None:
+            grad_z = torch.zeros((), device=x.device, dtype=torch.float32)
+        grad_aux = torch.empty(2, device=x.device, dtype=torch.float32)
+        _pack_aux_grad_kernel[(1,)](grad_load_balance, grad_z, grad_aux, num_warps=1)
+        return fused_shared_routed_swiglu_backward(
+            grad_output.contiguous(), ctx.result, *tensors, grad_aux=grad_aux)
+
+
+def fused_shared_routed_swiglu_autograd_parity(
+    x: torch.Tensor,
+    router_weight: torch.Tensor,
+    routed_gate_weight: torch.Tensor,
+    routed_up_weight: torch.Tensor,
+    routed_down_weight: torch.Tensor,
+    shared_gate_weight: torch.Tensor,
+    shared_up_weight: torch.Tensor,
+    shared_down_weight: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Exercise the real custom-autograd path without opening the training gate."""
+    return _FusedSharedRoutedSwiGLUParityFunction.apply(
+        x, router_weight, routed_gate_weight, routed_up_weight,
+        routed_down_weight, shared_gate_weight, shared_up_weight,
+        shared_down_weight,
+    )
+
+
+def fused_schedulefree_adamw_update_(
+    parameter: torch.Tensor,
+    grad: torch.Tensor,
+    z: torch.Tensor,
+    exp_avg_sq: torch.Tensor,
+    *,
+    lr: float,
+    beta1: float,
+    beta2: float,
+    bias_correction2: float,
+    eps: float,
+    weight_decay: float,
+    ckp1: float,
+) -> None:
+    """Fused in-place ScheduleFree AdamW tensor update without master weights."""
+    _require_hip_triton(parameter)
+    if parameter.dtype not in (torch.bfloat16, torch.float32):
+        raise ValueError("fused ScheduleFree state supports BF16 or FP32 tensors")
+    if any(tensor.dtype != parameter.dtype or tensor.shape != parameter.shape or
+           not tensor.is_contiguous() for tensor in (grad, z, exp_avg_sq)):
+        raise ValueError("parameter, grad, z, and exp_avg_sq must be matching contiguous tensors")
+    if not parameter.is_contiguous():
+        raise ValueError("parameter must be contiguous")
+    if bias_correction2 <= 0 or lr < 0 or eps < 0 or not 0 <= ckp1 <= 1:
+        raise ValueError("invalid ScheduleFree scalar state")
+    count = parameter.numel()
+    _schedulefree_adamw_update_kernel[(triton.cdiv(count, 256),)](
+        parameter, grad, z, exp_avg_sq, count,
+        LR=float(lr), BETA1=float(beta1), BETA2=float(beta2),
+        BIAS_CORRECTION2=float(bias_correction2), EPS=float(eps),
+        WEIGHT_DECAY=float(weight_decay), CKP1=float(ckp1),
+        BLOCK=256, num_warps=4)
+
+
+def fused_shared_routed_swiglu_forward(
+    x: torch.Tensor,
+    router_weight: torch.Tensor,
+    routed_gate_weight: torch.Tensor,
+    routed_up_weight: torch.Tensor,
+    routed_down_weight: torch.Tensor,
+    shared_gate_weight: torch.Tensor,
+    shared_up_weight: torch.Tensor,
+    shared_down_weight: torch.Tensor,
+    *,
+    require_training: bool = False,
+) -> FusedMoEForwardResult:
+    """Execute the required one-shared plus dropless top-3 E97 MoE forward."""
+    if router_weight.ndim != 2 or router_weight.shape[0] != 64:
+        raise ValueError("production E97 MoE requires exactly 64 routed experts")
+    if routed_gate_weight.ndim != 3 or routed_gate_weight.shape[0] != 64:
+        raise ValueError("production E97 MoE requires 64 packed routed expert weights")
+    return fused_routed_swiglu_forward(
+        x, router_weight, routed_gate_weight, routed_up_weight, routed_down_weight,
+        shared_gate_weight=shared_gate_weight,
+        shared_up_weight=shared_up_weight,
+        shared_down_weight=shared_down_weight,
+        require_training=require_training,
+    )

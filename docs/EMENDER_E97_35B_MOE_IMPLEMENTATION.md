@@ -116,16 +116,23 @@ optimizer kernels are complete.
   entropy, and maximum probability;
 - padded expert prefix layout and atomic dropless assignment;
 - token packing into bounded buffers;
-- grouped fused gate/up expert GEMMs;
-- fused SiLU multiplication;
+- grouped gate/up GEMMs with SiLU multiplication fused into the store;
 - grouped down-projection GEMMs;
+- an always-active fused shared expert and shared-plus-top-3 combination;
+- fused output, expert, input, normalized top-3 router, load-balance, and z-loss
+  backward kernels behind a custom-autograd parity API;
+- a fused ScheduleFree AdamW tensor update using same-dtype BF16/FP32 state and
+  no FP32 master-weight copy;
 - deterministic top-3 weighted combination; and
 - strict GPU/HIP/BF16/FP32 ABI validation with no eager fallback.
 
-These kernels have executed successfully on a gfx90a MI210 under the canonical
+These forward, backward, auxiliary-gradient, custom-autograd, and optimizer
+kernels have executed successfully on a gfx90a MI210 under the canonical
 Frontier ROCm 7.1 / PyTorch 2.10 / Triton 3.6 environment. This is not yet a
-training-ready implementation: fused backward, fused optimizer, shared-expert
-fusion, and eight-GCD RCCL dispatch are still mandatory.
+training-ready implementation: the parity APIs remain deliberately private and
+`require_training=True` fails closed until eight-GCD RCCL dispatch/combine,
+shared-gradient reduction, and the production packed-parameter module are
+complete.
 
 `ndm/models/e97_moe.py` provides CPU-only structural scaffolding:
 
@@ -162,8 +169,9 @@ artifacts, and production MoE training remains blocked on full-context parity.
 
 1. Complete the auxiliary freeze/control artifacts against the inspected 513B
    E97 seed.
-2. Complete fused Triton expert/router backward kernels, fused ScheduleFree
-   optimizer updates, shared-expert fusion, and eight-GCD RCCL dispatch/combine.
+2. Integrate the validated fused forward/backward/auxiliary/optimizer kernels
+   into packed production parameters and complete eight-GCD RCCL
+   dispatch/combine plus shared-gradient reduction.
 3. Add a checkpoint converter that writes sharded expert checkpoints without
    materializing all 35B parameters on one GCD.
 4. Add full-context dense-vs-MoE hooks for every layer output, FFN output,

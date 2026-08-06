@@ -46,6 +46,11 @@ from .e97_moe_fused import (
     FUSED_E97_MOE_ABI,
     FusedMoEForwardResult,
     fused_routed_swiglu_forward,
+    fused_schedulefree_adamw_update_,
+    fused_shared_routed_swiglu_autograd_parity,
+    fused_shared_routed_swiglu_backward,
+    fused_shared_routed_swiglu_forward,
+    fused_shared_routed_swiglu_forward_backward_parity,
 )
 
 __all__ = [
@@ -67,6 +72,11 @@ __all__ = [
     "FUSED_E97_MOE_ABI",
     "FusedMoEForwardResult",
     "fused_routed_swiglu_forward",
+    "fused_schedulefree_adamw_update_",
+    "fused_shared_routed_swiglu_autograd_parity",
+    "fused_shared_routed_swiglu_backward",
+    "fused_shared_routed_swiglu_forward",
+    "fused_shared_routed_swiglu_forward_backward_parity",
     "PHI_NAME_TO_CODE",
     "PHI_IDENTITY", "PHI_TANH", "PHI_GAMMA_MIX", "PHI_RELU", "PHI_SOFTPLUS",
 ]
