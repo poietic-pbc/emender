@@ -23,6 +23,25 @@ The current optimized implementation is **Emender/E88**: an emender layer with a
 fused Triton kernel for the nonlinear delta-memory state update. It has been
 used in 1.3B-class language-model training runs.
 
+A newer completed campaign artifact is the historical **E97** level: Emender's
+nonlinear split-edit recurrence with GDN-2-inspired erase/read and value-write
+gates. E97 now has a public model type, sequential Triton façade, and strict
+native-checkpoint generation loader; the proven fused implementation remains an
+E88-derived shared core internally. See
+[`docs/E97_CHECKPOINT_LOADING_AND_GENERATION.md`](docs/E97_CHECKPOINT_LOADING_AND_GENERATION.md)
+for the checkpoint and generation commands, and
+[`docs/E97_E88_KERNEL_NAMING_CLARIFICATION_20260802.md`](docs/E97_E88_KERNEL_NAMING_CLARIFICATION_20260802.md)
+for the naming history.
+
+Minimal native E97 generation:
+
+```bash
+python scripts/generate_e97.py \
+  --checkpoint /path/to/emender_E97_run \
+  --prompt $'\x1eThe theorem states' \
+  --max-new-tokens 64
+```
+
 ## v0.2 Release
 
 The v0.2 public-release hub is

@@ -81,8 +81,9 @@ LEVEL_14_AVAILABLE = True
 from .e85_input_as_matrix import E85InputAsMatrixLayer, E85InputAsMatrixCell, E85InputAsMatrix, E85_CUDA_AVAILABLE
 LEVEL_85_AVAILABLE = True
 
-# Language model wrapper
+# Language model wrapper and explicit E97 identity
 from .ladder_lm import LadderLM, create_ladder_model
+from .e97 import E97SplitEditLayer
 from .e97_moe import (
     E97MoEConfig,
     E97MoEParameterRecipe,
@@ -171,8 +172,8 @@ __all__ = [
     'MatrixStateElman', 'MatrixStateElmanCell', 'LEVEL_14_AVAILABLE', 'MATRIX_STATE_CUDA_AVAILABLE',
     # E85: Input-As-Matrix
     'E85InputAsMatrixLayer', 'E85InputAsMatrixCell', 'E85InputAsMatrix', 'LEVEL_85_AVAILABLE', 'E85_CUDA_AVAILABLE',
-    # Language model wrapper
-    'LadderLM', 'create_ladder_model',
+    # Language model wrapper and explicit E97 identity
+    'LadderLM', 'create_ladder_model', 'E97SplitEditLayer',
     'E97MoEConfig', 'E97MoEParameterRecipe', 'SharedRoutedMoE',
     'calculate_e97_moe_recipe', 'convert_e97_ffns_to_moe',
     'e97_moe_auxiliary_loss', 'expert_owner', 'experts_for_rank',

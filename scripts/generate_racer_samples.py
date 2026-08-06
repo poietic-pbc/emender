@@ -40,6 +40,11 @@ def load_args(ckpt: Path) -> dict:
 
 def build_model(args: dict, vocab_size: int) -> torch.nn.Module:
     level = args["level"]
+    if str(level) in {"97", "E97", "E97-M2"}:
+        from ndm.e97 import build_e97_model
+
+        return build_e97_model(args, vocab_size=vocab_size)
+
     if level == "mamba2":
         from ndm.models.mamba2_baseline import Mamba2LM
 
@@ -145,6 +150,7 @@ def apply_schedulefree_train_weights(model: torch.nn.Module, ckpt: dict, args: d
         lr=args.get("lr", 3e-4),
         weight_decay=args.get("weight_decay", 0.01),
         betas=(0.9, 0.95),
+        warmup_steps=args.get("warmup_steps", 0),
     )
     opt.load_state_dict(ckpt["optimizer_state_dict"])
     opt.train()
@@ -298,7 +304,26 @@ def main() -> None:
     used_sf_swap = apply_schedulefree_train_weights(model, ckpt, model_args)
     model = model.to(args.device).bfloat16().eval()
 
-    use_full_context = args.full_context or model_args["level"] == "mamba2"
+    is_e97 = str(model_args["level"]) in {"97", "E97", "E97-M2"}
+    fused_e97_generation = (
+        is_e97
+        and bool(model_args.get("use_triton", 0))
+        and str(args.device).startswith("cuda")
+    )
+    if is_e97:
+        from ndm.models import E97SplitEditLayer
+
+        for module in model.modules():
+            if isinstance(module, E97SplitEditLayer):
+                module.fused_inference = fused_e97_generation
+    # The shared sequential Triton kernel right-pads unaligned lengths. Its
+    # real-position outputs are causal, but the padded final state is not safe to
+    # carry token-by-token. Fused E97 generation therefore defaults to the exact
+    # full-context path. Use scripts/generate_e97.py --mode stateful for the eager
+    # state-carrying path.
+    use_full_context = args.full_context or model_args["level"] == "mamba2" or (
+        fused_e97_generation
+    )
     t0 = time.time()
     if use_full_context:
         generated = generate_full_context(model, prompt_tokens, args.max_new_tokens, args, stop_tokens)
@@ -318,6 +343,17 @@ def main() -> None:
         "checkpoint_step": ckpt.get("step"),
         "checkpoint_loss": ckpt.get("loss"),
         "level": model_args["level"],
+        "model": "emender/nonlin" if is_e97 else str(model_args["level"]),
+        "kernel_api": (
+            "e97-sequential-split-edit-triton"
+            if fused_e97_generation
+            else ("e97-split-edit-eager" if is_e97 else None)
+        ),
+        "kernel_core": (
+            "e88-shared-triton"
+            if fused_e97_generation
+            else ("python-reference" if is_e97 else None)
+        ),
         "mode": mode,
         "tokenizer": tokenizer_name or "byte",
         "prompt_tokens": len(prompt_tokens),
