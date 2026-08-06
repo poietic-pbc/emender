@@ -47,8 +47,8 @@ actual training at every scale and sequential fail-closed promotion.
 | Fused ScheduleFree optimizer | MACHINE LAYER PASS | job 5182096: BF16/FP32 same-dtype state, fused step, finite parameters, no master weights |
 | Sharded 513B-seed conversion/restart | PENDING | no 35B single-GCD materialization |
 | Full 513B-seed packed-model step | PASS | job 5182363: loss 2.17162, auxiliary 0.03004, 46.28 GB HBM, 751.6 tok/s, exact 513B seed, full-context forward/backward and fused optimizer step, `batch`/`debug`, exit 0 |
-| 1 node, >=20 min training | SYSTEMS PASS / RESTART PENDING | job 5182403: 1,203.146 s, 82 steps, 1,343,488 tokens, mean loss 2.80336, median 1,110.88 tok/s, max 48.10 GB allocated HBM, `batch`/`debug`, exit 0; sharded checkpoint/restart still required |
-| 2 nodes, >=20 min qualification | PENDING | non-production observation |
+| 1 node, >=20 min training | PASS | job 5182403 systems pass; job 5182549 atomically published ~210 GB of checksummed local/replicated model+ScheduleFree shards and a complete manifest (post-publication telemetry typo only); job 5182648 verified every SHA, restored in a fresh process group, and completed a step with loss 1.79291, `batch`/`debug`, exit 0 |
+| 2 nodes, >=20 min qualification | PENDING | immutable-source K40 runner ready; non-production observation |
 | 4 nodes, >=20 min qualification | PENDING | non-production observation |
 | 8 nodes, >=20 min ADR-003 rung | PENDING | requires reviewed exact-source acceptance |
 | 32 nodes, >=20 min ADR-003 rung | PENDING | requires immutable 8-node predecessor |
