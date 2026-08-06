@@ -54,6 +54,7 @@ from .e97_moe_ep import (
 from .e97_moe_fused import (
     FUSED_E97_MOE_ABI,
     FusedMoEForwardResult,
+    fused_packed_local_experts_autograd,
     fused_routed_swiglu_forward,
     fused_schedulefree_adamw_update_,
     fused_shared_routed_swiglu_autograd_parity,
@@ -87,6 +88,7 @@ __all__ = [
     "unpack_local_expert_rows",
     "FUSED_E97_MOE_ABI",
     "FusedMoEForwardResult",
+    "fused_packed_local_experts_autograd",
     "fused_routed_swiglu_forward",
     "fused_schedulefree_adamw_update_",
     "fused_shared_routed_swiglu_autograd_parity",

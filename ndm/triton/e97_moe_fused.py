@@ -979,6 +979,95 @@ def fused_shared_routed_swiglu_forward_backward_parity(
 
 
 
+class _FusedPackedLocalExpertsFunction(torch.autograd.Function):
+    """Autograd for one rank's eight already-packed routed experts."""
+
+    @staticmethod
+    def forward(ctx, packed_x, expert_offsets, gate_weight, up_weight, down_weight):
+        _require_hip_triton(packed_x)
+        if packed_x.ndim != 2 or packed_x.dtype != torch.bfloat16 or not packed_x.is_contiguous():
+            raise ValueError("packed local expert input must be contiguous BF16 [rows, dim]")
+        if (expert_offsets.shape != (9,) or expert_offsets.dtype != torch.int32 or
+                not expert_offsets.is_contiguous()):
+            raise ValueError("local expert offsets must be contiguous int32 [9]")
+        rows, dim = packed_x.shape
+        if gate_weight.ndim != 3 or gate_weight.shape[0] != 8:
+            raise ValueError("each GCD must own exactly eight routed experts")
+        hidden = gate_weight.shape[1]
+        if (gate_weight.shape[2] != dim or up_weight.shape != gate_weight.shape or
+                down_weight.shape != (8, dim, hidden)):
+            raise ValueError("local expert weight shape mismatch")
+        if any(weight.dtype != torch.bfloat16 or not weight.is_contiguous()
+               for weight in (gate_weight, up_weight, down_weight)):
+            raise ValueError("local expert weights must be contiguous BF16")
+        act = torch.empty((rows, hidden), device=packed_x.device, dtype=packed_x.dtype)
+        _grouped_gate_up_silu_kernel[(triton.cdiv(rows, 16), triton.cdiv(hidden, 64))](
+            packed_x, gate_weight, up_weight, expert_offsets, act,
+            rows, dim, hidden, 8, BLOCK_E=8,
+            BM=16, BN=64, BK=32, num_warps=4, num_stages=1)
+        output = torch.empty_like(packed_x)
+        _grouped_down_kernel[(triton.cdiv(rows, 16), triton.cdiv(dim, 64))](
+            act, down_weight, expert_offsets, output,
+            rows, dim, hidden, 8, BLOCK_E=8,
+            BM=16, BN=64, BK=32, num_warps=4, num_stages=1)
+        ctx.save_for_backward(
+            packed_x, expert_offsets, gate_weight, up_weight, down_weight, act)
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        packed_x, offsets, gate_weight, up_weight, down_weight, act = ctx.saved_tensors
+        grad_output = grad_output.contiguous()
+        rows, dim = packed_x.shape
+        hidden = gate_weight.shape[1]
+        BM, BN, BK = 16, 32, 32
+        grad_act = torch.empty_like(act)
+        _grouped_down_input_backward_kernel[(triton.cdiv(rows, BM), triton.cdiv(hidden, BN))](
+            grad_output, down_weight, offsets, grad_act,
+            rows, dim, hidden, 8, BLOCK_E=8,
+            BM=BM, BN=BN, BK=BK, num_warps=4, num_stages=1)
+        grad_down = torch.empty_like(down_weight)
+        _grouped_down_weight_backward_kernel[(8, triton.cdiv(dim, BN), triton.cdiv(hidden, BK))](
+            grad_output, act, offsets, grad_down,
+            rows, dim, hidden, 8, BM=BM, BN=BN, BK=BK,
+            num_warps=4, num_stages=1)
+        gate = torch.empty_like(act)
+        up = torch.empty_like(act)
+        _grouped_gate_up_kernel[(triton.cdiv(rows, BM), triton.cdiv(hidden, 64))](
+            packed_x, gate_weight, up_weight, offsets, gate, up,
+            rows, dim, hidden, 8, BLOCK_E=8,
+            BM=BM, BN=64, BK=32, num_warps=4, num_stages=1)
+        grad_gate_values = torch.empty_like(gate)
+        grad_up_values = torch.empty_like(up)
+        _silu_backward_kernel[(triton.cdiv(rows * hidden, 256),)](
+            gate, up, grad_act, grad_gate_values, grad_up_values,
+            rows * hidden, BLOCK=256, num_warps=4)
+        grad_x = torch.empty_like(packed_x)
+        _grouped_gate_up_input_backward_kernel[(triton.cdiv(rows, BM), triton.cdiv(dim, BN))](
+            grad_gate_values, grad_up_values, gate_weight, up_weight,
+            offsets, grad_x, rows, dim, hidden, 8, BLOCK_E=8,
+            BM=BM, BN=BN, BK=BK, num_warps=4, num_stages=1)
+        grad_gate = torch.empty_like(gate_weight)
+        grad_up = torch.empty_like(up_weight)
+        _grouped_gate_up_weight_backward_kernel[(8, triton.cdiv(hidden, BN), triton.cdiv(dim, BK))](
+            grad_gate_values, grad_up_values, packed_x, offsets,
+            grad_gate, grad_up, rows, dim, hidden, 8,
+            BM=BM, BN=BN, BK=BK, num_warps=4, num_stages=1)
+        return grad_x, None, grad_gate, grad_up, grad_down
+
+
+def fused_packed_local_experts_autograd(
+    packed_x: torch.Tensor,
+    expert_offsets: torch.Tensor,
+    gate_weight: torch.Tensor,
+    up_weight: torch.Tensor,
+    down_weight: torch.Tensor,
+) -> torch.Tensor:
+    """Run fused forward/backward for the eight experts owned by one GCD."""
+    return _FusedPackedLocalExpertsFunction.apply(
+        packed_x, expert_offsets, gate_weight, up_weight, down_weight)
+
+
 class _FusedSharedRoutedSwiGLUParityFunction(torch.autograd.Function):
     """Custom autograd bridge kept private until all runtime gates are complete."""
 

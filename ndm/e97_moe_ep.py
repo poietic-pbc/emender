@@ -13,6 +13,7 @@ import socket
 
 import torch
 import torch.distributed as dist
+import torch.distributed.nn.functional as dist_nn
 
 from .triton.e97_moe_ep import EP_SIZE, EPSendPlan, build_ep_send_plan
 
@@ -105,7 +106,7 @@ def exchange_expert_assignments(
     receive_rows = sum(receive_splits)
     received_x = torch.empty((receive_rows, x.shape[1]), device=x.device, dtype=x.dtype)
     received_local_expert = torch.empty(receive_rows, device=x.device, dtype=torch.int32)
-    dist.all_to_all_single(
+    received_x = dist_nn.all_to_all_single(
         received_x, plan.send_x,
         output_split_sizes=list(receive_splits), input_split_sizes=list(send_splits),
         group=group,
@@ -132,10 +133,9 @@ def return_expert_outputs(exchange: EPExchange, received_output: torch.Tensor,
             not received_output.is_contiguous()):
         raise ValueError("received expert output must match received assignment rows")
     returned = torch.empty_like(exchange.send_plan.send_x)
-    dist.all_to_all_single(
+    return dist_nn.all_to_all_single(
         returned, received_output,
         output_split_sizes=list(exchange.send_splits),
         input_split_sizes=list(exchange.receive_splits),
         group=group,
     )
-    return returned

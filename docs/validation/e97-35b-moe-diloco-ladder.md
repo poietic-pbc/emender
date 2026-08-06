@@ -40,8 +40,8 @@ actual training at every scale and sequential fail-closed promotion.
 |---|---|---|
 | Fused shared+routed forward/backward/aux/optimizer kernels | PASS | job 5181432; eight real GCDs independently passed 25 tests |
 | Bounded Triton EP assignment packing/repacking | LOCAL PASS | `tests/test_e97_moe_ep_triton.py`; real eight-rank RCCL round trip next |
-| One-node RCCL dispatch/return | RETRY | job 5181922 failed closed before communication because each Slurm task exposes device ordinal 0, not `SLURM_LOCALID`; corrected runner pending |
-| Packed local-expert fused compute + backward | PENDING | integrate received rows with eight local expert weights |
+| One-node RCCL dispatch/return | PASS | job 5181970: exact 51-row send/receive round trip on ranks 0..7, node `frontier00388`, `batch`/`debug`, exit 0; job 5181922 retained as the corrected device-binding failure |
+| Packed local-expert fused compute + backward | LOCAL PASS / MACHINE PENDING | fused eight-expert custom autograd matches oracle; upgraded RCCL-chain machine run next |
 | Shared/backbone node reduction | PENDING | node-local RCCL only |
 | Sharded 513B-seed conversion/restart | PENDING | no 35B single-GCD materialization |
 | 1 node, >=20 min training | PENDING | prerequisite before scale |

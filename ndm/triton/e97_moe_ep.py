@@ -87,6 +87,23 @@ def _repack_rows_kernel(X, INVERSE, PACKED, ROWS: tl.constexpr,
 
 
 @triton.jit
+def _pack_send_backward_kernel(
+    GRAD_SEND, INVERSE, GRAD_X,
+    M: tl.constexpr, D: tl.constexpr, BLOCK_D: tl.constexpr,
+):
+    token, pd = tl.program_id(0), tl.program_id(1)
+    d = pd * BLOCK_D + tl.arange(0, BLOCK_D)
+    mask = d < D
+    p0 = tl.load(INVERSE + token * 3 + 0)
+    p1 = tl.load(INVERSE + token * 3 + 1)
+    p2 = tl.load(INVERSE + token * 3 + 2)
+    g0 = tl.load(GRAD_SEND + p0 * D + d, mask=mask, other=0.0).to(tl.float32)
+    g1 = tl.load(GRAD_SEND + p1 * D + d, mask=mask, other=0.0).to(tl.float32)
+    g2 = tl.load(GRAD_SEND + p2 * D + d, mask=mask, other=0.0).to(tl.float32)
+    tl.store(GRAD_X + token * D + d, g0 + g1 + g2, mask=mask)
+
+
+@triton.jit
 def _unpack_rows_kernel(PACKED, INVERSE, OUT, ROWS: tl.constexpr,
                         D: tl.constexpr, BLOCK_D: tl.constexpr):
     row, pd = tl.program_id(0), tl.program_id(1)
@@ -94,6 +111,78 @@ def _unpack_rows_kernel(PACKED, INVERSE, OUT, ROWS: tl.constexpr,
     packed_row = tl.load(INVERSE + row)
     value = tl.load(PACKED + packed_row * D + d, mask=d < D, other=0.0)
     tl.store(OUT + row * D + d, value, mask=d < D)
+
+
+class _PackSendTokensFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, inverse):
+        assignments = inverse.numel()
+        output = torch.empty((assignments, x.shape[1]), device=x.device, dtype=x.dtype)
+        _pack_tokens_kernel[(assignments, triton.cdiv(x.shape[1], 256))](
+            x, inverse, output, x.shape[0], x.shape[1], BLOCK_D=256, num_warps=4)
+        ctx.save_for_backward(inverse)
+        ctx.input_shape = tuple(x.shape)
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        (inverse,) = ctx.saved_tensors
+        tokens, dim = ctx.input_shape
+        grad_x = torch.empty((tokens, dim), device=grad_output.device, dtype=grad_output.dtype)
+        _pack_send_backward_kernel[(tokens, triton.cdiv(dim, 256))](
+            grad_output.contiguous(), inverse, grad_x,
+            tokens, dim, BLOCK_D=256, num_warps=4)
+        return grad_x, None
+
+
+class _RepackRowsFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, inverse, padded_rows):
+        rows, dim = x.shape
+        output = torch.zeros((int(padded_rows), dim), device=x.device, dtype=x.dtype)
+        if rows:
+            _repack_rows_kernel[(rows, triton.cdiv(dim, 256))](
+                x, inverse, output, rows, dim, BLOCK_D=256, num_warps=4)
+        ctx.save_for_backward(inverse)
+        ctx.rows = rows
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        (inverse,) = ctx.saved_tensors
+        dim = grad_output.shape[1]
+        grad_x = torch.empty((ctx.rows, dim), device=grad_output.device, dtype=grad_output.dtype)
+        if ctx.rows:
+            _unpack_rows_kernel[(ctx.rows, triton.cdiv(dim, 256))](
+                grad_output.contiguous(), inverse, grad_x,
+                ctx.rows, dim, BLOCK_D=256, num_warps=4)
+        return grad_x, None, None
+
+
+class _UnpackRowsFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, packed, inverse):
+        rows, dim = inverse.numel(), packed.shape[1]
+        output = torch.empty((rows, dim), device=packed.device, dtype=packed.dtype)
+        if rows:
+            _unpack_rows_kernel[(rows, triton.cdiv(dim, 256))](
+                packed, inverse, output, rows, dim, BLOCK_D=256, num_warps=4)
+        ctx.save_for_backward(inverse)
+        ctx.packed_shape = tuple(packed.shape)
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        (inverse,) = ctx.saved_tensors
+        padded_rows, dim = ctx.packed_shape
+        rows = inverse.numel()
+        grad_packed = torch.zeros((padded_rows, dim), device=grad_output.device,
+                                  dtype=grad_output.dtype)
+        if rows:
+            _repack_rows_kernel[(rows, triton.cdiv(dim, 256))](
+                grad_output.contiguous(), inverse, grad_packed,
+                rows, dim, BLOCK_D=256, num_warps=4)
+        return grad_packed, None
 
 
 @dataclass(frozen=True)
@@ -133,9 +222,7 @@ def build_ep_send_plan(x: torch.Tensor, top_indices: torch.Tensor) -> EPSendPlan
     _ep_assign_send_rows_kernel[(assignments,)](
         top_indices, offsets, cursor, inverse, local_expert,
         assignments, EXPERTS_PER_RANK, num_warps=1)
-    send_x = torch.empty((assignments, x.shape[1]), device=x.device, dtype=x.dtype)
-    _pack_tokens_kernel[(assignments, triton.cdiv(x.shape[1], 256))](
-        x, inverse, send_x, x.shape[0], x.shape[1], BLOCK_D=256, num_warps=4)
+    send_x = _PackSendTokensFunction.apply(x, inverse)
     return EPSendPlan(send_x, local_expert, counts, offsets, inverse)
 
 
@@ -166,20 +253,11 @@ def build_local_expert_plan(received_x: torch.Tensor,
     if rows:
         _assign_local_packed_rows_kernel[(rows,)](
             received_local_expert, offsets, cursor, inverse, rows, num_warps=1)
-    packed = torch.zeros((padded_max, dim), device=received_x.device, dtype=received_x.dtype)
-    if rows:
-        _repack_rows_kernel[(rows, triton.cdiv(dim, 256))](
-            received_x, inverse, packed, rows, dim, BLOCK_D=256, num_warps=4)
+    packed = _RepackRowsFunction.apply(received_x, inverse, padded_max)
     return EPLocalPlan(packed, counts, offsets, inverse)
 
 
 def unpack_local_expert_rows(packed_output: torch.Tensor,
                              plan: EPLocalPlan) -> torch.Tensor:
-    rows = plan.received_to_packed_row.numel()
-    output = torch.empty((rows, packed_output.shape[1]), device=packed_output.device,
-                         dtype=packed_output.dtype)
-    if rows:
-        _unpack_rows_kernel[(rows, triton.cdiv(packed_output.shape[1], 256))](
-            packed_output, plan.received_to_packed_row, output,
-            rows, packed_output.shape[1], BLOCK_D=256, num_warps=4)
-    return output
+    return _UnpackRowsFunction.apply(
+        packed_output, plan.received_to_packed_row)
