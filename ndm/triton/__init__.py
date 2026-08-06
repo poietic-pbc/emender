@@ -41,6 +41,11 @@ from .e97_multiquery_autograd import (
     e97_multiquery_chunked_triton,
     E97MultiQueryChunkedFn,
 )
+from .e97_moe_fused import (
+    FUSED_E97_MOE_ABI,
+    FusedMoEForwardResult,
+    fused_routed_swiglu_forward,
+)
 
 __all__ = [
     "e88_triton_forward",
@@ -57,6 +62,9 @@ __all__ = [
     "e97_delta_chunked_triton",
     "e97_multiquery_chunked_triton",
     "E97MultiQueryChunkedFn",
+    "FUSED_E97_MOE_ABI",
+    "FusedMoEForwardResult",
+    "fused_routed_swiglu_forward",
     "PHI_NAME_TO_CODE",
     "PHI_IDENTITY", "PHI_TANH", "PHI_GAMMA_MIX", "PHI_RELU", "PHI_SOFTPLUS",
 ]

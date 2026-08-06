@@ -83,6 +83,16 @@ LEVEL_85_AVAILABLE = True
 
 # Language model wrapper
 from .ladder_lm import LadderLM, create_ladder_model
+from .e97_moe import (
+    E97MoEConfig,
+    E97MoEParameterRecipe,
+    SharedRoutedMoE,
+    calculate_e97_moe_recipe,
+    convert_e97_ffns_to_moe,
+    e97_moe_auxiliary_loss,
+    expert_owner,
+    experts_for_rank,
+)
 
 # Mamba2 baseline for comparison
 try:
@@ -163,6 +173,9 @@ __all__ = [
     'E85InputAsMatrixLayer', 'E85InputAsMatrixCell', 'E85InputAsMatrix', 'LEVEL_85_AVAILABLE', 'E85_CUDA_AVAILABLE',
     # Language model wrapper
     'LadderLM', 'create_ladder_model',
+    'E97MoEConfig', 'E97MoEParameterRecipe', 'SharedRoutedMoE',
+    'calculate_e97_moe_recipe', 'convert_e97_ffns_to_moe',
+    'e97_moe_auxiliary_loss', 'expert_owner', 'experts_for_rank',
     # Mamba2 baseline
     'Mamba2LM', 'create_mamba2_model', 'MAMBA2_AVAILABLE',
     # FLA GatedDeltaNet baseline

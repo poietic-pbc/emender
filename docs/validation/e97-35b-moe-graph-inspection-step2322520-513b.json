@@ -1,0 +1,584 @@
+{
+  "checkpoint": {
+    "loss": 2.279764811873436,
+    "metadata": {
+      "is_head": true,
+      "kind": "final",
+      "model": {
+        "derived_param_slug": "1.3B",
+        "level": "E97",
+        "model_family": "emender",
+        "params_arg": "100m",
+        "run_label_prefix": "emender_E97_1.3B",
+        "total_params": 1286589072,
+        "trainable_params": 1286589072
+      },
+      "model_variant": "level=E97,params_arg=100m,derived_params=1.3B,total_params=1286589072,mlp_ratio=2.2623",
+      "rank": 0,
+      "reason": "walltime:SLURM_JOB_END_TIME",
+      "run_label_prefix": "emender_E97_1.3B",
+      "shutdown_signal": null,
+      "total_params": 1286589072,
+      "total_tokens": 513013841920,
+      "trainable_params": 1286589072,
+      "walltime_deadline_source": "SLURM_JOB_END_TIME",
+      "walltime_margin_s": 900.0,
+      "walltime_remaining_s": 848.0948951244354,
+      "world_size": 2048
+    },
+    "path": "/lustre/orion/bif148/proj-shared/emender/frontier_runs/final-seed-production-256n/milestones/step-2322520-tokens-513013841920/checkpoint_step_2322520_loss_2.2798.pt",
+    "size_bytes": 7719680180,
+    "step": 2322520,
+    "total_tokens": 513013841920
+  },
+  "config": {
+    "path": "/lustre/orion/bif148/scratch/erikgarrison/emender/configs/frontier/e97_resilient_split_role_flat.json",
+    "values": {
+      "batch_size": 4,
+      "bf16": true,
+      "checkpoint_interval": 16,
+      "chunk_size": 2048,
+      "depth": 11,
+      "dim": 1792,
+      "e88_decay_mode": "mamba",
+      "e88_raw_write": 0,
+      "e97_chunk_size": 32,
+      "expansion": 1.0,
+      "gate_activation": "silu",
+      "grad_accum": 1,
+      "grad_clip": 1.0,
+      "gradient_checkpointing": false,
+      "level": "E97",
+      "linear_state": 0,
+      "lr": 0.001007,
+      "mlp_multiple": 64,
+      "mlp_ratio": 2.2623,
+      "n_groups": 32,
+      "n_heads": 216,
+      "n_slots": 64,
+      "n_state": 32,
+      "optimizer": "schedulefree",
+      "params": "100m",
+      "state_expansion": 2,
+      "tokenizer": "p50k_base",
+      "use_chunked_e97": 0,
+      "use_gate": 1,
+      "use_permutation": 1,
+      "use_split_edit": 1,
+      "use_triton": 1,
+      "warmup_steps": 0,
+      "weight_decay": 0.01
+    }
+  },
+  "dense_parameters": {
+    "ffn": 238436352,
+    "non_ffn": 1048152720,
+    "total": 1286589072
+  },
+  "graph_validation": {
+    "checkpoint_names_and_shapes_match": true,
+    "layer_count": 11,
+    "layers_uniform": true,
+    "vocab_size": 50281
+  },
+  "layers": [
+    {
+      "ffn_class": "ndm.models.ladder_lm.SwiGLUMLP",
+      "ffn_intermediate_width": 4032,
+      "ffn_parameters": [
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.0.mlp.w1.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.0.mlp.w2.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.0.mlp.w3.weight",
+          "numel": 7225344,
+          "shape": [
+            1792,
+            4032
+          ]
+        }
+      ],
+      "index": 0,
+      "model_width": 1792,
+      "recurrent_mixer_class": "ndm.models.e88_fla_hybrid.E88FLAHybrid",
+      "residual_and_normalization_order": [
+        "LadderLM: residual = previous_mixer_output + previous_residual",
+        "LadderLM: mixer_input = pre_mixer_RMSNorm(residual)",
+        "MixerMLPWrapper: mix_out = recurrent_mixer(mixer_input, state)",
+        "MixerMLPWrapper: ffn_input = post_mixer_RMSNorm(mixer_input + mix_out)",
+        "MixerMLPWrapper: block_output = mix_out + FFN(ffn_input)"
+      ]
+    },
+    {
+      "ffn_class": "ndm.models.ladder_lm.SwiGLUMLP",
+      "ffn_intermediate_width": 4032,
+      "ffn_parameters": [
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.1.mlp.w1.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.1.mlp.w2.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.1.mlp.w3.weight",
+          "numel": 7225344,
+          "shape": [
+            1792,
+            4032
+          ]
+        }
+      ],
+      "index": 1,
+      "model_width": 1792,
+      "recurrent_mixer_class": "ndm.models.e88_fla_hybrid.E88FLAHybrid",
+      "residual_and_normalization_order": [
+        "LadderLM: residual = previous_mixer_output + previous_residual",
+        "LadderLM: mixer_input = pre_mixer_RMSNorm(residual)",
+        "MixerMLPWrapper: mix_out = recurrent_mixer(mixer_input, state)",
+        "MixerMLPWrapper: ffn_input = post_mixer_RMSNorm(mixer_input + mix_out)",
+        "MixerMLPWrapper: block_output = mix_out + FFN(ffn_input)"
+      ]
+    },
+    {
+      "ffn_class": "ndm.models.ladder_lm.SwiGLUMLP",
+      "ffn_intermediate_width": 4032,
+      "ffn_parameters": [
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.2.mlp.w1.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.2.mlp.w2.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.2.mlp.w3.weight",
+          "numel": 7225344,
+          "shape": [
+            1792,
+            4032
+          ]
+        }
+      ],
+      "index": 2,
+      "model_width": 1792,
+      "recurrent_mixer_class": "ndm.models.e88_fla_hybrid.E88FLAHybrid",
+      "residual_and_normalization_order": [
+        "LadderLM: residual = previous_mixer_output + previous_residual",
+        "LadderLM: mixer_input = pre_mixer_RMSNorm(residual)",
+        "MixerMLPWrapper: mix_out = recurrent_mixer(mixer_input, state)",
+        "MixerMLPWrapper: ffn_input = post_mixer_RMSNorm(mixer_input + mix_out)",
+        "MixerMLPWrapper: block_output = mix_out + FFN(ffn_input)"
+      ]
+    },
+    {
+      "ffn_class": "ndm.models.ladder_lm.SwiGLUMLP",
+      "ffn_intermediate_width": 4032,
+      "ffn_parameters": [
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.3.mlp.w1.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.3.mlp.w2.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.3.mlp.w3.weight",
+          "numel": 7225344,
+          "shape": [
+            1792,
+            4032
+          ]
+        }
+      ],
+      "index": 3,
+      "model_width": 1792,
+      "recurrent_mixer_class": "ndm.models.e88_fla_hybrid.E88FLAHybrid",
+      "residual_and_normalization_order": [
+        "LadderLM: residual = previous_mixer_output + previous_residual",
+        "LadderLM: mixer_input = pre_mixer_RMSNorm(residual)",
+        "MixerMLPWrapper: mix_out = recurrent_mixer(mixer_input, state)",
+        "MixerMLPWrapper: ffn_input = post_mixer_RMSNorm(mixer_input + mix_out)",
+        "MixerMLPWrapper: block_output = mix_out + FFN(ffn_input)"
+      ]
+    },
+    {
+      "ffn_class": "ndm.models.ladder_lm.SwiGLUMLP",
+      "ffn_intermediate_width": 4032,
+      "ffn_parameters": [
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.4.mlp.w1.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.4.mlp.w2.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.4.mlp.w3.weight",
+          "numel": 7225344,
+          "shape": [
+            1792,
+            4032
+          ]
+        }
+      ],
+      "index": 4,
+      "model_width": 1792,
+      "recurrent_mixer_class": "ndm.models.e88_fla_hybrid.E88FLAHybrid",
+      "residual_and_normalization_order": [
+        "LadderLM: residual = previous_mixer_output + previous_residual",
+        "LadderLM: mixer_input = pre_mixer_RMSNorm(residual)",
+        "MixerMLPWrapper: mix_out = recurrent_mixer(mixer_input, state)",
+        "MixerMLPWrapper: ffn_input = post_mixer_RMSNorm(mixer_input + mix_out)",
+        "MixerMLPWrapper: block_output = mix_out + FFN(ffn_input)"
+      ]
+    },
+    {
+      "ffn_class": "ndm.models.ladder_lm.SwiGLUMLP",
+      "ffn_intermediate_width": 4032,
+      "ffn_parameters": [
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.5.mlp.w1.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.5.mlp.w2.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.5.mlp.w3.weight",
+          "numel": 7225344,
+          "shape": [
+            1792,
+            4032
+          ]
+        }
+      ],
+      "index": 5,
+      "model_width": 1792,
+      "recurrent_mixer_class": "ndm.models.e88_fla_hybrid.E88FLAHybrid",
+      "residual_and_normalization_order": [
+        "LadderLM: residual = previous_mixer_output + previous_residual",
+        "LadderLM: mixer_input = pre_mixer_RMSNorm(residual)",
+        "MixerMLPWrapper: mix_out = recurrent_mixer(mixer_input, state)",
+        "MixerMLPWrapper: ffn_input = post_mixer_RMSNorm(mixer_input + mix_out)",
+        "MixerMLPWrapper: block_output = mix_out + FFN(ffn_input)"
+      ]
+    },
+    {
+      "ffn_class": "ndm.models.ladder_lm.SwiGLUMLP",
+      "ffn_intermediate_width": 4032,
+      "ffn_parameters": [
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.6.mlp.w1.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.6.mlp.w2.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.6.mlp.w3.weight",
+          "numel": 7225344,
+          "shape": [
+            1792,
+            4032
+          ]
+        }
+      ],
+      "index": 6,
+      "model_width": 1792,
+      "recurrent_mixer_class": "ndm.models.e88_fla_hybrid.E88FLAHybrid",
+      "residual_and_normalization_order": [
+        "LadderLM: residual = previous_mixer_output + previous_residual",
+        "LadderLM: mixer_input = pre_mixer_RMSNorm(residual)",
+        "MixerMLPWrapper: mix_out = recurrent_mixer(mixer_input, state)",
+        "MixerMLPWrapper: ffn_input = post_mixer_RMSNorm(mixer_input + mix_out)",
+        "MixerMLPWrapper: block_output = mix_out + FFN(ffn_input)"
+      ]
+    },
+    {
+      "ffn_class": "ndm.models.ladder_lm.SwiGLUMLP",
+      "ffn_intermediate_width": 4032,
+      "ffn_parameters": [
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.7.mlp.w1.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.7.mlp.w2.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.7.mlp.w3.weight",
+          "numel": 7225344,
+          "shape": [
+            1792,
+            4032
+          ]
+        }
+      ],
+      "index": 7,
+      "model_width": 1792,
+      "recurrent_mixer_class": "ndm.models.e88_fla_hybrid.E88FLAHybrid",
+      "residual_and_normalization_order": [
+        "LadderLM: residual = previous_mixer_output + previous_residual",
+        "LadderLM: mixer_input = pre_mixer_RMSNorm(residual)",
+        "MixerMLPWrapper: mix_out = recurrent_mixer(mixer_input, state)",
+        "MixerMLPWrapper: ffn_input = post_mixer_RMSNorm(mixer_input + mix_out)",
+        "MixerMLPWrapper: block_output = mix_out + FFN(ffn_input)"
+      ]
+    },
+    {
+      "ffn_class": "ndm.models.ladder_lm.SwiGLUMLP",
+      "ffn_intermediate_width": 4032,
+      "ffn_parameters": [
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.8.mlp.w1.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.8.mlp.w2.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.8.mlp.w3.weight",
+          "numel": 7225344,
+          "shape": [
+            1792,
+            4032
+          ]
+        }
+      ],
+      "index": 8,
+      "model_width": 1792,
+      "recurrent_mixer_class": "ndm.models.e88_fla_hybrid.E88FLAHybrid",
+      "residual_and_normalization_order": [
+        "LadderLM: residual = previous_mixer_output + previous_residual",
+        "LadderLM: mixer_input = pre_mixer_RMSNorm(residual)",
+        "MixerMLPWrapper: mix_out = recurrent_mixer(mixer_input, state)",
+        "MixerMLPWrapper: ffn_input = post_mixer_RMSNorm(mixer_input + mix_out)",
+        "MixerMLPWrapper: block_output = mix_out + FFN(ffn_input)"
+      ]
+    },
+    {
+      "ffn_class": "ndm.models.ladder_lm.SwiGLUMLP",
+      "ffn_intermediate_width": 4032,
+      "ffn_parameters": [
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.9.mlp.w1.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.9.mlp.w2.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.9.mlp.w3.weight",
+          "numel": 7225344,
+          "shape": [
+            1792,
+            4032
+          ]
+        }
+      ],
+      "index": 9,
+      "model_width": 1792,
+      "recurrent_mixer_class": "ndm.models.e88_fla_hybrid.E88FLAHybrid",
+      "residual_and_normalization_order": [
+        "LadderLM: residual = previous_mixer_output + previous_residual",
+        "LadderLM: mixer_input = pre_mixer_RMSNorm(residual)",
+        "MixerMLPWrapper: mix_out = recurrent_mixer(mixer_input, state)",
+        "MixerMLPWrapper: ffn_input = post_mixer_RMSNorm(mixer_input + mix_out)",
+        "MixerMLPWrapper: block_output = mix_out + FFN(ffn_input)"
+      ]
+    },
+    {
+      "ffn_class": "ndm.models.ladder_lm.SwiGLUMLP",
+      "ffn_intermediate_width": 4032,
+      "ffn_parameters": [
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.10.mlp.w1.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.10.mlp.w2.weight",
+          "numel": 7225344,
+          "shape": [
+            4032,
+            1792
+          ]
+        },
+        {
+          "dtype": "torch.bfloat16",
+          "name": "layers.10.mlp.w3.weight",
+          "numel": 7225344,
+          "shape": [
+            1792,
+            4032
+          ]
+        }
+      ],
+      "index": 10,
+      "model_width": 1792,
+      "recurrent_mixer_class": "ndm.models.e88_fla_hybrid.E88FLAHybrid",
+      "residual_and_normalization_order": [
+        "LadderLM: residual = previous_mixer_output + previous_residual",
+        "LadderLM: mixer_input = pre_mixer_RMSNorm(residual)",
+        "MixerMLPWrapper: mix_out = recurrent_mixer(mixer_input, state)",
+        "MixerMLPWrapper: ffn_input = post_mixer_RMSNorm(mixer_input + mix_out)",
+        "MixerMLPWrapper: block_output = mix_out + FFN(ffn_input)"
+      ]
+    }
+  ],
+  "moe_recipe": {
+    "active_parameters": 3138570896,
+    "expert_hidden": 8832,
+    "instantiated_meta_graph_parameters": 34998209168,
+    "layers": 11,
+    "model_width": 1792,
+    "rounding_multiple": 128,
+    "routed_experts": 64,
+    "router_parameters": 1261568,
+    "seed_expert_hidden": 4032,
+    "shared_experts": 1,
+    "shared_non_moe_parameters": 1048152720,
+    "target_parameters": 35000000000,
+    "top_k": 3,
+    "total_parameters": 34998209168
+  },
+  "protected_modules": [
+    "embedding",
+    "layer_norms",
+    "layers.*.mixer",
+    "norm",
+    "lm_head"
+  ],
+  "replacement_scope": "layers.*.mlp only",
+  "schema": "emender-e97-to-35b-moe-inspection-v1"
+}
