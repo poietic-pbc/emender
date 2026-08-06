@@ -4,7 +4,7 @@
 #SBATCH -p batch
 #SBATCH -q debug
 #SBATCH -N 1
-#SBATCH -t 01:00:00
+#SBATCH -t 00:20:00
 #SBATCH --ntasks-per-node=8
 #SBATCH --cpus-per-task=7
 #SBATCH --gpus-per-task=1
@@ -34,6 +34,10 @@ export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-7}
 export MPICH_GPU_SUPPORT_ENABLED=1
 export NCCL_DEBUG=WARN
 export PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
+export TIKTOKEN_CACHE_DIR=/lustre/orion/bif148/proj-shared/tiktoken_cache
+[[ -r "$TIKTOKEN_CACHE_DIR/ec7223a39ce59f226a68acc30dc1af2788490e15" ]] || {
+  echo "offline p50k_base tokenizer cache is unavailable" >&2; exit 66;
+}
 
 srun --label --kill-on-bad-exit=1 bash -lc '
   set -euo pipefail
