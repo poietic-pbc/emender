@@ -128,6 +128,15 @@ def main() -> None:
             if not torch.isfinite(objective):
                 raise FloatingPointError(f"nonfinite objective at step {step}")
             objective.backward()
+            replicated_ids = {id(parameter) for parameter in replicated}
+            missing_replicated = [
+                name for name, parameter in model.named_parameters()
+                if id(parameter) in replicated_ids and parameter.grad is None]
+            if missing_replicated:
+                emit(args.log_jsonl, "missing_replicated_gradients",
+                     names=missing_replicated)
+                raise RuntimeError(
+                    f"replicated parameters missing gradients: {missing_replicated}")
             average_replicated_gradients_(
                 replicated, group=groups.node_group, topology=topology)
             optimizer.step()
