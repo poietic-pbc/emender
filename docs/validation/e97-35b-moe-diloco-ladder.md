@@ -45,13 +45,23 @@ actual training at every scale and sequential fail-closed promotion.
 | End-to-end node-local MoE layer | MACHINE PASS | job 5182030: fused 64-way router, dispatch, local experts, shared expert, return, combine, auxiliary losses, and backward on eight ranks; `batch`/`debug`, exit 0 |
 | Shared/backbone node reduction | MACHINE PASS | job 5182096: router/shared gradients averaged only over proven node group and equal on ranks 0..7 |
 | Fused ScheduleFree optimizer | MACHINE LAYER PASS | job 5182096: BF16/FP32 same-dtype state, fused step, finite parameters, no master weights |
-| Sharded 513B-seed conversion/restart | PENDING | no 35B single-GCD materialization |
+| Sharded 513B-seed conversion/restart | PASS | jobs 5182549/5182648: atomic checksummed shards, fresh-process restore, and continued optimizer step without 35B single-GCD materialization |
 | Full 513B-seed packed-model step | PASS | job 5182363: loss 2.17162, auxiliary 0.03004, 46.28 GB HBM, 751.6 tok/s, exact 513B seed, full-context forward/backward and fused optimizer step, `batch`/`debug`, exit 0 |
 | 1 node, >=20 min training | PASS | job 5182403 systems pass; job 5182549 atomically published ~210 GB of checksummed local/replicated model+ScheduleFree shards and a complete manifest (post-publication telemetry typo only); job 5182648 verified every SHA, restored in a fresh process group, and completed a step with loss 1.79291, `batch`/`debug`, exit 0 |
 | 2 nodes, >=20 min qualification | PASS | job 5182666: 1,200.738 s, 82 steps, 2,686,976 tokens, two K40 merges (17.206/13.517 s), mean loss 2.66133, median 2,362.63 tok/s, max 48.73 GB HBM, `batch`/`debug`, exit 0; job 5182663 was the pre-load source-staging failure; non-production observation |
 | 4 nodes, >=20 min qualification | PASS | job 5182895: 1,207.371 s, 81 steps, 5,308,416 tokens, two K40 merges (14.615/17.029 s), mean loss 2.60014, median 4,639.01 tok/s, max 48.65 GB HBM, `batch`/`debug`, exit 0; non-production observation |
 | 8 nodes, >=20 min ADR-003 rung | PASS | job 5183128: 1,211.676 s, 81 steps, 10,616,832 tokens, two K40 merges (28.670/17.848 s), mean loss 2.56924, median 9,611.27 tok/s, max 48.81 GB HBM, `batch`/`debug`, exit 0; immutable source commit `a9e2d542` |
-| 32 nodes, >=20 min ADR-003 rung | PENDING | job 5183284 failed after 12 finite steps when rank 209 on `frontier04828` reported HIP code 209 (`no kernel image is available`); retry 5183306 reached step 39 but rank 54 could not allocate a 32 MiB RCCL merge workspace because variable-routing allocator cache had raised reserved HBM to 65.34 GB; neither attempt earns a merge or duration claim; runner now empties inactive CUDA cache and lane-barriers before K40 merge |
+| 32 nodes, >=20 min ADR-003 rung | PASS | job 5183619: 1,201.755 s, 80 steps, 41,943,040 tokens, two K40 merges (24.096/24.103 s), mean loss 2.54960, median 38,953.08 tok/s, max 48.92 GB allocated HBM, `batch`/`debug`, exit 0, immutable source `096303da`; failed attempts 5183284 and 5183306 remain recorded below |
+
+## Retained failed 32-node attempts
+
+- Job `5183284` (`batch`/`debug`) failed after 12 finite steps: rank 209 on
+  `frontier04828` reported HIP code 209 (`no kernel image is available`).
+- Job `5183306` (`batch`/`debug`) reached the first K40 merge, then rank 54
+  failed a 32 MiB RCCL allocation while the variable-routing allocator cache
+  held 65.34 GB reserved HBM. It motivated commit `096303da`, which releases
+  inactive cache and lane-barriers immediately before each outer merge.
+- Neither failed attempt contributes duration or merge acceptance evidence.
 
 ## Validation commands
 
