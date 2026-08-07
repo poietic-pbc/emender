@@ -22,6 +22,7 @@ set -euo pipefail
 : "${RUN_ID:?stable run ID required}"
 : "${RUN_ROOT:?stable absolute run root required}"
 : "${TRAIN_MINUTES:?bounded training minutes required}"
+MAX_STEPS=${MAX_STEPS:-0}
 
 REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
 EXPECTED_NODES=${EXPECTED_NODES:-$SLURM_JOB_NUM_NODES}
@@ -36,6 +37,9 @@ KEEP_CHECKPOINTS=${KEEP_CHECKPOINTS:-2}
 DILOCO_K=${DILOCO_K:-40}
 
 [[ "$RUN_ROOT" == /* && "$RUN_ID" != */* ]] || { echo "invalid stable run identity" >&2; exit 64; }
+[[ "$MAX_STEPS" =~ ^[0-9]+$ && ( "$MAX_STEPS" != 0 || "$TRAIN_MINUTES" != 0 ) ]] || {
+  echo "set a positive MAX_STEPS and/or TRAIN_MINUTES" >&2; exit 64;
+}
 [[ "$SAVE_EVERY" =~ ^[0-9]+$ && "$DILOCO_K" =~ ^[0-9]+$ \
    && $SAVE_EVERY -gt 0 && $((SAVE_EVERY % DILOCO_K)) -eq 0 ]] || {
   echo "SAVE_EVERY must be positive and K-aligned" >&2; exit 64;
@@ -99,7 +103,7 @@ export MPICH_GPU_SUPPORT_ENABLED=1 NCCL_DEBUG=WARN
 export PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
 export TIKTOKEN_CACHE_DIR=/lustre/orion/bif148/proj-shared/tiktoken_cache
 export EMENDER_SOURCE_COMMIT=$SOURCE_COMMIT
-export SNAPSHOT JOB_SEED JOB_SEED_ARGS DATA_PATH CHECKPOINT_ROOT RESUME_ROOT TRAIN_MINUTES
+export SNAPSHOT JOB_SEED JOB_SEED_ARGS DATA_PATH CHECKPOINT_ROOT RESUME_ROOT TRAIN_MINUTES MAX_STEPS
 export SAVE_EVERY KEEP_CHECKPOINTS DILOCO_K RUN_ROOT
 
 set +e
@@ -115,7 +119,7 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   [[ -z "$RESUME_ROOT" ]] || resume=(--resume-root "$RESUME_ROOT")
   "$EMENDER_PYTHON" scripts/frontier/e97_35b_moe_train.py \
     --seed-checkpoint "$JOB_SEED" --seed-args-json "$JOB_SEED_ARGS" --data "$DATA_PATH" \
-    --max-steps 0 --minutes "$TRAIN_MINUTES" --batch-size 4 --chunk-size 2048 \
+    --max-steps "$MAX_STEPS" --minutes "$TRAIN_MINUTES" --batch-size 4 --chunk-size 2048 \
     --diloco-k "$DILOCO_K" --expert-backend rocblas \
     --checkpoint-root "$CHECKPOINT_ROOT" --save-every "$SAVE_EVERY" \
     --keep-checkpoints "$KEEP_CHECKPOINTS" "${resume[@]}" \
