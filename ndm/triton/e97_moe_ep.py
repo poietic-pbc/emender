@@ -57,27 +57,28 @@ def _ep_assign_send_rows_kernel(
 
 
 @triton.jit
-def _local_expert_counts_kernel(LOCAL_EXPERT, COUNTS, ROWS: tl.constexpr):
+def _local_expert_counts_kernel(LOCAL_EXPERT, COUNTS):
+    # The launch grid is exactly the received row count.  Do not specialize on
+    # that ragged count: every constexpr value loads another HIP module, which
+    # eventually exhausts the per-process module table in long MoE runs.
     row = tl.program_id(0)
-    if row < ROWS:
-        expert = tl.load(LOCAL_EXPERT + row)
-        tl.atomic_add(COUNTS + expert, 1)
+    expert = tl.load(LOCAL_EXPERT + row)
+    tl.atomic_add(COUNTS + expert, 1)
 
 
 @triton.jit
 def _assign_local_packed_rows_kernel(
-    LOCAL_EXPERT, OFFSETS, CURSOR, INVERSE, ROWS: tl.constexpr,
+    LOCAL_EXPERT, OFFSETS, CURSOR, INVERSE,
 ):
     row = tl.program_id(0)
-    if row < ROWS:
-        expert = tl.load(LOCAL_EXPERT + row)
-        slot = tl.atomic_add(CURSOR + expert, 1)
-        packed_row = tl.load(OFFSETS + expert) + slot
-        tl.store(INVERSE + row, packed_row)
+    expert = tl.load(LOCAL_EXPERT + row)
+    slot = tl.atomic_add(CURSOR + expert, 1)
+    packed_row = tl.load(OFFSETS + expert) + slot
+    tl.store(INVERSE + row, packed_row)
 
 
 @triton.jit
-def _repack_rows_kernel(X, INVERSE, PACKED, ROWS: tl.constexpr,
+def _repack_rows_kernel(X, INVERSE, PACKED,
                         D: tl.constexpr, BLOCK_D: tl.constexpr):
     row, pd = tl.program_id(0), tl.program_id(1)
     d = pd * BLOCK_D + tl.arange(0, BLOCK_D)
@@ -104,7 +105,7 @@ def _pack_send_backward_kernel(
 
 
 @triton.jit
-def _unpack_rows_kernel(PACKED, INVERSE, OUT, ROWS: tl.constexpr,
+def _unpack_rows_kernel(PACKED, INVERSE, OUT,
                         D: tl.constexpr, BLOCK_D: tl.constexpr):
     row, pd = tl.program_id(0), tl.program_id(1)
     d = pd * BLOCK_D + tl.arange(0, BLOCK_D)
@@ -142,7 +143,7 @@ class _RepackRowsFunction(torch.autograd.Function):
         output = torch.zeros((int(padded_rows), dim), device=x.device, dtype=x.dtype)
         if rows:
             _repack_rows_kernel[(rows, triton.cdiv(dim, 256))](
-                x, inverse, output, rows, dim, BLOCK_D=256, num_warps=4)
+                x, inverse, output, dim, BLOCK_D=256, num_warps=4)
         ctx.save_for_backward(inverse)
         ctx.rows = rows
         return output
@@ -155,7 +156,7 @@ class _RepackRowsFunction(torch.autograd.Function):
         if ctx.rows:
             _unpack_rows_kernel[(ctx.rows, triton.cdiv(dim, 256))](
                 grad_output.contiguous(), inverse, grad_x,
-                ctx.rows, dim, BLOCK_D=256, num_warps=4)
+                dim, BLOCK_D=256, num_warps=4)
         return grad_x, None, None
 
 
@@ -166,7 +167,7 @@ class _UnpackRowsFunction(torch.autograd.Function):
         output = torch.empty((rows, dim), device=packed.device, dtype=packed.dtype)
         if rows:
             _unpack_rows_kernel[(rows, triton.cdiv(dim, 256))](
-                packed, inverse, output, rows, dim, BLOCK_D=256, num_warps=4)
+                packed, inverse, output, dim, BLOCK_D=256, num_warps=4)
         ctx.save_for_backward(inverse)
         ctx.packed_shape = tuple(packed.shape)
         return output
@@ -181,7 +182,7 @@ class _UnpackRowsFunction(torch.autograd.Function):
         if rows:
             _repack_rows_kernel[(rows, triton.cdiv(dim, 256))](
                 grad_output.contiguous(), inverse, grad_packed,
-                rows, dim, BLOCK_D=256, num_warps=4)
+                dim, BLOCK_D=256, num_warps=4)
         return grad_packed, None
 
 
@@ -241,7 +242,7 @@ def build_local_expert_plan(received_x: torch.Tensor,
     counts = torch.zeros(EXPERTS_PER_RANK, device=received_x.device, dtype=torch.int32)
     if rows:
         _local_expert_counts_kernel[(rows,)](
-            received_local_expert, counts, rows, num_warps=1)
+            received_local_expert, counts, num_warps=1)
     offsets = torch.empty(EXPERTS_PER_RANK + 1, device=received_x.device, dtype=torch.int32)
     cursor = torch.empty(EXPERTS_PER_RANK, device=received_x.device, dtype=torch.int32)
     total = torch.empty((), device=received_x.device, dtype=torch.int32)
@@ -252,7 +253,7 @@ def build_local_expert_plan(received_x: torch.Tensor,
     inverse = torch.empty(rows, device=received_x.device, dtype=torch.int32)
     if rows:
         _assign_local_packed_rows_kernel[(rows,)](
-            received_local_expert, offsets, cursor, inverse, rows, num_warps=1)
+            received_local_expert, offsets, cursor, inverse, num_warps=1)
     packed = _RepackRowsFunction.apply(received_x, inverse, padded_max)
     return EPLocalPlan(packed, counts, offsets, inverse)
 
