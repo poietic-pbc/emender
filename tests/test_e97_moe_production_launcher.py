@@ -32,6 +32,8 @@ def test_submitter_verifies_partition_and_qos_separately():
 
 def test_runner_uses_restored_step_for_data_and_one_canonical_island():
     text = RUNNER.read_text()
+    assert 'parser.add_argument("--max-steps", type=int, default=0)' in text
+    assert 'args.max_steps == 0 and args.minutes == 0' in text
     assert "data_seed_base = 42 + starting_step" in text
     assert 'rank_seed=data_seed_base + dist.get_rank()' in text
     assert "if groups.node_index == 0:" in text
