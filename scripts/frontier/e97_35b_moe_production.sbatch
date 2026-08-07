@@ -21,7 +21,7 @@ set -euo pipefail
 : "${SOURCE_COMMIT:?immutable source commit required}"
 : "${RUN_ID:?stable run ID required}"
 : "${RUN_ROOT:?stable absolute run root required}"
-: "${TRAIN_MINUTES:?bounded training minutes required}"
+TRAIN_MINUTES=${TRAIN_MINUTES:-0}
 MAX_STEPS=${MAX_STEPS:-0}
 
 REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
@@ -37,8 +37,8 @@ KEEP_CHECKPOINTS=${KEEP_CHECKPOINTS:-2}
 DILOCO_K=${DILOCO_K:-40}
 
 [[ "$RUN_ROOT" == /* && "$RUN_ID" != */* ]] || { echo "invalid stable run identity" >&2; exit 64; }
-[[ "$MAX_STEPS" =~ ^[0-9]+$ && ( "$MAX_STEPS" != 0 || "$TRAIN_MINUTES" != 0 ) ]] || {
-  echo "set a positive MAX_STEPS and/or TRAIN_MINUTES" >&2; exit 64;
+[[ "$MAX_STEPS" =~ ^[1-9][0-9]*$ && "$TRAIN_MINUTES" == 0 ]] || {
+  echo "multinode production requires positive MAX_STEPS and TRAIN_MINUTES=0" >&2; exit 64;
 }
 [[ "$SAVE_EVERY" =~ ^[0-9]+$ && "$DILOCO_K" =~ ^[0-9]+$ \
    && $SAVE_EVERY -gt 0 && $((SAVE_EVERY % DILOCO_K)) -eq 0 ]] || {

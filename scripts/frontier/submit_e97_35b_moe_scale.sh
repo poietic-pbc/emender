@@ -7,7 +7,8 @@ PROJECT_ROOT=${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd -P)}
 NODES=${NODES:?set NODES to the reviewed scale}
 QOS=${QOS:-debug}
 TIME_LIMIT=${TIME_LIMIT:-00:40:00}
-TRAIN_MINUTES=${TRAIN_MINUTES:-20}
+TRAIN_MINUTES=${TRAIN_MINUTES:-0}
+MAX_STEPS=${MAX_STEPS:-200}
 RUN_ID=${RUN_ID:-e97-35b-moe-production}
 RUN_ROOT=${RUN_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-35b-moe-production/runs/$RUN_ID}
 
@@ -23,7 +24,7 @@ SOURCE_COMMIT=$(git rev-parse HEAD)
 }
 mkdir -p logs/frontier/e97_moe "$RUN_ROOT"
 
-export_args="ALL,SOURCE_COMMIT=$SOURCE_COMMIT,RUN_ID=$RUN_ID,RUN_ROOT=$RUN_ROOT,TRAIN_MINUTES=$TRAIN_MINUTES,EXPECTED_NODES=$NODES,EXPECTED_PARTITION=batch,EXPECTED_QOS=$QOS,EXPECTED_TIME_LIMIT=$TIME_LIMIT"
+export_args="ALL,SOURCE_COMMIT=$SOURCE_COMMIT,RUN_ID=$RUN_ID,RUN_ROOT=$RUN_ROOT,TRAIN_MINUTES=$TRAIN_MINUTES,MAX_STEPS=$MAX_STEPS,EXPECTED_NODES=$NODES,EXPECTED_PARTITION=batch,EXPECTED_QOS=$QOS,EXPECTED_TIME_LIMIT=$TIME_LIMIT"
 job_id=$(sbatch --parsable --nodes="$NODES" --ntasks=$((NODES * 8)) \
   --qos="$QOS" --time="$TIME_LIMIT" --job-name="e97-moe-${NODES}n" \
   --export="$export_args" scripts/frontier/e97_35b_moe_production.sbatch)
