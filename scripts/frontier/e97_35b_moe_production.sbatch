@@ -29,6 +29,7 @@ EXPECTED_PARTITION=${EXPECTED_PARTITION:-batch}
 EXPECTED_QOS=${EXPECTED_QOS:-debug}
 EXPECTED_TIME_LIMIT=${EXPECTED_TIME_LIMIT:-00:40:00}
 SEED_CHECKPOINT=${SEED_CHECKPOINT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/final-seed-production-256n/milestones/step-2322520-tokens-513013841920/checkpoint_step_2322520_loss_2.2798.pt}
+SEED_ARGS_JSON=${SEED_ARGS_JSON:-$(dirname "$SEED_CHECKPOINT")/args.json}
 DATA_PATH=${DATA_PATH:-/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt}
 SAVE_EVERY=${SAVE_EVERY:-200}
 KEEP_CHECKPOINTS=${KEEP_CHECKPOINTS:-2}
@@ -70,13 +71,17 @@ if [[ ! -f "$SNAPSHOT/scripts/frontier/e97_35b_moe_train.py" ]]; then
   git archive "$SOURCE_COMMIT" | tar -xf - -C "$temporary"
   mv -T "$temporary" "$SNAPSHOT"
 fi
-[[ -f "$SEED_CHECKPOINT" && -f "$DATA_PATH" ]] || { echo "seed or data unavailable" >&2; exit 66; }
+[[ -f "$SEED_CHECKPOINT" && -f "$SEED_ARGS_JSON" && -f "$DATA_PATH" ]] || {
+  echo "seed, seed args, or data unavailable" >&2; exit 66;
+}
 
 # The dense seed is needed to instantiate the graph on both cold start and
 # restore. Distribute it once per node instead of making 2,048 ranks read the
 # same 7.7 GB Lustre object.
 JOB_SEED="/tmp/emender-e97-513b-${SLURM_JOB_ID}.pt"
+JOB_SEED_ARGS="/tmp/emender-e97-513b-args-${SLURM_JOB_ID}.json"
 sbcast -f "$SEED_CHECKPOINT" "$JOB_SEED"
+sbcast -f "$SEED_ARGS_JSON" "$JOB_SEED_ARGS"
 CHECKPOINT_ROOT="$RUN_ROOT/checkpoints"
 RESUME_ROOT=
 if [[ -L "$CHECKPOINT_ROOT/latest" ]]; then
@@ -94,7 +99,7 @@ export MPICH_GPU_SUPPORT_ENABLED=1 NCCL_DEBUG=WARN
 export PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
 export TIKTOKEN_CACHE_DIR=/lustre/orion/bif148/proj-shared/tiktoken_cache
 export EMENDER_SOURCE_COMMIT=$SOURCE_COMMIT
-export SNAPSHOT JOB_SEED DATA_PATH CHECKPOINT_ROOT RESUME_ROOT TRAIN_MINUTES
+export SNAPSHOT JOB_SEED JOB_SEED_ARGS DATA_PATH CHECKPOINT_ROOT RESUME_ROOT TRAIN_MINUTES
 export SAVE_EVERY KEEP_CHECKPOINTS DILOCO_K RUN_ROOT
 
 set +e
@@ -109,7 +114,7 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   resume=()
   [[ -z "$RESUME_ROOT" ]] || resume=(--resume-root "$RESUME_ROOT")
   "$EMENDER_PYTHON" scripts/frontier/e97_35b_moe_train.py \
-    --seed-checkpoint "$JOB_SEED" --data "$DATA_PATH" \
+    --seed-checkpoint "$JOB_SEED" --seed-args-json "$JOB_SEED_ARGS" --data "$DATA_PATH" \
     --max-steps 0 --minutes "$TRAIN_MINUTES" --batch-size 4 --chunk-size 2048 \
     --diloco-k "$DILOCO_K" --expert-backend rocblas \
     --checkpoint-root "$CHECKPOINT_ROOT" --save-every "$SAVE_EVERY" \

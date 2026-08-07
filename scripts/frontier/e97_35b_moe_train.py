@@ -42,6 +42,7 @@ DEFAULT_DATA = Path(
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed-checkpoint", type=Path, default=DEFAULT_SEED)
+    parser.add_argument("--seed-args-json", type=Path)
     parser.add_argument("--data", type=Path, default=DEFAULT_DATA)
     parser.add_argument("--minutes", type=float, default=0.0)
     parser.add_argument("--max-steps", type=int, default=1)
@@ -117,7 +118,8 @@ def main() -> None:
              seed_checkpoint=str(args.seed_checkpoint), hostname=topology.hostname)
         loaded = load_e97_checkpoint(
             args.seed_checkpoint, device="cuda", dtype=torch.bfloat16,
-            weight_mode="train", use_triton=True, mmap=True)
+            weight_mode="train", use_triton=True, mmap=True,
+            args_json=args.seed_args_json)
         if loaded.step != 2322520 or int(loaded.config.get("dim", -1)) != 1792:
             raise RuntimeError("loaded checkpoint is not the bound final 513B E97 seed")
         model = loaded.model
