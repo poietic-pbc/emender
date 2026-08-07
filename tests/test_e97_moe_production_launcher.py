@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "scripts/frontier/e97_35b_moe_production.sbatch"
 SUBMITTER = ROOT / "scripts/frontier/submit_e97_35b_moe_scale.sh"
 RUNNER = ROOT / "scripts/frontier/e97_35b_moe_train.py"
+EP_TRITON = ROOT / "ndm/triton/e97_moe_ep.py"
 
 
 def test_production_launcher_is_fixed_world_fail_stop_and_canonical():
@@ -32,6 +33,14 @@ def test_submitter_verifies_partition_and_qos_separately():
     assert "MAX_STEPS=${MAX_STEPS:-200}" in text
     assert "HEAD == origin/main" in text
     assert "scancel" in text
+
+
+def test_ragged_ep_rows_do_not_create_unbounded_triton_specializations():
+    text = EP_TRITON.read_text()
+    # Received assignment counts vary by rank, layer, and step. Specializing
+    # ROWS loaded thousands of HIP modules and eventually produced HIP 209.
+    assert "ROWS: tl.constexpr" not in text
+    assert "row < ROWS" not in text
 
 
 def test_runner_uses_restored_step_for_data_and_one_canonical_island():
