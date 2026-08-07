@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 from typing import Mapping
 
 import torch
@@ -48,6 +49,7 @@ def save_node_sharded_checkpoint(
     accepted_tokens: int,
     source_commit: str,
     node_group=None,
+    keep_generations: int = 0,
 ) -> Path:
     """Synchronously publish a complete atomic eight-shard checkpoint."""
     if dist.get_world_size(node_group) != 8:
@@ -122,6 +124,13 @@ def save_node_sharded_checkpoint(
         temporary_link.unlink(missing_ok=True)
         temporary_link.symlink_to(generation.name)
         os.replace(temporary_link, root / "latest")
+        if keep_generations > 0:
+            complete = sorted(
+                path for path in root.glob("step-*-tokens-*")
+                if path.is_dir() and (path / "manifest.json").is_file())
+            for expired in complete[:-keep_generations]:
+                if expired != generation:
+                    shutil.rmtree(expired)
     dist.barrier(group=node_group)
     optimizer.train()
     return generation
@@ -137,15 +146,20 @@ def load_node_sharded_checkpoint(root: str | Path, model, optimizer, *, node_gro
     manifest = json.loads((generation / "manifest.json").read_text())
     if manifest.get("schema") != SCHEMA or manifest.get("complete") is not True:
         raise RuntimeError("checkpoint manifest is not a complete E97 MoE shard set")
-    for sidecar in manifest["ranks"]:
-        for kind in ("local", "replicated"):
-            info = sidecar[kind]
-            path = generation / info["file"]
-            if path.stat().st_size != info["bytes"] or _sha256(path) != info["sha256"]:
-                raise RuntimeError(f"checkpoint shard failed integrity: {path}")
+    # Each lane validates and reads only the files it owns. Replicated tensors
+    # are then broadcast inside the node island. This preserves rank-0-style
+    # canonical checkpoint authority without making every rank reread and hash
+    # the complete ~210 GB island checkpoint.
+    sidecar = manifest["ranks"][rank]
+    restore_paths = [
+        generation / sidecar["local"]["file"],
+        generation / sidecar["replicated"]["file"],
+    ]
+    for kind, path in zip(("local", "replicated"), restore_paths):
+        info = sidecar[kind]
+        if path.stat().st_size != info["bytes"] or _sha256(path) != info["sha256"]:
+            raise RuntimeError(f"checkpoint shard failed integrity: {path}")
     named = dict(model.named_parameters())
-    restore_paths = [generation / f"replicated-owner-{lane}.pt" for lane in range(8)]
-    restore_paths.append(generation / f"local-rank-{rank}.pt")
     with torch.no_grad():
         for restore_path in restore_paths:
             payload = torch.load(restore_path, map_location="cpu", weights_only=False)
@@ -155,6 +169,19 @@ def load_node_sharded_checkpoint(root: str | Path, model, optimizer, *, node_gro
                 optimizer.state[parameter]["z"] = saved["z"].to(parameter.device)
                 optimizer.state[parameter]["exp_avg_sq"] = saved["exp_avg_sq"].to(parameter.device)
             del payload
+
+        for name, parameter in named.items():
+            if name.endswith(_LOCAL_SUFFIXES):
+                continue
+            owner = _replicated_owner(name)
+            state = optimizer.state[parameter]
+            if rank != owner:
+                state["z"] = torch.empty_like(parameter)
+                state["exp_avg_sq"] = torch.empty_like(parameter)
+            source = dist.get_global_rank(node_group, owner)
+            dist.broadcast(parameter.data, src=source, group=node_group)
+            dist.broadcast(state["z"], src=source, group=node_group)
+            dist.broadcast(state["exp_avg_sq"], src=source, group=node_group)
     for group, saved_group in zip(optimizer.param_groups, manifest["optimizer_groups"]):
         group.update(saved_group)
     optimizer.assert_no_master_weights()

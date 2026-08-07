@@ -55,6 +55,8 @@ def parse_args():
     parser.add_argument("--log-jsonl", type=Path, required=True)
     parser.add_argument("--checkpoint-root", type=Path)
     parser.add_argument("--resume-root", type=Path)
+    parser.add_argument("--save-every", type=int, default=0)
+    parser.add_argument("--keep-checkpoints", type=int, default=2)
     parser.add_argument("--empty-cache-interval", type=int, default=0)
     parser.add_argument(
         "--profile-phases", action="store_true",
@@ -72,10 +74,34 @@ def emit(path: Path, event: str, **fields) -> None:
             handle.write(line + "\n")
 
 
+def _canonical_checkpoint(args, groups, model, optimizer, *, step, accepted_tokens,
+                          source_commit):
+    """Publish one canonical eight-rank island, coordinated by global rank zero."""
+    dist.barrier()
+    if groups.node_index == 0:
+        save_node_sharded_checkpoint(
+            args.checkpoint_root, model, optimizer, step=step,
+            accepted_tokens=accepted_tokens, source_commit=source_commit,
+            node_group=groups.node_group, keep_generations=args.keep_checkpoints)
+    dist.barrier()
+    generation = (args.checkpoint_root / "latest").resolve(strict=True)
+    manifest = json.loads((generation / "manifest.json").read_text())
+    if (manifest.get("complete") is not True or int(manifest.get("step", -1)) != step
+            or int(manifest.get("accepted_tokens", -1)) != accepted_tokens):
+        raise RuntimeError("canonical checkpoint authority does not match the completed step")
+    return generation
+
+
 def main() -> None:
     args = parse_args()
     if not args.seed_checkpoint.is_file() or not args.data.is_file():
         raise SystemExit("seed checkpoint or training data is unavailable")
+    if args.save_every < 0 or args.keep_checkpoints < 1:
+        raise SystemExit("save-every must be nonnegative and keep-checkpoints must be positive")
+    if args.save_every and args.checkpoint_root is None:
+        raise SystemExit("save-every requires checkpoint-root")
+    if args.save_every and args.save_every % args.diloco_k:
+        raise SystemExit("save-every must be aligned to completed DiLoCo K boundaries")
     local_rank = int(os.environ["SLURM_LOCALID"])
     torch.cuda.set_device(0)
     dist.init_process_group("nccl", init_method="env://")
@@ -123,8 +149,7 @@ def main() -> None:
         accepted_tokens = 0
         if args.resume_root is not None:
             manifest = load_node_sharded_checkpoint(
-                args.resume_root / f"node-{groups.node_index}",
-                model, optimizer, node_group=groups.node_group)
+                args.resume_root, model, optimizer, node_group=groups.node_group)
             starting_step = int(manifest["step"])
             accepted_tokens = int(manifest["accepted_tokens"])
             emit(args.log_jsonl, "restart_loaded", checkpoint_step=starting_step,
@@ -145,6 +170,7 @@ def main() -> None:
         start = None
         step = starting_step
         completed_steps = 0
+        last_checkpoint_step = None
         while True:
             if completed_steps >= args.max_steps and args.max_steps > 0:
                 break
@@ -234,19 +260,34 @@ def main() -> None:
                 start = time.monotonic()
             step += 1
             completed_steps += 1
+            if (args.checkpoint_root is not None and args.save_every > 0
+                    and step % args.save_every == 0):
+                checkpoint_start = time.monotonic()
+                checkpoint = _canonical_checkpoint(
+                    args, groups, model, optimizer, step=step,
+                    accepted_tokens=accepted_tokens, source_commit=source_commit)
+                last_checkpoint_step = step
+                emit(args.log_jsonl, "checkpoint_complete",
+                     checkpoint_path=str(checkpoint), step=step,
+                     accepted_tokens=accepted_tokens,
+                     checkpoint_seconds=time.monotonic() - checkpoint_start,
+                     canonical_node=0)
         measured_seconds = 0.0 if start is None else time.monotonic() - start
         emit(args.log_jsonl, "complete", step=step, steps_completed=completed_steps,
              accepted_tokens=accepted_tokens,
              measured_training_seconds=measured_seconds,
              hbm_allocated=torch.cuda.memory_allocated(),
              max_hbm_allocated=torch.cuda.max_memory_allocated())
-        if args.checkpoint_root is not None:
-            checkpoint = save_node_sharded_checkpoint(
-                args.checkpoint_root / f"node-{groups.node_index}",
-                model, optimizer, step=step, accepted_tokens=accepted_tokens,
-                source_commit=source_commit, node_group=groups.node_group)
-            emit(args.log_jsonl, "checkpoint_complete", checkpoint_path=str(checkpoint), step=step,
-                 accepted_tokens=accepted_tokens)
+        if args.checkpoint_root is not None and last_checkpoint_step != step:
+            checkpoint_start = time.monotonic()
+            checkpoint = _canonical_checkpoint(
+                args, groups, model, optimizer, step=step,
+                accepted_tokens=accepted_tokens, source_commit=source_commit)
+            emit(args.log_jsonl, "checkpoint_complete",
+                 checkpoint_path=str(checkpoint), step=step,
+                 accepted_tokens=accepted_tokens,
+                 checkpoint_seconds=time.monotonic() - checkpoint_start,
+                 canonical_node=0)
     finally:
         dist.destroy_process_group()
 
