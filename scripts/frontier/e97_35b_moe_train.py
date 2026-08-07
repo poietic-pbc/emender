@@ -45,7 +45,7 @@ def parse_args():
     parser.add_argument("--seed-args-json", type=Path)
     parser.add_argument("--data", type=Path, default=DEFAULT_DATA)
     parser.add_argument("--minutes", type=float, default=0.0)
-    parser.add_argument("--max-steps", type=int, default=1)
+    parser.add_argument("--max-steps", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--chunk-size", type=int, default=2048)
     parser.add_argument("--lr", type=float, default=1.007e-3)
@@ -95,6 +95,8 @@ def main() -> None:
     args = parse_args()
     if not args.seed_checkpoint.is_file() or not args.data.is_file():
         raise SystemExit("seed checkpoint or training data is unavailable")
+    if args.max_steps < 0 or args.minutes < 0 or (args.max_steps == 0 and args.minutes == 0):
+        raise SystemExit("set positive max-steps and/or minutes; zero means no limit")
     if args.save_every < 0 or args.keep_checkpoints < 1:
         raise SystemExit("save-every must be nonnegative and keep-checkpoints must be positive")
     if args.save_every and args.checkpoint_root is None:
