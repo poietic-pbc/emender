@@ -51,7 +51,7 @@ actual training at every scale and sequential fail-closed promotion.
 | 2 nodes, >=20 min qualification | PASS | job 5182666: 1,200.738 s, 82 steps, 2,686,976 tokens, two K40 merges (17.206/13.517 s), mean loss 2.66133, median 2,362.63 tok/s, max 48.73 GB HBM, `batch`/`debug`, exit 0; job 5182663 was the pre-load source-staging failure; non-production observation |
 | 4 nodes, >=20 min qualification | PASS | job 5182895: 1,207.371 s, 81 steps, 5,308,416 tokens, two K40 merges (14.615/17.029 s), mean loss 2.60014, median 4,639.01 tok/s, max 48.65 GB HBM, `batch`/`debug`, exit 0; non-production observation |
 | 8 nodes, >=20 min ADR-003 rung | PASS | job 5183128: 1,211.676 s, 81 steps, 10,616,832 tokens, two K40 merges (28.670/17.848 s), mean loss 2.56924, median 9,611.27 tok/s, max 48.81 GB HBM, `batch`/`debug`, exit 0; immutable source commit `a9e2d542` |
-| 32 nodes, >=20 min ADR-003 rung | PENDING | job 5183284 failed after 12 finite steps when rank 209 on `frontier04828` reported HIP code 209 (`no kernel image is available`); no merge or duration claim; retry excludes that node |
+| 32 nodes, >=20 min ADR-003 rung | PENDING | job 5183284 failed after 12 finite steps when rank 209 on `frontier04828` reported HIP code 209 (`no kernel image is available`); retry 5183306 reached step 39 but rank 54 could not allocate a 32 MiB RCCL merge workspace because variable-routing allocator cache had raised reserved HBM to 65.34 GB; neither attempt earns a merge or duration claim; runner now empties inactive CUDA cache and lane-barriers before K40 merge |
 
 ## Validation commands
 

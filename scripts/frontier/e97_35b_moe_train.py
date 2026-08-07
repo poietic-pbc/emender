@@ -158,6 +158,12 @@ def main() -> None:
             optimizer.assert_no_master_weights()
             merge_seconds = 0.0
             if groups.node_count > 1 and (step + 1) % args.diloco_k == 0:
+                # Release inactive variable-routing blocks before RCCL allocates its
+                # cross-node collective workspace.  At 32 nodes, one lane rank can
+                # otherwise retain enough allocator cache to starve RCCL despite
+                # live tensors fitting comfortably in HBM.
+                torch.cuda.empty_cache()
+                dist.barrier(group=groups.diloco_lane_group)
                 merge_start = time.monotonic()
                 diloco_average_schedulefree_(
                     model, optimizer, lane_group=groups.diloco_lane_group)
