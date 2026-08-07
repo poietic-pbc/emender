@@ -85,7 +85,7 @@ if [[ -L "$CHECKPOINT_ROOT/latest" ]]; then
   RESUME_ROOT="$CHECKPOINT_ROOT"
 fi
 
-source "$SNAPSHOT/scripts/frontier/activate_emender_frontier.sh"
+source "$REPO/scripts/frontier/activate_emender_frontier.sh"
 MASTER_HOST=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -1)
 export MASTER_ADDR=$(getent ahostsv4 "$MASTER_HOST" | awk 'NR==1 {print $1}')
 export MASTER_PORT=$((31000 + SLURM_JOB_ID % 10000))
@@ -100,7 +100,7 @@ export SAVE_EVERY KEEP_CHECKPOINTS DILOCO_K RUN_ROOT
 set +e
 srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   set -euo pipefail
-  source "$SNAPSHOT/scripts/frontier/activate_emender_frontier.sh" >/dev/null
+  source "'$REPO'/scripts/frontier/activate_emender_frontier.sh" >/dev/null
   cd "$SNAPSHOT"
   export PYTHONPATH="$SNAPSHOT${PYTHONPATH:+:$PYTHONPATH}"
   export RANK=$SLURM_PROCID LOCAL_RANK=$SLURM_LOCALID
