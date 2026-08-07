@@ -114,26 +114,37 @@ def main() -> None:
              hbm_allocated=torch.cuda.memory_allocated(),
              hbm_reserved=torch.cuda.memory_reserved())
 
-        dataset = TokenizedStreamDataset(
-            data_path=str(args.data), chunk_size=args.chunk_size + 1,
-            rank=dist.get_rank(), world_size=dist.get_world_size(),
-            seed=42, tokenizer_name="p50k_base")
         optimizer = FusedScheduleFreeAdamW(
             model.parameters(), lr=args.lr, weight_decay=args.weight_decay,
             betas=(0.9, 0.95), warmup_steps=0)
+        starting_step = int(loaded.step)
+        accepted_tokens = 0
         if args.resume_root is not None:
             manifest = load_node_sharded_checkpoint(
                 args.resume_root / f"node-{groups.node_index}",
                 model, optimizer, node_group=groups.node_group)
-            emit(args.log_jsonl, "restart_loaded", checkpoint_step=manifest["step"],
-                 checkpoint_tokens=manifest["accepted_tokens"])
+            starting_step = int(manifest["step"])
+            accepted_tokens = int(manifest["accepted_tokens"])
+            emit(args.log_jsonl, "restart_loaded", checkpoint_step=starting_step,
+                 checkpoint_tokens=accepted_tokens)
+        # A fresh/resumed execution gets a different deterministic random stream:
+        # requested offset = source/checkpoint starting step + 42 + global rank.
+        # TokenizedStreamDataset adds rank internally to this base seed.
+        data_seed_base = 42 + starting_step
+        dataset = TokenizedStreamDataset(
+            data_path=str(args.data), chunk_size=args.chunk_size + 1,
+            rank=dist.get_rank(), world_size=dist.get_world_size(),
+            seed=data_seed_base, tokenizer_name="p50k_base")
+        emit(args.log_jsonl, "data_stream_ready", starting_step=starting_step,
+             seed_base=data_seed_base,
+             rank_seed=data_seed_base + dist.get_rank(), replay_previous_launch=False)
         optimizer.train()
         replicated = tuple(node_replicated_parameters(model))
         start = None
-        step = 0
-        accepted_tokens = 0
+        step = starting_step
+        completed_steps = 0
         while True:
-            if step >= args.max_steps and args.max_steps > 0:
+            if completed_steps >= args.max_steps and args.max_steps > 0:
                 break
             if start is not None and args.minutes > 0 and time.monotonic() - start >= args.minutes * 60:
                 break
@@ -213,8 +224,10 @@ def main() -> None:
             if start is None:
                 start = time.monotonic()
             step += 1
+            completed_steps += 1
         measured_seconds = 0.0 if start is None else time.monotonic() - start
-        emit(args.log_jsonl, "complete", steps=step, accepted_tokens=accepted_tokens,
+        emit(args.log_jsonl, "complete", step=step, steps_completed=completed_steps,
+             accepted_tokens=accepted_tokens,
              measured_training_seconds=measured_seconds,
              hbm_allocated=torch.cuda.memory_allocated(),
              max_hbm_allocated=torch.cuda.max_memory_allocated())
