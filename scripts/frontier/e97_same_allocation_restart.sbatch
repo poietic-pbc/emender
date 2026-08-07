@@ -1,12 +1,8 @@
 #!/bin/bash
-# Production fixed-world E97 launcher: each execution epoch is one fresh srun.
-#
-# RUN_ID is mandatory and is deliberately independent of SLURM_JOB_ID.  On a
-# child failure the parent batch shell keeps the allocation, promotes only the
-# child's atomically published latest.pt (if any), and starts a new process
-# group.  If Slurm reports fewer healthy whole nodes, the next epoch uses that
-# smaller fixed world.  Batch-shell/allocation loss is handled by Slurm requeue,
-# not by an in-process membership or communicator-shrink protocol.
+# Fixed-world E97 launcher. The accepted production mode is fail-stop: one
+# batch job launches one child srun, performs no validation, and exits nonzero
+# after any child failure. Automatic child restart and Slurm requeue are
+# forbidden in that mode; a human must inspect before a fresh submission.
 #
 # Submission is intentionally not performed by this file. The submitter must
 # export the canonical content-addressed E97_SEED_CACHE plus its authority
@@ -21,8 +17,7 @@
 #SBATCH --cpus-per-task=7
 #SBATCH --gpus-per-task=1
 #SBATCH --gpu-bind=closest
-#SBATCH --no-kill
-#SBATCH --requeue
+#SBATCH --no-requeue
 #SBATCH --signal=B:TERM@300
 #SBATCH -o logs/frontier/%x-%j.out
 #SBATCH -e logs/frontier/%x-%j.err
@@ -286,7 +281,9 @@ samealloc_main() {
   EXECUTION_EPOCH_TIMEOUT_SECONDS=${EXECUTION_EPOCH_TIMEOUT_SECONDS:-86400}
   FAILED_STEP_WAIT_SECONDS=${FAILED_STEP_WAIT_SECONDS:-60}
   FAILED_STEP_KILL_GRACE_SECONDS=${FAILED_STEP_KILL_GRACE_SECONDS:-60}
-  REQUEUE_ON_EXHAUSTION=${REQUEUE_ON_EXHAUSTION:-1}
+  REQUEUE_ON_EXHAUSTION=${REQUEUE_ON_EXHAUSTION:-0}
+  FAIL_STOP_SINGLE_EPOCH=${FAIL_STOP_SINGLE_EPOCH:-1}
+  ENABLE_VALIDATION=${ENABLE_VALIDATION:-0}
 
   DILOCO_K=${DILOCO_K:-40}
   SAVE_EVERY=${SAVE_EVERY:-200}
@@ -315,13 +312,23 @@ samealloc_main() {
   [[ "$RUN_DIR" == /* ]] || { echo "RUN_DIR must be absolute" >&2; return 64; }
   [[ "$TARGET_NODES" =~ ^[1-9][0-9]*$ && "$MIN_NODES" =~ ^[1-9][0-9]*$ ]] || return 64
   [[ "$MAX_CONSECUTIVE_NO_PROGRESS_FAILURES" =~ ^[1-9][0-9]*$ ]] || return 64
+  [[ "$FAIL_STOP_SINGLE_EPOCH" =~ ^[01]$ && "$ENABLE_VALIDATION" =~ ^[01]$ ]] || return 64
+  if [[ "$FAIL_STOP_SINGLE_EPOCH" == 1 ]]; then
+    [[ "$REQUEUE_ON_EXHAUSTION" == 0 && "$MIN_NODES" == "$TARGET_NODES" ]] || {
+      echo "fail-stop mode requires REQUEUE_ON_EXHAUSTION=0 and MIN_NODES=TARGET_NODES" >&2
+      return 64
+    }
+  fi
   (( TARGET_NODES <= SLURM_JOB_NUM_NODES && MIN_NODES <= TARGET_NODES )) || {
     echo "invalid TARGET_NODES/MIN_NODES for allocation" >&2; return 64;
   }
   (( SAVE_EVERY % DILOCO_K == 0 )) || {
     echo "SAVE_EVERY must be an exact multiple of DILOCO_K" >&2; return 64;
   }
-  [[ -r "$DATA" && -r "$VAL_DATA" ]] || { echo "training data inputs are unreadable" >&2; return 64; }
+  [[ -r "$DATA" ]] || { echo "training data input is unreadable" >&2; return 64; }
+  if [[ "$ENABLE_VALIDATION" == 1 && ! -r "$VAL_DATA" ]]; then
+    echo "validation data input is unreadable" >&2; return 64
+  fi
 
   mkdir -p "$RUN_DIR"/{epochs,identity,logs,supervisor,train} logs/frontier
   cd "$REPO"
@@ -427,11 +434,11 @@ exec "$1" "$2" --verify-local --seed-config "$3" --destination "$4" \
   git rev-parse HEAD > "$RUN_DIR/identity/git-commit-${SLURM_JOB_ID}.txt"
 
   local -a common_args=(
-    --data "$DATA" --val_data "$VAL_DATA" --bf16 --batch_size "$BATCH_SIZE"
+    --data "$DATA" --bf16 --batch_size "$BATCH_SIZE"
     --chunk_size "$CHUNK_SIZE" --tokenizer p50k_base --optimizer schedulefree
     --seed 42 --lr 0.001007 --train_minutes "$TRAIN_MINUTES"
     --timer_after_compile_warmup --compile_warmup_steps "$COMPILE_WARMUP_STEPS"
-    --log_every "$LOG_EVERY" --val_every "$VAL_EVERY"
+    --log_every "$LOG_EVERY"
     --save_every "$SAVE_EVERY" --keep_checkpoints "$KEEP_CHECKPOINTS"
     --walltime_final_checkpoint_margin_seconds "$WALLTIME_FINAL_CHECKPOINT_MARGIN_SECONDS"
     --walltime_check_every "$WALLTIME_CHECK_EVERY"
@@ -444,6 +451,9 @@ exec "$1" "$2" --verify-local --seed-config "$3" --destination "$4" \
     --diloco_merge_completion_barrier "$DILOCO_MERGE_COMPLETION_BARRIER"
     --diloco_merge_bucket_numel "$DILOCO_MERGE_BUCKET_NUMEL"
   )
+  if [[ "$ENABLE_VALIDATION" == 1 ]]; then
+    common_args+=(--val_data "$VAL_DATA" --val_every "$VAL_EVERY")
+  fi
   local -a model_args=(
     --level E97 --params 100m --dim 1792 --depth 11 --n_heads 216 --n_state 32
     --n_groups 32 --n_slots 64 --state_expansion 2 --expansion 1.0 --use_gate 1
@@ -474,13 +484,21 @@ exec "$1" "$2" --verify-local --seed-config "$3" --destination "$4" \
     >> "$RUN_DIR/supervisor/allocation-identities.tsv"
 
   if ! samealloc_select_usable_nodes "$SLURM_JOB_NODELIST" excluded_nodes usable hard_bad_nodes; then
+    if [[ "$FAIL_STOP_SINGLE_EPOCH" == 1 ]]; then
+      echo "fail-stop: batch allocation node list is unavailable at startup" >&2
+      return 69
+    fi
     samealloc_request_requeue "batch allocation node list is unavailable at startup"
     return 0
   fi
-  (( ${#usable[@]} >= MIN_NODES )) || {
+  if (( ${#usable[@]} < MIN_NODES )); then
+    if [[ "$FAIL_STOP_SINGLE_EPOCH" == 1 ]]; then
+      echo "fail-stop: fewer than MIN_NODES healthy at startup" >&2
+      return 69
+    fi
     samealloc_request_requeue "fewer than MIN_NODES healthy at startup"
     return 0
-  }
+  fi
   local current_nodes=$TARGET_NODES
   (( current_nodes <= ${#usable[@]} )) || current_nodes=${#usable[@]}
   usable=("${usable[@]:0:current_nodes}")
@@ -555,9 +573,13 @@ exec "$1" "$2" --verify-local --seed-config "$3" --destination "$4" \
     # parent also makes the execution identity explicit to step shims/tests.
     export MASTER_ADDR=$master_host MASTER_PORT=$master_port EMENDER_EXECUTION_EPOCH=$epoch
     set +e
+    local -a srun_failure_flags=(--kill-on-bad-exit=1 --wait="$FAILED_STEP_WAIT_SECONDS")
+    if [[ "$FAIL_STOP_SINGLE_EPOCH" == 0 ]]; then
+      srun_failure_flags=(--no-kill "${srun_failure_flags[@]}")
+    fi
     setsid timeout --signal=TERM --kill-after="${FAILED_STEP_KILL_GRACE_SECONDS}s" \
       "${EXECUTION_EPOCH_TIMEOUT_SECONDS}s" \
-      srun --exact --no-kill --kill-on-bad-exit=1 --wait="$FAILED_STEP_WAIT_SECONDS" \
+      srun --exact "${srun_failure_flags[@]}" \
         -N"$current_nodes" -n"$tasks" --ntasks-per-node="$TASKS_PER_NODE" \
         -c"$CPUS_PER_TASK" --gpus-per-task=1 --gpu-bind=closest --nodelist="$node_csv" \
         --export=ALL,MASTER_ADDR="$master_host",MASTER_PORT="$master_port",EMENDER_EXECUTION_EPOCH="$epoch" \
@@ -589,6 +611,18 @@ exec "$1" "$2" --verify-local --seed-config "$3" --destination "$4" \
     printf '%s|%s|%s|%s|%s|%s|%s\n' "$epoch" "$rc" "$current_nodes" "$tasks" "$master_port" "$promoted" "$observed_step" \
       >> "$RUN_DIR/supervisor/execution-epochs.tsv"
 
+    if [[ "$FAIL_STOP_SINGLE_EPOCH" == 1 ]]; then
+      if (( REQUEUE_REQUESTED )); then
+        echo "[samealloc] fail-stop batch signal after epoch $epoch; no requeue" >&2
+        return 143
+      fi
+      if (( rc == 0 )); then
+        echo "[samealloc] single execution epoch $epoch completed"
+        return 0
+      fi
+      echo "[samealloc] single execution epoch $epoch failed rc=$rc; no retry or requeue" >&2
+      return "$rc"
+    fi
     if (( REQUEUE_REQUESTED )); then
       samealloc_request_requeue "batch signal after epoch $epoch"
       return 0

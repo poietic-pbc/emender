@@ -29,7 +29,7 @@ relaunch. It remains honestly `v1_conformance=false` and
 | ID / set | ADR-003 production disposition | Implementation / remaining evidence |
 |---|---|---|
 | R07 | **Applicable safety intent, elastic receipt-chain clause unclaimed.** A child checkpoint and `latest.pt` are synchronously published with temp-file/rename and temp-symlink/rename. The parent advances only a readable atomic epoch `latest.pt`; partial files are never selected. | `train.save_checkpoint`; `samealloc_promote_epoch_latest`; checkpoint and launcher tests. No native peer receipt chain is claimed. |
-| R12 | **Applicable safety intent.** Every fresh child receives the stable run-level `latest.pt` through `--resume`, restoring model, inner optimizer, and recorded DiLoCo outer state. Stable `RUN_ID` and pointer survive Slurm job-ID changes/requeue. | `scripts/frontier/e97_same_allocation_restart.sbatch`; restart/outer-state tests. No allocation claim or native recovery handshake is claimed. |
+| R12 | **Applicable safety intent.** The single child receives stable run-level `latest.pt` through `--resume`, restoring model, inner optimizer, and recorded DiLoCo outer state. Stable `RUN_ID` and pointer survive a failed job and a human-approved replacement job. | `scripts/frontier/e97_same_allocation_restart.sbatch`; restart/outer-state tests. Automatic child restart and scheduler requeue are forbidden; no allocation claim or native recovery handshake is claimed. |
 | R14 / NDP13 | **Applicable after translation to an execution-epoch boundary.** `timeout` TERM/KILL bounds the epoch, `srun --kill-on-bad-exit --wait` bounds rank-failure cleanup, and existing final/pre-walltime checkpoint controls remain enabled. | Job 5125415 terminated the damaged step in 99 seconds; launcher syntax/contract tests cover configured bounds. Async phase/foreground-wait telemetry is retired, not satisfied. |
 | R16 | **Replaced production ladder.** The attended approval plus job 5125415 selects immutable exact-source `8 -> 32 -> 128`, each rung requiring its immediate predecessor. 256 remains review-only. | The dependent immutable 8-node acceptance consumes the production launcher commit. The historical native G2–G6 authorization is research-only. |
 | NDP02 | **Retired/incompatible for production.** Each child deliberately uses fixed-world RCCL collectives. Failure safety comes from terminating the entire child and constructing a fresh process group, never from continuing or shrinking its communicator. | Job 5125415 is the physical containment evidence. No no-all-rank claim is made. |
@@ -41,9 +41,9 @@ relaunch. It remains honestly `v1_conformance=false` and
 Production defaults are `DILOCO_K=40`, `SAVE_EVERY=200` (five outer merges),
 and `KEEP_CHECKPOINTS=2`, all explicit overrides with K-alignment enforced.
 The launcher preserves hierarchical `DILOCO_MERGE_BUCKET_NUMEL=67108864`, uses
-a stable run directory independent of `SLURM_JOB_ID`, records a monotonically
-advanced execution epoch and fresh port, and delegates batch-shell loss to
-Slurm `--requeue`.
+a stable run directory independent of `SLURM_JOB_ID`, launches exactly one
+execution epoch, performs no inline validation, and fails the job after the
+first child failure. Submission uses `--no-requeue` and verifies `Requeue=0`.
 
 ## Elastic research requirements-to-current-harness matrix
 
@@ -246,7 +246,7 @@ elastic conformance checklist in every task's `## Validation`.
 
 | Decision | Owner/evidence required | Safe default now |
 |---|---|---|
-| Frontier allocation fencing/restart authority | Production: stable run identity, atomic latest selection, bounded child restart and scheduler requeue. Research: scheduler-fence monotonicity, immutable receipt lineage and fresh-allocation recovery. | ADR-003 uses one parent allocation plus Slurm requeue and no database/protocol. A path claiming elastic identity still requires immutable claims/receipts/manifests. |
+| Frontier allocation fencing/restart authority | Production: stable run identity, atomic latest selection, one fail-stop child, and human-approved fresh submission. Research: scheduler-fence monotonicity, immutable receipt lineage and fresh-allocation recovery. | ADR-003 uses one non-requeueing job and no database/protocol. A path claiming elastic identity still requires immutable claims/receipts/manifests. |
 | v1 `Q_min`, `T_min`, optional READY fraction and retry limits | Training + reliability results per model/config | V1 uses test-only explicit values. V2.1 is fixed at `Q_min=2`, `T_min=3,934,080`, fraction disabled, zero retry for its two-node gate. |
 | v1 outer optimizer and recovery/export cadence | Numerical parity and measured checkpoint cost | V2.1 is fixed to stateless exact-token `eta_outer=1.0`; restore its outer step/token clock and fail closed if unavailable. |
 | Shard count and production byte bounds | Full E97 network/memory measurements at the 2-node rung | Deterministic full-layout mapping and bounded defaults; do not scale before telemetry is accepted. |

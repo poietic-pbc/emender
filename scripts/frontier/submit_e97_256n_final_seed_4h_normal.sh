@@ -1,6 +1,6 @@
 #!/bin/bash
-# Submit exactly one immutable, unheld 256-node / 2,048-rank two-hour
-# continuation and verify its live scheduler binding. The batch job writes all
+# Submit exactly one immutable, unheld 256-node / 2,048-rank four-hour
+# normal-QOS continuation and verify its live scheduler binding. The batch job writes all
 # logs/checkpoint state directly to durable RUN_DIR; no collector job is used.
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
@@ -90,8 +90,8 @@ NODES=256
 TASKS_PER_NODE=8
 WORLD_SIZE=2048
 PARTITION=batch
-QOS=debug
-TIME_LIMIT=02:00:00
+QOS=normal
+TIME_LIMIT=04:00:00
 DILOCO_K=40
 SAVE_EVERY=200
 KEEP_CHECKPOINTS=2
@@ -122,7 +122,7 @@ EOF
 )
 asset_hashes=$(
   for asset in \
-    scripts/frontier/submit_e97_256n_final_seed_2h.sh \
+    scripts/frontier/submit_e97_256n_final_seed_4h_normal.sh \
     scripts/frontier/e97_256n_final_seed_payload.sh \
     scripts/frontier/e97_same_allocation_restart.sbatch \
     scripts/frontier/materialize_e97_s3_seed.py \
@@ -157,7 +157,7 @@ mkdir -p "$payload_root"
 printf '%s\n' "$config" > "$payload_root/config.env"
 printf '%s\n' "$asset_hashes" > "$payload_root/source-assets.sha256"
 cp scripts/frontier/e97_256n_final_seed_payload.sh "$payload_root/payload.sh"
-cp scripts/frontier/submit_e97_256n_final_seed_2h.sh "$payload_root/submit.sh"
+cp scripts/frontier/submit_e97_256n_final_seed_4h_normal.sh "$payload_root/submit.sh"
 cp "$seed_attestation" "$payload_root/seed-bootstrap-attestation.json"
 chmod 0555 "$payload_root"/{payload.sh,submit.sh}
 git clone --shared --no-checkout "$PROJECT_ROOT" "$repo_exact"
@@ -248,11 +248,11 @@ printf 'HEAD=%s\nmain=%s\norigin/main=%s\n' "$SOURCE_SHA" "$LOCAL_MAIN_SHA" "$OR
 export RUN_ID RUN_DIR
 export TARGET_NODES=256 MIN_NODES=256 TASKS_PER_NODE=8 CPUS_PER_TASK=7
 export FAIL_STOP_SINGLE_EPOCH=1 ENABLE_VALIDATION=0 REQUEUE_ON_EXHAUSTION=0
-export EXECUTION_EPOCH_TIMEOUT_SECONDS=9000 FAILED_STEP_WAIT_SECONDS=60 FAILED_STEP_KILL_GRACE_SECONDS=60
+export EXECUTION_EPOCH_TIMEOUT_SECONDS=18000 FAILED_STEP_WAIT_SECONDS=60 FAILED_STEP_KILL_GRACE_SECONDS=60
 export DILOCO_K=40 SAVE_EVERY=200 KEEP_CHECKPOINTS=2
 export DILOCO_MERGE_BUCKET_NUMEL=67108864 DILOCO_MERGE_TOPOLOGY=hierarchical
 export DILOCO_MERGE_GROUP_SIZE=4 DILOCO_MERGE_GROUP_CREATE_BARRIER_EVERY=8
-export DILOCO_MERGE_COMPLETION_BARRIER=1 TRAIN_MINUTES=180 BATCH_SIZE=4 CHUNK_SIZE=2048
+export DILOCO_MERGE_COMPLETION_BARRIER=1 TRAIN_MINUTES=300 BATCH_SIZE=4 CHUNK_SIZE=2048
 export LOG_EVERY=10 COMPILE_WARMUP_STEPS=1
 unset VAL_DATA VAL_EVERY
 export WALLTIME_FINAL_CHECKPOINT_MARGIN_SECONDS=900 WALLTIME_CHECK_EVERY=40 DISTRIBUTED_HEALTH_CHECK_EVERY=40
@@ -260,6 +260,7 @@ export E97_SEED_CONFIG="$repo_exact/configs/frontier/e97_async_256.yaml"
 export E97_SEED_CACHE="$seed_cache" E97_SEED_ATTESTATION="$seed_attestation"
 export E97_SEED_ATTESTATION_SHA256="$seed_attestation_sha256"
 export TOTAL_TOKEN_MIGRATION_RECEIPT="$repo_exact/$TOKEN_MIGRATION_RECEIPT_REL"
+export EXPECTED_PARTITION=batch EXPECTED_QOS=normal EXPECTED_TIME_LIMIT=04:00:00
 export FRONTIER_RCCL_ENV=recommended FRONTIER_ENABLE_OLCF_RCCL_PLUGIN=1
 export FRONTIER_RUNTIME_PROFILE=olcf-rccl-debug REQUIRE_RCCL_NET_PLUGIN=1
 export NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET
@@ -267,7 +268,7 @@ unset EMENDER_DILOCO_EXIT_RANK EMENDER_DILOCO_EXIT_MERGE EMENDER_DILOCO_EXIT_BUC
 unset EMENDER_DILOCO_EXIT_LABEL EMENDER_DILOCO_EXIT_CODE EMENDER_DILOCO_EXIT_DELAY_SECONDS
 
 payload_id=$(sbatch --parsable --no-requeue --signal=B:TERM@300 \
-  -A bif148 -p batch -q debug -J e97-final-seed-256n -N256 -t 02:00:00 \
+  -A bif148 -p batch -q normal -J e97-final-seed-256n-4h -N256 -t 04:00:00 \
   --ntasks-per-node=8 --cpus-per-task=7 --gpus-per-task=1 --gpu-bind=closest \
   --output="$RUN_DIR/logs/batch-%j.out" --error="$RUN_DIR/logs/batch-%j.err" \
   --export=ALL "$payload_root/payload.sh")
@@ -277,7 +278,7 @@ import json
 v={'schema':'e97-final-seed-production-256n-submission-v2','payload_job_id':'$payload_id',
 'source_sha':'$SOURCE_SHA','origin_main_sha':'$ORIGIN_MAIN_SHA','local_main_sha':'$LOCAL_MAIN_SHA',
 'payload_digest':'$payload_digest','run_id':'$RUN_ID','run_dir':'$RUN_DIR','payload_root':'$payload_root',
-'nodes':256,'world_size':2048,'tasks_per_node':8,'partition':'batch','qos':'debug','time_limit':'02:00:00',
+'nodes':256,'world_size':2048,'tasks_per_node':8,'partition':'batch','qos':'normal','time_limit':'04:00:00',
 'submitted_unheld':True,'collector_job_id':None,'seed_step':2300930,
 'seed_accepted_tokens':150793748480,'seed_bytes':7719680116,'seed_sha256':'$SEED_SHA256',
 'token_migration_receipt':'$TOKEN_MIGRATION_RECEIPT_REL','token_migration_step':2303840,
@@ -295,8 +296,8 @@ squeue -j "$payload_id" -h -o '%i|%T|%D|%N|%P|%q|%l|%R' \
 payload_record=$(scontrol show job "$payload_id" -o)
 printf '%s\n' "$payload_record" > "$RUN_DIR/identity/scontrol-submitted.txt"
 [[ $payload_record == *"NumNodes=256"* && $payload_record == *"NumTasks=2048"* \
-   && $payload_record == *"Partition=batch"* && $payload_record == *"QOS=debug"* \
-   && $payload_record == *"TimeLimit=02:00:00"* && $payload_record == *"Requeue=0"* ]] || {
+   && $payload_record == *"Partition=batch"* && $payload_record == *"QOS=normal"* \
+   && $payload_record == *"TimeLimit=04:00:00"* && $payload_record == *"Requeue=0"* ]] || {
   # The user explicitly requires that a submitted training payload remain
   # intact even if post-submit inspection fails.
   echo "submitted payload binding inspection failed; payload left intact: $payload_record" >&2

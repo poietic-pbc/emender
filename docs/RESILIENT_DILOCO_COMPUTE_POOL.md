@@ -63,13 +63,13 @@ The report correctly called the experiment nonconforming research when it ran;
 this reviewed amendment uses it as decision evidence rather than retroactively
 claiming v1, v2.1, native-data-plane, or overlap conformance.
 
-Production E97 now uses one Slurm batch parent and a sequence of fixed-world
-`train.py` **execution epochs**:
+Production E97 uses one Slurm batch parent and fixed-world `train.py`. Following
+the 2026-08-04 operator safety decision, each submitted job has exactly one
+**execution epoch**: there is no automatic child restart or scheduler requeue.
 
 1. A caller supplies a stable `RUN_ID`; its run directory MUST NOT contain the
    Slurm job ID. The same exact checkpoint directory and atomic
-   `train/latest.pt` survive an
-   in-place restart, Slurm requeue, and a replacement job ID.
+   `train/latest.pt` survive a failed job and a human-approved replacement job.
 2. Each epoch is a new child `srun`, process set, distributed process group, and
    `MASTER_PORT`. It resumes only the stable atomic `latest.pt`. It MUST NOT
    reuse a damaged communicator, unfinished tensors, a partial checkpoint, or
@@ -82,18 +82,21 @@ Production E97 now uses one Slurm batch parent and a sequence of fixed-world
    readable epoch `latest.pt`; temporary or bare checkpoint files are never
    candidates.
 4. `srun --kill-on-bad-exit` plus finite wait/TERM/KILL deadlines bounds failed
-   step teardown. The batch allocation uses `--no-kill`. After teardown the
-   parent re-evaluates allocation nodes, excludes whole nodes that Slurm marks
-   unusable, and relaunches a smaller fixed world when at least `MIN_NODES`
-   remains. There is no rank-level elasticity or communicator shrink.
-5. Loss or exhaustion of the batch parent/allocation is not repaired by a new
-   control protocol. `#SBATCH --requeue` is the fallback; an attended batch
-   signal requests scheduler requeue after bounded child termination. The next
-   attempt uses only the stable `RUN_ID` directory and atomic `latest.pt`.
+   step teardown. Production MUST NOT use `--no-kill`, relaunch a child, reduce
+   the world, or preserve a failed allocation. Any rank, node, collective, or
+   child failure terminates the batch job nonzero. There is no rank-level
+   elasticity or communicator shrink.
+5. Production submissions MUST request `--no-requeue` and verify scheduler
+   `Requeue=0`. No launcher path may call `scontrol requeue`. Allocation loss,
+   timeout, signal, or child failure stops the job; a human inspects durable
+   evidence and explicitly approves a fresh immutable submission anchored to
+   atomic `latest.pt`.
 6. Default E97 policy is synchronous **K40**, `save_every=200` local steps
    (five outer merges), and `keep_checkpoints=2`, while retaining `train.py`'s
-   final and pre-walltime checkpoint behavior. These values have explicit
-   launcher overrides, but every periodic save MUST remain K-aligned.
+   final and pre-walltime checkpoint behavior. Production passes no validation
+   dataset or validation/held-out option: training performs no inline
+   validation. These values have explicit launcher overrides, but every
+   periodic save MUST remain K-aligned.
 
 The approved production systems ladder is **8 -> 32 -> 128**. Job 5125415 is
 the direct two-node decision observation; it is not relabeled as an async-v2.1
@@ -357,9 +360,9 @@ authorize nor block this systems ladder.
   MUST NOT claim elastic/native/v2.1 requirements that the fixed-world path
   intentionally retires.
 - Elastic research must show peer-owned READY membership, bounded waits, and no
-  launched-rank/all-rank invariant. Production ADR-003 instead shows a bounded
-  fixed-world child boundary, fresh process-group relaunch, whole-node
-  reduction, and no attempt to preserve a broken all-rank communicator.
+  launched-rank/all-rank invariant. Production ADR-003 instead shows one
+  bounded fixed-world child and no attempt to preserve, shrink, or automatically
+  relaunch a broken all-rank communicator.
 - Prove the rendered compute-role closure has no SQLite import, connection,
   database path, store construction, filesystem lock, or metadata heartbeat.
 - Show fenced generation identity, deterministic weighted math, idempotence, stale/corrupt rejection, and atomic committed evidence.

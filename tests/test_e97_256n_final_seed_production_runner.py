@@ -4,6 +4,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 SUBMIT = REPO / "scripts/frontier/submit_e97_256n_final_seed_2h.sh"
+SUBMIT_4H = REPO / "scripts/frontier/submit_e97_256n_final_seed_4h_normal.sh"
+SUBMIT_7H = REPO / "scripts/frontier/submit_e97_256n_final_seed_7h_normal.sh"
 PAYLOAD = REPO / "scripts/frontier/e97_256n_final_seed_payload.sh"
 LAUNCHER = REPO / "scripts/frontier/e97_same_allocation_restart.sbatch"
 
@@ -17,7 +19,9 @@ def test_256n_submit_is_exactly_one_unheld_payload_and_no_collector_job():
     assert "--dependency=" not in text
     assert "scontrol release" not in text
     assert "--hold" not in text
-    assert "--parsable --no-kill --requeue" in text
+    assert "--parsable --no-requeue" in text
+    assert "--no-kill" not in text
+    assert "Requeue=0" in text
     assert "-p batch -q debug -J e97-final-seed-256n -N256 -t 02:00:00" in text
     assert "--ntasks-per-node=8" in text
     assert "NumNodes=256" in text
@@ -26,7 +30,59 @@ def test_256n_submit_is_exactly_one_unheld_payload_and_no_collector_job():
     assert "QOS=debug" in text
     assert "TimeLimit=02:00:00" in text
     assert "unchanged payload bytes already attempted" in text
+    assert "E97_EXPECTED_RESUME_STEP" in text
+    assert "E97_EXPECTED_RESUME_TOTAL_TOKENS" in text
+    assert "explicitly approved resume authority" in text
+    assert "mmap=True" in text
     assert "scancel" not in text
+    assert "collector_job_id=none" in text
+
+
+def test_256n_four_hour_normal_submit_is_fail_stop_and_resume_bound():
+    text = SUBMIT_4H.read_text()
+
+    assert text.count("payload_id=$(sbatch") == 1
+    assert text.count("$(sbatch") == 1
+    assert "--dependency=" not in text
+    assert "--hold" not in text
+    assert "scancel" not in text
+    assert "-p batch -q normal -J e97-final-seed-256n-4h -N256 -t 04:00:00" in text
+    assert "QOS=normal" in text
+    assert "TIME_LIMIT=04:00:00" in text
+    assert "EXPECTED_QOS=normal EXPECTED_TIME_LIMIT=04:00:00" in text
+    assert "EXECUTION_EPOCH_TIMEOUT_SECONDS=18000" in text
+    assert "TRAIN_MINUTES=300" in text
+    assert "FAIL_STOP_SINGLE_EPOCH=1 ENABLE_VALIDATION=0 REQUEUE_ON_EXHAUSTION=0" in text
+    assert "unset VAL_DATA VAL_EVERY" in text
+    assert "--parsable --no-requeue" in text
+    assert "Requeue=0" in text
+    assert "E97_EXPECTED_RESUME_STEP" in text
+    assert "E97_EXPECTED_RESUME_TOTAL_TOKENS" in text
+    assert "explicitly approved resume authority" in text
+    assert "DILOCO_K=40 SAVE_EVERY=200 KEEP_CHECKPOINTS=2" in text
+    assert "DILOCO_MERGE_BUCKET_NUMEL=67108864" in text
+    assert "collector_job_id=none" in text
+
+
+def test_256n_seven_hour_normal_submit_preserves_production_recipe():
+    text = SUBMIT_7H.read_text()
+
+    assert text.count("payload_id=$(sbatch") == 1
+    assert text.count("$(sbatch") == 1
+    assert "--dependency=" not in text
+    assert "--hold" not in text
+    assert "scancel" not in text
+    assert "-p batch -q normal -J e97-final-seed-256n-7h -N256 -t 07:00:00" in text
+    assert "QOS=normal" in text
+    assert "TimeLimit=07:00:00" in text
+    assert "EXECUTION_EPOCH_TIMEOUT_SECONDS=28800" in text
+    assert "--parsable --no-requeue" in text
+    assert "FAIL_STOP_SINGLE_EPOCH=1 ENABLE_VALIDATION=0 REQUEUE_ON_EXHAUSTION=0" in text
+    assert "unset VAL_DATA VAL_EVERY" in text
+    assert "Requeue=0" in text
+    assert "TRAIN_MINUTES=480" in text
+    assert "DILOCO_K=40 SAVE_EVERY=200 KEEP_CHECKPOINTS=2" in text
+    assert "DILOCO_MERGE_BUCKET_NUMEL=67108864" in text
     assert "collector_job_id=none" in text
 
 
@@ -49,6 +105,8 @@ def test_256n_snapshot_binds_clean_final_seed_and_all_immutable_assets():
     assert "TOKEN_MIGRATION_TOTAL_TOKENS=199615447040" in text
     assert "TOKEN_MIGRATION_SOURCE_JOB=5134243" in text
     assert "TOKEN_MIGRATION_CHECKPOINT_BYTES=7719680116" in text
+    assert "EXPECTED_RESUME_STEP=${EXPECTED_RESUME_STEP:-none}" in text
+    assert "EXPECTED_RESUME_TOTAL_TOKENS=${EXPECTED_RESUME_TOTAL_TOKENS:-none}" in text
     assert "--expected-step 2303840" in text
     assert "--expected-total-tokens 199615447040" in text
     assert "--expected-source-job-id 5134243" in text
@@ -80,9 +138,14 @@ def test_256n_payload_is_clean_envelope_not_a_fault_or_acceptance_shim():
     assert "samealloc_main" in payload
     assert "NumNodes=256" in payload
     assert "NumTasks=2048" in payload
-    assert "Partition=batch" in payload
-    assert "QOS=debug" in payload
-    assert "TimeLimit=02:00:00" in payload
+    assert "EXPECTED_PARTITION=${EXPECTED_PARTITION:-batch}" in payload
+    assert "EXPECTED_QOS=${EXPECTED_QOS:-debug}" in payload
+    assert "EXPECTED_TIME_LIMIT=${EXPECTED_TIME_LIMIT:-02:00:00}" in payload
+    assert 'Partition=$EXPECTED_PARTITION' in payload
+    assert 'QOS=$EXPECTED_QOS' in payload
+    assert 'TimeLimit=$EXPECTED_TIME_LIMIT' in payload
+    assert '"Requeue=0"' in payload
+    assert "production requires one epoch, validation disabled, and no requeue" in payload
     assert "e97_256n_final_seed_retry_srun_shim" not in payload
     assert "FINAL_SEED_RETRY_STATE_DIR" not in payload
     assert "EMENDER_DILOCO_EXIT_RANK" in payload  # fail-closed absence check
@@ -95,7 +158,9 @@ def test_256n_runtime_preserves_atomic_continuing_authority_and_seed_broadcast()
     launcher = LAUNCHER.read_text()
 
     assert "TARGET_NODES=256 MIN_NODES=256 TASKS_PER_NODE=8" in submit
-    assert "MAX_CONSECUTIVE_NO_PROGRESS_FAILURES=2 REQUEUE_ON_EXHAUSTION=1" in submit
+    assert "FAIL_STOP_SINGLE_EPOCH=1 ENABLE_VALIDATION=0 REQUEUE_ON_EXHAUSTION=0" in submit
+    assert "VAL_EVERY=" not in submit
+    assert "--no-requeue" in submit
     assert "DILOCO_K=40 SAVE_EVERY=200 KEEP_CHECKPOINTS=2" in submit
     assert "DILOCO_MERGE_BUCKET_NUMEL=67108864" in submit
     assert "TRAIN_MINUTES=180" in submit
@@ -107,7 +172,8 @@ def test_256n_runtime_preserves_atomic_continuing_authority_and_seed_broadcast()
     assert "sbcast" in launcher
     assert "--verify-local" in launcher
     assert 'job-${SLURM_JOB_ID}-restart-${SLURM_RESTART_COUNT:-0}' in launcher
-    assert "samealloc_update_no_progress" in launcher
+    assert 'single execution epoch $epoch failed rc=$rc; no retry or requeue' in launcher
+    assert 'if [[ "$ENABLE_VALIDATION" == 1 ]]; then' in launcher
     assert "samealloc_resume_token_bootstrap" in launcher
     assert 'token_args=(--total_tokens "$resume_total_tokens")' in launcher
 
