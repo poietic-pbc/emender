@@ -132,6 +132,10 @@ def main() -> None:
     dist.init_process_group("nccl", init_method="env://")
     try:
         groups = create_moe_process_groups()
+        if groups.node_count > 1 and args.minutes > 0:
+            raise RuntimeError(
+                "multinode production requires an exact max-steps boundary; "
+                "independent wall-clock stopping can desynchronize node islands")
         if groups.local_rank != local_rank:
             raise RuntimeError("Slurm rank ordering does not match contiguous node islands")
         topology = assert_node_local_ep_group(groups.node_group)
