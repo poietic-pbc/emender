@@ -1452,9 +1452,9 @@ def build_training_optimizer(core_model, args, *, announce=False):
     return optimizer
 
 
-def build_training_dataset(args, *, rank=0, dist_enabled=False):
-    """Create the real train.py streaming dataset for one rank."""
-    data_seed = args.seed + (rank if dist_enabled else 0)
+def build_training_dataset(args, *, rank=0, dist_enabled=False, start_step=0):
+    """Create one rank's deterministic stream, offset by its resume step."""
+    data_seed = args.seed + int(start_step) + (rank if dist_enabled else 0)
     if args.tbptt:
         return BatchedStreamDataset(
             data_path=args.data,
@@ -3043,7 +3043,11 @@ def train(args):
     # Create dataset - use BatchedStreamDataset for TBPTT (persistent per-batch streams)
     if args.tbptt:
         print("TBPTT enabled: using BatchedStreamDataset (persistent streams)")
-    train_dataset = build_training_dataset(args, rank=rank, dist_enabled=dist_enabled)
+    train_dataset = build_training_dataset(
+        args, rank=rank, dist_enabled=dist_enabled, start_step=start_step)
+    if is_main:
+        print(f"[data-stream] seed_base={args.seed + start_step} "
+              f"starting_step={start_step} rank_offset=global-rank", flush=True)
 
     val_loader = None
     if args.val_data:
