@@ -1,15 +1,11 @@
-"""Fail-closed fused Triton kernels for the E97 MoE data path.
+"""ROCm production kernels for the E97 MoE data path.
 
-This file is the only admissible compute path for E97 MoE experiments.  Python
-allocates bounded buffers and launches kernels; routing, packing, expert
-SwiGLU, and deterministic top-k combination execute in ``@triton.jit``
-kernels.  There is deliberately no eager fallback.
-
-The production forward includes both the always-active shared expert and the
-routed experts.  It remains forward-only while fused backward and optimizer
-kernels are completed.  ``require_training=True`` therefore fails closed: it
-is impossible to mistake this implementation for a training-ready system or
-submit a parity/training job prematurely.
+The proven E97 recurrence, routing, packing, combination, and optimizer remain
+explicit Triton kernels. Expert SwiGLU GEMMs have two explicit backends: the
+correctness/parity Triton implementation and the production ``rocblas`` path,
+which uses the same tuned ROCm linear operations as dense E97 with selective
+non-reentrant activation checkpointing. There is no implicit eager fallback:
+the backend is selected and validated by :class:`E97MoEConfig`.
 """
 from __future__ import annotations
 
