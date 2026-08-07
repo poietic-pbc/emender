@@ -49,8 +49,8 @@ class E97MoEConfig:
             raise ValueError("routed experts must divide evenly over expert ranks")
         if self.router_init_std < 0:
             raise ValueError("router_init_std must be nonnegative")
-        if self.expert_backend not in {"triton", "rocblas"}:
-            raise ValueError("expert_backend must be 'triton' or 'rocblas'")
+        if self.expert_backend not in {"triton", "rocblas", "grouped"}:
+            raise ValueError("expert_backend must be 'triton', 'rocblas', or 'grouped'")
 
 
 def expert_owner(expert_index: int, *, routed_experts: int = 64,

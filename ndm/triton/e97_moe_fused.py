@@ -1208,6 +1208,38 @@ def checkpointed_shared_expert_rocblas(
         use_reentrant=False)
 
 
+def checkpointed_packed_local_experts_grouped(
+    packed_x: torch.Tensor,
+    expert_offsets: torch.Tensor,
+    gate_weight: torch.Tensor,
+    up_weight: torch.Tensor,
+    down_weight: torch.Tensor,
+) -> torch.Tensor:
+    """Checkpointed ragged grouped GEMMs using PyTorch's ROCm GroupedMm op.
+
+    Unlike the eight-call rocBLAS reference, offsets remain device-resident and
+    each gate/up/down phase is one grouped kernel launch. The weight views use
+    the physical layouts accepted by the HIP grouped-GEMM implementation.
+    """
+    _require_hip_triton(packed_x)
+    if expert_offsets.shape != (9,) or expert_offsets.dtype != torch.int32:
+        raise ValueError("expert_offsets must be int32 [9]")
+    if (gate_weight.shape[0] != 8 or up_weight.shape != gate_weight.shape or
+            down_weight.shape != (8, packed_x.shape[1], gate_weight.shape[1])):
+        raise ValueError("packed grouped expert weight shape mismatch")
+    ends = expert_offsets[1:].contiguous()
+
+    def experts(x, wg, wu, wd, offs):
+        gate = F.grouped_mm(x, wg.transpose(1, 2), offs=offs)
+        up = F.grouped_mm(x, wu.transpose(1, 2), offs=offs)
+        activation = F.silu(gate) * up
+        return F.grouped_mm(activation, wd.transpose(1, 2), offs=offs)
+
+    return checkpoint(
+        experts, packed_x, gate_weight, up_weight, down_weight, ends,
+        use_reentrant=False)
+
+
 def checkpointed_packed_local_experts_rocblas(
     packed_x: torch.Tensor,
     expert_offsets: torch.Tensor,
