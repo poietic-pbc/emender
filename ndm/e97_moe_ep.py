@@ -24,6 +24,7 @@ from .triton.e97_moe_ep import (
 )
 from .triton.e97_moe_fused import (
     checkpointed_packed_local_experts_rocblas,
+    checkpointed_shared_expert_rocblas,
     fused_packed_local_experts_autograd,
     fused_shared_expert_autograd,
     fused_shared_top3_combine_autograd,
@@ -269,8 +270,12 @@ def node_local_fused_moe_autograd(
         raise ValueError(f"unknown expert backend: {expert_backend}")
     received_output = unpack_local_expert_rows(local_packed_output, local_plan)
     returned_output = return_expert_outputs(exchange, received_output, group=group)
-    shared_output = fused_shared_expert_autograd(
-        x, shared_gate_weight, shared_up_weight, shared_down_weight)
+    if expert_backend == "rocblas":
+        shared_output = checkpointed_shared_expert_rocblas(
+            x, shared_gate_weight, shared_up_weight, shared_down_weight)
+    else:
+        shared_output = fused_shared_expert_autograd(
+            x, shared_gate_weight, shared_up_weight, shared_down_weight)
     output = fused_shared_top3_combine_autograd(
         returned_output, exchange.send_plan.assignment_to_send_row,
         top_weights, shared_output)

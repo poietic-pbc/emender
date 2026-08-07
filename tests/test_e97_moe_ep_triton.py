@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 
 from ndm.triton.e97_moe_fused import (
+    checkpointed_packed_local_experts_rocblas,
     fused_packed_local_experts_autograd,
     fused_shared_expert_autograd,
     fused_top3_router_autograd,
@@ -147,6 +148,12 @@ def test_fused_eight_local_experts_forward_and_backward_match_oracle():
     packed_output = fused_packed_local_experts_autograd(
         packed, plan.expert_offsets, gate, up, down)
     actual = unpack_local_expert_rows(packed_output, plan)
+    rocblas_output = checkpointed_packed_local_experts_rocblas(
+        packed, plan.expert_offsets, gate, up, down)
+    real_packed_rows = plan.received_to_packed_row.long()
+    torch.testing.assert_close(
+        rocblas_output[real_packed_rows].float(), packed_output[real_packed_rows].float(),
+        rtol=8e-3, atol=7e-5)
 
     oreceived = received.float().detach().requires_grad_(True)
     ogate = gate.float().detach().requires_grad_(True)
@@ -167,6 +174,11 @@ def test_fused_eight_local_experts_forward_and_backward_match_oracle():
     grad_packed[inverse] = grad_rows.to(torch.bfloat16)
     packed_grads = torch.autograd.grad(
         packed_output, (packed, gate, up, down), grad_outputs=grad_packed)
+    rocblas_grads = torch.autograd.grad(
+        rocblas_output, (packed, gate, up, down), grad_outputs=grad_packed)
+    for triton_grad, rocblas_grad in zip(packed_grads, rocblas_grads):
+        torch.testing.assert_close(
+            triton_grad.float(), rocblas_grad.float(), rtol=3e-2, atol=3e-4)
     oracle_grads = torch.autograd.grad(
         (expected * grad_rows).sum(), (oreceived, ogate, oup, odown))
     torch.testing.assert_close(

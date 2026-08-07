@@ -1195,6 +1195,23 @@ def fused_shared_top3_combine_autograd(
         returned_expert_output, assignment_to_send_row, top_weights, shared_output)
 
 
+def checkpointed_shared_expert_rocblas(
+    x: torch.Tensor,
+    gate_weight: torch.Tensor,
+    up_weight: torch.Tensor,
+    down_weight: torch.Tensor,
+) -> torch.Tensor:
+    """Checkpointed shared expert on ROCm's production GEMM backend."""
+    _require_hip_triton(x)
+
+    def expert(x_, wg, wu, wd):
+        return F.linear(F.silu(F.linear(x_, wg)) * F.linear(x_, wu), wd)
+
+    return checkpoint(
+        expert, x, gate_weight, up_weight, down_weight,
+        use_reentrant=False)
+
+
 def checkpointed_packed_local_experts_rocblas(
     packed_x: torch.Tensor,
     expert_offsets: torch.Tensor,
