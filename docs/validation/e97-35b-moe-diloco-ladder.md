@@ -50,7 +50,7 @@ actual training at every scale and sequential fail-closed promotion.
 | 1 node, >=20 min training | PASS | job 5182403 systems pass; job 5182549 atomically published ~210 GB of checksummed local/replicated model+ScheduleFree shards and a complete manifest (post-publication telemetry typo only); job 5182648 verified every SHA, restored in a fresh process group, and completed a step with loss 1.79291, `batch`/`debug`, exit 0 |
 | 2 nodes, >=20 min qualification | PASS | job 5182666: 1,200.738 s, 82 steps, 2,686,976 tokens, two K40 merges (17.206/13.517 s), mean loss 2.66133, median 2,362.63 tok/s, max 48.73 GB HBM, `batch`/`debug`, exit 0; job 5182663 was the pre-load source-staging failure; non-production observation |
 | 4 nodes, >=20 min qualification | PASS | job 5182895: 1,207.371 s, 81 steps, 5,308,416 tokens, two K40 merges (14.615/17.029 s), mean loss 2.60014, median 4,639.01 tok/s, max 48.65 GB HBM, `batch`/`debug`, exit 0; non-production observation |
-| 8 nodes, >=20 min ADR-003 rung | PENDING | requires reviewed exact-source acceptance |
+| 8 nodes, >=20 min ADR-003 rung | PASS | job 5183128: 1,211.676 s, 81 steps, 10,616,832 tokens, two K40 merges (28.670/17.848 s), mean loss 2.56924, median 9,611.27 tok/s, max 48.81 GB HBM, `batch`/`debug`, exit 0; immutable source commit `a9e2d542` |
 | 32 nodes, >=20 min ADR-003 rung | PENDING | requires immutable 8-node predecessor |
 
 ## Validation commands
