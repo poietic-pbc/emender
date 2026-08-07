@@ -133,6 +133,22 @@ def test_train_one_optimizer_step_reports_phase_timestamps_in_execution_order():
     assert phases[-1][1]["tokens"] == args.batch_size * (args.chunk_size + 1)
 
 
+def test_training_dataset_seed_includes_resume_step_and_global_rank(monkeypatch):
+    captured = {}
+
+    class Dataset:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(train, "TokenizedStreamDataset", Dataset)
+    args = Namespace(
+        seed=42, tbptt=False, tokenizer="p50k_base", data="corpus.txt",
+        chunk_size=2048, batch_size=4)
+    train.build_training_dataset(
+        args, rank=17, dist_enabled=True, start_step=2_322_520)
+    assert captured["seed"] == 2_322_579
+
+
 def test_real_worker_reports_bootstrap_phases_before_training(monkeypatch):
     import ndm.async_diloco_real as real
 
