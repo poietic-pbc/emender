@@ -85,11 +85,33 @@ def _canonical_checkpoint(args, groups, model, optimizer, *, step, accepted_toke
             accepted_tokens=accepted_tokens, source_commit=source_commit,
             node_group=groups.node_group, keep_generations=args.keep_checkpoints)
     dist.barrier()
-    generation = (args.checkpoint_root / "latest").resolve(strict=True)
-    manifest = json.loads((generation / "manifest.json").read_text())
-    if (manifest.get("complete") is not True or int(manifest.get("step", -1)) != step
-            or int(manifest.get("accepted_tokens", -1)) != accepted_tokens):
-        raise RuntimeError("canonical checkpoint authority does not match the completed step")
+    # Only global rank zero reads the just-published Lustre symlink/manifest.
+    # Other nodes can retain stale metadata briefly even after the RCCL barrier;
+    # broadcasting the verified authority prevents a false post-publication
+    # failure while preserving rank-zero checkpoint ownership.
+    authority = torch.zeros(3, device="cuda", dtype=torch.int64)
+    generation = args.checkpoint_root / (
+        f"step-{step:08d}-tokens-{accepted_tokens:016d}")
+    if dist.get_rank() == 0:
+        try:
+            resolved = (args.checkpoint_root / "latest").resolve(strict=True)
+            manifest = json.loads((resolved / "manifest.json").read_text())
+            valid = (resolved == generation.resolve(strict=True)
+                     and manifest.get("complete") is True
+                     and int(manifest.get("step", -1)) == step
+                     and int(manifest.get("accepted_tokens", -1)) == accepted_tokens)
+            authority.copy_(torch.tensor(
+                [int(valid), int(manifest.get("step", -1)),
+                 int(manifest.get("accepted_tokens", -1))],
+                device="cuda", dtype=torch.int64))
+        except Exception:
+            authority.zero_()
+    dist.broadcast(authority, src=0)
+    observed = tuple(int(value) for value in authority.cpu().tolist())
+    if observed != (1, step, accepted_tokens):
+        raise RuntimeError(
+            f"canonical checkpoint authority mismatch: observed={observed}, "
+            f"expected={(1, step, accepted_tokens)}")
     return generation
 
 

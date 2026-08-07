@@ -37,5 +37,7 @@ def test_runner_uses_restored_step_for_data_and_one_canonical_island():
     assert "data_seed_base = 42 + starting_step" in text
     assert 'rank_seed=data_seed_base + dist.get_rank()' in text
     assert "if groups.node_index == 0:" in text
+    assert "dist.broadcast(authority, src=0)" in text
+    assert 'if dist.get_rank() == 0:' in text
     assert 'args.checkpoint_root / f"node-' not in text
     assert "step % args.save_every == 0" in text
