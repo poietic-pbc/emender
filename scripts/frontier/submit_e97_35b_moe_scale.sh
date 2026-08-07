@@ -11,7 +11,7 @@ TRAIN_MINUTES=${TRAIN_MINUTES:-20}
 RUN_ID=${RUN_ID:-e97-35b-moe-production}
 RUN_ROOT=${RUN_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-35b-moe-production/runs/$RUN_ID}
 
-[[ "$NODES" =~ ^(32|128|256)$ ]] || { echo "NODES must be an explicitly reviewed 32, 128, or 256" >&2; exit 64; }
+[[ "$NODES" =~ ^(8|32|128|256)$ ]] || { echo "NODES must be an explicitly reviewed 8, 32, 128, or 256" >&2; exit 64; }
 [[ "$QOS" == debug || "$QOS" == normal ]] || { echo "QOS must be debug or normal" >&2; exit 64; }
 [[ "$RUN_ROOT" == /* && "$RUN_ID" != */* ]] || { echo "invalid stable run identity" >&2; exit 64; }
 cd "$PROJECT_ROOT"
