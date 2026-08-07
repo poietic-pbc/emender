@@ -17,7 +17,7 @@ REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
 SOURCE_COMMIT=${SOURCE_COMMIT:?submit with an immutable source commit}
 BATCH_SIZE=${BATCH_SIZE:-1}
 MAX_STEPS=${MAX_STEPS:-4}
-EXPERT_BACKEND=${EXPERT_BACKEND:-triton}
+EXPERT_BACKEND=${EXPERT_BACKEND:-rocblas}
 cd "$REPO"; git cat-file -e "${SOURCE_COMMIT}^{commit}"
 mkdir -p logs/frontier/e97_moe
 RUN_ROOT=${RUN_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-35b-moe/profile-1n-${EXPERT_BACKEND}-b${BATCH_SIZE}-${SLURM_JOB_ID}}

@@ -50,7 +50,7 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=1.007e-3)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--diloco-k", type=int, default=40)
-    parser.add_argument("--expert-backend", choices=("triton", "rocblas"), default="triton")
+    parser.add_argument("--expert-backend", choices=("triton", "rocblas"), default="rocblas")
     parser.add_argument("--log-jsonl", type=Path, required=True)
     parser.add_argument("--checkpoint-root", type=Path)
     parser.add_argument("--resume-root", type=Path)

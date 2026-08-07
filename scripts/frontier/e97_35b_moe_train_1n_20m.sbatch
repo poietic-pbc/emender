@@ -54,6 +54,6 @@ srun --label --kill-on-bad-exit=1 bash -lc '
   export TRITON_CACHE_DIR="/tmp/e97-35b-moe-20m-${SLURM_JOB_ID}-${SLURM_PROCID}"
   rm -rf "$TRITON_CACHE_DIR"
   "$EMENDER_PYTHON" scripts/frontier/e97_35b_moe_train.py \
-    --max-steps 0 --minutes 20 --batch-size 1 --chunk-size 2048 \
+    --max-steps 0 --minutes 20 --batch-size 2 --chunk-size 2048 --expert-backend rocblas \
     --log-jsonl "'"$RUN_ROOT"'"/training.jsonl
 '

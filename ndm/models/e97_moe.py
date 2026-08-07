@@ -34,7 +34,9 @@ class E97MoEConfig:
     router_init_std: float = 1.0e-3
     load_balance_coefficient: float = 1.0e-3
     z_loss_coefficient: float = 1.0e-4
-    expert_backend: str = "triton"
+    # Production expert GEMMs use the same tuned ROCm linear backend as dense
+    # E97. Triton remains responsible for recurrence, routing and packing.
+    expert_backend: str = "rocblas"
 
     def validate(self) -> None:
         if self.hidden_dim <= 0:
