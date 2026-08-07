@@ -50,6 +50,7 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=1.007e-3)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--diloco-k", type=int, default=40)
+    parser.add_argument("--expert-backend", choices=("triton", "rocblas"), default="triton")
     parser.add_argument("--log-jsonl", type=Path, required=True)
     parser.add_argument("--checkpoint-root", type=Path)
     parser.add_argument("--resume-root", type=Path)
@@ -97,7 +98,8 @@ def main() -> None:
         convert_e97_ffns_to_node_local_moe(
             model,
             E97MoEConfig(hidden_dim=8832, routed_experts=64, shared_experts=1,
-                         top_k=3, expert_parallel_size=8),
+                         top_k=3, expert_parallel_size=8,
+                         expert_backend=args.expert_backend),
             local_expert_rank=local_rank, expert_group=groups.node_group)
         model.train()
         parameter_count_local = sum(parameter.numel() for parameter in model.parameters())

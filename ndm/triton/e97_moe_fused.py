@@ -17,6 +17,8 @@ from dataclasses import dataclass
 import os
 
 import torch
+import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 import triton
 import triton.language as tl
 
@@ -1191,6 +1193,47 @@ def fused_shared_top3_combine_autograd(
     """Combine returned expert rows and the shared expert with fused backward."""
     return _FusedMoECombineFunction.apply(
         returned_expert_output, assignment_to_send_row, top_weights, shared_output)
+
+
+def checkpointed_packed_local_experts_rocblas(
+    packed_x: torch.Tensor,
+    expert_offsets: torch.Tensor,
+    gate_weight: torch.Tensor,
+    up_weight: torch.Tensor,
+    down_weight: torch.Tensor,
+) -> torch.Tensor:
+    """Performance-reference grouped experts using ROCm's tuned GEMMs.
+
+    Routing and packing remain Triton/RCCL.  Eight expert-local ``linear``
+    calls deliberately use rocBLAS rather than the correctness-first custom
+    GEMM, and non-reentrant checkpointing retains only each packed input while
+    recomputing its SwiGLU activation once in backward.
+    """
+    _require_hip_triton(packed_x)
+    if expert_offsets.shape != (9,) or expert_offsets.dtype != torch.int32:
+        raise ValueError("expert_offsets must be int32 [9]")
+    if (gate_weight.shape[0] != 8 or up_weight.shape != gate_weight.shape or
+            down_weight.shape != (8, packed_x.shape[1], gate_weight.shape[1])):
+        raise ValueError("packed rocBLAS expert weight shape mismatch")
+    # PyTorch's ragged GEMM interfaces require host-visible segment boundaries.
+    # The EP exchange already has a mandatory split-size synchronization; this
+    # reference makes the additional synchronization explicit for measurement.
+    offsets = [int(value) for value in expert_offsets.detach().cpu().tolist()]
+
+    def expert(x, wg, wu, wd):
+        return F.linear(F.silu(F.linear(x, wg)) * F.linear(x, wu), wd)
+
+    outputs = []
+    for expert_index in range(8):
+        start, end = offsets[expert_index], offsets[expert_index + 1]
+        outputs.append(checkpoint(
+            expert, packed_x[start:end], gate_weight[expert_index],
+            up_weight[expert_index], down_weight[expert_index],
+            use_reentrant=False))
+    covered = offsets[-1]
+    if covered < packed_x.shape[0]:
+        outputs.append(packed_x.new_zeros((packed_x.shape[0] - covered, packed_x.shape[1])))
+    return torch.cat(outputs, dim=0)
 
 
 class _FusedPackedLocalExpertsFunction(torch.autograd.Function):

@@ -34,6 +34,7 @@ class E97MoEConfig:
     router_init_std: float = 1.0e-3
     load_balance_coefficient: float = 1.0e-3
     z_loss_coefficient: float = 1.0e-4
+    expert_backend: str = "triton"
 
     def validate(self) -> None:
         if self.hidden_dim <= 0:
@@ -46,6 +47,8 @@ class E97MoEConfig:
             raise ValueError("routed experts must divide evenly over expert ranks")
         if self.router_init_std < 0:
             raise ValueError("router_init_std must be nonnegative")
+        if self.expert_backend not in {"triton", "rocblas"}:
+            raise ValueError("expert_backend must be 'triton' or 'rocblas'")
 
 
 def expert_owner(expert_index: int, *, routed_experts: int = 64,
@@ -178,7 +181,8 @@ class NodeLocalSharedRoutedMoE(nn.Module):
             self.local_gate_weight, self.local_up_weight, self.local_down_weight,
             self.shared_expert.w1.weight, self.shared_expert.w2.weight,
             self.shared_expert.w3.weight,
-            group=self.expert_group, topology=self._topology)
+            group=self.expert_group, topology=self._topology,
+            expert_backend=self.config.expert_backend)
         self._load_balance_loss = result.load_balance_loss
         self._z_loss = result.z_loss
         self.last_metrics = {

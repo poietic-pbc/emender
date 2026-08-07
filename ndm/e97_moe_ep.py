@@ -23,6 +23,7 @@ from .triton.e97_moe_ep import (
     unpack_local_expert_rows,
 )
 from .triton.e97_moe_fused import (
+    checkpointed_packed_local_experts_rocblas,
     fused_packed_local_experts_autograd,
     fused_shared_expert_autograd,
     fused_shared_top3_combine_autograd,
@@ -245,6 +246,7 @@ def node_local_fused_moe_autograd(
     *,
     group=None,
     topology: NodeLocalEPTopology | None = None,
+    expert_backend: str = "triton",
 ) -> NodeLocalMoEResult:
     """Execute one complete shared+routed MoE layer across one eight-GCD node."""
     if topology is None:
@@ -255,9 +257,16 @@ def node_local_fused_moe_autograd(
         x, top_indices, group=group, topology=topology)
     local_plan = build_local_expert_plan(
         exchange.received_x, exchange.received_local_expert)
-    local_packed_output = fused_packed_local_experts_autograd(
-        local_plan.packed_x, local_plan.expert_offsets,
-        local_gate_weight, local_up_weight, local_down_weight)
+    if expert_backend == "triton":
+        local_packed_output = fused_packed_local_experts_autograd(
+            local_plan.packed_x, local_plan.expert_offsets,
+            local_gate_weight, local_up_weight, local_down_weight)
+    elif expert_backend == "rocblas":
+        local_packed_output = checkpointed_packed_local_experts_rocblas(
+            local_plan.packed_x, local_plan.expert_offsets,
+            local_gate_weight, local_up_weight, local_down_weight)
+    else:
+        raise ValueError(f"unknown expert backend: {expert_backend}")
     received_output = unpack_local_expert_rows(local_packed_output, local_plan)
     returned_output = return_expert_outputs(exchange, received_output, group=group)
     shared_output = fused_shared_expert_autograd(

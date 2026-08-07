@@ -17,9 +17,10 @@ REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
 SOURCE_COMMIT=${SOURCE_COMMIT:?submit with an immutable source commit}
 BATCH_SIZE=${BATCH_SIZE:-1}
 MAX_STEPS=${MAX_STEPS:-4}
+EXPERT_BACKEND=${EXPERT_BACKEND:-triton}
 cd "$REPO"; git cat-file -e "${SOURCE_COMMIT}^{commit}"
 mkdir -p logs/frontier/e97_moe
-RUN_ROOT=${RUN_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-35b-moe/profile-1n-b${BATCH_SIZE}-${SLURM_JOB_ID}}
+RUN_ROOT=${RUN_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-35b-moe/profile-1n-${EXPERT_BACKEND}-b${BATCH_SIZE}-${SLURM_JOB_ID}}
 mkdir -p "$RUN_ROOT"
 SNAPSHOT=$RUN_ROOT/source-$SOURCE_COMMIT
 rm -rf "$SNAPSHOT"; mkdir -p "$SNAPSHOT"
@@ -34,7 +35,7 @@ export WORLD_SIZE=$SLURM_NTASKS OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-7}
 export MPICH_GPU_SUPPORT_ENABLED=1 NCCL_DEBUG=WARN
 export PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
 export TIKTOKEN_CACHE_DIR=/lustre/orion/bif148/proj-shared/tiktoken_cache
-export EMENDER_SOURCE_COMMIT=$SOURCE_COMMIT BATCH_SIZE MAX_STEPS
+export EMENDER_SOURCE_COMMIT=$SOURCE_COMMIT BATCH_SIZE MAX_STEPS EXPERT_BACKEND
 
 srun --label --kill-on-bad-exit=1 bash -lc '
   set -euo pipefail
@@ -45,5 +46,5 @@ srun --label --kill-on-bad-exit=1 bash -lc '
   rm -rf "$TRITON_CACHE_DIR"
   "$EMENDER_PYTHON" scripts/frontier/e97_35b_moe_train.py \
     --max-steps "$MAX_STEPS" --minutes 0 --batch-size "$BATCH_SIZE" --chunk-size 2048 \
-    --profile-phases --log-jsonl "'"$RUN_ROOT"'/training.jsonl"
+    --expert-backend "$EXPERT_BACKEND" --profile-phases --log-jsonl "'"$RUN_ROOT"'/training.jsonl"
 '
