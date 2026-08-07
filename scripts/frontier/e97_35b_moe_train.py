@@ -53,6 +53,9 @@ def parse_args():
     parser.add_argument("--log-jsonl", type=Path, required=True)
     parser.add_argument("--checkpoint-root", type=Path)
     parser.add_argument("--resume-root", type=Path)
+    parser.add_argument(
+        "--profile-phases", action="store_true",
+        help="synchronize GPU events and emit forward/backward/reduction/optimizer timings")
     return parser.parse_args()
 
 
@@ -136,13 +139,24 @@ def main() -> None:
             chunks, _, actual_lengths = dataset.get_batch(
                 args.batch_size, device=torch.device("cuda"))
             step_start = time.monotonic()
+            phase_events = None
+            if args.profile_phases:
+                phase_events = {
+                    name: torch.cuda.Event(enable_timing=True)
+                    for name in ("start", "forward", "backward", "reduce", "optimizer", "merge")
+                }
+                phase_events["start"].record()
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 loss = model(chunks, return_loss=True)
             auxiliary = e97_moe_auxiliary_loss(model)
+            if phase_events is not None:
+                phase_events["forward"].record()
             objective = loss + auxiliary
             if not torch.isfinite(objective):
                 raise FloatingPointError(f"nonfinite objective at step {step}")
             objective.backward()
+            if phase_events is not None:
+                phase_events["backward"].record()
             replicated_ids = {id(parameter) for parameter in replicated}
             missing_replicated = [
                 name for name, parameter in model.named_parameters()
@@ -154,8 +168,12 @@ def main() -> None:
                     f"replicated parameters missing gradients: {missing_replicated}")
             average_replicated_gradients_(
                 replicated, group=groups.node_group, topology=topology)
+            if phase_events is not None:
+                phase_events["reduce"].record()
             optimizer.step()
             optimizer.assert_no_master_weights()
+            if phase_events is not None:
+                phase_events["optimizer"].record()
             merge_seconds = 0.0
             if groups.node_count > 1 and (step + 1) % args.diloco_k == 0:
                 # Release inactive variable-routing blocks before RCCL allocates its
@@ -168,6 +186,15 @@ def main() -> None:
                 diloco_average_schedulefree_(
                     model, optimizer, lane_group=groups.diloco_lane_group)
                 merge_seconds = time.monotonic() - merge_start
+            if phase_events is not None:
+                phase_events["merge"].record()
+                phase_events["merge"].synchronize()
+                emit(args.log_jsonl, "phase_profile", step=step,
+                     forward_ms=phase_events["start"].elapsed_time(phase_events["forward"]),
+                     backward_ms=phase_events["forward"].elapsed_time(phase_events["backward"]),
+                     replicated_reduce_ms=phase_events["backward"].elapsed_time(phase_events["reduce"]),
+                     optimizer_ms=phase_events["reduce"].elapsed_time(phase_events["optimizer"]),
+                     merge_ms=phase_events["optimizer"].elapsed_time(phase_events["merge"]))
             dist.all_reduce(loss, op=dist.ReduceOp.AVG, group=groups.node_group)
             dist.all_reduce(auxiliary, op=dist.ReduceOp.AVG, group=groups.node_group)
             step_seconds = time.monotonic() - step_start

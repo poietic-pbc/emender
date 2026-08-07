@@ -421,14 +421,18 @@ def _grouped_down_weight_backward_kernel(
     start = tl.load(OFFSETS + expert)
     end = tl.load(OFFSETS + expert + 1)
     acc = tl.zeros((BN, BK), tl.float32)
-    for m0 in range(0, PADDED_M, BM):
+    # Expert spans are padded to BM alignment.  Walk only this expert's span;
+    # the former range(0, PADDED_M) made every expert rescan all eight spans.
+    m0 = start
+    while m0 < end:
         m = m0 + tl.arange(0, BM)
-        row_mask = (m >= start) & (m < end)
+        row_mask = m < end
         grad = tl.load(GRAD_OUT + m[:, None] * D + n[None, :],
                        mask=row_mask[:, None] & (n[None, :] < D), other=0.0)
         act = tl.load(ACT + m[:, None] * HIDDEN + k[None, :],
                       mask=row_mask[:, None] & (k[None, :] < HIDDEN), other=0.0)
         acc += tl.dot(tl.trans(grad), act)
+        m0 += BM
     base = expert * D * HIDDEN
     tl.store(GRAD_W + base + n[:, None] * HIDDEN + k[None, :], acc,
              mask=(n[:, None] < D) & (k[None, :] < HIDDEN))
@@ -501,9 +505,12 @@ def _grouped_gate_up_weight_backward_kernel(
     end = tl.load(OFFSETS + expert + 1)
     acc_gate = tl.zeros((BN, BK), tl.float32)
     acc_up = tl.zeros((BN, BK), tl.float32)
-    for m0 in range(0, PADDED_M, BM):
+    # Expert-local dynamic loop: do not perform eight masked passes over the
+    # complete rank-level packed batch for each expert weight tile.
+    m0 = start
+    while m0 < end:
         m = m0 + tl.arange(0, BM)
-        row_mask = (m >= start) & (m < end)
+        row_mask = m < end
         dg = tl.load(GRAD_GATE + m[:, None] * HIDDEN + n[None, :],
                      mask=row_mask[:, None] & (n[None, :] < HIDDEN), other=0.0)
         du = tl.load(GRAD_UP + m[:, None] * HIDDEN + n[None, :],
@@ -512,6 +519,7 @@ def _grouped_gate_up_weight_backward_kernel(
                     mask=row_mask[:, None] & (k[None, :] < D), other=0.0)
         acc_gate += tl.dot(tl.trans(dg), x)
         acc_up += tl.dot(tl.trans(du), x)
+        m0 += BM
     base = expert * HIDDEN * D
     mask = (n[:, None] < HIDDEN) & (k[None, :] < D)
     tl.store(GRAD_W_GATE + base + n[:, None] * D + k[None, :], acc_gate, mask=mask)
@@ -1216,17 +1224,32 @@ class _FusedPackedLocalExpertsFunction(torch.autograd.Function):
             act, down_weight, expert_offsets, output,
             rows, dim, hidden, 8, BLOCK_E=8,
             BM=16, BN=64, BK=32, num_warps=4, num_stages=1)
+        # Checkpoint the compact packed input and route spans, not the enormous
+        # [rows, 8832] activation.  Backward already needs gate/up recomputation
+        # for the SiLU derivative, so retaining ACT consumed HBM without avoiding
+        # its dominant recompute.
         ctx.save_for_backward(
-            packed_x, expert_offsets, gate_weight, up_weight, down_weight, act)
+            packed_x, expert_offsets, gate_weight, up_weight, down_weight)
         return output
 
     @staticmethod
     def backward(ctx, grad_output):
-        packed_x, offsets, gate_weight, up_weight, down_weight, act = ctx.saved_tensors
+        packed_x, offsets, gate_weight, up_weight, down_weight = ctx.saved_tensors
         grad_output = grad_output.contiguous()
         rows, dim = packed_x.shape
         hidden = gate_weight.shape[1]
         BM, BN, BK = 16, 32, 32
+        # One checkpoint recomputation supplies both the down-weight input and
+        # the gate/up values required by the SiLU VJP.
+        gate = torch.empty((rows, hidden), device=packed_x.device, dtype=packed_x.dtype)
+        up = torch.empty_like(gate)
+        _grouped_gate_up_kernel[(triton.cdiv(rows, BM), triton.cdiv(hidden, 64))](
+            packed_x, gate_weight, up_weight, offsets, gate, up,
+            rows, dim, hidden, 8, BLOCK_E=8,
+            BM=BM, BN=64, BK=32, num_warps=4, num_stages=1)
+        act = torch.empty_like(gate)
+        _silu_mul_kernel[(triton.cdiv(rows * hidden, 256),)](
+            gate, up, act, rows * hidden, BLOCK=256, num_warps=4)
         grad_act = torch.empty_like(act)
         _grouped_down_input_backward_kernel[(triton.cdiv(rows, BM), triton.cdiv(hidden, BN))](
             grad_output, down_weight, offsets, grad_act,
@@ -1237,12 +1260,6 @@ class _FusedPackedLocalExpertsFunction(torch.autograd.Function):
             grad_output, act, offsets, grad_down,
             rows, dim, hidden, 8, BM=BM, BN=BN, BK=BK,
             num_warps=4, num_stages=1)
-        gate = torch.empty_like(act)
-        up = torch.empty_like(act)
-        _grouped_gate_up_kernel[(triton.cdiv(rows, BM), triton.cdiv(hidden, 64))](
-            packed_x, gate_weight, up_weight, offsets, gate, up,
-            rows, dim, hidden, 8, BLOCK_E=8,
-            BM=BM, BN=64, BK=32, num_warps=4, num_stages=1)
         grad_gate_values = torch.empty_like(gate)
         grad_up_values = torch.empty_like(up)
         _silu_backward_kernel[(triton.cdiv(rows * hidden, 256),)](
