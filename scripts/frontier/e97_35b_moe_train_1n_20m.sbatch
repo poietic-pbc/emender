@@ -17,6 +17,7 @@ REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
 SOURCE_COMMIT=${SOURCE_COMMIT:?submit with --export=ALL,SOURCE_COMMIT=<exact commit>}
 BATCH_SIZE=${BATCH_SIZE:-4}
 EMPTY_CACHE_INTERVAL=${EMPTY_CACHE_INTERVAL:-0}
+ALLOC_CONF=${ALLOC_CONF:-expandable_segments:True}
 cd "$REPO"
 git cat-file -e "${SOURCE_COMMIT}^{commit}"
 mkdir -p logs/frontier/e97_moe
@@ -42,7 +43,7 @@ export WORLD_SIZE=$SLURM_NTASKS
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-7}
 export MPICH_GPU_SUPPORT_ENABLED=1
 export NCCL_DEBUG=WARN
-export PYTORCH_ALLOC_CONF=expandable_segments:True
+export PYTORCH_ALLOC_CONF=$ALLOC_CONF
 export PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_ALLOC_CONF
 export PYTORCH_HIP_ALLOC_CONF=$PYTORCH_ALLOC_CONF
 export TIKTOKEN_CACHE_DIR=/lustre/orion/bif148/proj-shared/tiktoken_cache
