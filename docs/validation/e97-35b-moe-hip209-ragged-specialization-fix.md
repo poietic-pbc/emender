@@ -84,10 +84,27 @@ _repack_rows_kernel               caches device 0: 1
 _unpack_rows_kernel               caches device 0: 1
 ```
 
-The next bounded machine validation is one exact 320-step 256-node epoch with
-K40, `SAVE_EVERY=80`, `Partition=batch`, `QOS=debug`, and `Requeue=0`.  It must
-pass beyond all three prior direct failure points, retain eight K40 merges and
-four atomic checkpoints, and exit zero before a longer epoch is authorized.
+Bounded machine validation job **5195332** used source `864d8f3c`, exact 320
+steps at 256 nodes, K40, `SAVE_EVERY=80`, `Partition=batch`, `QOS=debug`, and
+`Requeue=0`.  It passed beyond all prior direct failure points and terminated
+`COMPLETED 0:0` in 52:51.  It retained all eight K40 merges (22.82--28.10 s),
+four atomic checkpoints (67.40--98.13 s), 5,368,709,120 newly accepted tokens,
+and final authority:
+
+```text
+step=2323760
+accepted_tokens=10547625984
+checkpoint=step-02323760-tokens-0000010547625984
+```
+
+No HIP-209, Triton-load, nonfinite, HBM, or collective error occurred.  Peak
+allocated HBM was 53,582,800,896 bytes/GCD.  This is a direct machine pass of
+the proposed root-cause fix, not merely a shorter-than-failure smoke.
+
+The measured 320-step timing predicts 960 steps would slightly exceed two
+hours after staging/model restore.  The bounded sustained successor therefore
+uses exact 880 steps, 22 K40 merges, `SAVE_EVERY=80`, and a two-hour debug-QoS
+safety envelope (job 5195870), targeting about 1h54 rather than guessing 960.
 
 ## Architecture conformance
 
