@@ -1200,16 +1200,11 @@ def checkpointed_shared_expert_rocblas(
     """Checkpointed shared expert on ROCm's production GEMM backend."""
     _require_hip_triton(x)
 
-    # Retain only the gate projection. This selective checkpoint avoids
-    # recomputing gate in backward while recomputing the equally large up
-    # projection, a better speed/HBM point than either saving both or neither.
-    gate = F.linear(x, gate_weight)
-
-    def expert_remainder(x_, gate_, wu, wd):
-        return F.linear(F.silu(gate_) * F.linear(x_, wu), wd)
+    def expert(x_, wg, wu, wd):
+        return F.linear(F.silu(F.linear(x_, wg)) * F.linear(x_, wu), wd)
 
     return checkpoint(
-        expert_remainder, x, gate, up_weight, down_weight,
+        expert, x, gate_weight, up_weight, down_weight,
         use_reentrant=False)
 
 
@@ -1234,16 +1229,14 @@ def checkpointed_packed_local_experts_grouped(
         raise ValueError("packed grouped expert weight shape mismatch")
     ends = expert_offsets[1:].contiguous()
 
-    gate = F.grouped_mm(
-        packed_x, gate_weight.transpose(1, 2), offs=ends)
-
-    def expert_remainder(x, gate_, wu, wd, offs):
+    def experts(x, wg, wu, wd, offs):
+        gate = F.grouped_mm(x, wg.transpose(1, 2), offs=offs)
         up = F.grouped_mm(x, wu.transpose(1, 2), offs=offs)
-        activation = F.silu(gate_) * up
+        activation = F.silu(gate) * up
         return F.grouped_mm(activation, wd.transpose(1, 2), offs=offs)
 
     return checkpoint(
-        expert_remainder, packed_x, gate, up_weight, down_weight, ends,
+        experts, packed_x, gate_weight, up_weight, down_weight, ends,
         use_reentrant=False)
 
 
@@ -1272,17 +1265,16 @@ def checkpointed_packed_local_experts_rocblas(
     # reference makes the additional synchronization explicit for measurement.
     offsets = [int(value) for value in expert_offsets.detach().cpu().tolist()]
 
-    def expert_remainder(x, gate, wu, wd):
-        return F.linear(F.silu(gate) * F.linear(x, wu), wd)
+    def expert(x, wg, wu, wd):
+        return F.linear(F.silu(F.linear(x, wg)) * F.linear(x, wu), wd)
 
     outputs = []
     for expert_index in range(8):
         start, end = offsets[expert_index], offsets[expert_index + 1]
-        expert_x = packed_x[start:end]
-        gate = F.linear(expert_x, gate_weight[expert_index])
         outputs.append(checkpoint(
-            expert_remainder, expert_x, gate, up_weight[expert_index],
-            down_weight[expert_index], use_reentrant=False))
+            expert, packed_x[start:end], gate_weight[expert_index],
+            up_weight[expert_index], down_weight[expert_index],
+            use_reentrant=False))
     covered = offsets[-1]
     if covered < packed_x.shape[0]:
         outputs.append(packed_x.new_zeros((packed_x.shape[0] - covered, packed_x.shape[1])))
