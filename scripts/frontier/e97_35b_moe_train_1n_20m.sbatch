@@ -40,6 +40,7 @@ export WORLD_SIZE=$SLURM_NTASKS
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-7}
 export MPICH_GPU_SUPPORT_ENABLED=1
 export NCCL_DEBUG=WARN
+export PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
 export TIKTOKEN_CACHE_DIR=/lustre/orion/bif148/proj-shared/tiktoken_cache
 export EMENDER_SOURCE_COMMIT=$SOURCE_COMMIT
 [[ -r "$TIKTOKEN_CACHE_DIR/ec7223a39ce59f226a68acc30dc1af2788490e15" ]] || exit 66
@@ -54,6 +55,6 @@ srun --label --kill-on-bad-exit=1 bash -lc '
   export TRITON_CACHE_DIR="/tmp/e97-35b-moe-20m-${SLURM_JOB_ID}-${SLURM_PROCID}"
   rm -rf "$TRITON_CACHE_DIR"
   "$EMENDER_PYTHON" scripts/frontier/e97_35b_moe_train.py \
-    --max-steps 0 --minutes 20 --batch-size 2 --chunk-size 2048 --expert-backend rocblas \
+    --max-steps 0 --minutes 20 --batch-size 4 --chunk-size 2048 --expert-backend rocblas \
     --log-jsonl "'"$RUN_ROOT"'"/training.jsonl
 '
