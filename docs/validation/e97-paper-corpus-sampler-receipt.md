@@ -53,13 +53,33 @@ job_source_at_reported_commit_sha256=a3fe65508412ac51f2cfb6ef5a5ff4d312d3034d0aa
 ```
 
 The job compared its submitted commit environment variable with `git rev-parse
-HEAD` and failed closed on disagreement. It did **not** record `git status` or a
-runtime hash of its own spooled script. Accordingly, these fields retain the
-required reported source identity but are not presented as proof that the
-entire worktree was clean. The content-addressed job source named above remains
-available at commit `42990607036e7a59c9aed13795f49aa875ffd443`; its Git-blob
-content hashes to the stated SHA-256. This limitation does not change the exact
-scheduler stdout, artifact paths, byte sizes, or hashes below.
+HEAD` and failed closed on disagreement. Frontier accounting stored the exact
+spooled batch script. After completion, the accounting copy was extracted and
+compared byte-for-byte with the named file at the reported commit:
+
+```console
+$ sacct -j 5207741 --batch-script
+Batch Script for 5207741
+--------------------------------------------------------------------------------
+#!/bin/bash
+#SBATCH -A bif148
+#SBATCH -J e97-corpus-receipt
+#SBATCH -p batch
+#SBATCH --qos=debug
+[the complete 92-line accounting output is retained in terminal-batch-script-sacct.txt]
+$ tail -n +4 terminal-batch-script-sacct.txt > slurm-5207741-spooled-batch-script.sbatch
+$ sha256sum -- slurm-5207741-spooled-batch-script.sbatch
+a3fe65508412ac51f2cfb6ef5a5ff4d312d3034d0aa8c39f05c28bac3df550a0  slurm-5207741-spooled-batch-script.sbatch
+$ git show 42990607036e7a59c9aed13795f49aa875ffd443:scripts/frontier/e97_paper_corpus_receipt.sbatch | sha256sum
+a3fe65508412ac51f2cfb6ef5a5ff4d312d3034d0aa8c39f05c28bac3df550a0  -
+$ cmp slurm-5207741-spooled-batch-script.sbatch <(git show 42990607036e7a59c9aed13795f49aa875ffd443:scripts/frontier/e97_paper_corpus_receipt.sbatch)
+spooled_script_matches_source_commit=true
+```
+
+Thus the executed scheduler script is bound to source commit
+`42990607036e7a59c9aed13795f49aa875ffd443`, independent of the relative path
+used at submission. This does not assert that unrelated worktree files were
+clean; the hash job did not execute them.
 
 Exact submission command and output:
 
@@ -170,6 +190,9 @@ Key artifact digests from that directory's `SHA256SUMS`:
 e4e765e3fdf330351cd548d3b97c045d2873acb021029f2281ddeb4589dc3ce9  live-squeue.txt
 d3ca1a0ec18aabe668e0f79960978f2d2e3d8001e70794258e01d2902780de5e  terminal-sacct.txt
 3434e57705c9dcd8f199f72657e220e569b14bca34c58ea18958d58252dea8f1  terminal-scontrol.txt
+a3fe65508412ac51f2cfb6ef5a5ff4d312d3034d0aa8c39f05c28bac3df550a0  slurm-5207741-spooled-batch-script.sbatch
+cc5640ec7fa34bb50546b1da84dc303f1f94ad5186614eb7d39eb68e4aae141a  source-provenance.txt
+58aa14c94a75f9c9141bcd71d8da84e8d914c5dd59bf1ec281fd1d375ee6261e  terminal-batch-script-sacct.txt
 ```
 
 This Git receipt is the content-addressed publication of those facts. The job
