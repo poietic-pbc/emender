@@ -42,14 +42,24 @@ recomputed the decompressed canonical artifact's digest.
 
 ## Source and submission identity
 
-The submitted source tree was exactly:
+The job reported this source identity:
 
 ```text
 source_repo=/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-4
 submitted_source_commit=42990607036e7a59c9aed13795f49aa875ffd443
 actual_source_commit=42990607036e7a59c9aed13795f49aa875ffd443
 job_source=scripts/frontier/e97_paper_corpus_receipt.sbatch
+job_source_at_reported_commit_sha256=a3fe65508412ac51f2cfb6ef5a5ff4d312d3034d0aa8c39f05c28bac3df550a0
 ```
+
+The job compared its submitted commit environment variable with `git rev-parse
+HEAD` and failed closed on disagreement. It did **not** record `git status` or a
+runtime hash of its own spooled script. Accordingly, these fields retain the
+required reported source identity but are not presented as proof that the
+entire worktree was clean. The content-addressed job source named above remains
+available at commit `42990607036e7a59c9aed13795f49aa875ffd443`; its Git-blob
+content hashes to the stated SHA-256. This limitation does not change the exact
+scheduler stdout, artifact paths, byte sizes, or hashes below.
 
 Exact submission command and output:
 
