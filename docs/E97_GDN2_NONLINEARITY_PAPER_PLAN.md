@@ -1,6 +1,6 @@
 # E97–GDN2 Nonlinearity Study and Long-Context Follow-up
 
-**Status:** reviewed execution plan; no scale job is authorized by this document alone  
+**Status:** operator-authorized autonomous execution plan for the scoped three-arm study
 **Date:** 2026-08-08  
 **Primary question:** Does E97's nonlinear matrix-state update improve language
 modeling over (a) the same E97 transition with the state `tanh` removed and
@@ -306,17 +306,21 @@ chunked-ROCm smoke.
 
 ### Phase C — systems ladder
 
-Requested operational checks are 8-node, 32-node, and 256-node runs. Current
-ADR-003 authority requires the exact predecessor ladder `8 -> 32 -> 128`, with
-256 requiring explicit evidence review. Therefore the conforming execution is:
+The operator has explicitly authorized autonomous progression for this scoped
+study without a 128-node rung or a separate human gate at each transition. The
+execution ladder is:
 
 1. **8 nodes:** approximately 20-minute safety envelope, exact positive
    K-aligned steps; validate data cursor, loss, kernels, merge, and checkpoint.
 2. **32 nodes:** same exact source and identities, 20–30-minute envelope.
-3. **128 nodes:** short required predecessor gate.
-4. **256 nodes / 2,048 GCDs:** explicit reviewed qualification, long enough to
-   demonstrate multiple merges, at least one periodic checkpoint, stable loss,
-   sustained HBM, and bounded compiled-module count.
+3. **256 nodes / 2,048 GCDs:** advance automatically only after the 32-node
+   machine criteria pass; run long enough to demonstrate multiple merges, at
+   least one periodic checkpoint, stable loss, sustained HBM, and bounded
+   compiled-module count.
+
+A failed rung is diagnosed and retried autonomously from immutable evidence;
+unchanged unexplained failures do not advance. No 128-node allocation is
+required for these arms.
 
 These are throwaway from-scratch systems runs. They do not become paper model
 initialization. Every run uses eight ranks/node, one GCD/rank, fixed world,
@@ -410,7 +414,7 @@ unbounded kernel specialization, inconsistent sampler metadata, mismatched next
 batch after restore, checkpoint corruption, rank/world drift, or an unexplained
 loss discontinuity. A failed fixed world publishes no emergency checkpoint.
 Resume only from the newest complete accepted K-boundary authority in a fresh,
-human-approved non-requeueing job.
+non-requeueing job after automated evidence review.
 
 Proceed from 50B to 100B only after all three 50B milestones exist and a fixed
 held-out evaluation shows that continuation is scientifically useful. A systems
@@ -424,7 +428,7 @@ or data-integrity gates.
 - exact three-arm model/config/initialization manifests;
 - GDN2 immutable source bundle and ROCm qualification;
 - E97-linear current-source parity qualification;
-- 8/32/128/256 systems reports per newly qualified kernel path;
+- 8/32/256 systems reports per newly qualified kernel path;
 - three immutable 50.332B checkpoint authorities;
 - held-out base-context comparison report;
 - optional three-arm 100.663B continuation report;
@@ -438,9 +442,11 @@ ADR-003 crosswalk in `docs/RESILIENT_DILOCO_GAP_MATRIX.md`.
 
 Applicable production safety requirements are **R07** (atomic checkpoint
 intent), **R12** (stable authoritative restart), **R14/NDP13** (bounded
-fail-stop execution), **R16** (sequential exact-source ladder and explicit 256
-review), and **NDP15 checkpoint atomicity only**. The elastic/native clauses of
-those rows are unclaimed. **R02–R06, R08–R11; NDP01, NDP03–NDP12, NDP14,
+fail-stop execution), and **NDP15 checkpoint atomicity only**. The
+elastic/native clauses of those rows are unclaimed. For this explicitly scoped
+study, the operator replaces **R16**'s generic `8 -> 32 -> 128` promotion rule
+with an autonomous exact-source `8 -> 32 -> 256` ladder. No general elastic or
+other production-path promotion claim follows from this exception. **R02–R06, R08–R11; NDP01, NDP03–NDP12, NDP14,
 NDP16–NDP17; V21S01–V21S17; and ISP01–ISP07** are explicitly retired/not
 claimed for this fixed-world production study, as are NDP02's no-all-rank
 property and background/apply clauses of NDP15.
@@ -448,7 +454,8 @@ property and background/apply clauses of NDP15.
 The production path uses one bounded fixed-world child, never preserves,
 shrinks, or automatically relaunches a broken communicator, contains no SQLite
 or filesystem membership/heartbeat authority, publishes only complete atomic
-K-aligned checkpoints, and requires a human-approved fresh job after failure.
+K-aligned checkpoints, and starts a fresh non-requeueing job after automated
+failure-evidence review.
 There is no elastic minimum-progress floor: the required fixed-world floor is
 the complete launched world; failure of any rank aborts provisional work.
 
