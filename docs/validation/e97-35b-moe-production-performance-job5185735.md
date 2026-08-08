@@ -54,8 +54,27 @@ Short phase profiles established the progression:
 | 5185426 | ROCm routed+shared / B4 | ~13k tok/s short-run | ~2.2 / 2.6 s |
 
 The long run settled lower than the short B4 profile as routing evolved, but
-remained over ten times the old accepted throughput. Router balance and removal
-of host-visible ragged split synchronization are the next optimization targets.
+remained over ten times the old accepted throughput.
+
+## Follow-up ceiling probes
+
+- B6 job `5186086` reached `16,812 tok/s` at step 1 but failed at step 4 when
+  rank 6 needed another 1.27 GiB with only 126 MiB free. B6 is not safe.
+- Device-offset `torch.nn.functional.grouped_mm` job `5186213` removed the
+  expert-offset host synchronization but settled near 11.5–11.9k tok/s, slower
+  than eight tuned rocBLAS expert calls. It remains an opt-in research backend,
+  not the production default.
+- Selectively retaining gate projections, job `5186285`, improved early B4
+  steps only marginally while raising peak allocated HBM to 60.70 GB and
+  reserved HBM to 67.45 GB. Commit `56e2482e` reverted it.
+
+The historical dense 1.3B run reached 750,816 tok/s over 32 nodes, or about
+23,463 tok/s/node at the same B4x2048 shape. This MoE activates 3.14B versus
+1.286B dense parameters, a 2.44x active-compute ratio. Equal compute efficiency
+therefore predicts about 9,616 tok/s/node; job 5185735 exceeds that reference by
+21%. Several-fold additional speed at fixed top-3 + shared-expert semantics is
+not supported by this compute floor. Router balance and transport overlap can
+still yield incremental gains.
 
 ## Parity and authority
 

@@ -51,12 +51,14 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=1.007e-3)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--diloco-k", type=int, default=40)
-    parser.add_argument("--expert-backend", choices=("triton", "rocblas"), default="rocblas")
+    parser.add_argument(
+        "--expert-backend", choices=("triton", "rocblas", "grouped"), default="rocblas")
     parser.add_argument("--log-jsonl", type=Path, required=True)
     parser.add_argument("--checkpoint-root", type=Path)
     parser.add_argument("--resume-root", type=Path)
     parser.add_argument("--save-every", type=int, default=0)
     parser.add_argument("--keep-checkpoints", type=int, default=2)
+    parser.add_argument("--empty-cache-interval", type=int, default=0)
     parser.add_argument(
         "--profile-phases", action="store_true",
         help="synchronize GPU events and emit forward/backward/reduction/optimizer timings")
@@ -277,6 +279,13 @@ def main() -> None:
                  hbm_allocated=torch.cuda.memory_allocated(),
                  hbm_reserved=torch.cuda.memory_reserved(),
                  max_hbm_allocated=torch.cuda.max_memory_allocated())
+            if (args.empty_cache_interval > 0 and
+                    (step + 1) % args.empty_cache_interval == 0):
+                # Variable dropless routing changes ragged GEMM workspace sizes.
+                # Trim only at a completed step boundary where activations are
+                # dead; this prevents inactive slabs from starving the next
+                # step without changing model or optimizer state.
+                torch.cuda.empty_cache()
             if start is None:
                 start = time.monotonic()
             step += 1
