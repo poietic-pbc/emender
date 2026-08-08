@@ -1,0 +1,6 @@
+$ sha256sum -- /lustre/orion/bif148/proj-shared/emender/validation/e97-paper-corpus-receipt/slurm-5207741-spooled-batch-script.sbatch
+a3fe65508412ac51f2cfb6ef5a5ff4d312d3034d0aa8c39f05c28bac3df550a0  /lustre/orion/bif148/proj-shared/emender/validation/e97-paper-corpus-receipt/slurm-5207741-spooled-batch-script.sbatch
+$ git show 42990607036e7a59c9aed13795f49aa875ffd443:scripts/frontier/e97_paper_corpus_receipt.sbatch | sha256sum
+a3fe65508412ac51f2cfb6ef5a5ff4d312d3034d0aa8c39f05c28bac3df550a0  -
+$ cmp /lustre/orion/bif148/proj-shared/emender/validation/e97-paper-corpus-receipt/slurm-5207741-spooled-batch-script.sbatch <(git show 42990607036e7a59c9aed13795f49aa875ffd443:scripts/frontier/e97_paper_corpus_receipt.sbatch)
+spooled_script_matches_source_commit=true

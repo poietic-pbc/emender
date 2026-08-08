@@ -1,0 +1,33 @@
+receipt_start=2026-08-08T14:01:17-04:00
+host=frontier01802.frontier.olcf.ornl.gov
+job_id=5207741
+slurm_partition_env=batch
+slurm_qos_env=debug
+slurm_requeue_request=disabled_by_sbatch_no_requeue
+source_repo=/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-4
+submitted_source_commit=42990607036e7a59c9aed13795f49aa875ffd443
+actual_source_commit=42990607036e7a59c9aed13795f49aa875ffd443
+sampler_schema=emender-byte-window-counter-v1
+fixed_sampler_key=42
+== live scheduler evidence ==
+$ scontrol show job -o 5207741
+JobId=5207741 JobName=e97-corpus-receipt UserId=erikgarrison(19032) GroupId=erikgarrison(31761) MCS_label=N/A Priority=43372800 Nice=0 Account=bif148 QOS=debug JobState=RUNNING Reason=None Dependency=(null) Requeue=0 Restarts=0 BatchFlag=1 Reboot=0 ExitCode=0:0 RunTime=00:00:00 TimeLimit=01:00:00 TimeMin=N/A SubmitTime=2026-08-08T14:01:15 EligibleTime=2026-08-08T14:01:15 AccrueTime=2026-08-08T14:01:17 StartTime=2026-08-08T14:01:17 EndTime=2026-08-08T15:01:17 Deadline=N/A SuspendTime=None SecsPreSuspend=0 LastSchedEval=2026-08-08T14:01:17 Scheduler=Main Partition=batch AllocNode:Sid=login04:1811242 ReqNodeList=(null) ExcNodeList=(null) NodeList=frontier01802 BatchHost=frontier01802 NumNodes=1 NumCPUs=112 NumTasks=1 CPUs/Task=16 ReqB:S:C:T=0:0:*:1 ReqTRES=cpu=16,mem=500G,node=1,billing=16 AllocTRES=cpu=112,mem=500G,node=1,billing=112 Socks/Node=* NtasksPerN:B:S:C=0:0:*:* CoreSpec=* MinCPUsNode=16 MinMemoryNode=0 MinTmpDiskNode=0 Features=(null) DelayBoot=00:00:00 OverSubscribe=NO Contiguous=0 Licenses=(null) LicensesAlloc=(null) Network=(null) Command=/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-4/scripts/frontier/e97_paper_corpus_receipt.sbatch SubmitLine=sbatch --parsable scripts/frontier/e97_paper_corpus_receipt.sbatch WorkDir=/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-worktrees/agent-4 AdminComment=GPU_SRANGE_SRC=default,GPU_POWER_CAP=560,GPU_POWER_CAP_SRC=default,GPU_COUNTERS=0,GPU_COUNTERS_SRC=default,GPU_SRANGE=500-1700 StdErr=/lustre/orion/bif148/proj-shared/emender/validation/e97-paper-corpus-receipt/slurm-5207741.out StdIn=/dev/null StdOut=/lustre/orion/bif148/proj-shared/emender/validation/e97-paper-corpus-receipt/slurm-5207741.out TresPerTask=cpu=16
+== canonical artifact identities ==
+$ stat -c path=%n\ size_bytes=%s\ mtime=%y\ mode=%A\ owner=%U\ group=%G -- /lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt
+path=/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt size_bytes=1000000725401 mtime=2026-06-21 02:21:57.000000000 -0400 mode=-rw-r--r-- owner=erikgarrison group=bif148
+corpus_hash_start=2026-08-08T14:01:17-04:00
+$ sha256sum -- /lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt
+44f4c33471e0d49686453d81850380532bdc4a09e15c71b78eb8ec2d71bbcaa9  /lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt
+corpus_hash_end=2026-08-08T14:59:03-04:00
+$ stat -c path=%n\ size_bytes=%s\ mtime=%y\ mode=%A\ owner=%U\ group=%G -- /lustre/orion/bif148/proj-shared/emender/tokenizers/tiktoken/p50k_base/ec7223a39ce59f226a68acc30dc1af2788490e15
+path=/lustre/orion/bif148/proj-shared/emender/tokenizers/tiktoken/p50k_base/ec7223a39ce59f226a68acc30dc1af2788490e15 size_bytes=836186 mtime=2026-07-17 19:38:45.000000000 -0400 mode=-r--r--r-- owner=erikgarrison group=bif148
+$ sha256sum -- /lustre/orion/bif148/proj-shared/emender/tokenizers/tiktoken/p50k_base/ec7223a39ce59f226a68acc30dc1af2788490e15
+94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069  /lustre/orion/bif148/proj-shared/emender/tokenizers/tiktoken/p50k_base/ec7223a39ce59f226a68acc30dc1af2788490e15
+corpus_path=/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt
+corpus_size_bytes=1000000725401
+corpus_sha256=44f4c33471e0d49686453d81850380532bdc4a09e15c71b78eb8ec2d71bbcaa9
+tokenizer_path=/lustre/orion/bif148/proj-shared/emender/tokenizers/tiktoken/p50k_base/ec7223a39ce59f226a68acc30dc1af2788490e15
+tokenizer_size_bytes=836186
+tokenizer_sha256=94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069
+receipt_verdict=PASS
+receipt_end=2026-08-08T14:59:03-04:00

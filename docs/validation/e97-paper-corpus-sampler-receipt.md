@@ -55,7 +55,13 @@ job_source_at_reported_commit_sha256=a3fe65508412ac51f2cfb6ef5a5ff4d312d3034d0aa
 The job compared its submitted commit environment variable with `git rev-parse
 HEAD` and failed closed on disagreement. Frontier accounting stored the exact
 spooled batch script. After completion, the accounting copy was extracted and
-compared byte-for-byte with the named file at the reported commit:
+compared byte-for-byte with the named file at the reported commit. The landed
+`./scripts/frontier/e97_paper_corpus_receipt.sbatch` and Git-retained spooled
+copy are also byte-identical, so the submitted script, reported source commit,
+and delivered script are bound by bytes rather than commit labels alone.
+
+The following comparison transcript and its inputs are included under
+`docs/validation/e97-paper-corpus-sampler-receipt-artifacts/`:
 
 ```console
 $ sacct -j 5207741 --batch-script
@@ -173,15 +179,21 @@ that field and contains:
 JobId=5207741 JobName=e97-corpus-receipt Account=bif148 QOS=debug JobState=COMPLETED Reason=None Requeue=0 Restarts=0 ExitCode=0:0 RunTime=00:57:46 TimeLimit=01:00:00 StartTime=2026-08-08T14:01:17 EndTime=2026-08-08T14:59:03 Partition=batch NodeList=frontier01802
 ```
 
-## Durable raw artifact
+## Durable raw artifacts
 
-The scheduler stdout and scheduler evidence are retained read-only at:
+The scheduler stdout, exact Slurm-spooled script, and live/terminal scheduler
+evidence are included in this Git output at:
 
 ```text
-/lustre/orion/bif148/proj-shared/emender/validation/e97-paper-corpus-receipt
+docs/validation/e97-paper-corpus-sampler-receipt-artifacts/
 ```
 
-Key artifact digests from that directory's `SHA256SUMS`:
+A read-only project-filesystem mirror remains at
+`/lustre/orion/bif148/proj-shared/emender/validation/e97-paper-corpus-receipt/`.
+The Git copies make every presented validation byte independently reviewable
+without access to that external filesystem.
+
+Key artifact digests from the included `SHA256SUMS`:
 
 ```text
 3f1d3c5c75af0c50f43e0412f76ea35bac3b6adf7cafeda99b2fc37d8fc62b81  slurm-5207741.out
@@ -194,6 +206,10 @@ a3fe65508412ac51f2cfb6ef5a5ff4d312d3034d0aa8c39f05c28bac3df550a0  slurm-5207741-
 cc5640ec7fa34bb50546b1da84dc303f1f94ad5186614eb7d39eb68e4aae141a  source-provenance.txt
 58aa14c94a75f9c9141bcd71d8da84e8d914c5dd59bf1ec281fd1d375ee6261e  terminal-batch-script-sacct.txt
 ```
+
+`sha256sum -c docs/validation/e97-paper-corpus-sampler-receipt-artifacts/SHA256SUMS`
+verifies all included raw files, and `cmp` verifies the included spooled script
+against `scripts/frontier/e97_paper_corpus_receipt.sbatch`.
 
 This Git receipt is the content-addressed publication of those facts. The job
 read only the two named canonical artifacts, queried only its own scheduler ID,
