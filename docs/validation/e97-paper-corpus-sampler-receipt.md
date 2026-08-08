@@ -96,9 +96,9 @@ $ E97_CORPUS_RECEIPT_REPO=/lustre/orion/bif148/scratch/erikgarrison/emender/.wg-
 
 The source requests account `bif148`, `Partition=batch`, `QOS=debug`, one node,
 one task, 16 CPUs/task, an explicit `01:00:00` limit, and `--no-requeue`. Slurm
-allocated one node and the job completed in `00:57:46`. A monitored attempt to
-extend the limit was denied by Slurm; the recorded terminal limit remained
-`01:00:00`, so the successful artifact is from the original bounded request.
+allocated one node and the job completed in `00:57:46`. Live and terminal
+scheduler records both retain `TimeLimit=01:00:00`, so the successful artifact
+is from the original bounded request.
 
 ## Exact scheduler hash command and output
 
