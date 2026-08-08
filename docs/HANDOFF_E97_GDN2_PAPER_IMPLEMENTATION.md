@@ -44,9 +44,10 @@ milestone. `[~]` means actively in progress; `[x]` requires committed evidence.
   job 5207741. It completed `0:0` in 00:57:46 on `Partition=batch`, `QOS=debug`;
   both pinned digests matched. Receipt:
   `docs/validation/e97-paper-corpus-sampler-receipt.md`.
-- [~] Implement the versioned counter-based sampler in
-  `ndm/data/tokenized_dataset.py` with focused deterministic/resume tests.
-- [ ] Thread sampler identity and accepted-token cursor through dense training
+- [x] Implement the versioned counter-based sampler in
+  `ndm/data/tokenized_dataset.py`; 21 focused deterministic/resume tests pass in
+  the canonical Frontier environment.
+- [~] Thread sampler identity and accepted-token cursor through dense training
   and atomic checkpoint restore.
 - [ ] Thread the same contract through MoE manifests and training without
   relabeling legacy checkpoints.
