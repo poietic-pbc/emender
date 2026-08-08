@@ -1,4 +1,4 @@
-# E97–GDN2 Nonlinearity Study and Long-Context Follow-up
+# E97-MLP–GDN2-MLP Nonlinearity Study and Long-Context Follow-up
 
 **Status:** operator-authorized autonomous execution plan for the scoped three-arm study
 **Date:** 2026-08-08  
@@ -11,12 +11,17 @@ systems see literally identical training tokens?
 
 The core study has three approximately 1.3B-parameter arms:
 
-1. **E97:** canonical split key-axis erase/read plus value-axis delta-write,
-   with the nonlinear matrix-state update.
-2. **E97-linear:** the exact same instantiated E97 architecture and training
-   recipe, changing only `linear_state=False` to `linear_state=True`.
+1. **E97-MLP:** canonical split key-axis erase/read plus value-axis delta-write
+   recurrent mixer, followed in every layer by the standard SwiGLU MLP, with
+   the nonlinear matrix-state update.
+2. **E97-linear-MLP:** the exact same instantiated E97-MLP architecture and
+   training recipe, changing only `linear_state=False` to `linear_state=True`.
 3. **GDN2-MLP:** official-style GDN2 mixer plus SwiGLU MLP, using the best
    retained CMA-ES configuration as the established neighboring baseline.
+
+Throughout this document, unqualified “E97” is shorthand for **E97-MLP**. No
+mixer-only E97 arm is proposed, and the reported parameter counts include the
+post-mixer MLPs.
 
 M²RNN is not a core arm. Its public XMA implementation currently identifies
 M²RNN as unsupported on ROCm. A local HIP implementation would create an
