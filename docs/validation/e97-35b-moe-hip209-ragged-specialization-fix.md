@@ -101,10 +101,39 @@ No HIP-209, Triton-load, nonfinite, HBM, or collective error occurred.  Peak
 allocated HBM was 53,582,800,896 bytes/GCD.  This is a direct machine pass of
 the proposed root-cause fix, not merely a shorter-than-failure smoke.
 
-The measured 320-step timing predicts 960 steps would slightly exceed two
+The measured 320-step timing predicted 960 steps would slightly exceed two
 hours after staging/model restore.  The bounded sustained successor therefore
-uses exact 880 steps, 22 K40 merges, `SAVE_EVERY=80`, and a two-hour debug-QoS
-safety envelope (job 5195870), targeting about 1h54 rather than guessing 960.
+used exact 880 steps, 22 K40 merges, `SAVE_EVERY=80`, and a two-hour debug-QoS
+safety envelope rather than guessing 960.
+
+Sustained job **5195870** used the same tested code source `864d8f3c`,
+`Partition=batch`, `QOS=debug`, 256 nodes/2,048 ranks, and `Requeue=0`.  It
+terminated `COMPLETED 0:0` after 1:45:03:
+
+```text
+steps=880
+new_accepted_tokens=14763950080
+merges=22
+checkpoints=11
+final_step=2324640
+final_accepted_tokens=25311576064
+final_checkpoint=step-02324640-tokens-0000025311576064
+```
+
+All 22 merges completed in 20.60--31.66 s (median 23.33 s); checkpoints took
+64.09--94.11 s (median 71.26 s).  Plain-step median was 3.319 s and recent
+median throughput was 5.07M token/s.  Peak allocated HBM was 54,722,904,576
+bytes/GCD.  Whole-run mean language-model loss was 2.18483 (perplexity 8.889),
+last-100 mean was 2.17900 (perplexity 8.837), and last-100 mean auxiliary loss
+was 0.01157.  The finite batch-loss range was 1.8393--2.5841.
+
+Across both post-fix machine jobs, one fresh 2,048-rank world completed 320
+steps and another completed 880: 1,200 steps, 30 merges, 15 checkpoints, and
+20,132,659,200 newly accepted tokens without HIP-209 or a Triton load failure.
+The reduction in JIT specialization also removed ongoing compile overhead:
+ordinary throughput rose from roughly 3.6--3.8M token/s in the failing jobs to
+about 5.0M token/s sustained.  This independent performance effect strongly
+corroborates the module-proliferation diagnosis.
 
 ## Architecture conformance
 
