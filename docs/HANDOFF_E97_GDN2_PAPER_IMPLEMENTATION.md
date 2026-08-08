@@ -50,11 +50,13 @@ milestone. `[~]` means actively in progress; `[x]` requires committed evidence.
 - [x] Thread sampler identity and accepted-token cursor through dense training,
   run manifests, atomic checkpoint/latest publication, and pre-mutation restore
   validation. Focused dense/sampler suite: 31 passed.
-- [~] Thread the same contract through MoE manifests and training without
-  relabeling legacy checkpoints.
-- [ ] Add cross-model/call-site tests and launcher/config receipts covering all
-  eight sampler requirements.
-- [ ] Freeze exact graph, parameter, tensor-schema, initialization, optimizer,
+- [x] Thread the same contract through MoE shard payloads, sidecars, manifests,
+  training, and explicit K-aligned legacy transition handling without relabeling
+  historical checkpoints.
+- [x] Add cross-model/call-site tests and launcher/config receipts covering all
+  eight sampler requirements. Integrated suite: 51 passed; report:
+  `docs/validation/e97-paper-deterministic-sampler.md`.
+- [~] Freeze exact graph, parameter, tensor-schema, initialization, optimizer,
   corpus, tokenizer, sampler, and external-source manifests for all three arms.
 
 ### Phase B — kernel qualification

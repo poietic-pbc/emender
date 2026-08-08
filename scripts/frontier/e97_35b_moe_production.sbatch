@@ -35,6 +35,12 @@ DATA_PATH=${DATA_PATH:-/lustre/orion/bif148/proj-shared/commapile/commapile_main
 SAVE_EVERY=${SAVE_EVERY:-200}
 KEEP_CHECKPOINTS=${KEEP_CHECKPOINTS:-2}
 DILOCO_K=${DILOCO_K:-40}
+SAMPLER_SCHEMA=${SAMPLER_SCHEMA:-}
+SAMPLER_CORPUS_SHA256=${SAMPLER_CORPUS_SHA256:-}
+SAMPLER_TOKENIZER_SHA256=${SAMPLER_TOKENIZER_SHA256:-}
+SAMPLER_KEY=${SAMPLER_KEY:-}
+SAMPLER_DATA_WORLD_SIZE=${SAMPLER_DATA_WORLD_SIZE:-}
+SAMPLER_TRANSITION_FROM_LEGACY=${SAMPLER_TRANSITION_FROM_LEGACY:-0}
 
 [[ "$RUN_ROOT" == /* && "$RUN_ID" != */* ]] || { echo "invalid stable run identity" >&2; exit 64; }
 [[ "$MAX_STEPS" =~ ^[1-9][0-9]*$ && "$TRAIN_MINUTES" == 0 ]] || {
@@ -44,6 +50,21 @@ DILOCO_K=${DILOCO_K:-40}
    && $SAVE_EVERY -gt 0 && $((SAVE_EVERY % DILOCO_K)) -eq 0 ]] || {
   echo "SAVE_EVERY must be positive and K-aligned" >&2; exit 64;
 }
+if [[ -z "$SAMPLER_SCHEMA" ]]; then
+  [[ -z "$SAMPLER_CORPUS_SHA256$SAMPLER_TOKENIZER_SHA256$SAMPLER_KEY$SAMPLER_DATA_WORLD_SIZE" \
+     && "$SAMPLER_TRANSITION_FROM_LEGACY" == 0 ]] || {
+    echo "partial sampler identity or transition without schema" >&2; exit 64;
+  }
+else
+  [[ "$SAMPLER_SCHEMA" == emender-byte-window-counter-v1 \
+     && "$SAMPLER_CORPUS_SHA256" =~ ^[0-9a-f]{64}$ \
+     && "$SAMPLER_TOKENIZER_SHA256" =~ ^[0-9a-f]{64}$ \
+     && "$SAMPLER_KEY" =~ ^[0-9]+$ \
+     && "$SAMPLER_DATA_WORLD_SIZE" == "$((EXPECTED_NODES * 8))" \
+     && "$SAMPLER_TRANSITION_FROM_LEGACY" =~ ^[01]$ ]] || {
+    echo "invalid or launch-world-mismatched counter sampler identity" >&2; exit 64;
+  }
+fi
 cd "$REPO"
 git cat-file -e "${SOURCE_COMMIT}^{commit}"
 record=$(scontrol show job "$SLURM_JOB_ID" -o)
@@ -64,6 +85,15 @@ else
   printf '%s\n' "$RUN_ID" > "$RUN_ROOT/identity/run-id.txt"
 fi
 printf '%s\n' "$SOURCE_COMMIT" > "$RUN_ROOT/identity/source-${SLURM_JOB_ID}.txt"
+printf '%s\n' \
+  "schema=${SAMPLER_SCHEMA:-legacy-mutable-rng-v0}" \
+  "corpus_sha256=${SAMPLER_CORPUS_SHA256:-legacy-unbound}" \
+  "tokenizer_sha256=${SAMPLER_TOKENIZER_SHA256:-legacy-unbound}" \
+  "sampler_key=${SAMPLER_KEY:-legacy-mutable}" \
+  "data_world_size=${SAMPLER_DATA_WORLD_SIZE:-legacy-launch-world}" \
+  "context_size=2048" \
+  "transition_from_legacy=$SAMPLER_TRANSITION_FROM_LEGACY" \
+  > "$RUN_ROOT/identity/sampler-${SLURM_JOB_ID}.txt"
 squeue -j "$SLURM_JOB_ID" -h -o 'JobID=%i|Partition=%P|QOS=%q|State=%T|NodeList=%N|TimeLimit=%l' \
   | tee "$RUN_ROOT/identity/squeue-${SLURM_JOB_ID}.txt"
 printf '%s\n' "$record" > "$RUN_ROOT/identity/scontrol-${SLURM_JOB_ID}.txt"
@@ -93,6 +123,9 @@ if [[ -L "$CHECKPOINT_ROOT/latest" ]]; then
   [[ -r "$generation/manifest.json" ]] || { echo "checkpoint latest is incomplete" >&2; exit 67; }
   RESUME_ROOT="$CHECKPOINT_ROOT"
 fi
+if [[ "$SAMPLER_TRANSITION_FROM_LEGACY" == 1 && -z "$RESUME_ROOT" ]]; then
+  echo "legacy sampler transition requires a complete resume authority" >&2; exit 67
+fi
 
 source "$REPO/scripts/frontier/activate_emender_frontier.sh"
 MASTER_HOST=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -1)
@@ -105,6 +138,8 @@ export TIKTOKEN_CACHE_DIR=/lustre/orion/bif148/proj-shared/tiktoken_cache
 export EMENDER_SOURCE_COMMIT=$SOURCE_COMMIT
 export SNAPSHOT JOB_SEED JOB_SEED_ARGS DATA_PATH CHECKPOINT_ROOT RESUME_ROOT TRAIN_MINUTES MAX_STEPS
 export SAVE_EVERY KEEP_CHECKPOINTS DILOCO_K RUN_ROOT
+export SAMPLER_SCHEMA SAMPLER_CORPUS_SHA256 SAMPLER_TOKENIZER_SHA256 SAMPLER_KEY
+export SAMPLER_DATA_WORLD_SIZE SAMPLER_TRANSITION_FROM_LEGACY
 
 set +e
 srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
@@ -117,12 +152,23 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   rm -rf "$TRITON_CACHE_DIR"
   resume=()
   [[ -z "$RESUME_ROOT" ]] || resume=(--resume-root "$RESUME_ROOT")
+  sampler=()
+  if [[ -n "$SAMPLER_SCHEMA" ]]; then
+    sampler=(
+      --sampler-schema "$SAMPLER_SCHEMA"
+      --sampler-corpus-sha256 "$SAMPLER_CORPUS_SHA256"
+      --sampler-tokenizer-sha256 "$SAMPLER_TOKENIZER_SHA256"
+      --sampler-key "$SAMPLER_KEY"
+      --sampler-data-world-size "$SAMPLER_DATA_WORLD_SIZE")
+    [[ "$SAMPLER_TRANSITION_FROM_LEGACY" == 0 ]] || \
+      sampler+=(--sampler-transition-from-legacy)
+  fi
   "$EMENDER_PYTHON" scripts/frontier/e97_35b_moe_train.py \
     --seed-checkpoint "$JOB_SEED" --seed-args-json "$JOB_SEED_ARGS" --data "$DATA_PATH" \
     --max-steps "$MAX_STEPS" --minutes "$TRAIN_MINUTES" --batch-size 4 --chunk-size 2048 \
     --diloco-k "$DILOCO_K" --expert-backend rocblas \
     --checkpoint-root "$CHECKPOINT_ROOT" --save-every "$SAVE_EVERY" \
-    --keep-checkpoints "$KEEP_CHECKPOINTS" "${resume[@]}" \
+    --keep-checkpoints "$KEEP_CHECKPOINTS" "${resume[@]}" "${sampler[@]}" \
     --log-jsonl "$RUN_ROOT/logs/training.jsonl"
 '
 rc=$?

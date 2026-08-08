@@ -213,7 +213,7 @@ class TokenizedStreamDataset(Dataset):
                 cursor = absolute_rank_sample_index(
                     total_accepted_tokens,
                     data_world_size=self.world_size,
-                    context_size=self.chunk_size,
+                    context_size=sampler_identity.context_size,
                 )
             except Exception:
                 self.close()

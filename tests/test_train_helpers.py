@@ -1,5 +1,7 @@
+import importlib.util
 import math
 from argparse import Namespace
+from pathlib import Path
 
 import pytest
 import torch
@@ -186,6 +188,56 @@ def test_training_dataset_uses_accepted_token_cursor_and_fixed_identity(monkeypa
     assert captured["chunk_size"] == 2049
     assert captured["accepted_tokens_per_sample"] == 2048
     assert captured["total_accepted_tokens"] == 4 * 2048 * 6
+
+
+def test_dense_e97_gdn2_and_moe_resolve_identical_samples(tmp_path, monkeypatch):
+    import ndm.data.tokenized_dataset as td
+
+    class Encoding:
+        n_vocab = 512
+
+        def encode(self, text, disallowed_special=()):
+            return [ord(char) % self.n_vocab for char in text]
+
+    monkeypatch.setattr(td.tiktoken, "get_encoding", lambda _name: Encoding())
+    corpus = tmp_path / "corpus.txt"
+    corpus.write_bytes(bytes(32 + (index * 37) % 95 for index in range(32768)))
+    dense_args = _counter_sampler_args(data=str(corpus))
+    dense_identity = train.counter_sampler_identity_from_args(
+        dense_args, world_size=4)
+
+    runner_path = (Path(__file__).resolve().parents[1]
+                   / "scripts/frontier/e97_35b_moe_train.py")
+    spec = importlib.util.spec_from_file_location("e97_moe_sampler_runner", runner_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    moe_args = Namespace(
+        sampler_schema=dense_args.sampler_schema,
+        sampler_corpus_sha256=dense_args.sampler_corpus_sha256,
+        sampler_tokenizer_sha256=dense_args.sampler_tokenizer_sha256,
+        sampler_key=dense_args.sampler_key,
+        sampler_data_world_size=dense_args.sampler_data_world_size,
+        sampler_transition_from_legacy=False,
+        chunk_size=dense_args.chunk_size,
+    )
+    moe_identity = module._sampler_identity(moe_args, world_size=4)
+    assert moe_identity == dense_identity
+
+    # E97 and GDN2 both use build_training_dataset; MoE uses the same dataset
+    # identity/API. Model selection therefore cannot alter IDs or tensors.
+    streams = [
+        td.TokenizedStreamDataset(
+            str(corpus), 2049, rank=2, world_size=4,
+            tokenizer_name="p50k_base", sampler_identity=resolved,
+            total_accepted_tokens=4 * 2048 * 3,
+            accepted_tokens_per_sample=2048)
+        for resolved in (dense_identity, dense_identity, moe_identity)
+    ]
+    batches = [stream.get_batch(2)[0].clone() for stream in streams]
+    ids = [stream.last_batch_sample_ids for stream in streams]
+    assert ids[0] == ids[1] == ids[2]
+    assert torch.equal(batches[0], batches[1])
+    assert torch.equal(batches[0], batches[2])
 
 
 def test_dense_checkpoint_sampler_metadata_survives_atomic_latest(tmp_path):

@@ -11,6 +11,12 @@ from typing import Mapping
 import torch
 import torch.distributed as dist
 
+from ndm.data.tokenized_dataset import (
+    LEGACY_SAMPLER_SCHEMA,
+    CounterSamplerIdentity,
+    restore_sampler_checkpoint_metadata,
+)
+
 
 SCHEMA = "emender-e97-moe-sharded-v1"
 _LOCAL_SUFFIXES = ("local_gate_weight", "local_up_weight", "local_down_weight")
@@ -40,6 +46,48 @@ def _atomic_json(payload, path: Path) -> None:
     os.replace(temporary, path)
 
 
+def validate_moe_sampler_manifest(
+    manifest: Mapping,
+    *,
+    expected_identity: CounterSamplerIdentity | None,
+    allow_legacy_transition: bool = False,
+    diloco_k: int | None = None,
+) -> str:
+    """Validate sampler authority before any checkpoint tensor is restored.
+
+    Returns ``counter``, ``legacy``, or ``legacy-transition``. Missing sampler
+    fields are historical legacy evidence, never an implicit counter stream.
+    """
+    accepted_tokens = int(manifest.get("accepted_tokens", -1))
+    persisted = manifest.get("sampler")
+    if expected_identity is None:
+        if persisted is None or persisted == {
+                "schema": LEGACY_SAMPLER_SCHEMA, "status": "legacy"}:
+            return "legacy"
+        raise RuntimeError(
+            "checkpoint contains counter sampler metadata but launch selects legacy mode")
+    if persisted is None or persisted.get("schema") == LEGACY_SAMPLER_SCHEMA:
+        if not allow_legacy_transition:
+            raise RuntimeError(
+                "legacy MoE checkpoint cannot be silently relabelled as counter sampled")
+        if diloco_k is None or diloco_k <= 0:
+            raise RuntimeError("legacy sampler transition requires a positive DiLoCo K")
+        step = int(manifest.get("step", -1))
+        if step < 0 or step % diloco_k:
+            raise RuntimeError(
+                "legacy sampler transition requires a complete K-aligned checkpoint")
+        return "legacy-transition"
+    try:
+        _identity, sampler_tokens, _cursor = restore_sampler_checkpoint_metadata(
+            persisted, expected_identity=expected_identity)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError(f"MoE checkpoint sampler metadata mismatch: {error}") from error
+    if sampler_tokens != accepted_tokens:
+        raise RuntimeError(
+            "MoE sampler accepted-token clock contradicts checkpoint manifest")
+    return "counter"
+
+
 def save_node_sharded_checkpoint(
     root: str | Path,
     model,
@@ -48,6 +96,8 @@ def save_node_sharded_checkpoint(
     step: int,
     accepted_tokens: int,
     source_commit: str,
+    sampler: Mapping | None = None,
+    sampler_transition: Mapping | None = None,
     node_group=None,
     keep_generations: int = 0,
 ) -> Path:
@@ -80,9 +130,12 @@ def save_node_sharded_checkpoint(
         for name, parameter in named.items()
         if not name.endswith(_LOCAL_SUFFIXES) and _replicated_owner(name) == rank
     }
+    sampler = dict(sampler or {
+        "schema": LEGACY_SAMPLER_SCHEMA, "status": "legacy"})
     common = {
         "schema": SCHEMA, "rank": rank, "step": int(step),
         "accepted_tokens": int(accepted_tokens), "source_commit": source_commit,
+        "sampler": sampler,
     }
     local_path = generation / f"local-rank-{rank}.pt"
     replicated_path = generation / f"replicated-owner-{rank}.pt"
@@ -114,6 +167,9 @@ def save_node_sharded_checkpoint(
         manifest = {
             "schema": SCHEMA, "complete": True, "step": int(step),
             "accepted_tokens": int(accepted_tokens), "source_commit": source_commit,
+            "sampler": sampler,
+            "sampler_transition": (
+                dict(sampler_transition) if sampler_transition is not None else None),
             "ranks": ranks,
             "optimizer_groups": [
                 {key: value for key, value in group.items() if key != "params"}
@@ -136,7 +192,16 @@ def save_node_sharded_checkpoint(
     return generation
 
 
-def load_node_sharded_checkpoint(root: str | Path, model, optimizer, *, node_group=None):
+def load_node_sharded_checkpoint(
+    root: str | Path,
+    model,
+    optimizer,
+    *,
+    node_group=None,
+    expected_sampler_identity: CounterSamplerIdentity | None = None,
+    allow_legacy_sampler_transition: bool = False,
+    diloco_k: int | None = None,
+):
     """Restore this rank's local experts and every replicated parameter/state."""
     if dist.get_world_size(node_group) != 8:
         raise RuntimeError("checkpoint restore requires one complete eight-rank node")
@@ -146,6 +211,17 @@ def load_node_sharded_checkpoint(root: str | Path, model, optimizer, *, node_gro
     manifest = json.loads((generation / "manifest.json").read_text())
     if manifest.get("schema") != SCHEMA or manifest.get("complete") is not True:
         raise RuntimeError("checkpoint manifest is not a complete E97 MoE shard set")
+    sampler_status = validate_moe_sampler_manifest(
+        manifest, expected_identity=expected_sampler_identity,
+        allow_legacy_transition=allow_legacy_sampler_transition,
+        diloco_k=diloco_k)
+    manifest["sampler_restore_status"] = sampler_status
+    for rank_sidecar in manifest.get("ranks", []):
+        if (rank_sidecar.get("sampler") != manifest.get("sampler")
+                or int(rank_sidecar.get("step", -1)) != int(manifest["step"])
+                or int(rank_sidecar.get("accepted_tokens", -1))
+                != int(manifest["accepted_tokens"])):
+            raise RuntimeError("checkpoint sidecar sampler/clock authority mismatch")
     # Each lane validates and reads only the files it owns. Replicated tensors
     # are then broadcast inside the node island. This preserves rank-0-style
     # canonical checkpoint authority without making every rank reread and hash
@@ -163,6 +239,12 @@ def load_node_sharded_checkpoint(root: str | Path, model, optimizer, *, node_gro
     with torch.no_grad():
         for restore_path in restore_paths:
             payload = torch.load(restore_path, map_location="cpu", weights_only=False)
+            if (payload.get("sampler") != manifest.get("sampler")
+                    or int(payload.get("step", -1)) != int(manifest["step"])
+                    or int(payload.get("accepted_tokens", -1))
+                    != int(manifest["accepted_tokens"])):
+                raise RuntimeError(
+                    f"checkpoint shard sampler/clock authority mismatch: {restore_path}")
             for name, saved in payload["entries"].items():
                 parameter = named[name]
                 parameter.copy_(saved["parameter"])

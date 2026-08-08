@@ -21,6 +21,10 @@ def test_production_launcher_is_fixed_world_fail_stop_and_canonical():
     assert "--save-every \"$SAVE_EVERY\"" in text
     assert "--keep-checkpoints \"$KEEP_CHECKPOINTS\"" in text
     assert 'RESUME_ROOT="$CHECKPOINT_ROOT"' in text
+    assert '"schema=${SAMPLER_SCHEMA:-legacy-mutable-rng-v0}"' in text
+    assert '--sampler-data-world-size "$SAMPLER_DATA_WORLD_SIZE"' in text
+    assert "--sampler-transition-from-legacy" in text
+    assert "partial sampler identity or transition without schema" in text
     assert "scontrol requeue" not in text
 
 
@@ -32,6 +36,9 @@ def test_submitter_verifies_partition_and_qos_separately():
     assert "TRAIN_MINUTES=${TRAIN_MINUTES:-0}" in text
     assert "MAX_STEPS=${MAX_STEPS:-200}" in text
     assert "HEAD == origin/main" in text
+    assert "SAMPLER_CORPUS_SHA256" in text
+    assert "SAMPLER_DATA_WORLD_SIZE" in text
+    assert "SAMPLER_TRANSITION_FROM_LEGACY" in text
     assert "scancel" in text
 
 
@@ -50,6 +57,9 @@ def test_runner_uses_restored_step_for_data_and_one_canonical_island():
     assert "groups.node_count > 1 and args.minutes > 0" in text
     assert "data_seed_base = 42 + starting_step" in text
     assert 'rank_seed=data_seed_base + dist.get_rank()' in text
+    assert "sampler_identity=sampler_identity" in text
+    assert "accepted_tokens if sampler_identity is not None else None" in text
+    assert '"legacy-to-counter"' in text
     assert "if groups.node_index == 0:" in text
     assert "dist.broadcast(authority, src=0)" in text
     assert 'if dist.get_rank() == 0:' in text

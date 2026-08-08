@@ -10,7 +10,13 @@ import time
 import torch
 import torch.distributed as dist
 
-from ndm.data.tokenized_dataset import TokenizedStreamDataset
+from ndm.data.tokenized_dataset import (
+    COUNTER_SAMPLER_SCHEMA,
+    LEGACY_SAMPLER_SCHEMA,
+    CounterSamplerIdentity,
+    TokenizedStreamDataset,
+    sampler_checkpoint_metadata,
+)
 from ndm.e97 import load_e97_checkpoint
 from ndm.e97_moe_checkpoint import (
     load_node_sharded_checkpoint,
@@ -59,10 +65,60 @@ def parse_args():
     parser.add_argument("--save-every", type=int, default=0)
     parser.add_argument("--keep-checkpoints", type=int, default=2)
     parser.add_argument("--empty-cache-interval", type=int, default=0)
+    parser.add_argument("--sampler-schema")
+    parser.add_argument("--sampler-corpus-sha256")
+    parser.add_argument("--sampler-tokenizer-sha256")
+    parser.add_argument("--sampler-key", type=int)
+    parser.add_argument("--sampler-data-world-size", type=int)
+    parser.add_argument(
+        "--sampler-transition-from-legacy", action="store_true",
+        help="Explicitly transition one complete K-aligned legacy authority to the "
+             "counter sampler; never relabels historical samples.")
     parser.add_argument(
         "--profile-phases", action="store_true",
         help="synchronize GPU events and emit forward/backward/reduction/optimizer timings")
     return parser.parse_args()
+
+
+def _sampler_identity(args, *, world_size: int) -> CounterSamplerIdentity | None:
+    values = {
+        "corpus_sha256": args.sampler_corpus_sha256,
+        "tokenizer_sha256": args.sampler_tokenizer_sha256,
+        "sampler_key": args.sampler_key,
+        "data_world_size": args.sampler_data_world_size,
+    }
+    if args.sampler_schema is None:
+        provided = [name for name, value in values.items() if value is not None]
+        if provided or args.sampler_transition_from_legacy:
+            raise RuntimeError(
+                "sampler fields/transition require --sampler-schema: "
+                + ", ".join(provided))
+        return None
+    if args.sampler_schema != COUNTER_SAMPLER_SCHEMA:
+        raise RuntimeError(
+            f"unsupported sampler schema {args.sampler_schema!r}; expected "
+            f"{COUNTER_SAMPLER_SCHEMA!r}")
+    missing = [name for name, value in values.items() if value is None]
+    if missing:
+        raise RuntimeError("counter sampler identity missing: " + ", ".join(missing))
+    if int(args.sampler_data_world_size) != int(world_size):
+        raise RuntimeError(
+            f"sampler world {args.sampler_data_world_size} != launched world {world_size}")
+    return CounterSamplerIdentity(
+        schema=args.sampler_schema,
+        corpus_sha256=args.sampler_corpus_sha256,
+        tokenizer_sha256=args.sampler_tokenizer_sha256,
+        sampler_key=args.sampler_key,
+        data_world_size=args.sampler_data_world_size,
+        context_size=args.chunk_size,
+    )
+
+
+def _sampler_metadata(identity, *, accepted_tokens: int):
+    if identity is None:
+        return {"schema": LEGACY_SAMPLER_SCHEMA, "status": "legacy"}
+    return sampler_checkpoint_metadata(
+        identity, total_accepted_tokens=accepted_tokens)
 
 
 def emit(path: Path, event: str, **fields) -> None:
@@ -76,13 +132,16 @@ def emit(path: Path, event: str, **fields) -> None:
 
 
 def _canonical_checkpoint(args, groups, model, optimizer, *, step, accepted_tokens,
-                          source_commit):
+                          source_commit, sampler_identity, sampler_transition):
     """Publish one canonical eight-rank island, coordinated by global rank zero."""
     dist.barrier()
     if groups.node_index == 0:
         save_node_sharded_checkpoint(
             args.checkpoint_root, model, optimizer, step=step,
             accepted_tokens=accepted_tokens, source_commit=source_commit,
+            sampler=_sampler_metadata(
+                sampler_identity, accepted_tokens=accepted_tokens),
+            sampler_transition=sampler_transition,
             node_group=groups.node_group, keep_generations=args.keep_checkpoints)
     dist.barrier()
     # Only global rank zero reads the just-published Lustre symlink/manifest.
@@ -99,7 +158,10 @@ def _canonical_checkpoint(args, groups, model, optimizer, *, step, accepted_toke
             valid = (resolved == generation.resolve(strict=True)
                      and manifest.get("complete") is True
                      and int(manifest.get("step", -1)) == step
-                     and int(manifest.get("accepted_tokens", -1)) == accepted_tokens)
+                     and int(manifest.get("accepted_tokens", -1)) == accepted_tokens
+                     and manifest.get("sampler") == _sampler_metadata(
+                         sampler_identity, accepted_tokens=accepted_tokens)
+                     and manifest.get("sampler_transition") == sampler_transition)
             authority.copy_(torch.tensor(
                 [int(valid), int(manifest.get("step", -1)),
                  int(manifest.get("accepted_tokens", -1))],
@@ -132,6 +194,11 @@ def main() -> None:
     dist.init_process_group("nccl", init_method="env://")
     try:
         groups = create_moe_process_groups()
+        sampler_identity = _sampler_identity(
+            args, world_size=dist.get_world_size())
+        if args.sampler_transition_from_legacy and args.resume_root is None:
+            raise RuntimeError(
+                "--sampler-transition-from-legacy requires --resume-root")
         if groups.node_count > 1 and args.minutes > 0:
             raise RuntimeError(
                 "multinode production requires an exact max-steps boundary; "
@@ -177,24 +244,56 @@ def main() -> None:
             betas=(0.9, 0.95), warmup_steps=0)
         starting_step = int(loaded.step)
         accepted_tokens = 0
+        sampler_transition = None
         if args.resume_root is not None:
             manifest = load_node_sharded_checkpoint(
-                args.resume_root, model, optimizer, node_group=groups.node_group)
+                args.resume_root, model, optimizer, node_group=groups.node_group,
+                expected_sampler_identity=sampler_identity,
+                allow_legacy_sampler_transition=args.sampler_transition_from_legacy,
+                diloco_k=args.diloco_k)
             starting_step = int(manifest["step"])
             accepted_tokens = int(manifest["accepted_tokens"])
+            restore_status = manifest["sampler_restore_status"]
+            if restore_status == "legacy-transition":
+                sampler_transition = {
+                    "status": "legacy-to-counter",
+                    "boundary_step": starting_step,
+                    "boundary_accepted_tokens": accepted_tokens,
+                    "previous_sampler": manifest.get("sampler") or {
+                        "schema": LEGACY_SAMPLER_SCHEMA,
+                        "status": "legacy-metadata-absent",
+                    },
+                    "new_sampler_identity": sampler_identity.to_metadata(),
+                }
+            else:
+                sampler_transition = manifest.get("sampler_transition")
             emit(args.log_jsonl, "restart_loaded", checkpoint_step=starting_step,
-                 checkpoint_tokens=accepted_tokens)
-        # A fresh/resumed execution gets a different deterministic random stream:
-        # requested offset = source/checkpoint starting step + 42 + global rank.
-        # TokenizedStreamDataset adds rank internally to this base seed.
+                 checkpoint_tokens=accepted_tokens,
+                 sampler_restore_status=restore_status,
+                 sampler_transition=sampler_transition)
         data_seed_base = 42 + starting_step
         dataset = TokenizedStreamDataset(
             data_path=str(args.data), chunk_size=args.chunk_size + 1,
             rank=dist.get_rank(), world_size=dist.get_world_size(),
-            seed=data_seed_base, tokenizer_name="p50k_base")
-        emit(args.log_jsonl, "data_stream_ready", starting_step=starting_step,
-             seed_base=data_seed_base,
-             rank_seed=data_seed_base + dist.get_rank(), replay_previous_launch=False)
+            seed=data_seed_base, tokenizer_name="p50k_base",
+            sampler_identity=sampler_identity,
+            total_accepted_tokens=(
+                accepted_tokens if sampler_identity is not None else None),
+            accepted_tokens_per_sample=args.chunk_size)
+        if sampler_identity is None:
+            emit(args.log_jsonl, "data_stream_ready", starting_step=starting_step,
+                 sampler_schema=LEGACY_SAMPLER_SCHEMA,
+                 seed_base=data_seed_base,
+                 rank_seed=data_seed_base + dist.get_rank(),
+                 replay_previous_launch=False)
+        else:
+            emit(args.log_jsonl, "data_stream_ready", starting_step=starting_step,
+                 sampler_schema=sampler_identity.schema,
+                 sampler_identity=sampler_identity.to_metadata(),
+                 accepted_tokens=accepted_tokens,
+                 absolute_rank_sample_index=(
+                     dataset.initial_absolute_rank_sample_index),
+                 sampler_transition=sampler_transition)
         optimizer.train()
         replicated = tuple(node_replicated_parameters(model))
         start = None
@@ -295,7 +394,9 @@ def main() -> None:
                 checkpoint_start = time.monotonic()
                 checkpoint = _canonical_checkpoint(
                     args, groups, model, optimizer, step=step,
-                    accepted_tokens=accepted_tokens, source_commit=source_commit)
+                    accepted_tokens=accepted_tokens, source_commit=source_commit,
+                    sampler_identity=sampler_identity,
+                    sampler_transition=sampler_transition)
                 last_checkpoint_step = step
                 emit(args.log_jsonl, "checkpoint_complete",
                      checkpoint_path=str(checkpoint), step=step,
@@ -312,7 +413,9 @@ def main() -> None:
             checkpoint_start = time.monotonic()
             checkpoint = _canonical_checkpoint(
                 args, groups, model, optimizer, step=step,
-                accepted_tokens=accepted_tokens, source_commit=source_commit)
+                accepted_tokens=accepted_tokens, source_commit=source_commit,
+                sampler_identity=sampler_identity,
+                sampler_transition=sampler_transition)
             emit(args.log_jsonl, "checkpoint_complete",
                  checkpoint_path=str(checkpoint), step=step,
                  accepted_tokens=accepted_tokens,
