@@ -1,8 +1,11 @@
 # E97 paper corpus/tokenizer/sampler receipt
 
-Status: **PASS**  
-WG task: `e97-paper-corpus-receipt`  
-Frontier job: `5207741`  
+Status: **PASS**
+
+WG task: `e97-paper-corpus-receipt`
+
+Frontier job: `5207741`
+
 Verification interval: `2026-08-08T14:01:17-04:00` to
 `2026-08-08T14:59:03-04:00`
 
