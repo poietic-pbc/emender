@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 
 import pytest
 import torch
@@ -157,6 +159,40 @@ def test_accepted_token_cursor_requires_exact_division(accepted):
             accepted, data_world_size=4, context_size=8)
 
 
+def test_fresh_process_restore_produces_identical_next_batch(corpus, tmp_path):
+    accepted = 3 * 4 * 8
+    expected_stream = dataset(corpus, accepted=accepted)
+    expected = tensors(expected_stream.get_batch(2)).tolist()
+    metadata_path = tmp_path / "sampler.json"
+    metadata_path.write_text(json.dumps(td.sampler_checkpoint_metadata(
+        identity(), total_accepted_tokens=accepted)))
+    script = r'''
+import json
+import sys
+from ndm.data import tokenized_dataset as td
+class Encoding:
+    n_vocab = 512
+    def encode(self, text, disallowed_special=()):
+        return [ord(char) % self.n_vocab for char in text]
+td.tiktoken.get_encoding = lambda _name: Encoding()
+metadata = json.load(open(sys.argv[2]))
+expected = td.CounterSamplerIdentity(
+    schema=td.COUNTER_SAMPLER_SCHEMA, corpus_sha256="1" * 64,
+    tokenizer_sha256="2" * 64, sampler_key=42,
+    data_world_size=4, context_size=8)
+_identity, accepted, _cursor = td.restore_sampler_checkpoint_metadata(
+    metadata, expected_identity=expected)
+stream = td.TokenizedStreamDataset(
+    sys.argv[1], 8, rank=0, world_size=4, tokenizer_name="p50k_base",
+    sampler_identity=expected, total_accepted_tokens=accepted)
+print(json.dumps(stream.get_batch(2)[0].tolist()))
+'''
+    output = subprocess.check_output(
+        [sys.executable, "-c", script, str(corpus), str(metadata_path)],
+        text=True)
+    assert json.loads(output.strip().splitlines()[-1]) == expected
+
+
 def test_identity_and_cursor_metadata_round_trip_through_json():
     expected = identity()
     metadata = td.sampler_checkpoint_metadata(
@@ -206,7 +242,7 @@ def test_counter_dataset_requires_complete_matching_authority(corpus):
         td.TokenizedStreamDataset(
             str(corpus), 8, world_size=2, sampler_identity=identity(),
             total_accepted_tokens=0)
-    with pytest.raises(ValueError, match="chunk_size mismatches"):
+    with pytest.raises(ValueError, match="accepted_tokens_per_sample mismatches"):
         td.TokenizedStreamDataset(
             str(corpus), 16, world_size=4, sampler_identity=identity(),
             total_accepted_tokens=0)

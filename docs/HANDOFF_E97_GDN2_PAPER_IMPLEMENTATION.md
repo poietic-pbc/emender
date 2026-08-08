@@ -45,11 +45,12 @@ milestone. `[~]` means actively in progress; `[x]` requires committed evidence.
   both pinned digests matched. Receipt:
   `docs/validation/e97-paper-corpus-sampler-receipt.md`.
 - [x] Implement the versioned counter-based sampler in
-  `ndm/data/tokenized_dataset.py`; 21 focused deterministic/resume tests pass in
-  the canonical Frontier environment.
-- [~] Thread sampler identity and accepted-token cursor through dense training
-  and atomic checkpoint restore.
-- [ ] Thread the same contract through MoE manifests and training without
+  `ndm/data/tokenized_dataset.py`; 22 focused deterministic/resume tests pass in
+  the canonical Frontier environment, including fresh-process restore.
+- [x] Thread sampler identity and accepted-token cursor through dense training,
+  run manifests, atomic checkpoint/latest publication, and pre-mutation restore
+  validation. Focused dense/sampler suite: 31 passed.
+- [~] Thread the same contract through MoE manifests and training without
   relabeling legacy checkpoints.
 - [ ] Add cross-model/call-site tests and launcher/config receipts covering all
   eight sampler requirements.

@@ -65,7 +65,14 @@ elif os.environ.get('ELMAN_PARARNN_HYBRID') == '1':
     _install_hybrid()
 
 from ndm.data import DocumentStreamDataset, BatchedStreamDataset, create_dataloader
-from ndm.data.tokenized_dataset import TokenizedStreamDataset
+from ndm.data.tokenized_dataset import (
+    COUNTER_SAMPLER_SCHEMA,
+    LEGACY_SAMPLER_SCHEMA,
+    CounterSamplerIdentity,
+    TokenizedStreamDataset,
+    restore_sampler_checkpoint_metadata,
+    sampler_checkpoint_metadata,
+)
 from ndm.models.gru_baseline import GRULM
 from ndm.models.lstm_baseline import LSTMLM
 from ndm.models.min_rnn_baseline import MinGRULM, MinLSTMLM
@@ -491,6 +498,18 @@ def parse_args():
                              'For checkpoints with embedded total_tokens this is optional and '
                              'must match exactly; newly written checkpoints use the embedded '
                              'value as sole authority.')
+    parser.add_argument('--sampler_schema', type=str, default=None,
+                        help='Versioned accepted-token sampler schema. Unset is explicitly '
+                             'legacy mutable-RNG mode; scientific runs must pass '
+                             f'{COUNTER_SAMPLER_SCHEMA}.')
+    parser.add_argument('--sampler_corpus_sha256', type=str, default=None,
+                        help='Frozen canonical corpus SHA-256 for the counter sampler.')
+    parser.add_argument('--sampler_tokenizer_sha256', type=str, default=None,
+                        help='Frozen tokenizer-cache SHA-256 for the counter sampler.')
+    parser.add_argument('--sampler_key', type=int, default=None,
+                        help='Fixed nonnegative counter sampler key (paper study: 42).')
+    parser.add_argument('--sampler_data_world_size', type=int, default=None,
+                        help='Declared fixed data world; must exactly match launched WORLD_SIZE.')
     parser.add_argument('--tbptt', action='store_true',
                         help='Enable TBPTT (carry hidden state across chunks)')
     parser.add_argument('--orth_reg', type=float, default=0.0,
@@ -963,6 +982,13 @@ def setup_output_dir(args, model_metadata=None):
         'resume': getattr(args, 'resume', None),
         'diloco_bootstrap_outer_state': getattr(args, 'diloco_bootstrap_outer_state', 'none'),
         'model': model_metadata or getattr(args, '_model_metadata', None),
+        'sampler': (
+            {"schema": LEGACY_SAMPLER_SCHEMA, "status": "legacy"}
+            if counter_sampler_identity_from_args(
+                args, world_size=int(getattr(args, '_world_size', 1))) is None
+            else counter_sampler_identity_from_args(
+                args, world_size=int(getattr(args, '_world_size', 1))).to_metadata()
+        ),
         'runtime': frontier_runtime_manifest(),
     }
 
@@ -1128,6 +1154,84 @@ def resolve_checkpoint_total_tokens(checkpoint, explicit_total_tokens=None,
     return embedded
 
 
+def counter_sampler_identity_from_args(args, *, world_size):
+    """Resolve a complete scientific sampler identity or explicit legacy mode."""
+    schema = getattr(args, 'sampler_schema', None)
+    fields = {
+        'corpus_sha256': getattr(args, 'sampler_corpus_sha256', None),
+        'tokenizer_sha256': getattr(args, 'sampler_tokenizer_sha256', None),
+        'sampler_key': getattr(args, 'sampler_key', None),
+        'data_world_size': getattr(args, 'sampler_data_world_size', None),
+    }
+    if schema is None:
+        provided = [name for name, value in fields.items() if value is not None]
+        if provided:
+            raise ValueError(
+                "sampler identity fields require --sampler_schema: " + ", ".join(provided))
+        return None
+    if schema != COUNTER_SAMPLER_SCHEMA:
+        raise ValueError(
+            f"unsupported --sampler_schema {schema!r}; expected "
+            f"{COUNTER_SAMPLER_SCHEMA!r}")
+    missing = [name for name, value in fields.items() if value is None]
+    if missing:
+        raise ValueError("counter sampler identity missing fields: " + ", ".join(missing))
+    if int(fields['data_world_size']) != int(world_size):
+        raise ValueError(
+            f"sampler data world {fields['data_world_size']} does not match launched "
+            f"WORLD_SIZE {world_size}")
+    tokenizer_name = getattr(args, 'tokenizer', None)
+    if not tokenizer_name:
+        raise ValueError("counter sampler requires an explicit tokenizer")
+    return CounterSamplerIdentity(
+        schema=schema,
+        corpus_sha256=fields['corpus_sha256'],
+        tokenizer_sha256=fields['tokenizer_sha256'],
+        sampler_key=int(fields['sampler_key']),
+        data_world_size=int(fields['data_world_size']),
+        context_size=int(args.chunk_size),
+    )
+
+
+def dense_sampler_checkpoint_metadata(args, *, world_size, total_tokens):
+    """Build the rank-independent sampler authority persisted atomically."""
+    identity = counter_sampler_identity_from_args(args, world_size=world_size)
+    if identity is None:
+        return {"schema": LEGACY_SAMPLER_SCHEMA, "status": "legacy"}
+    return sampler_checkpoint_metadata(identity, total_accepted_tokens=total_tokens)
+
+
+def validate_dense_checkpoint_sampler(checkpoint, args, *, world_size,
+                                      checkpoint_path=None):
+    """Fail closed on sampler drift before model/optimizer state is loaded."""
+    total_tokens = resolve_checkpoint_total_tokens(
+        checkpoint, getattr(args, 'total_tokens', None), checkpoint_path)
+    expected = counter_sampler_identity_from_args(args, world_size=world_size)
+    checkpoint_metadata = checkpoint.get('checkpoint_metadata')
+    persisted = (
+        checkpoint_metadata.get('sampler')
+        if isinstance(checkpoint_metadata, dict) else None
+    )
+    if expected is None:
+        if persisted is None or persisted == {
+                "schema": LEGACY_SAMPLER_SCHEMA, "status": "legacy"}:
+            return total_tokens
+        raise ValueError(
+            "checkpoint contains a counter sampler identity but launch arguments "
+            "select legacy mode")
+    if persisted is None:
+        raise ValueError(
+            "legacy checkpoint lacks counter sampler metadata and cannot be "
+            "silently relabelled")
+    if persisted.get('schema') == LEGACY_SAMPLER_SCHEMA:
+        raise ValueError("legacy sampler checkpoint cannot resume as counter sampler")
+    _identity, persisted_tokens, _cursor = restore_sampler_checkpoint_metadata(
+        persisted, expected_identity=expected)
+    if persisted_tokens != total_tokens:
+        raise ValueError("sampler accepted-token clock contradicts checkpoint total_tokens")
+    return total_tokens
+
+
 def save_checkpoint(model, optimizer, step, loss, output_dir, keep_n=5, outer_state=None,
                     metadata=None, *, total_tokens):
     """Atomically save model/optimizer state and its authoritative token clock."""
@@ -1191,7 +1295,8 @@ def save_checkpoint(model, optimizer, step, loss, output_dir, keep_n=5, outer_st
     return ckpt_path
 
 
-def load_checkpoint(path, model, optimizer=None, return_checkpoint=False):
+def load_checkpoint(path, model, optimizer=None, return_checkpoint=False,
+                    preflight=None):
     """Load a checkpoint without privately materializing its full CPU storage.
 
     Frontier launches several GPU trainers per physical node.  A conventional
@@ -1202,6 +1307,8 @@ def load_checkpoint(path, model, optimizer=None, return_checkpoint=False):
     gives each model the normal owned parameter storage it requires.
     """
     ckpt = torch.load(path, map_location='cpu', mmap=True, weights_only=False)
+    if preflight is not None:
+        preflight(ckpt)
     model.load_state_dict(ckpt['model_state_dict'])
     if optimizer is not None and 'optimizer_state_dict' in ckpt:
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
@@ -1452,10 +1559,18 @@ def build_training_optimizer(core_model, args, *, announce=False):
     return optimizer
 
 
-def build_training_dataset(args, *, rank=0, dist_enabled=False, start_step=0):
-    """Create one rank's deterministic stream, offset by its resume step."""
+def build_training_dataset(args, *, rank=0, dist_enabled=False, start_step=0,
+                           world_size=None, total_accepted_tokens=None):
+    """Create one rank's stream from an accepted-token authority or legacy seed."""
     data_seed = args.seed + int(start_step) + (rank if dist_enabled else 0)
+    actual_world_size = int(
+        world_size if world_size is not None else (getattr(args, '_world_size', 1)))
+    sampler_identity = counter_sampler_identity_from_args(
+        args, world_size=actual_world_size)
     if args.tbptt:
+        if sampler_identity is not None:
+            raise ValueError(
+                "counter accepted-token sampler is not implemented for TBPTT")
         return BatchedStreamDataset(
             data_path=args.data,
             batch_size=args.batch_size,
@@ -1463,11 +1578,19 @@ def build_training_dataset(args, *, rank=0, dist_enabled=False, start_step=0):
             seed=data_seed,
         )
     if getattr(args, 'tokenizer', None):
+        if sampler_identity is not None and total_accepted_tokens is None:
+            raise ValueError(
+                "counter sampler dataset requires total_accepted_tokens authority")
         return TokenizedStreamDataset(
             data_path=args.data,
             chunk_size=args.chunk_size + 1,
+            rank=rank,
+            world_size=actual_world_size,
             seed=data_seed,
             tokenizer_name=args.tokenizer,
+            sampler_identity=sampler_identity,
+            total_accepted_tokens=total_accepted_tokens,
+            accepted_tokens_per_sample=args.chunk_size,
         )
     return DocumentStreamDataset(
         data_path=args.data,
@@ -2399,6 +2522,10 @@ def train(args):
     args._world_size = world_size
     args._is_main = is_main
     args._model_variant = model_variant_label(args)
+    # Validate the complete launch identity before model, optimizer, data, or
+    # checkpoint state can be mutated.
+    launch_sampler_identity = counter_sampler_identity_from_args(
+        args, world_size=world_size)
 
     # Setup
     torch.manual_seed(args.seed)
@@ -3016,13 +3143,20 @@ def train(args):
     total_tokens = 0
     if args.resume:
         print(f"Resuming from {args.resume}")
+        preflight_result = {}
+
+        def _checkpoint_preflight(checkpoint):
+            preflight_result['total_tokens'] = validate_dense_checkpoint_sampler(
+                checkpoint, args, world_size=world_size,
+                checkpoint_path=args.resume)
+
         start_step, _, ckpt = load_checkpoint(
-            args.resume, core_model, optimizer, return_checkpoint=True)
+            args.resume, core_model, optimizer, return_checkpoint=True,
+            preflight=_checkpoint_preflight)
         loaded_checkpoint = ckpt
         loaded_outer_state = ckpt.get('diloco_outer_state')
         loaded_optimizer_state = 'optimizer_state_dict' in ckpt
-        total_tokens = resolve_checkpoint_total_tokens(
-            ckpt, args.total_tokens, args.resume)
+        total_tokens = preflight_result['total_tokens']
         # Optimizer state dicts carry their original param-group LR. For
         # continuation runs we want the explicit CLI LR to be authoritative.
         for param_group in optimizer.param_groups:
@@ -3044,10 +3178,19 @@ def train(args):
     if args.tbptt:
         print("TBPTT enabled: using BatchedStreamDataset (persistent streams)")
     train_dataset = build_training_dataset(
-        args, rank=rank, dist_enabled=dist_enabled, start_step=start_step)
+        args, rank=rank, dist_enabled=dist_enabled, start_step=start_step,
+        world_size=world_size, total_accepted_tokens=total_tokens)
     if is_main:
-        print(f"[data-stream] seed_base={args.seed + start_step} "
-              f"starting_step={start_step} rank_offset=global-rank", flush=True)
+        if launch_sampler_identity is None:
+            print(f"[data-stream] schema={LEGACY_SAMPLER_SCHEMA} "
+                  f"seed_base={args.seed + start_step} starting_step={start_step} "
+                  "rank_offset=global-rank", flush=True)
+        else:
+            print(f"[data-stream] schema={launch_sampler_identity.schema} "
+                  f"accepted_tokens={total_tokens} world={world_size} "
+                  f"context={args.chunk_size} key={launch_sampler_identity.sampler_key} "
+                  f"corpus={launch_sampler_identity.corpus_sha256} "
+                  f"tokenizer={launch_sampler_identity.tokenizer_sha256}", flush=True)
 
     val_loader = None
     if args.val_data:
@@ -3539,6 +3682,9 @@ def train(args):
                         'rank': rank,
                         'world_size': world_size,
                         'is_head': is_main,
+                        'sampler': dense_sampler_checkpoint_metadata(
+                            args, world_size=world_size,
+                            total_tokens=total_tokens),
                         'walltime_remaining_s': (
                             final_ckpt.deadline - time.time()
                             if final_ckpt.deadline is not None else None
@@ -3613,6 +3759,8 @@ def train(args):
         'rank': rank,
         'world_size': world_size,
         'is_head': is_main,
+        'sampler': dense_sampler_checkpoint_metadata(
+            args, world_size=world_size, total_tokens=total_tokens),
         'walltime_deadline_source': final_ckpt.deadline_source,
         'walltime_remaining_s': (
             final_ckpt.deadline - time.time()

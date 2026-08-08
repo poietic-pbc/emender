@@ -157,6 +157,7 @@ class TokenizedStreamDataset(Dataset):
         *,
         sampler_identity: Optional[CounterSamplerIdentity] = None,
         total_accepted_tokens: Optional[int] = None,
+        accepted_tokens_per_sample: Optional[int] = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
     ):
         self.chunk_size = int(chunk_size)
@@ -196,8 +197,16 @@ class TokenizedStreamDataset(Dataset):
             try:
                 if sampler_identity.data_world_size != self.world_size:
                     raise ValueError("dataset world_size mismatches sampler identity")
-                if sampler_identity.context_size != self.chunk_size:
-                    raise ValueError("dataset chunk_size mismatches sampler identity")
+                tokens_per_sample = (
+                    self.chunk_size if accepted_tokens_per_sample is None
+                    else int(accepted_tokens_per_sample)
+                )
+                if sampler_identity.context_size != tokens_per_sample:
+                    raise ValueError(
+                        "accepted_tokens_per_sample mismatches sampler identity context")
+                if self.chunk_size not in (tokens_per_sample, tokens_per_sample + 1):
+                    raise ValueError(
+                        "dataset chunk_size must equal accepted context or context + 1")
                 if total_accepted_tokens is None:
                     raise ValueError(
                         "counter sampler requires total_accepted_tokens authority")

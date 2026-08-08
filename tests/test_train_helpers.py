@@ -1,6 +1,7 @@
 import math
 from argparse import Namespace
 
+import pytest
 import torch
 
 import train
@@ -147,6 +148,96 @@ def test_training_dataset_seed_includes_resume_step_and_global_rank(monkeypatch)
     train.build_training_dataset(
         args, rank=17, dist_enabled=True, start_step=2_322_520)
     assert captured["seed"] == 2_322_579
+    assert captured["sampler_identity"] is None
+
+
+def _counter_sampler_args(**overrides):
+    values = dict(
+        seed=42, tbptt=False, tokenizer="p50k_base", data="corpus.txt",
+        chunk_size=2048, batch_size=2,
+        sampler_schema=train.COUNTER_SAMPLER_SCHEMA,
+        sampler_corpus_sha256="1" * 64,
+        sampler_tokenizer_sha256="2" * 64,
+        sampler_key=42,
+        sampler_data_world_size=4,
+        total_tokens=None,
+    )
+    values.update(overrides)
+    return Namespace(**values)
+
+
+def test_training_dataset_uses_accepted_token_cursor_and_fixed_identity(monkeypatch):
+    captured = {}
+
+    class Dataset:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(train, "TokenizedStreamDataset", Dataset)
+    args = _counter_sampler_args()
+    train.build_training_dataset(
+        args, rank=2, dist_enabled=True, world_size=4,
+        total_accepted_tokens=4 * 2048 * 6)
+
+    identity = captured["sampler_identity"]
+    assert identity.data_world_size == 4
+    assert identity.context_size == 2048
+    assert captured["rank"] == 2
+    assert captured["chunk_size"] == 2049
+    assert captured["accepted_tokens_per_sample"] == 2048
+    assert captured["total_accepted_tokens"] == 4 * 2048 * 6
+
+
+def test_dense_checkpoint_sampler_metadata_survives_atomic_latest(tmp_path):
+    args = _counter_sampler_args()
+    model = torch.nn.Linear(2, 2)
+    optimizer = torch.optim.AdamW(model.parameters())
+    total_tokens = 4 * 2048 * 6
+    sampler = train.dense_sampler_checkpoint_metadata(
+        args, world_size=4, total_tokens=total_tokens)
+
+    path = train.save_checkpoint(
+        model, optimizer, 3, 1.0, tmp_path, total_tokens=total_tokens,
+        metadata={"sampler": sampler})
+    assert (tmp_path / "latest.pt").resolve() == path.resolve()
+    checkpoint = torch.load(
+        tmp_path / "latest.pt", map_location="cpu", mmap=True,
+        weights_only=False)
+    assert train.validate_dense_checkpoint_sampler(
+        checkpoint, args, world_size=4, checkpoint_path=path) == total_tokens
+    assert checkpoint["checkpoint_metadata"]["sampler"] == sampler
+
+
+def test_dense_sampler_mismatch_fails_before_model_mutation(tmp_path):
+    args = _counter_sampler_args()
+    source = torch.nn.Linear(2, 2)
+    optimizer = torch.optim.AdamW(source.parameters())
+    total_tokens = 4 * 2048 * 2
+    sampler = train.dense_sampler_checkpoint_metadata(
+        args, world_size=4, total_tokens=total_tokens)
+    path = train.save_checkpoint(
+        source, optimizer, 1, 1.0, tmp_path, total_tokens=total_tokens,
+        metadata={"sampler": sampler})
+
+    target = torch.nn.Linear(2, 2)
+    before = {name: value.clone() for name, value in target.state_dict().items()}
+    mismatched = _counter_sampler_args(sampler_tokenizer_sha256="3" * 64)
+    with pytest.raises(ValueError, match="sampler identity mismatch"):
+        train.load_checkpoint(
+            path, target,
+            preflight=lambda checkpoint: train.validate_dense_checkpoint_sampler(
+                checkpoint, mismatched, world_size=4,
+                checkpoint_path=path))
+    assert all(torch.equal(before[name], value)
+               for name, value in target.state_dict().items())
+
+
+def test_counter_sampler_refuses_legacy_checkpoint_metadata():
+    args = _counter_sampler_args()
+    checkpoint = {"total_tokens": 0, "checkpoint_metadata": {"total_tokens": 0}}
+    with pytest.raises(ValueError, match="cannot be silently relabelled"):
+        train.validate_dense_checkpoint_sampler(
+            checkpoint, args, world_size=4, checkpoint_path="legacy.pt")
 
 
 def test_real_worker_reports_bootstrap_phases_before_training(monkeypatch):
