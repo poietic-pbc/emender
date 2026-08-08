@@ -25,6 +25,62 @@ M²RNN is deliberately excluded. Its public XMA implementation is not supported
 on ROCm, and a local reimplementation would add an unnecessary fidelity
 confound.
 
+## Live execution checklist
+
+**Last updated:** 2026-08-08. This is the authoritative progress ledger for the
+study. Update it in the same commit as each completed implementation or evidence
+milestone. `[~]` means actively in progress; `[x]` requires committed evidence.
+
+### Operating mode
+
+- [x] Work is running directly in one attended session; no WG dispatcher or
+  worker service is active.
+- [x] Frontier debugging is serialized to at most one active debug-QoS job.
+- [x] Independent MoE continuation job 5208321 is left untouched by this study.
+
+### Phase A — identities and deterministic sampling
+
+- [x] Recompute the canonical CommaPile and tokenizer hashes in bounded Frontier
+  job 5207741. It completed `0:0` in 00:57:46 on `Partition=batch`, `QOS=debug`;
+  both pinned digests matched. Receipt:
+  `docs/validation/e97-paper-corpus-sampler-receipt.md`.
+- [~] Implement the versioned counter-based sampler in
+  `ndm/data/tokenized_dataset.py` with focused deterministic/resume tests.
+- [ ] Thread sampler identity and accepted-token cursor through dense training
+  and atomic checkpoint restore.
+- [ ] Thread the same contract through MoE manifests and training without
+  relabeling legacy checkpoints.
+- [ ] Add cross-model/call-site tests and launcher/config receipts covering all
+  eight sampler requirements.
+- [ ] Freeze exact graph, parameter, tensor-schema, initialization, optimizer,
+  corpus, tokenizer, sampler, and external-source manifests for all three arms.
+
+### Phase B — kernel qualification
+
+- [ ] E97-MLP current-source one-GCD and one-node qualification.
+- [ ] Matched E97-linear-MLP parity, finiteness, specialization-cardinality,
+  sustained K40, and restore qualification.
+- [ ] Bind GDN2 commit `95709fc250357c2dd109361c353192f2aa5913f9` and
+  complete ROCm kernel/fallback audit.
+- [ ] GDN2-MLP parity, one-GCD, sustained eight-GCD, and restore qualification.
+
+### Phase C — fixed-world systems ladders
+
+- [ ] E97-MLP: 8 nodes → 32 nodes → 256 nodes.
+- [ ] E97-linear-MLP: 8 nodes → 32 nodes → 256 nodes.
+- [ ] GDN2-MLP: 8 nodes → 32 nodes → 256 nodes.
+
+Each box is checked only after exact-source predecessor evidence passes. Ladder
+checkpoints are throwaway and never enter the scientific chain.
+
+### Phase D — production and evaluation
+
+- [ ] E97-MLP immutable 6,000-step / 50,331,648,000-token authority.
+- [ ] E97-linear-MLP immutable 6,000-step / 50,331,648,000-token authority.
+- [ ] GDN2-MLP immutable 6,000-step / 50,331,648,000-token authority.
+- [ ] Fixed-stream held-out comparison report for all three authorities.
+- [ ] Post-base long-context adaptation plan.
+
 ## Read first
 
 1. `docs/E97_GDN2_NONLINEARITY_PAPER_PLAN.md` — normative scientific and
