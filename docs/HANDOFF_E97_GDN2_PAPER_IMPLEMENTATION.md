@@ -58,6 +58,8 @@ milestone. `[~]` means actively in progress; `[x]` requires committed evidence.
   `docs/validation/e97-paper-deterministic-sampler.md`.
 - [~] Freeze exact graph, parameter, tensor-schema, initialization, optimizer,
   corpus, tokenizer, sampler, and external-source manifests for all three arms.
+  The primary E97-MLP graph and upcycle cross-check are now resolved in
+  `docs/validation/e97-paper-primary-graph-selection.md`.
 
 ### Phase B — kernel qualification
 
@@ -104,50 +106,57 @@ Every accepted implementation/evidence change must be committed and pushed.
 
 ## Current operational state at handoff
 
-The 35B MoE continuation is independent of this from-scratch study and is still
-running as Frontier job **5201882** from an immutable source snapshot:
+The 35B MoE continuation is independent of this from-scratch study. Job
+**5201882** completed the immutable 100.474B authority. The separately
+authorized stage-1 continuation is now running as job **5208321** from immutable
+source `54bf2f2b03b2ef8e1ae65d4176df2d8453a96bec`:
 
 - 256 nodes / 2,048 ranks;
 - `Partition=batch`, `QOS=normal`, `Requeue=0`;
-- target step `2329120`, accepted tokens `100,473,503,744`;
-- most recently observed around step `2328960`, approximately 97.789B accepted
-  tokens, finite loss, and a successful K40 merge;
+- resumes step 2,329,120 / 100,473,503,744 accepted tokens;
+- targets step 2,332,080 / 150,134,063,104 accepted tokens;
+- finite live loss and the exact packed parameter-count guards passed;
 - the mutable repository checkout cannot change its loaded code.
 
-Do not cancel, relabel, or modify that job. When it completes, separately verify
-terminal scheduler evidence, final eight-shard authority, and preserve the
-100.474B checkpoint as an immutable milestone. The deterministic sampler below
-applies only to future executions and must not retroactively relabel old data
-streams.
+Do not cancel, relabel, or modify job 5208321. The deterministic sampler below
+applies only to future executions and must not retroactively relabel its legacy
+stream.
 
 ## Frozen primary model recipes
 
 ### E97-MLP and matched E97-linear-MLP
 
-Use the canonical-E97 CMA winner for both arms:
+Use the exact verified dense E97-MLP production graph for both arms:
 
 ```json
 {
-  "dim": 2176,
-  "n_heads": 170,
+  "dim": 1792,
+  "n_heads": 216,
   "n_state": 32,
-  "depth": 14,
-  "lr": 0.0010403731352768883,
+  "depth": 11,
+  "mlp_ratio": 2.2623,
+  "mlp_multiple": 64,
+  "mlp_hidden": 4032,
+  "lr": 0.001007,
   "batch_size": 2
 }
 ```
 
-Instantiate the exact current graph and record its exact parameter count and
-tensor schema. E97-linear-MLP must reuse the same geometry, initialization
-policy, optimizer, learning rate, microbatch, MLPs, and DiLoCo configuration.
-The sole architectural change is `linear_state=True`.
+Its exact count is `1,286,589,072`: `1,048,152,720` non-MLP parameters plus
+`238,436,352` parameters in eleven bias-free SwiGLU MLPs. This is the graph that
+produced the 513.014B seed and was upcycled into the 35B MoE by replacing only
+`layers.*.mlp`. It is within 0.105% of GDN2-MLP.
 
-There is a separately CMA-optimized linear configuration (depth 11, 224 heads,
-B4), but it confounds the nonlinearity ablation. It is optional secondary work,
-not a replacement for the matched primary arm.
+The seed trained with B4; this study deliberately uses B2 for all arms to keep
+literal sample grouping and accepted-token cadence identical. E97-linear-MLP
+must reuse the same geometry, initialization, optimizer, learning rate,
+microbatch, MLPs, and DiLoCo configuration. The sole architectural change is
+`linear_state=True`.
 
-Canonical E97 is used rather than `e97-raw`; raw-write removes the delta
-correction central to the mechanism under study.
+The older `2176 / 170 heads / depth 14` CMA configuration is mixer-only
+(`mlp_ratio=0`) and is not the primary E97-MLP arm. The independently optimized
+linear configuration remains optional secondary work. Canonical delta-write E97
+is used rather than `e97-raw`.
 
 ### GDN2-MLP
 

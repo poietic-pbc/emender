@@ -36,32 +36,54 @@ base checkpoints. It must not alter or overwrite the base comparison.
 
 ### 2.1 Primary E97 geometry
 
-Use the retained canonical-E97 CMA-ES winner:
+Use the exact verified dense E97-MLP graph that produced the 513.014B-token
+seed and was subsequently upcycled into the 35B MoE:
 
 ```json
 {
-  "dim": 2176,
-  "n_heads": 170,
+  "dim": 1792,
+  "n_heads": 216,
   "n_state": 32,
-  "depth": 14,
-  "lr": 0.0010403731352768883,
+  "depth": 11,
+  "mlp_ratio": 2.2623,
+  "mlp_multiple": 64,
+  "mlp_hidden": 4032,
+  "lr": 0.001007,
   "batch_size": 2
 }
 ```
 
-The retained leaderboard reports approximately 1,274.7M parameters. Before a
-training submission, instantiate from the exact production graph and record the
-exact parameter count, tensor schema, initialized-state digest, and rendered
-arguments.
+The production seed trained with B4, but this from-scratch paper comparison
+standardizes all three arms to B2 so sample grouping, accepted-token arithmetic,
+and merge cadence are identical. This does not change the instantiated graph.
 
-This is deliberately canonical E97 rather than `e97-raw`: the raw-write winner
-removes the delta correction that is central to the proposed E97 mechanism.
+The graph was independently inspected against its mmap-loaded checkpoint:
+
+- exact parameters: **1,286,589,072**;
+- 11 uniform nonlinear E97 recurrent mixers;
+- 11 bias-free post-mixer SwiGLU MLPs, hidden width 4,032;
+- MLP parameters: 238,436,352;
+- shared non-MLP parameters: 1,048,152,720;
+- tied p50k embedding/output head;
+- `linear_state=False`, `e88_raw_write=False`, SiLU output gating.
+
+The durable graph evidence is
+`docs/validation/e97-35b-moe-graph-inspection-step2322520-513b.json`; the
+selection decision and upcycle cross-check are recorded in
+`docs/validation/e97-paper-primary-graph-selection.md`. It is within 0.105% of
+GDN2-MLP's 1,285,245,320 parameters.
+
+The older `dim=2176, n_heads=170, depth=14` CMA entry is a mixer-only E97
+configuration: its 1,274,697,304 count requires `mlp_ratio=0`. It remains valid
+historical CMA provenance but is not the E97-MLP graph used by this study.
+Canonical delta-write E97 is retained rather than `e97-raw`, because raw-write
+removes the correction central to the proposed mechanism.
 
 ### 2.2 Matched E97-linear ablation
 
-The primary ablation clones the canonical E97 geometry, initialization policy,
-optimizer, learning rate, B2 microbatch, DiLoCo policy, and all non-state
-components. It changes only:
+The primary ablation clones the verified production E97-MLP geometry,
+initialization policy, optimizer, learning rate, B2 microbatch, DiLoCo policy,
+and all non-state components. It changes only:
 
 ```text
 linear_state: false -> true
