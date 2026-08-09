@@ -93,6 +93,9 @@ def test_runner_uses_restored_step_for_data_and_one_canonical_island():
     assert "sampler_identity=sampler_identity" in text
     assert "accepted_tokens if sampler_identity is not None else None" in text
     assert '"legacy-to-counter"' in text
+    assert '"--sampler-transition-from-counter"' in text
+    assert '"counter-to-counter"' in text
+    assert "allow_counter_sampler_transition=args.sampler_transition_from_counter" in text
     assert "if groups.node_index == 0:" in text
     assert "dist.broadcast(authority, src=0)" in text
     assert 'if dist.get_rank() == 0:' in text

@@ -128,6 +128,43 @@ def test_legacy_transition_rejects_v1_and_wrong_v2_origin():
             allow_legacy_transition=True, diloco_k=40)
 
 
+def test_counter_context_and_world_transition_is_explicit_and_boundary_relative():
+    accepted = 2048 * 2048 * 2
+    expected = _identity(
+        schema=BOUNDARY_COUNTER_SAMPLER_SCHEMA,
+        context_size=131072,
+        data_world_size=256,
+        stream_origin_accepted_tokens=accepted)
+    manifest = _manifest(step=80, accepted_tokens=accepted)
+    with pytest.raises(RuntimeError, match="sampler metadata mismatch"):
+        validate_moe_sampler_manifest(manifest, expected_identity=expected, diloco_k=1)
+    assert validate_moe_sampler_manifest(
+        manifest, expected_identity=expected,
+        allow_counter_transition=True, diloco_k=1) == "counter-transition"
+
+
+def test_counter_transition_rejects_wrong_origin_and_incomplete_k_boundary():
+    accepted = 2048 * 2048 * 2
+    manifest = _manifest(step=81, accepted_tokens=accepted)
+    expected = _identity(
+        schema=BOUNDARY_COUNTER_SAMPLER_SCHEMA,
+        context_size=32768,
+        data_world_size=256,
+        stream_origin_accepted_tokens=accepted)
+    with pytest.raises(RuntimeError, match="K-aligned"):
+        validate_moe_sampler_manifest(
+            manifest, expected_identity=expected,
+            allow_counter_transition=True, diloco_k=2)
+    with pytest.raises(RuntimeError, match="stream origin"):
+        validate_moe_sampler_manifest(
+            _manifest(step=80, accepted_tokens=accepted),
+            expected_identity=_identity(
+                schema=BOUNDARY_COUNTER_SAMPLER_SCHEMA,
+                context_size=32768, data_world_size=256,
+                stream_origin_accepted_tokens=accepted - 1),
+            allow_counter_transition=True, diloco_k=2)
+
+
 def test_legacy_launch_refuses_counter_checkpoint():
     with pytest.raises(RuntimeError, match="launch selects legacy"):
         validate_moe_sampler_manifest(

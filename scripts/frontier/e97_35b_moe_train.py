@@ -85,6 +85,10 @@ def parse_args():
         help="Explicitly transition one complete K-aligned legacy authority to the "
              "counter sampler; never relabels historical samples.")
     parser.add_argument(
+        "--sampler-transition-from-counter", action="store_true",
+        help="Start a new boundary-relative counter phase (for example a new context "
+             "or data world) from an exact counter-sampled checkpoint boundary.")
+    parser.add_argument(
         "--profile-phases", action="store_true",
         help="synchronize GPU events and emit forward/backward/reduction/optimizer timings")
     return parser.parse_args()
@@ -103,7 +107,8 @@ def _sampler_identity(args, *, world_size: int) -> CounterSamplerIdentity | None
         provided = [name for name, value in values.items() if value is not None]
         if stream_origin is not None:
             provided.append("stream_origin_accepted_tokens")
-        if provided or args.sampler_transition_from_legacy:
+        if (provided or args.sampler_transition_from_legacy
+                or args.sampler_transition_from_counter):
             raise RuntimeError(
                 "sampler fields/transition require --sampler-schema: "
                 + ", ".join(provided))
@@ -271,12 +276,17 @@ def main() -> None:
         groups = create_moe_process_groups()
         sampler_identity = _sampler_identity(
             args, world_size=dist.get_world_size())
-        if args.sampler_transition_from_legacy and args.resume_root is None:
-            raise RuntimeError(
-                "--sampler-transition-from-legacy requires --resume-root")
         if (args.sampler_transition_from_legacy
+                and args.sampler_transition_from_counter):
+            raise RuntimeError("sampler transition modes are mutually exclusive")
+        if ((args.sampler_transition_from_legacy
+                or args.sampler_transition_from_counter)
+                and args.resume_root is None):
+            raise RuntimeError("sampler transition requires --resume-root")
+        if ((args.sampler_transition_from_legacy
+                or args.sampler_transition_from_counter)
                 and sampler_identity.schema != BOUNDARY_COUNTER_SAMPLER_SCHEMA):
-            raise RuntimeError("legacy transition requires boundary-relative counter-v2")
+            raise RuntimeError("sampler transition requires boundary-relative counter-v2")
         if (sampler_identity is not None
                 and sampler_identity.stream_origin_accepted_tokens > 0
                 and args.resume_root is None):
@@ -352,19 +362,25 @@ def main() -> None:
                 args.resume_root, model, optimizer, node_group=groups.node_group,
                 expected_sampler_identity=sampler_identity,
                 allow_legacy_sampler_transition=args.sampler_transition_from_legacy,
+                allow_counter_sampler_transition=args.sampler_transition_from_counter,
                 diloco_k=args.diloco_k)
             starting_step = int(manifest["step"])
             accepted_tokens = int(manifest["accepted_tokens"])
             restore_status = manifest["sampler_restore_status"]
-            if restore_status == "legacy-transition":
-                sampler_transition = {
-                    "status": "legacy-to-counter",
-                    "boundary_step": starting_step,
-                    "boundary_accepted_tokens": accepted_tokens,
-                    "previous_sampler": manifest.get("sampler") or {
+            if restore_status in {"legacy-transition", "counter-transition"}:
+                previous_sampler = manifest.get("sampler")
+                if previous_sampler is None:
+                    previous_sampler = {
                         "schema": LEGACY_SAMPLER_SCHEMA,
                         "status": "legacy-metadata-absent",
-                    },
+                    }
+                sampler_transition = {
+                    "status": (
+                        "legacy-to-counter" if restore_status == "legacy-transition"
+                        else "counter-to-counter"),
+                    "boundary_step": starting_step,
+                    "boundary_accepted_tokens": accepted_tokens,
+                    "previous_sampler": previous_sampler,
                     "new_sampler_identity": sampler_identity.to_metadata(),
                 }
             else:

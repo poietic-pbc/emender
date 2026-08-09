@@ -52,6 +52,7 @@ def validate_moe_sampler_manifest(
     *,
     expected_identity: CounterSamplerIdentity | None,
     allow_legacy_transition: bool = False,
+    allow_counter_transition: bool = False,
     diloco_k: int | None = None,
 ) -> str:
     """Validate sampler authority before any checkpoint tensor is restored.
@@ -89,12 +90,32 @@ def validate_moe_sampler_manifest(
     try:
         _identity, sampler_tokens, _cursor = restore_sampler_checkpoint_metadata(
             persisted, expected_identity=expected_identity)
+        status = "counter"
     except (TypeError, ValueError) as error:
-        raise RuntimeError(f"MoE checkpoint sampler metadata mismatch: {error}") from error
+        if not allow_counter_transition:
+            raise RuntimeError(f"MoE checkpoint sampler metadata mismatch: {error}") from error
+        try:
+            previous_identity = CounterSamplerIdentity.from_metadata(
+                persisted["identity"])
+            _identity, sampler_tokens, _cursor = restore_sampler_checkpoint_metadata(
+                persisted, expected_identity=previous_identity)
+        except (KeyError, TypeError, ValueError) as previous_error:
+            raise RuntimeError(
+                f"invalid previous counter sampler authority: {previous_error}") from previous_error
+        step = int(manifest.get("step", -1))
+        if diloco_k is None or diloco_k <= 0 or step < 0 or step % diloco_k:
+            raise RuntimeError(
+                "counter phase transition requires a complete K-aligned checkpoint")
+        if expected_identity.schema != BOUNDARY_COUNTER_SAMPLER_SCHEMA:
+            raise RuntimeError("counter phase transition requires boundary-relative counter-v2")
+        if expected_identity.stream_origin_accepted_tokens != accepted_tokens:
+            raise RuntimeError(
+                "new counter stream origin must equal the previous accepted-token boundary")
+        status = "counter-transition"
     if sampler_tokens != accepted_tokens:
         raise RuntimeError(
             "MoE sampler accepted-token clock contradicts checkpoint manifest")
-    return "counter"
+    return status
 
 
 def save_node_sharded_checkpoint(
@@ -209,6 +230,7 @@ def load_node_sharded_checkpoint(
     node_group=None,
     expected_sampler_identity: CounterSamplerIdentity | None = None,
     allow_legacy_sampler_transition: bool = False,
+    allow_counter_sampler_transition: bool = False,
     diloco_k: int | None = None,
 ):
     """Restore this rank's local experts and every replicated parameter/state."""
@@ -223,6 +245,7 @@ def load_node_sharded_checkpoint(
     sampler_status = validate_moe_sampler_manifest(
         manifest, expected_identity=expected_sampler_identity,
         allow_legacy_transition=allow_legacy_sampler_transition,
+        allow_counter_transition=allow_counter_sampler_transition,
         diloco_k=diloco_k)
     manifest["sampler_restore_status"] = sampler_status
     for rank_sidecar in manifest.get("ranks", []):
