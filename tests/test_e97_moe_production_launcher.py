@@ -56,6 +56,7 @@ def test_long_context_launcher_is_debug_fail_stop_and_immutable():
     assert 'sbcast -f "$SEED_CHECKPOINT" "$JOB_SEED"' in text
     assert '--seed-checkpoint "$JOB_SEED"' in text
     assert 'resume=(--resume-root "$RESUME_ROOT")' in text
+    assert 'resume+=(--resume-lr-override "$RESUME_LR_OVERRIDE")' in text
     assert 'sampler+=(--sampler-transition-from-counter)' in text
     assert '--sampler-data-world-size "$WORLD_SIZE"' in text
     assert '--gradient-checkpointing' in text
@@ -113,6 +114,8 @@ def test_runner_exposes_existing_long_context_memory_controls():
     assert 'parser.add_argument("--checkpoint-interval", type=int, default=16)' in text
     assert 'parser.add_argument("--projection-chunk-size", type=int, default=0)' in text
     assert 'parser.add_argument("--sequence-chunk-size", type=int, default=0)' in text
+    assert 'parser.add_argument("--resume-lr-override", type=float)' in text
+    assert 'optimizer_group["lr"] = float(args.resume_lr_override)' in text
     assert "model.gradient_checkpointing = bool(args.gradient_checkpointing)" in text
     assert "model.loss_chunk_size = int(args.loss_chunk_size)" in text
     assert "module.checkpoint_interval = int(args.checkpoint_interval)" in text

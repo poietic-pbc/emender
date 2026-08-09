@@ -64,6 +64,7 @@ def parse_args():
     parser.add_argument("--projection-chunk-size", type=int, default=0)
     parser.add_argument("--sequence-chunk-size", type=int, default=0)
     parser.add_argument("--lr", type=float, default=1.007e-3)
+    parser.add_argument("--resume-lr-override", type=float)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--diloco-k", type=int, default=40)
     parser.add_argument(
@@ -265,6 +266,9 @@ def main() -> None:
                  or args.sequence_chunk_size % args.checkpoint_interval)):
         raise SystemExit(
             "sequence-chunk-size must divide context and be divisible by checkpoint-interval")
+    if args.resume_lr_override is not None:
+        if args.resume_root is None or args.resume_lr_override <= 0:
+            raise SystemExit("positive resume-lr-override requires resume-root")
     if args.save_every and args.checkpoint_root is None:
         raise SystemExit("save-every requires checkpoint-root")
     if args.save_every and args.save_every % args.diloco_k:
@@ -366,6 +370,9 @@ def main() -> None:
                 diloco_k=args.diloco_k)
             starting_step = int(manifest["step"])
             accepted_tokens = int(manifest["accepted_tokens"])
+            if args.resume_lr_override is not None:
+                for optimizer_group in optimizer.param_groups:
+                    optimizer_group["lr"] = float(args.resume_lr_override)
             restore_status = manifest["sampler_restore_status"]
             if restore_status in {"legacy-transition", "counter-transition"}:
                 previous_sampler = manifest.get("sampler")
@@ -387,6 +394,8 @@ def main() -> None:
                 sampler_transition = manifest.get("sampler_transition")
             emit(args.log_jsonl, "restart_loaded", checkpoint_step=starting_step,
                  checkpoint_tokens=accepted_tokens,
+                 learning_rates=[group["lr"] for group in optimizer.param_groups],
+                 resume_lr_override=args.resume_lr_override,
                  sampler_restore_status=restore_status,
                  sampler_transition=sampler_transition)
         data_seed_base = 42 + starting_step
