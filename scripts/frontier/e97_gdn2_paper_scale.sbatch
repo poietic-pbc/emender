@@ -22,6 +22,8 @@ DATA=${DATA:-/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1
 GDN2_CHECKOUT=${GDN2_CHECKOUT:-$REPO/src/GatedDeltaNet-2}
 MAX_STEPS=${MAX_STEPS:-160}
 SAVE_EVERY=${SAVE_EVERY:-80}
+DIAGNOSTIC_VARIANT=${DIAGNOSTIC_VARIANT:-none}
+[[ "$DIAGNOSTIC_VARIANT" =~ ^(none|output-norm|clip-0.25|lr-half)$ ]] || exit 64
 RUN_BASE=${RUN_BASE:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-gdn2-paper/qualification}
 WORLD_SIZE=$((EXPECTED_NODES * 8))
 RUN_ROOT="$RUN_BASE/${EXPECTED_NODES}node/$ARM/job-$SLURM_JOB_ID"
@@ -79,7 +81,8 @@ export TIKTOKEN_CACHE_DIR=/lustre/orion/bif148/proj-shared/emender/tokenizers/ti
 export NDM_PIN_TRITON_AUTOTUNE=1 PYTHONDONTWRITEBYTECODE=1
 export EMENDER_GDN2_REQUIRE_BOUND_SOURCE=1
 export EMENDER_GDN2_EXPECTED_COMMIT=95709fc250357c2dd109361c353192f2aa5913f9
-export REPO SNAPSHOT RUN_ROOT ARM DATA GDN2_STAGE MAX_STEPS SAVE_EVERY
+export REPO SNAPSHOT RUN_ROOT ARM DATA GDN2_STAGE MAX_STEPS SAVE_EVERY DIAGNOSTIC_VARIANT
+printf '%s\n' "$DIAGNOSTIC_VARIANT" > "$RUN_ROOT/receipts/diagnostic-variant.txt"
 
 srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   set -euo pipefail
@@ -94,7 +97,13 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
     scripts/render_e97_gdn2_paper_args.py --arm "$ARM" --world-size "$WORLD_SIZE" \
     --steps "$MAX_STEPS" --data "$DATA" --output "$RUN_ROOT/output" \
     --save-every "$SAVE_EVERY")
-  "$EMENDER_PYTHON" train.py "${TRAIN_ARGS[@]}" \
+  EXTRA_ARGS=()
+  case "$DIAGNOSTIC_VARIANT" in
+    output-norm) EXTRA_ARGS=(--layer_kwargs "{\"use_output_norm\":true}") ;;
+    clip-0.25) EXTRA_ARGS=(--grad_clip 0.25) ;;
+    lr-half) EXTRA_ARGS=(--lr 0.0005035) ;;
+  esac
+  "$EMENDER_PYTHON" train.py "${TRAIN_ARGS[@]}" "${EXTRA_ARGS[@]}" \
     --disable_scalar_status_collectives --distributed_health_check_every 40 \
     --walltime_final_checkpoint_margin_seconds 300 --log_every 10
 ' 2>&1 | tee "$RUN_ROOT/logs/train.log"

@@ -1705,8 +1705,6 @@ class E88FLAHybrid(nn.Module):
             self.use_gate and
             self.g_proj is not None and
             self.gate_activation == 'silu' and
-            not self.use_output_norm and
-            not self._use_fused_norm_gate and
             not self.use_write_gate and  # Optimized kernels don't support write gate yet
             not self.use_value_residual and  # Fused path gates before we can add D*v
             (not self.use_split_edit or self.use_triton) and
@@ -1787,6 +1785,12 @@ class E88FLAHybrid(nn.Module):
 
                 # Compute gate projection (kept in [B, T, H, dim] layout)
                 g = self.g_proj(x).view(B, T, H, self.head_v_dim).to(input_dtype)
+                # FLA-GDN ordering normalizes the raw state readout before the
+                # SiLU gate. Keep gating outside the recurrence kernel when
+                # output RMSNorm is enabled; the post-scan block applies the
+                # fused RMSNorm+gate operation (or its equivalent fallback).
+                g_for_kernel = None if self.use_output_norm else g
+                apply_gate_in_kernel = not self.use_output_norm
                 erase_for_kernel = erase_gate.to(input_dtype) if self.use_split_edit else None
                 value_write_for_kernel = (
                     value_write_gate.to(input_dtype) if self.use_split_edit else None
@@ -1869,14 +1873,18 @@ class E88FLAHybrid(nn.Module):
                             chunk_size=getattr(self, 'e97_chunk_size', 32),
                             log_decay=use_log,
                         )
-                        output = out_ungated * F.silu(g)
+                        output = (
+                            out_ungated if self.use_output_norm
+                            else out_ungated * F.silu(g)
+                        )
                 elif self.use_triton:
                     if self.use_split_edit:
                         from ndm.triton.e97_sequential import e97_split_edit_triton_apply
                         S_final, output = e97_split_edit_triton_apply(
                             self.training,
                             k_norm, v.to(input_dtype), q_norm, decay.to(input_dtype),
-                            g, S0.to(input_dtype), H, True, use_fused_l2,
+                            g_for_kernel, S0.to(input_dtype), H,
+                            apply_gate_in_kernel, use_fused_l2,
                             self.checkpoint_interval,
                             apply_silu_qkv=qkv_silu_in_kernel,
                             raw_write=self.raw_write,
@@ -1889,7 +1897,8 @@ class E88FLAHybrid(nn.Module):
                         S_final, output = e88_triton_optimized_apply(
                             self.training,
                             k_norm, v.to(input_dtype), q_norm, decay.to(input_dtype),
-                            g, S0.to(input_dtype), H, True, use_fused_l2,
+                            g_for_kernel, S0.to(input_dtype), H,
+                            apply_gate_in_kernel, use_fused_l2,
                             self.checkpoint_interval,
                             apply_silu_qkv=qkv_silu_in_kernel,
                             raw_write=self.raw_write,
@@ -1902,11 +1911,12 @@ class E88FLAHybrid(nn.Module):
                     S_final, output = E88OptimizedCUDAFunction.apply(
                         self.training,
                         k_norm, v.to(input_dtype), q_norm, decay.to(input_dtype),
-                        g, S0.to(input_dtype), H, True, use_fused_l2,  # apply_gate=True, normalize_kq
+                        g_for_kernel, S0.to(input_dtype), H,
+                        apply_gate_in_kernel, use_fused_l2,
                         self.checkpoint_interval
                     )
 
-            fused_gate_used = True
+            fused_gate_used = apply_gate_in_kernel
 
             # Convert S_final back to list for hidden state
             S_list = [S_final[:, h] for h in range(H)]
