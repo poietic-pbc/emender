@@ -27,7 +27,7 @@ confound.
 
 ## Live execution checklist
 
-**Last updated:** 2026-08-08. This is the authoritative progress ledger for the
+**Last updated:** 2026-08-09. This is the authoritative progress ledger for the
 study. Update it in the same commit as each completed implementation or evidence
 milestone. `[~]` means actively in progress; `[x]` requires committed evidence.
 
@@ -57,25 +57,32 @@ milestone. `[~]` means actively in progress; `[x]` requires committed evidence.
 - [x] Add cross-model/call-site tests and launcher/config receipts covering all
   eight sampler requirements. Integrated suite: 51 passed; report:
   `docs/validation/e97-paper-deterministic-sampler.md`.
-- [~] Freeze exact graph, parameter, tensor-schema, initialization, optimizer,
+- [x] Freeze exact graph, parameter, tensor-schema, initialization, optimizer,
   corpus, tokenizer, sampler, and external-source manifests for all three arms.
-  The primary E97-MLP graph and upcycle cross-check are now resolved in
-  `docs/validation/e97-paper-primary-graph-selection.md`.
+  The primary E97-MLP graph and upcycle cross-check are resolved in
+  `docs/validation/e97-paper-primary-graph-selection.md`; immutable manifests
+  live under `configs/frontier/e97_gdn2_paper/manifests/`.
 
 ### Phase B — kernel qualification
 
-- [ ] E97-MLP current-source one-GCD and one-node qualification.
-- [ ] Matched E97-linear-MLP parity, finiteness, specialization-cardinality,
-  sustained K40, and restore qualification.
-- [ ] Bind GDN2 commit `95709fc250357c2dd109361c353192f2aa5913f9` and
+- [x] E97-MLP current-source one-GCD and one-node qualification.
+- [~] Matched E97-linear-MLP parity, specialization-cardinality, sustained K40,
+  and restore gates pass through 8 nodes, but larger populations fail closed on
+  rare pre-K40 non-finite losses; see the qualification report below.
+- [x] Bind GDN2 commit `95709fc250357c2dd109361c353192f2aa5913f9` and
   complete ROCm kernel/fallback audit.
-- [ ] GDN2-MLP parity, one-GCD, sustained eight-GCD, and restore qualification.
+- [x] GDN2-MLP parity, one-GCD, sustained eight-GCD, and restore qualification.
 
 ### Phase C — fixed-world systems ladders
 
-- [ ] E97-MLP: 8 nodes → 32 nodes → 256 nodes.
-- [ ] E97-linear-MLP: 8 nodes → 32 nodes → 256 nodes.
-- [ ] GDN2-MLP: 8 nodes → 32 nodes → 256 nodes.
+- [x] E97-MLP: 8 nodes → 32 nodes → 256 nodes.
+- [~] E97-linear-MLP: 8-node pass; 32-node sequential-route failure. Earlier
+  chunked-route ladder passed 8 and 32 nodes but failed at 256 nodes.
+- [x] GDN2-MLP: 8 nodes → 32 nodes → 256 nodes.
+
+Exact jobs, accepted-token totals, memory, scheduler evidence, and the linear
+failure investigation are recorded in
+`docs/validation/e97-gdn2-paper-frontier-qualification.md`.
 
 Each box is checked only after exact-source predecessor evidence passes. Ladder
 checkpoints are throwaway and never enter the scientific chain.
