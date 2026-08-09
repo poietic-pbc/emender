@@ -50,6 +50,13 @@ def main() -> int:
                    "--diloco_merge_group_size", "8"]
     if args.resume:
         result += ["--resume", args.resume]
+    layer_kwargs = {
+        key: bool(config[key])
+        for key in ("use_output_norm", "output_norm_affine")
+        if key in config
+    }
+    if layer_kwargs:
+        result += ["--layer_kwargs", json.dumps(layer_kwargs, sort_keys=True)]
     for key in VALUE_KEYS:
         if key == "sampler_data_world_size" or key not in config:
             continue

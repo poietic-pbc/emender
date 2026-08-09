@@ -19,9 +19,12 @@ def test_primary_arm_configs_are_matched_and_exact():
         key for key in set(nonlinear) | set(linear)
         if nonlinear.get(key) != linear.get(key)
     }
-    assert differences == {"arm", "linear_state"}
+    assert differences == {"arm", "linear_state", "use_output_norm"}
     assert nonlinear["linear_state"] == 0
     assert linear["linear_state"] == 1
+    assert nonlinear["use_output_norm"] == 0
+    assert linear["use_output_norm"] == 1
+    assert nonlinear["output_norm_affine"] == linear["output_norm_affine"] == 0
     assert nonlinear["use_chunked_e97"] == linear["use_chunked_e97"] == 0
     assert nonlinear["exact_parameters"] == linear["exact_parameters"] == 1_286_589_072
     assert nonlinear["derived_mlp_hidden"] == 4032
@@ -46,6 +49,11 @@ def test_train_argv_uses_exact_steps_without_zero_minute_budget():
     argv = [item.decode() for item in output.split(b"\0") if item]
     assert argv[argv.index("--steps") + 1] == "160"
     assert "--train_minutes" not in argv
+    layer_kwargs = json.loads(argv[argv.index("--layer_kwargs") + 1])
+    assert layer_kwargs == {
+        "output_norm_affine": False,
+        "use_output_norm": True,
+    }
 
 
 def test_manifest_renderer_reproduces_committed_manifests(tmp_path):

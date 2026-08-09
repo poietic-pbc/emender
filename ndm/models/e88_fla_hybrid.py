@@ -870,6 +870,7 @@ class E88FLAHybrid(nn.Module):
         use_silu: bool = True,  # Set False to skip SiLU on projections
         use_l2_norm: bool = True,  # Set False to skip L2 normalization on k/q
         use_output_norm: bool = False,  # E88 optimal: no output RMSNorm
+        output_norm_affine: bool = True,  # False: parameter-free RMSNorm with fixed unit gain
         head_mix: str = 'concat',  # Head mixing: 'concat', 'weighted_sum', 'per_head', 'input_weighted', 'sum'
         gate_activation: str = 'silu',  # Gate activation: 'silu' (FLA-GDN style, enables optimized kernels) or 'sigmoid'
         checkpoint_interval: int = 16,  # Steps between state checkpoints (larger = less memory, more recompute)
@@ -944,6 +945,7 @@ class E88FLAHybrid(nn.Module):
         self.use_silu = use_silu
         self.use_l2_norm = use_l2_norm
         self.use_output_norm = use_output_norm
+        self.output_norm_affine = bool(output_norm_affine)
         self.head_mix = head_mix
         self.use_triton = use_triton
         self.use_chunked_e97 = use_chunked_e97
@@ -1167,7 +1169,7 @@ class E88FLAHybrid(nn.Module):
         # Only enable when use_output_norm=True (default False)
         self.norm_eps = 1e-5
         self._use_fused_norm_gate = False
-        if use_output_norm:
+        if use_output_norm and self.output_norm_affine:
             if FLA_FUSED_NORM_AVAILABLE:
                 if use_gate:
                     # FusedRMSNormGated: rms_norm(x) * weight * g * sigmoid(g) in one Triton kernel
@@ -2075,7 +2077,21 @@ class E88FLAHybrid(nn.Module):
         # NOTE: Per-head norm hurts E88 (tanh-bounded state doesn't need it)
         # Only applied when use_output_norm=True (default False)
         # Skip gating if already done by fused gate kernel
-        if self._use_fused_norm_gate and self.g_proj is not None:
+        if self.use_output_norm and not self.output_norm_affine:
+            # Parameter-free per-head RMSNorm with fixed unit gain. Accumulate
+            # the norm in fp32, preserve the activation dtype, then apply the
+            # ordinary E97 output gate. This adds no state_dict entries.
+            rms = output.float().pow(2).mean(dim=-1, keepdim=True).add(
+                self.norm_eps
+            ).rsqrt()
+            output = (output.float() * rms).to(output.dtype)
+            if self.use_gate and self.g_proj is not None and not fused_gate_used:
+                g = self.g_proj(x).view(B, T, H, self.head_v_dim)
+                if self.gate_activation == 'sigmoid':
+                    output = output * torch.sigmoid(g)
+                else:
+                    output = output * F.silu(g)
+        elif self._use_fused_norm_gate and self.g_proj is not None:
             # FusedRMSNormGated: rms_norm(x) * weight * g * sigmoid(g) in one Triton kernel
             g = self.g_proj(x).view(B, T, H, self.head_v_dim)  # [B, T, H, head_v_dim]
             # Reshape to 2D for Triton kernel: [B*T*H, head_v_dim]

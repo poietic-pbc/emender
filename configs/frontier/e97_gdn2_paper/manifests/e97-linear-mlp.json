@@ -31,6 +31,7 @@
     "n_slots": 64,
     "n_state": 32,
     "optimizer": "schedulefree",
+    "output_norm_affine": 0,
     "sampler_corpus_sha256": "44f4c33471e0d49686453d81850380532bdc4a09e15c71b78eb8ec2d71bbcaa9",
     "sampler_key": 42,
     "sampler_schema": "emender-byte-window-counter-v1",
@@ -41,12 +42,13 @@
     "tokenizer": "p50k_base",
     "use_chunked_e97": 0,
     "use_gate": 1,
+    "use_output_norm": 1,
     "use_triton": 1,
     "warmup_steps": 0,
     "weight_decay": 0.01
   },
   "config_path": "configs/frontier/e97_gdn2_paper/e97_linear_mlp.json",
-  "config_sha256": "afa6a551209dee717bd5d37109fe31e4624d263825e4df169cab4c846d538989",
+  "config_sha256": "557d6ab73624cb66db6c77ed457ff82bd30a4d8a9b2560a8f5a5075463a82812",
   "exact_parameters": 1286589072,
   "external_gdn2": null,
   "initialization": {

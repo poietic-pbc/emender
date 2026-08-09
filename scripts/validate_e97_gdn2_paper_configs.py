@@ -54,6 +54,10 @@ def build(config: dict):
             use_triton=bool(config["use_triton"]),
             use_chunked_e97=bool(config["use_chunked_e97"]),
             e97_chunk_size=config["e97_chunk_size"],
+            layer_kwargs={
+                "use_output_norm": bool(config["use_output_norm"]),
+                "output_norm_affine": bool(config["output_norm_affine"]),
+            },
         )
     with torch.device("meta"):
         return LadderLM(**common)
@@ -105,7 +109,7 @@ def main() -> int:
 
     configs = {arm: load(path) for arm, path in CONFIGS.items()}
     nonlinear, linear = configs["e97-mlp"], configs["e97-linear-mlp"]
-    permitted_differences = {"arm", "linear_state"}
+    permitted_differences = {"arm", "linear_state", "use_output_norm"}
     differences = {
         key for key in set(nonlinear) | set(linear)
         if nonlinear.get(key) != linear.get(key)
@@ -115,6 +119,10 @@ def main() -> int:
             f"matched E97 arms differ in unexpected fields: {sorted(differences)}")
     if nonlinear["linear_state"] != 0 or linear["linear_state"] != 1:
         raise RuntimeError("matched E97 activation flags are not 0 -> 1")
+    if nonlinear["use_output_norm"] != 0 or linear["use_output_norm"] != 1:
+        raise RuntimeError("stabilized linear arm must alone enable output RMSNorm")
+    if nonlinear["output_norm_affine"] != 0 or linear["output_norm_affine"] != 0:
+        raise RuntimeError("E97 paper arms require parameter-free output RMSNorm")
 
     external = external_receipt(
         args.gdn2_path, configs["gdn2-mlp"]["external_gdn2_commit"])
