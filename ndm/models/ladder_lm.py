@@ -1295,6 +1295,12 @@ class LadderLM(nn.Module):
             prev_hiddens = [None] * self.depth
 
         new_hidden_states = []
+        checkpointed_auxiliary_losses = []
+        # A MoE router auxiliary kept only as a module side effect would escape
+        # non-reentrant activation checkpointing and retain the full layer graph.
+        # The checkpointed path therefore returns each scalar as an explicit
+        # output; e97_moe_auxiliary_loss consumes this tuple after forward.
+        self._checkpointed_moe_auxiliary_losses = None
         diagnostic_rank = os.environ.get("EMENDER_DIAG_FINITE_RANK")
         trace_finiteness = (
             diagnostic_rank is not None
@@ -1326,7 +1332,17 @@ class LadderLM(nn.Module):
             # Elman layer forward
             mixer_input = x
             if self.gradient_checkpointing and self.training:
-                x, h_final = torch_checkpoint(layer, x, prev_hiddens[i], use_reentrant=False)
+                def checkpointed_layer(layer_input, layer_hidden, *, _layer=layer):
+                    layer_output, layer_final = _layer(layer_input, layer_hidden)
+                    mlp = getattr(_layer, "mlp", None)
+                    auxiliary = getattr(mlp, "auxiliary_loss", None)
+                    if auxiliary is None:
+                        auxiliary = layer_output.new_zeros(())
+                    return layer_output, layer_final, auxiliary
+
+                x, h_final, layer_auxiliary = torch_checkpoint(
+                    checkpointed_layer, x, prev_hiddens[i], use_reentrant=False)
+                checkpointed_auxiliary_losses.append(layer_auxiliary)
             else:
                 x, h_final = layer(x, prev_hiddens[i])
 
@@ -1363,6 +1379,10 @@ class LadderLM(nn.Module):
                 )
 
             new_hidden_states.append(h_final)
+
+        if checkpointed_auxiliary_losses:
+            self._checkpointed_moe_auxiliary_losses = tuple(
+                checkpointed_auxiliary_losses)
 
         # Final fused add + norm
         if self.fused_add_norm:

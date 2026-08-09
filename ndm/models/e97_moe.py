@@ -446,6 +446,11 @@ def iter_e97_moe_layers(model: nn.Module) -> Iterable[SharedRoutedMoE | NodeLoca
 
 
 def e97_moe_auxiliary_loss(model: nn.Module) -> torch.Tensor:
+    checkpointed = getattr(model, "_checkpointed_moe_auxiliary_losses", None)
+    if checkpointed is not None:
+        if not checkpointed:
+            raise RuntimeError("checkpointed MoE auxiliary tuple is empty")
+        return torch.stack(list(checkpointed)).sum()
     layers = list(iter_e97_moe_layers(model))
     if not layers:
         parameter = next(model.parameters(), None)

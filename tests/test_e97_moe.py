@@ -12,6 +12,7 @@ from ndm.models.e97_moe import (
     convert_e97_ffns_to_node_local_moe,
     expert_owner,
     experts_for_rank,
+    e97_moe_auxiliary_loss,
     widen_swiglu_function_preserving,
 )
 from ndm.models.ladder_lm import LadderLM, MixerMLPWrapper, SwiGLUMLP
@@ -75,6 +76,40 @@ def test_router_auxiliary_losses_are_differentiable():
     moe.auxiliary_loss.backward()
     assert moe.router.weight.grad is not None
     assert torch.isfinite(moe.router.weight.grad).all()
+
+
+def test_gradient_checkpointed_ladder_returns_router_auxiliary_graph():
+    torch.manual_seed(19)
+    model = LadderLM(
+        vocab_size=32, dim=8, depth=2, level="E97", expansion=1.0,
+        n_state=4, n_heads=2, use_gate=True, gate_activation="sigmoid",
+        linear_state=True, use_triton=False, mlp_ratio=2.0, mlp_multiple=4,
+        gradient_checkpointing=True,
+    )
+    convert_e97_ffns_to_moe(
+        model, E97MoEConfig(hidden_dim=16, routed_experts=8, top_k=3,
+                            expert_parallel_size=4))
+    model.train()
+    loss = model(torch.randint(0, 32, (1, 9)), return_loss=True)
+    auxiliary = e97_moe_auxiliary_loss(model)
+    (loss + auxiliary).backward()
+    assert model._checkpointed_moe_auxiliary_losses is not None
+    assert len(model._checkpointed_moe_auxiliary_losses) == model.depth
+    for layer in model.layers:
+        assert layer.mlp.router.weight.grad is not None
+        assert torch.isfinite(layer.mlp.router.weight.grad).all()
+
+
+def test_checkpointed_auxiliary_outputs_remain_differentiable_authority():
+    model = torch.nn.Linear(2, 2)
+    first = torch.tensor(1.0, requires_grad=True)
+    second = torch.tensor(2.0, requires_grad=True)
+    model._checkpointed_moe_auxiliary_losses = (first, second)
+    auxiliary = e97_moe_auxiliary_loss(model)
+    assert auxiliary.item() == 3.0
+    auxiliary.backward()
+    assert first.grad.item() == 1.0
+    assert second.grad.item() == 1.0
 
 
 def test_forced_routing_rejects_duplicate_or_out_of_range_experts():
