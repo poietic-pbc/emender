@@ -42,7 +42,7 @@ def main() -> int:
     config = json.loads((ROOT / "configs/frontier/e97_gdn2_paper" / FILES[args.arm]).read_text())
     result = ["--params", "100m", "--data", args.data,
               "--exact_output_dir", args.output, "--steps", str(args.steps),
-              "--train_minutes", "0", "--save_every", str(args.save_every),
+              "--save_every", str(args.save_every),
               "--keep_checkpoints", "3", "--bf16",
               "--sampler_data_world_size", str(args.world_size)]
     if args.world_size > 1:

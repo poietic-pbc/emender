@@ -35,6 +35,18 @@ def test_gdn2_config_is_size_matched_and_source_bound():
     assert gdn2["external_gdn2_commit"] == "95709fc250357c2dd109361c353192f2aa5913f9"
 
 
+def test_train_argv_uses_exact_steps_without_zero_minute_budget():
+    output = subprocess.check_output([
+        sys.executable,
+        str(ROOT / "scripts/render_e97_gdn2_paper_args.py"),
+        "--arm", "e97-linear-mlp", "--world-size", "8",
+        "--steps", "160", "--data", "/data", "--output", "/output",
+    ], cwd=ROOT)
+    argv = [item.decode() for item in output.split(b"\0") if item]
+    assert argv[argv.index("--steps") + 1] == "160"
+    assert "--train_minutes" not in argv
+
+
 def test_manifest_renderer_reproduces_committed_manifests(tmp_path):
     subprocess.run([
         sys.executable,
