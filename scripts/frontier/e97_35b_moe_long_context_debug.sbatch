@@ -29,6 +29,9 @@ EXPERT_BACKEND=${EXPERT_BACKEND:-rocblas}
 EMPTY_CACHE_INTERVAL=${EMPTY_CACHE_INTERVAL:-1}
 GRADIENT_CHECKPOINTING=${GRADIENT_CHECKPOINTING:-1}
 RUN_ROOT=${RUN_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-35b-moe/longctx-debug-${SLURM_JOB_NUM_NODES}n-c${CONTEXT_SIZE}-j${SLURM_JOB_ID}}
+SEED_CHECKPOINT=${SEED_CHECKPOINT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/final-seed-production-256n/milestones/step-2322520-tokens-513013841920/checkpoint_step_2322520_loss_2.2798.pt}
+SEED_ARGS_JSON=${SEED_ARGS_JSON:-$(dirname "$SEED_CHECKPOINT")/args.json}
+DATA_PATH=${DATA_PATH:-/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt}
 
 [[ "$CONTEXT_SIZE" =~ ^[1-9][0-9]*$ && "$LOSS_CHUNK_SIZE" =~ ^[0-9]+$ \
    && "$CHECKPOINT_INTERVAL" =~ ^[1-9][0-9]*$ && "$MAX_STEPS" =~ ^[1-9][0-9]*$ \
@@ -42,6 +45,11 @@ mkdir -p logs/frontier/e97_moe "$RUN_ROOT"
 SNAPSHOT="$RUN_ROOT/source-$SOURCE_COMMIT"
 rm -rf "$SNAPSHOT"; mkdir -p "$SNAPSHOT"
 git archive "$SOURCE_COMMIT" | tar -xf - -C "$SNAPSHOT"
+[[ -f "$SEED_CHECKPOINT" && -f "$SEED_ARGS_JSON" && -f "$DATA_PATH" ]] || exit 66
+JOB_SEED="/tmp/emender-e97-longctx-${SLURM_JOB_ID}.pt"
+JOB_SEED_ARGS="/tmp/emender-e97-longctx-args-${SLURM_JOB_ID}.json"
+sbcast -f "$SEED_CHECKPOINT" "$JOB_SEED"
+sbcast -f "$SEED_ARGS_JSON" "$JOB_SEED_ARGS"
 squeue -j "$SLURM_JOB_ID" -h -o 'JobID=%i|Partition=%P|QOS=%q|State=%T|Nodes=%D|NodeList=%N|TimeLimit=%l' | tee "$RUN_ROOT/squeue.txt"
 scontrol show job -dd "$SLURM_JOB_ID" > "$RUN_ROOT/scontrol.txt"
 printf '%s\n' \
@@ -65,7 +73,7 @@ export EMENDER_SOURCE_COMMIT=$SOURCE_COMMIT
 
 GC_FLAG=--no-gradient-checkpointing
 [[ "$GRADIENT_CHECKPOINTING" == 1 ]] && GC_FLAG=--gradient-checkpointing
-export GC_FLAG CONTEXT_SIZE LOSS_CHUNK_SIZE CHECKPOINT_INTERVAL PROJECTION_CHUNK_SIZE SEQUENCE_CHUNK_SIZE MAX_STEPS DILOCO_K EXPERT_BACKEND EMPTY_CACHE_INTERVAL
+export GC_FLAG CONTEXT_SIZE LOSS_CHUNK_SIZE CHECKPOINT_INTERVAL PROJECTION_CHUNK_SIZE SEQUENCE_CHUNK_SIZE MAX_STEPS DILOCO_K EXPERT_BACKEND EMPTY_CACHE_INTERVAL JOB_SEED JOB_SEED_ARGS DATA_PATH
 srun --label --kill-on-bad-exit=1 bash -lc '
   set -euo pipefail
   source "'"$REPO"'/scripts/frontier/activate_emender_frontier.sh" >/dev/null
@@ -74,6 +82,7 @@ srun --label --kill-on-bad-exit=1 bash -lc '
   export TRITON_CACHE_DIR="/tmp/e97-moe-longctx-${SLURM_JOB_ID}-${SLURM_PROCID}"
   rm -rf "$TRITON_CACHE_DIR"
   "$EMENDER_PYTHON" scripts/frontier/e97_35b_moe_train.py \
+    --seed-checkpoint "$JOB_SEED" --seed-args-json "$JOB_SEED_ARGS" --data "$DATA_PATH" \
     --max-steps "$MAX_STEPS" --minutes 0 --batch-size 1 --chunk-size "$CONTEXT_SIZE" \
     "$GC_FLAG" --loss-chunk-size "$LOSS_CHUNK_SIZE" \
     --checkpoint-interval "$CHECKPOINT_INTERVAL" \

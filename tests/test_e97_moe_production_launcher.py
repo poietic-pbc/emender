@@ -53,6 +53,8 @@ def test_long_context_launcher_is_debug_fail_stop_and_immutable():
     assert "#SBATCH --no-requeue" in text
     assert 'SOURCE_COMMIT:?immutable source commit required' in text
     assert 'git archive "$SOURCE_COMMIT"' in text
+    assert 'sbcast -f "$SEED_CHECKPOINT" "$JOB_SEED"' in text
+    assert '--seed-checkpoint "$JOB_SEED"' in text
     assert '--gradient-checkpointing' in text
     assert '--loss-chunk-size "$LOSS_CHUNK_SIZE"' in text
     assert '--checkpoint-interval "$CHECKPOINT_INTERVAL"' in text
