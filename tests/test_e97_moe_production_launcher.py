@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 
@@ -8,6 +9,7 @@ RUNNER = ROOT / "scripts/frontier/e97_35b_moe_train.py"
 EP_TRITON = ROOT / "ndm/triton/e97_moe_ep.py"
 E97_MIXER = ROOT / "ndm/models/e88_fla_hybrid.py"
 LONG_CONTEXT_LAUNCHER = ROOT / "scripts/frontier/e97_35b_moe_long_context_debug.sbatch"
+LONG_CONTEXT_CONFIGS = ROOT / "configs/frontier/e97_moe_long_context"
 
 
 def test_production_launcher_is_fixed_world_fail_stop_and_canonical():
@@ -67,6 +69,23 @@ def test_long_context_launcher_is_debug_fail_stop_and_immutable():
     assert '--empty-cache-interval "$EMPTY_CACHE_INTERVAL"' in text
     assert '--profile-phases' in text
     assert '--kill-on-bad-exit=1' in text
+
+
+def test_long_context_study_configs_freeze_qualified_execution_not_architecture():
+    short = json.loads((LONG_CONTEXT_CONFIGS / "32k.json").read_text())
+    long = json.loads((LONG_CONTEXT_CONFIGS / "128k.json").read_text())
+    assert short["schema"] == long["schema"] == "emender-e97-moe-long-context-study-v1"
+    assert short["context_size"] == short["gradient_horizon"] == 32768
+    assert short["sequence_chunk_size"] == 0
+    assert long["context_size"] == 131072
+    assert long["sequence_chunk_size"] == long["gradient_horizon"] == 32768
+    for recipe in (short, long):
+        assert recipe["parent_step"] == 2338080
+        assert recipe["parent_accepted_tokens"] == 250797359104
+        assert recipe["projection_chunk_size"] == recipe["loss_chunk_size"] == 2048
+        assert recipe["record_separator_token_id"] == 218
+        assert recipe["reset_state_at_record_separator"] is False
+        assert not ({"dim", "depth", "n_heads", "n_state"} & set(recipe))
 
 
 def test_split_edit_projection_recomputation_uses_existing_e97_kernel():

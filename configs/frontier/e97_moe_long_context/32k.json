@@ -1,0 +1,23 @@
+{
+  "schema": "emender-e97-moe-long-context-study-v1",
+  "arm": "32k-full-bptt",
+  "parent_step": 2338080,
+  "parent_accepted_tokens": 250797359104,
+  "context_size": 32768,
+  "batch_size_per_gcd": 1,
+  "loss_chunk_size": 2048,
+  "projection_chunk_size": 2048,
+  "checkpoint_interval": 16,
+  "gradient_checkpointing": true,
+  "sequence_chunk_size": 0,
+  "gradient_horizon": 32768,
+  "expert_backend": "rocblas",
+  "empty_cache_interval": 1,
+  "qualification_nodes": 32,
+  "qualification_diloco_k": 2,
+  "sampler_schema": "emender-byte-window-counter-v2",
+  "sampler_stream_origin_accepted_tokens": 250797359104,
+  "record_separator_byte": 30,
+  "record_separator_token_id": 218,
+  "reset_state_at_record_separator": false
+}
