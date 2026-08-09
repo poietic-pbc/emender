@@ -57,6 +57,7 @@ def test_long_context_launcher_is_debug_fail_stop_and_immutable():
     assert '--loss-chunk-size "$LOSS_CHUNK_SIZE"' in text
     assert '--checkpoint-interval "$CHECKPOINT_INTERVAL"' in text
     assert '--projection-chunk-size "$PROJECTION_CHUNK_SIZE"' in text
+    assert '--sequence-chunk-size "$SEQUENCE_CHUNK_SIZE"' in text
     assert '--empty-cache-interval "$EMPTY_CACHE_INTERVAL"' in text
     assert '--profile-phases' in text
     assert '--kill-on-bad-exit=1' in text
@@ -103,10 +104,14 @@ def test_runner_exposes_existing_long_context_memory_controls():
     assert 'parser.add_argument("--loss-chunk-size", type=int, default=0)' in text
     assert 'parser.add_argument("--checkpoint-interval", type=int, default=16)' in text
     assert 'parser.add_argument("--projection-chunk-size", type=int, default=0)' in text
-    assert "model.gradient_checkpointing = bool(args.gradient_checkpointing)" in text
+    assert 'parser.add_argument("--sequence-chunk-size", type=int, default=0)' in text
+    assert "args.gradient_checkpointing and args.sequence_chunk_size == 0" in text
     assert "model.loss_chunk_size = int(args.loss_chunk_size)" in text
     assert "module.checkpoint_interval = int(args.checkpoint_interval)" in text
     assert "module.projection_chunk_size = int(args.projection_chunk_size)" in text
+    assert "def _training_objective(model, chunks: torch.Tensor" in text
+    assert "prev_hiddens=hiddens" in text
+    assert "activation_checkpoint(" in text
     assert 'torch.cuda.reset_peak_memory_stats()' in text
     assert 'forward_max_hbm_allocated=forward_max_hbm_allocated' in text
     assert 'backward_max_hbm_allocated=backward_max_hbm_allocated' in text

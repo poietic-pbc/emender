@@ -9,6 +9,7 @@ from pathlib import Path
 import time
 import torch
 import torch.distributed as dist
+from torch.utils.checkpoint import checkpoint as activation_checkpoint
 
 from ndm.data.tokenized_dataset import (
     BOUNDARY_COUNTER_SAMPLER_SCHEMA,
@@ -62,6 +63,7 @@ def parse_args():
     parser.add_argument("--loss-chunk-size", type=int, default=0)
     parser.add_argument("--checkpoint-interval", type=int, default=16)
     parser.add_argument("--projection-chunk-size", type=int, default=0)
+    parser.add_argument("--sequence-chunk-size", type=int, default=0)
     parser.add_argument("--lr", type=float, default=1.007e-3)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--diloco-k", type=int, default=40)
@@ -196,6 +198,42 @@ def _canonical_checkpoint(args, groups, model, optimizer, *, step, accepted_toke
     return generation
 
 
+def _training_objective(model, chunks: torch.Tensor, *, sequence_chunk_size: int):
+    """Return LM and router losses, optionally checkpointing complete time segments.
+
+    Segment boundaries carry every layer's recurrent state without detaching it.
+    Each segment contains C+1 tokens, so its C targets exactly partition the
+    original full-context next-token objective.
+    """
+    if sequence_chunk_size <= 0:
+        loss = model(chunks, return_loss=True)
+        return loss, e97_moe_auxiliary_loss(model)
+
+    prediction_tokens = chunks.shape[1] - 1
+    if prediction_tokens <= 0 or prediction_tokens % sequence_chunk_size:
+        raise RuntimeError("sequence chunk must exactly partition prediction tokens")
+    previous_hiddens = None
+    losses = []
+    auxiliaries = []
+
+    for start in range(0, prediction_tokens, sequence_chunk_size):
+        token_segment = chunks[:, start:start + sequence_chunk_size + 1]
+
+        def segment_forward(tokens, hiddens):
+            segment_loss, (new_hiddens, _conv) = model(
+                tokens, return_loss=True, return_prev_hiddens=True,
+                prev_hiddens=hiddens)
+            segment_auxiliary = e97_moe_auxiliary_loss(model)
+            return segment_loss, tuple(new_hiddens), segment_auxiliary
+
+        segment_loss, previous_hiddens, segment_auxiliary = activation_checkpoint(
+            segment_forward, token_segment, previous_hiddens, use_reentrant=False)
+        losses.append(segment_loss)
+        auxiliaries.append(segment_auxiliary)
+
+    return torch.stack(losses).mean(), torch.stack(auxiliaries).mean()
+
+
 def main() -> None:
     args = parse_args()
     if not args.seed_checkpoint.is_file() or not args.data.is_file():
@@ -205,7 +243,8 @@ def main() -> None:
     if args.save_every < 0 or args.keep_checkpoints < 1:
         raise SystemExit("save-every must be nonnegative and keep-checkpoints must be positive")
     if (args.chunk_size <= 0 or args.loss_chunk_size < 0
-            or args.checkpoint_interval <= 0 or args.projection_chunk_size < 0):
+            or args.checkpoint_interval <= 0 or args.projection_chunk_size < 0
+            or args.sequence_chunk_size < 0):
         raise SystemExit(
             "chunk-size/checkpoint-interval must be positive and chunk controls nonnegative")
     if args.chunk_size % args.checkpoint_interval:
@@ -215,6 +254,11 @@ def main() -> None:
                  or args.projection_chunk_size % args.checkpoint_interval)):
         raise SystemExit(
             "projection-chunk-size must divide context and be divisible by checkpoint-interval")
+    if (args.sequence_chunk_size > 0
+            and (args.chunk_size % args.sequence_chunk_size
+                 or args.sequence_chunk_size % args.checkpoint_interval)):
+        raise SystemExit(
+            "sequence-chunk-size must divide context and be divisible by checkpoint-interval")
     if args.save_every and args.checkpoint_root is None:
         raise SystemExit("save-every requires checkpoint-root")
     if args.save_every and args.save_every % args.diloco_k:
@@ -258,7 +302,10 @@ def main() -> None:
         if loaded.step != 2322520 or int(loaded.config.get("dim", -1)) != 1792:
             raise RuntimeError("loaded checkpoint is not the bound final 513B E97 seed")
         model = loaded.model
-        model.gradient_checkpointing = bool(args.gradient_checkpointing)
+        # Whole-model time-segment checkpointing subsumes per-layer checkpointing
+        # and additionally bounds residual/add-norm activation retention.
+        model.gradient_checkpointing = bool(
+            args.gradient_checkpointing and args.sequence_chunk_size == 0)
         model.loss_chunk_size = int(args.loss_chunk_size)
         recurrent_mixers = []
         for module in model.modules():
@@ -286,6 +333,8 @@ def main() -> None:
         emit(args.log_jsonl, "model_ready", local_parameter_count=parameter_count_local,
              local_expert_parameter_count=local_expert_count,
              gradient_checkpointing=model.gradient_checkpointing,
+             gradient_checkpointing_requested=args.gradient_checkpointing,
+             sequence_chunk_size=args.sequence_chunk_size,
              loss_chunk_size=model.loss_chunk_size,
              checkpoint_interval=args.checkpoint_interval,
              projection_chunk_size=args.projection_chunk_size,
@@ -372,8 +421,8 @@ def main() -> None:
                 }
                 phase_events["start"].record()
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                loss = model(chunks, return_loss=True)
-            auxiliary = e97_moe_auxiliary_loss(model)
+                loss, auxiliary = _training_objective(
+                    model, chunks, sequence_chunk_size=args.sequence_chunk_size)
             objective = loss + auxiliary
             forward_hbm_allocated = torch.cuda.memory_allocated()
             forward_hbm_reserved = torch.cuda.memory_reserved()
