@@ -62,7 +62,13 @@ fi
 
 MASTER_HOST=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -1)
 export MASTER_ADDR=$(getent ahostsv4 "$MASTER_HOST" | awk 'NR==1 {print $1}')
-export MASTER_PORT=$((32000 + SLURM_JOB_ID % 10000))
+export MASTER_PORT=$("$EMENDER_PYTHON" - <<'PY'
+import socket
+with socket.socket() as sock:
+    sock.bind(("", 0))
+    print(sock.getsockname()[1])
+PY
+)
 export WORLD_SIZE=8 OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-7}
 export MPICH_GPU_SUPPORT_ENABLED=1 NCCL_DEBUG=WARN
 export PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
