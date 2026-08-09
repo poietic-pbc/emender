@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import hashlib
 import inspect
+import json
 import os
 import sys
 import types
@@ -22,6 +24,7 @@ import torch.nn.functional as F
 
 
 DEFAULT_GDN2_PATH = "/home/erikg/GatedDeltaNet-2"
+BOUND_SOURCE_RECEIPT = ".emender-gdn2-source.json"
 OFFICIAL_GDN2_MLP_RATIO = 6208 / 2304
 _GDN2_CLASS = None
 _GDN2_OPS_MODULE = None
@@ -29,6 +32,54 @@ _GDN2_OPS_MODULE = None
 
 def _external_root() -> Path:
     return Path(os.environ.get("GDN2_PATH", DEFAULT_GDN2_PATH)).expanduser().resolve()
+
+
+def gdn2_source_tree_sha256(root: Path) -> str:
+    """Hash staged source paths, types, link targets, and file bytes."""
+    root = Path(root)
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+        relative_path = path.relative_to(root)
+        relative = relative_path.as_posix()
+        if relative == BOUND_SOURCE_RECEIPT or ".git" in relative_path.parts:
+            continue
+        if path.is_symlink():
+            kind, payload = b"L", os.readlink(path).encode()
+        elif path.is_file():
+            kind, payload = b"F", path.read_bytes()
+        elif path.is_dir():
+            kind, payload = b"D", b""
+        else:
+            raise RuntimeError(f"unsupported staged GDN2 source entry: {path}")
+        encoded_relative = relative.encode()
+        digest.update(kind)
+        digest.update(len(encoded_relative).to_bytes(8, "little"))
+        digest.update(encoded_relative)
+        digest.update(len(payload).to_bytes(8, "little"))
+        digest.update(payload)
+    return digest.hexdigest()
+
+
+def verify_bound_gdn2_source(
+    root: Path, expected_commit: str | None = None,
+) -> dict[str, Any]:
+    """Fail closed unless an extracted source tree matches its immutable receipt."""
+    root = Path(root).resolve()
+    receipt_path = root / BOUND_SOURCE_RECEIPT
+    if not receipt_path.is_file():
+        raise RuntimeError(f"bound GDN2 source receipt missing: {receipt_path}")
+    receipt = json.loads(receipt_path.read_text())
+    if receipt.get("schema") != "emender-gdn2-source-v1":
+        raise RuntimeError("unsupported GDN2 source receipt schema")
+    if expected_commit is not None and receipt.get("commit") != expected_commit:
+        raise RuntimeError(
+            f"staged GDN2 commit {receipt.get('commit')} != required {expected_commit}")
+    observed = gdn2_source_tree_sha256(root)
+    if observed != receipt.get("source_tree_sha256"):
+        raise RuntimeError(
+            f"staged GDN2 source tree digest mismatch: {observed} != "
+            f"{receipt.get('source_tree_sha256')}")
+    return receipt
 
 
 def _ensure_fla_cache_helpers() -> None:
@@ -121,6 +172,9 @@ def _load_gdn2_class():
         return _GDN2_CLASS
 
     root = _external_root()
+    if os.environ.get("EMENDER_GDN2_REQUIRE_BOUND_SOURCE") == "1":
+        verify_bound_gdn2_source(
+            root, os.environ.get("EMENDER_GDN2_EXPECTED_COMMIT"))
     gdn2_file = root / "lit_gpt" / "gdn2.py"
     if not gdn2_file.exists():
         raise ImportError(
@@ -185,7 +239,22 @@ def probe_gdn2_external_dependencies() -> dict[str, Any]:
         "gdn2_path": str(root),
         "gdn2_file": str(gdn2_file),
         "gdn2_file_exists": gdn2_file.exists(),
+        "bound_source_required": (
+            os.environ.get("EMENDER_GDN2_REQUIRE_BOUND_SOURCE") == "1"),
     }
+    receipt_path = root / BOUND_SOURCE_RECEIPT
+    if receipt_path.is_file():
+        try:
+            report["bound_source"] = verify_bound_gdn2_source(
+                root, os.environ.get("EMENDER_GDN2_EXPECTED_COMMIT"))
+        except Exception as exc:
+            report["ok"] = False
+            report["failure"] = f"invalid bound GDN2 source: {exc!r}"
+            return report
+    elif report["bound_source_required"]:
+        report["ok"] = False
+        report["failure"] = f"bound GDN2 source receipt missing: {receipt_path}"
+        return report
 
     try:
         import torch
