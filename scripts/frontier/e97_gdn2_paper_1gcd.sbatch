@@ -31,18 +31,24 @@ printf '%s\n' "$record" | tee "$RUN_ROOT/receipts/live-scontrol.txt"
 squeue -h -j "$SLURM_JOB_ID" -o '%i|%P|%q|%T|%D|%l' \
   | tee "$RUN_ROOT/receipts/live-squeue.txt"
 
-SNAPSHOT="$RUN_BASE/sources/$SOURCE_COMMIT"
-if [[ ! -f "$SNAPSHOT/train.py" ]]; then
+SNAPSHOT="$RUN_BASE/sources/code-$SOURCE_COMMIT"
+if [[ ! -f "$SNAPSHOT/.emender-source-receipt" ]]; then
   tmp="$SNAPSHOT.tmp-$SLURM_JOB_ID"
   rm -rf "$tmp"; mkdir -p "$tmp"
-  git archive "$SOURCE_COMMIT" | tar -xf - -C "$tmp"
+  SOURCE_PATHS=(train.py ndm scripts configs tests pyproject.toml)
+  git archive "$SOURCE_COMMIT" -- "${SOURCE_PATHS[@]}" | tar -xf - -C "$tmp"
+  {
+    echo "commit=$SOURCE_COMMIT"
+    printf 'path=%s\n' "${SOURCE_PATHS[@]}"
+  } > "$tmp/.emender-source-receipt"
   if ! mv -T "$tmp" "$SNAPSHOT" 2>/dev/null; then
     rm -rf "$tmp"
-    [[ -f "$SNAPSHOT/train.py" ]] || exit 68
+    [[ -f "$SNAPSHOT/.emender-source-receipt" ]] || exit 68
   fi
 fi
 printf '%s\n' "$SOURCE_COMMIT" > "$RUN_ROOT/receipts/source-commit.txt"
 printf '%s\n' "$SNAPSHOT" > "$RUN_ROOT/receipts/source-snapshot.txt"
+cp "$SNAPSHOT/.emender-source-receipt" "$RUN_ROOT/receipts/source-snapshot-receipt.txt"
 git show "$SOURCE_COMMIT:scripts/frontier/activate_emender_frontier.sh" \
   | cmp - "$REPO/scripts/frontier/activate_emender_frontier.sh"
 source "$REPO/scripts/frontier/activate_emender_frontier.sh"
