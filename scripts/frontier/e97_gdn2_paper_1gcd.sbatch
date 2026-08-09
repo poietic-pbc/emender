@@ -19,6 +19,7 @@ set -euo pipefail
 REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
 DATA=${DATA:-/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt}
 GDN2_CHECKOUT=${GDN2_CHECKOUT:-$REPO/src/GatedDeltaNet-2}
+REPRO_LINEAR_RANK=${REPRO_LINEAR_RANK:-}
 RUN_BASE=${RUN_BASE:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-gdn2-paper/qualification}
 RUN_ROOT="$RUN_BASE/1gcd/$ARM/job-$SLURM_JOB_ID"
 mkdir -p "$RUN_ROOT"/{source,external,logs,output,receipts} "$REPO/logs/frontier/e97_paper"
@@ -63,7 +64,7 @@ if [[ "$ARM" == gdn2-mlp ]]; then
     --output "$GDN2_STAGE" | tee "$RUN_ROOT/receipts/gdn2-source.json"
 fi
 
-export SNAPSHOT RUN_ROOT ARM DATA GDN2_STAGE
+export SNAPSHOT RUN_ROOT ARM DATA GDN2_STAGE REPRO_LINEAR_RANK
 export TIKTOKEN_CACHE_DIR=/lustre/orion/bif148/proj-shared/emender/tokenizers/tiktoken/p50k_base
 export NDM_PIN_TRITON_AUTOTUNE=1
 export PYTHONDONTWRITEBYTECODE=1
@@ -78,6 +79,13 @@ srun --label --kill-on-bad-exit=1 --wait=60 bash -lc '
   export RANK=0 WORLD_SIZE=1 LOCAL_RANK=0
   export TRITON_CACHE_DIR="/tmp/e97-paper-${SLURM_JOB_ID}-${ARM}"
   rm -rf "$TRITON_CACHE_DIR"
+  if [[ -n "$REPRO_LINEAR_RANK" ]]; then
+    "$EMENDER_PYTHON" scripts/frontier/reproduce_e97_linear_rank.py \
+      --config configs/frontier/e97_gdn2_paper/e97_linear_mlp.json \
+      --data "$DATA" --data-world-size 64 --data-rank "$REPRO_LINEAR_RANK" \
+      --steps 40 | tee "$RUN_ROOT/logs/linear-rank-reproduction.jsonl"
+    exit ${PIPESTATUS[0]}
+  fi
   if [[ "$ARM" == gdn2-mlp ]]; then
     export GDN2_PATH="$GDN2_STAGE"
     "$EMENDER_PYTHON" scripts/frontier/gdn2_rocm_preflight.py \
