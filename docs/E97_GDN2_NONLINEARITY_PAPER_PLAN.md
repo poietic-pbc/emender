@@ -14,8 +14,9 @@ The core study has three approximately 1.3B-parameter arms:
 1. **E97-MLP:** canonical split key-axis erase/read plus value-axis delta-write
    recurrent mixer, followed in every layer by the standard SwiGLU MLP, with
    the nonlinear matrix-state update.
-2. **E97-linear-MLP:** the exact same instantiated E97-MLP architecture and
-   training recipe, changing only `linear_state=False` to `linear_state=True`.
+2. **E97-linear-RMS-MLP:** the same E97-MLP geometry and training recipe with
+   `linear_state=True` plus parameter-free per-head output RMS normalization,
+   required by scale qualification to stabilize the unbounded state readout.
 3. **GDN2-MLP:** official-style GDN2 mixer plus SwiGLU MLP, using the best
    retained CMA-ES configuration as the established neighboring baseline.
 
@@ -79,28 +80,36 @@ historical CMA provenance but is not the E97-MLP graph used by this study.
 Canonical delta-write E97 is retained rather than `e97-raw`, because raw-write
 removes the correction central to the proposed mechanism.
 
-### 2.2 Matched E97-linear ablation
+### 2.2 Stabilized E97-linear ablation
 
 The primary ablation clones the verified production E97-MLP geometry,
-initialization policy, optimizer, learning rate, B2 microbatch, DiLoCo policy,
-and all non-state components. It changes only:
+initialization policy, optimizer, learning rate, B2 microbatch, and DiLoCo
+policy. Scale qualification localized deterministic BF16 overflow to one
+unbounded linear split-edit state head. The usable arm therefore changes:
 
 ```text
 linear_state: false -> true
+use_output_norm: false -> true
+output_norm_affine: false  # fixed unit gain; zero parameters
 ```
 
-At the state activation this means:
+The normalization is per head over the 32-dimensional raw state readout,
+accumulated in FP32 with epsilon `1e-5`, and applied before the SiLU output gate.
+It has no bias, learned gain, or state-dict entry, so both E97 arms retain the
+exact same parameter and tensor schema. At the state activation this means:
 
 ```text
 S_t = tanh(pre_t) -> S_t = pre_t
 ```
 
-and the backward pass drops only the `tanh` derivative. The whole network is
-not a linear model: its input-dependent gates, normalization, projections,
-MLPs, and other activations remain nonlinear. “Linear-state E97” is the precise
-term. IEEE floating-point rounding means the computed transition does not obey
-exact real-arithmetic linear identities, but rounding is not treated as a
-learned source of nonlinear expressivity.
+and the backward pass drops the `tanh` derivative. The whole network is not a
+linear model: its input-dependent gates, normalization, projections, MLPs, and
+other activations remain nonlinear. “Stabilized linear-state E97” is the precise
+term. This is no longer a literal one-flag ablation; results measure removal of
+state tanh under the minimal zero-parameter normalization needed for viable
+large-rank training. IEEE floating-point rounding means the computed transition
+does not obey exact real-arithmetic linear identities, but rounding is not
+treated as a learned source of nonlinear expressivity.
 
 A separate CMA-ES `e97-linear` winner does exist:
 
@@ -397,7 +406,8 @@ must be provenance-separated from the training artifact, immutable, and hashed.
 
 Primary comparisons:
 
-1. E97 versus matched E97-linear: controlled effect of state `tanh`.
+1. E97 versus stabilized E97-linear-RMS: effect of removing state `tanh` under
+   the zero-parameter output normalization required for viable training.
 2. E97 versus GDN2-MLP: proposed architecture versus established close baseline.
 3. E97-linear versus GDN2-MLP: behavior of two linear-state neighboring systems.
 

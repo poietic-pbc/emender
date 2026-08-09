@@ -11,8 +11,8 @@ Build and execute a defensible, identical-data comparison among:
 
 1. **E97-MLP** — canonical nonlinear E97 recurrent mixer followed by the
    standard SwiGLU MLP in each layer;
-2. **E97-linear-MLP** — the exact same graph and recipe, changing only the
-   matrix-state activation from `tanh` to identity;
+2. **E97-linear-RMS-MLP** — the same graph and recipe with identity matrix
+   state plus zero-parameter, non-affine per-head output RMSNorm for stability;
 3. **GDN2-MLP** — the strongest retained closely related recurrent baseline.
 
 Train all three from scratch on literally identical CommaPile token samples to
@@ -66,9 +66,9 @@ milestone. `[~]` means actively in progress; `[x]` requires committed evidence.
 ### Phase B — kernel qualification
 
 - [x] E97-MLP current-source one-GCD and one-node qualification.
-- [~] Matched E97-linear-MLP parity, specialization-cardinality, sustained K40,
-  and restore gates pass through 8 nodes, but larger populations fail closed on
-  rare pre-K40 non-finite losses; see the qualification report below.
+- [~] Stabilized E97-linear-RMS-MLP passed the decisive 256-node/2,048-rank
+  current-source gate in job 5217377; refresh the short one-node restore receipt
+  before production authorization.
 - [x] Bind GDN2 commit `95709fc250357c2dd109361c353192f2aa5913f9` and
   complete ROCm kernel/fallback audit.
 - [x] GDN2-MLP parity, one-GCD, sustained eight-GCD, and restore qualification.
@@ -76,8 +76,9 @@ milestone. `[~]` means actively in progress; `[x]` requires committed evidence.
 ### Phase C — fixed-world systems ladders
 
 - [x] E97-MLP: 8 nodes → 32 nodes → 256 nodes.
-- [~] E97-linear-MLP: 8-node pass; 32-node sequential-route failure. Earlier
-  chunked-route ladder passed 8 and 32 nodes but failed at 256 nodes.
+- [~] E97-linear-RMS-MLP: parameter-free RMSNorm passed the decisive 256-node
+  gate (5217377); refresh exact-source 8- and 32-node receipts if strict serial
+  predecessor bookkeeping is required.
 - [x] GDN2-MLP: 8 nodes → 32 nodes → 256 nodes.
 
 Exact jobs, accepted-token totals, memory, scheduler evidence, and the linear
@@ -86,8 +87,9 @@ failure investigation are recorded in
 tracing localized the failure to explosive head state in layer 9. Controlled
 32-node treatments with per-head output RMSNorm (job 5215887) and clip 0.25
 (job 5215911) both passed; the same-source baseline (5215983) reproduced rank
-179's step-36 failure. No treatment is promoted pending a scientific choice and
-256-node validation.
+179's step-36 failure. Parameter-free RMSNorm was then promoted and passed job
+5217377 on 256 nodes in 00:15:46: four K40 merges, 1,342,177,280 accepted tokens,
+validated checkpoint/sampler authority, and no non-finite ranks.
 
 Each box is checked only after exact-source predecessor evidence passes. Ladder
 checkpoints are throwaway and never enter the scientific chain.

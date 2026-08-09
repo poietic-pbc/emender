@@ -128,12 +128,26 @@ A same-source baseline repetition, job 5215983, failed again on rank 179 at step
 36, confirming that the two passing treatments fixed the deterministic smaller
 rung rather than merely receiving a lucky stream assignment. Output RMSNorm is
 the more architecture-standard repair; clip 0.25 is a useful secondary control
-but only constrains optimizer updates, not the state directly. Neither treatment
-is promoted into the frozen arm yet, and each still requires 256-node validation.
+but only constrains optimizer updates, not the state directly.
+
+The selected repair is non-affine per-head RMSNorm: FP32 RMS accumulation over
+the 32-dimensional raw readout, epsilon `1e-5`, fixed unit gain, no bias, applied
+before the SiLU gate. It adds no parameter or tensor-schema entries; both E97
+arms remain exactly 1,286,589,072 parameters and 146 tensors. Frozen source
+commit `407a01df` passed the decisive full-population gate in job 5217377:
+
+- 256 nodes / 2,048 ranks on `Partition=batch`, `QOS=debug`, `Requeue=0`;
+- `COMPLETED 0:0` in 00:15:46 (inside the requested 20-minute envelope);
+- 160 steps and four K40 hierarchical DiLoCo merges;
+- 1,342,177,280 accepted tokens, sampler cursor 320;
+- validated final checkpoint and explicit PASS receipt;
+- peak allocated memory 22,328 MiB per rank;
+- final-100 loss 8.0997, with no non-finite rank.
 
 ## Production boundary
 
-No 6,000-step production allocation was submitted. E97-MLP and GDN2-MLP have
-complete pre-production systems evidence, but the three-arm study as specified
-is **not production-ready** until the E97-linear optimization/stability policy
-is explicitly revised and requalified from the affected gates.
+No 6,000-step production allocation was submitted. E97-MLP and GDN2-MLP retain
+complete pre-production systems evidence, and stabilized E97-linear-RMS has now
+passed the decisive 256-node full-population gate. A short exact-source
+one-node checkpoint/restore refresh remains prudent before production launch;
+production was not submitted by this qualification job.
