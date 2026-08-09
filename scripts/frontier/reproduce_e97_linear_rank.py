@@ -25,7 +25,7 @@ def main() -> int:
 
     saved_argv = sys.argv
     try:
-        sys.argv = ["train.py"]
+        sys.argv = ["train.py", "--data", args.data]
         train_args = train.parse_args()
     finally:
         sys.argv = saved_argv
