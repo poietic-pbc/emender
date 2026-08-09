@@ -80,7 +80,7 @@ run_epoch() {
     source "$REPO/scripts/frontier/activate_emender_frontier.sh" >/dev/null
     cd "$SNAPSHOT"
     export PYTHONPATH="$SNAPSHOT${PYTHONPATH:+:$PYTHONPATH}"
-    export RANK=$SLURM_PROCID LOCAL_RANK=$SLURM_LOCALID
+    export RANK=$SLURM_PROCID LOCAL_RANK=0
     export TRITON_CACHE_DIR="/tmp/e97-paper-${SLURM_JOB_ID}-${ARM}-${SLURM_PROCID}"
     [[ -n "$RESUME_PATH" ]] || rm -rf "$TRITON_CACHE_DIR"
     [[ "$ARM" != gdn2-mlp ]] || export GDN2_PATH="$GDN2_STAGE"
