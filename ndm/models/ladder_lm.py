@@ -12,6 +12,8 @@ Architecture matches Mamba exactly:
     - RMSNorm (not LayerNorm) for efficiency
 """
 
+import os
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -1293,6 +1295,11 @@ class LadderLM(nn.Module):
             prev_hiddens = [None] * self.depth
 
         new_hidden_states = []
+        diagnostic_rank = os.environ.get("EMENDER_DIAG_FINITE_RANK")
+        trace_finiteness = (
+            diagnostic_rank is not None
+            and int(diagnostic_rank) == int(os.environ.get("RANK", "0"))
+        )
 
         # Run through layers with fused add+norm (exactly like Mamba's Block)
         # Pattern: residual = x + residual; x = norm(residual); x = mixer(x)
@@ -1317,10 +1324,43 @@ class LadderLM(nn.Module):
                     residual = residual.to(torch.float32)
 
             # Elman layer forward
+            mixer_input = x
             if self.gradient_checkpointing and self.training:
                 x, h_final = torch_checkpoint(layer, x, prev_hiddens[i], use_reentrant=False)
             else:
                 x, h_final = layer(x, prev_hiddens[i])
+
+            if trace_finiteness and not bool(torch.isfinite(x).all().item()):
+                def summary(name, tensor):
+                    if tensor is None or not torch.is_tensor(tensor):
+                        return f"{name}=none"
+                    finite = torch.isfinite(tensor)
+                    count = int(finite.sum().item())
+                    total = tensor.numel()
+                    max_abs = (
+                        float(tensor[finite].float().abs().max().item())
+                        if count else float("nan")
+                    )
+                    return f"{name}_finite={count}/{total} {name}_max_abs={max_abs:.6g}"
+
+                hidden_tensors = (
+                    [h_final] if torch.is_tensor(h_final)
+                    else list(h_final or []) if isinstance(h_final, (list, tuple))
+                    else []
+                )
+                hidden_summary = " ".join(
+                    summary(f"hidden_{j}", value)
+                    for j, value in enumerate(hidden_tensors)
+                )
+                print(
+                    f"[finite-trace] rank={diagnostic_rank} first_nonfinite_layer={i} "
+                    f"layer_type={type(layer).__name__} {summary('input', mixer_input)} "
+                    f"{summary('output', x)} {hidden_summary}",
+                    flush=True,
+                )
+                raise RuntimeError(
+                    f"finite-trace: first non-finite mixer output at layer {i}"
+                )
 
             new_hidden_states.append(h_final)
 
