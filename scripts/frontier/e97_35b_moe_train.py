@@ -9,7 +9,6 @@ from pathlib import Path
 import time
 import torch
 import torch.distributed as dist
-from torch.utils.checkpoint import checkpoint as activation_checkpoint
 
 from ndm.data.tokenized_dataset import (
     BOUNDARY_COUNTER_SAMPLER_SCHEMA,
@@ -198,40 +197,42 @@ def _canonical_checkpoint(args, groups, model, optimizer, *, step, accepted_toke
     return generation
 
 
-def _training_objective(model, chunks: torch.Tensor, *, sequence_chunk_size: int):
-    """Return LM and router losses, optionally checkpointing complete time segments.
+def _detach_recurrent_hiddens(hiddens):
+    return [
+        [head.detach() for head in layer] if isinstance(layer, (list, tuple))
+        else layer.detach()
+        for layer in hiddens
+    ]
 
-    Segment boundaries carry every layer's recurrent state without detaching it.
-    Each segment contains C+1 tokens, so its C targets exactly partition the
-    original full-context next-token objective.
+
+def _tbptt_objective_backward(model, chunks: torch.Tensor, *, sequence_chunk_size: int):
+    """Backpropagate one long window in bounded, state-continuous TBPTT segments.
+
+    Segment C consumes tokens [start:start+C] and predicts exactly the next C
+    tokens. Recurrent state is carried forward, then detached after each segment;
+    gradients are accumulated and normalized before one optimizer update.
     """
-    if sequence_chunk_size <= 0:
-        loss = model(chunks, return_loss=True)
-        return loss, e97_moe_auxiliary_loss(model)
-
     prediction_tokens = chunks.shape[1] - 1
     if prediction_tokens <= 0 or prediction_tokens % sequence_chunk_size:
-        raise RuntimeError("sequence chunk must exactly partition prediction tokens")
+        raise RuntimeError("TBPTT chunk must exactly partition prediction tokens")
+    segment_count = prediction_tokens // sequence_chunk_size
     previous_hiddens = None
-    losses = []
-    auxiliaries = []
+    loss_total = chunks.new_zeros((), dtype=torch.float32)
+    auxiliary_total = chunks.new_zeros((), dtype=torch.float32)
 
     for start in range(0, prediction_tokens, sequence_chunk_size):
         token_segment = chunks[:, start:start + sequence_chunk_size + 1]
+        segment_loss, (new_hiddens, _conv) = model(
+            token_segment, return_loss=True, return_prev_hiddens=True,
+            prev_hiddens=previous_hiddens)
+        segment_auxiliary = e97_moe_auxiliary_loss(model)
+        ((segment_loss + segment_auxiliary) / segment_count).backward()
+        loss_total = loss_total + segment_loss.detach().float() / segment_count
+        auxiliary_total = (
+            auxiliary_total + segment_auxiliary.detach().float() / segment_count)
+        previous_hiddens = _detach_recurrent_hiddens(new_hiddens)
 
-        def segment_forward(tokens, hiddens):
-            segment_loss, (new_hiddens, _conv) = model(
-                tokens, return_loss=True, return_prev_hiddens=True,
-                prev_hiddens=hiddens)
-            segment_auxiliary = e97_moe_auxiliary_loss(model)
-            return segment_loss, tuple(new_hiddens), segment_auxiliary
-
-        segment_loss, previous_hiddens, segment_auxiliary = activation_checkpoint(
-            segment_forward, token_segment, previous_hiddens, use_reentrant=False)
-        losses.append(segment_loss)
-        auxiliaries.append(segment_auxiliary)
-
-    return torch.stack(losses).mean(), torch.stack(auxiliaries).mean()
+    return loss_total, auxiliary_total
 
 
 def main() -> None:
@@ -302,10 +303,7 @@ def main() -> None:
         if loaded.step != 2322520 or int(loaded.config.get("dim", -1)) != 1792:
             raise RuntimeError("loaded checkpoint is not the bound final 513B E97 seed")
         model = loaded.model
-        # Whole-model time-segment checkpointing subsumes per-layer checkpointing
-        # and additionally bounds residual/add-norm activation retention.
-        model.gradient_checkpointing = bool(
-            args.gradient_checkpointing and args.sequence_chunk_size == 0)
+        model.gradient_checkpointing = bool(args.gradient_checkpointing)
         model.loss_chunk_size = int(args.loss_chunk_size)
         recurrent_mixers = []
         for module in model.modules():
@@ -335,6 +333,7 @@ def main() -> None:
              gradient_checkpointing=model.gradient_checkpointing,
              gradient_checkpointing_requested=args.gradient_checkpointing,
              sequence_chunk_size=args.sequence_chunk_size,
+             tbptt_truncated=args.sequence_chunk_size > 0,
              loss_chunk_size=model.loss_chunk_size,
              checkpoint_interval=args.checkpoint_interval,
              projection_chunk_size=args.projection_chunk_size,
@@ -420,10 +419,18 @@ def main() -> None:
                     for name in ("start", "forward", "backward", "reduce", "optimizer", "merge")
                 }
                 phase_events["start"].record()
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                loss, auxiliary = _training_objective(
-                    model, chunks, sequence_chunk_size=args.sequence_chunk_size)
-            objective = loss + auxiliary
+            if args.sequence_chunk_size > 0:
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    loss, auxiliary = _tbptt_objective_backward(
+                        model, chunks, sequence_chunk_size=args.sequence_chunk_size)
+                objective = loss + auxiliary
+                gradients_ready = True
+            else:
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    loss = model(chunks, return_loss=True)
+                auxiliary = e97_moe_auxiliary_loss(model)
+                objective = loss + auxiliary
+                gradients_ready = False
             forward_hbm_allocated = torch.cuda.memory_allocated()
             forward_hbm_reserved = torch.cuda.memory_reserved()
             forward_max_hbm_allocated = torch.cuda.max_memory_allocated()
@@ -431,7 +438,8 @@ def main() -> None:
                 phase_events["forward"].record()
             if not torch.isfinite(objective):
                 raise FloatingPointError(f"nonfinite objective at step {step}")
-            objective.backward()
+            if not gradients_ready:
+                objective.backward()
             backward_hbm_allocated = torch.cuda.memory_allocated()
             backward_hbm_reserved = torch.cuda.memory_reserved()
             backward_max_hbm_allocated = torch.cuda.max_memory_allocated()

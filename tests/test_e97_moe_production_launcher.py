@@ -105,13 +105,14 @@ def test_runner_exposes_existing_long_context_memory_controls():
     assert 'parser.add_argument("--checkpoint-interval", type=int, default=16)' in text
     assert 'parser.add_argument("--projection-chunk-size", type=int, default=0)' in text
     assert 'parser.add_argument("--sequence-chunk-size", type=int, default=0)' in text
-    assert "args.gradient_checkpointing and args.sequence_chunk_size == 0" in text
+    assert "model.gradient_checkpointing = bool(args.gradient_checkpointing)" in text
     assert "model.loss_chunk_size = int(args.loss_chunk_size)" in text
     assert "module.checkpoint_interval = int(args.checkpoint_interval)" in text
     assert "module.projection_chunk_size = int(args.projection_chunk_size)" in text
-    assert "def _training_objective(model, chunks: torch.Tensor" in text
-    assert "prev_hiddens=hiddens" in text
-    assert "activation_checkpoint(" in text
+    assert "def _tbptt_objective_backward(model, chunks: torch.Tensor" in text
+    assert "prev_hiddens=previous_hiddens" in text
+    assert "_detach_recurrent_hiddens(new_hiddens)" in text
+    assert "tbptt_truncated=args.sequence_chunk_size > 0" in text
     assert 'torch.cuda.reset_peak_memory_stats()' in text
     assert 'forward_max_hbm_allocated=forward_max_hbm_allocated' in text
     assert 'backward_max_hbm_allocated=backward_max_hbm_allocated' in text
