@@ -29,6 +29,7 @@ mkdir -p "$RUN_ROOT"/{external,logs,output,receipts} "$REPO/logs/frontier/e97_pa
 cd "$REPO"
 record=$(scontrol show job "$SLURM_JOB_ID" -o)
 [[ "$record" == *"Partition=batch"* && "$record" == *"QOS=${EXPECTED_QOS:-debug}"* \
+   && "$record" == *"TimeLimit=${EXPECTED_TIME_LIMIT:?}"* \
    && "$record" == *"Requeue=0"* && "$record" == *"NumNodes=$EXPECTED_NODES"* \
    && "$record" == *"NumTasks=$WORLD_SIZE"* ]] || { echo "scheduler binding mismatch" >&2; exit 65; }
 printf '%s\n' "$record" | tee "$RUN_ROOT/receipts/live-scontrol.txt"

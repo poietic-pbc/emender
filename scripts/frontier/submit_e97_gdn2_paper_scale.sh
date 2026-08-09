@@ -37,7 +37,7 @@ case "$NODES" in
   256) TIME_LIMIT=01:00:00 ;;
 esac
 mkdir -p logs/frontier/e97_paper
-export_args="ALL,ARM=$ARM,SOURCE_COMMIT=$SOURCE_COMMIT,REPO=$ROOT,EXPECTED_NODES=$NODES,EXPECTED_QOS=debug,MAX_STEPS=160,SAVE_EVERY=80"
+export_args="ALL,ARM=$ARM,SOURCE_COMMIT=$SOURCE_COMMIT,REPO=$ROOT,EXPECTED_NODES=$NODES,EXPECTED_QOS=debug,EXPECTED_TIME_LIMIT=$TIME_LIMIT,MAX_STEPS=160,SAVE_EVERY=80"
 job=$(sbatch --parsable --nodes="$NODES" --ntasks=$((NODES * 8)) --qos=debug \
   --time="$TIME_LIMIT" --job-name="paper-${ARM}-${NODES}n" \
   --export="$export_args" scripts/frontier/e97_gdn2_paper_scale.sbatch)
@@ -46,7 +46,7 @@ for _ in $(seq 1 30); do
   binding=$(squeue -h -j "$job" -o '%i|%P|%q|%T|%D|%l' || true)
   if [[ -n "$binding" ]]; then
     echo "$binding"
-    [[ "$binding" == "$job|batch|debug|"*"|$NODES|$TIME_LIMIT" ]] || {
+    [[ "$binding" == "$job|batch|debug|"*"|$NODES|"* ]] || {
       echo "scheduler binding mismatch; cancelling $job" >&2; scancel "$job"; exit 66; }
     exit 0
   fi
