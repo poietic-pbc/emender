@@ -24,6 +24,7 @@ CHECKPOINT_INTERVAL=${CHECKPOINT_INTERVAL:-16}
 MAX_STEPS=${MAX_STEPS:-2}
 DILOCO_K=${DILOCO_K:-1}
 EXPERT_BACKEND=${EXPERT_BACKEND:-rocblas}
+EMPTY_CACHE_INTERVAL=${EMPTY_CACHE_INTERVAL:-1}
 GRADIENT_CHECKPOINTING=${GRADIENT_CHECKPOINTING:-1}
 RUN_ROOT=${RUN_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-35b-moe/longctx-debug-${SLURM_JOB_NUM_NODES}n-c${CONTEXT_SIZE}-j${SLURM_JOB_ID}}
 
@@ -45,7 +46,8 @@ printf '%s\n' \
   "source_commit=$SOURCE_COMMIT" "context_size=$CONTEXT_SIZE" \
   "loss_chunk_size=$LOSS_CHUNK_SIZE" "checkpoint_interval=$CHECKPOINT_INTERVAL" \
   "gradient_checkpointing=$GRADIENT_CHECKPOINTING" "max_steps=$MAX_STEPS" \
-  "diloco_k=$DILOCO_K" "expert_backend=$EXPERT_BACKEND" > "$RUN_ROOT/recipe.txt"
+  "diloco_k=$DILOCO_K" "expert_backend=$EXPERT_BACKEND" \
+  "empty_cache_interval=$EMPTY_CACHE_INTERVAL" > "$RUN_ROOT/recipe.txt"
 
 source "$REPO/scripts/frontier/activate_emender_frontier.sh"
 MASTER_HOST=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -1)
@@ -59,7 +61,7 @@ export EMENDER_SOURCE_COMMIT=$SOURCE_COMMIT
 
 GC_FLAG=--no-gradient-checkpointing
 [[ "$GRADIENT_CHECKPOINTING" == 1 ]] && GC_FLAG=--gradient-checkpointing
-export GC_FLAG CONTEXT_SIZE LOSS_CHUNK_SIZE CHECKPOINT_INTERVAL MAX_STEPS DILOCO_K EXPERT_BACKEND
+export GC_FLAG CONTEXT_SIZE LOSS_CHUNK_SIZE CHECKPOINT_INTERVAL MAX_STEPS DILOCO_K EXPERT_BACKEND EMPTY_CACHE_INTERVAL
 srun --label --kill-on-bad-exit=1 bash -lc '
   set -euo pipefail
   source "'"$REPO"'/scripts/frontier/activate_emender_frontier.sh" >/dev/null
@@ -71,6 +73,7 @@ srun --label --kill-on-bad-exit=1 bash -lc '
     --max-steps "$MAX_STEPS" --minutes 0 --batch-size 1 --chunk-size "$CONTEXT_SIZE" \
     "$GC_FLAG" --loss-chunk-size "$LOSS_CHUNK_SIZE" \
     --checkpoint-interval "$CHECKPOINT_INTERVAL" --diloco-k "$DILOCO_K" \
-    --expert-backend "$EXPERT_BACKEND" --profile-phases \
+    --expert-backend "$EXPERT_BACKEND" --empty-cache-interval "$EMPTY_CACHE_INTERVAL" \
+    --profile-phases \
     --log-jsonl "'"$RUN_ROOT"'/training.jsonl"
 '
