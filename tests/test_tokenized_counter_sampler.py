@@ -34,7 +34,8 @@ def corpus(tmp_path):
 
 
 def identity(*, world=4, context=8, corpus_digest=CORPUS_DIGEST,
-             tokenizer_digest=TOKENIZER_DIGEST, schema=td.COUNTER_SAMPLER_SCHEMA):
+             tokenizer_digest=TOKENIZER_DIGEST, schema=td.COUNTER_SAMPLER_SCHEMA,
+             stream_origin=0):
     return td.CounterSamplerIdentity(
         schema=schema,
         corpus_sha256=corpus_digest,
@@ -42,14 +43,17 @@ def identity(*, world=4, context=8, corpus_digest=CORPUS_DIGEST,
         sampler_key=42,
         data_world_size=world,
         context_size=context,
+        stream_origin_accepted_tokens=stream_origin,
     )
 
 
-def dataset(corpus, *, rank=0, accepted=0, world=4, context=8, max_retries=64):
+def dataset(corpus, *, rank=0, accepted=0, world=4, context=8, max_retries=64,
+            schema=td.COUNTER_SAMPLER_SCHEMA, stream_origin=0):
     return td.TokenizedStreamDataset(
         str(corpus), context, rank=rank, world_size=world,
         tokenizer_name="p50k_base", sampler_identity=identity(
-            world=world, context=context), total_accepted_tokens=accepted,
+            world=world, context=context, schema=schema,
+            stream_origin=stream_origin), total_accepted_tokens=accepted,
         max_retries=max_retries,
     )
 
@@ -157,6 +161,49 @@ def test_accepted_token_cursor_requires_exact_division(accepted):
     with pytest.raises(ValueError):
         td.absolute_rank_sample_index(
             accepted, data_world_size=4, context_size=8)
+
+
+def test_boundary_relative_v2_starts_at_real_150b_authority_and_resumes(corpus):
+    origin = 150_134_063_104
+    schema = td.BOUNDARY_COUNTER_SAMPLER_SCHEMA
+    started = dataset(
+        corpus, accepted=origin, schema=schema, stream_origin=origin)
+    assert started.initial_absolute_rank_sample_index == 0
+    first = tensors(started.get_batch(3))
+
+    accepted = origin + 3 * 4 * 8
+    resumed = dataset(
+        corpus, accepted=accepted, schema=schema, stream_origin=origin)
+    assert resumed.initial_absolute_rank_sample_index == 3
+    assert torch.equal(tensors(resumed.get_batch(2)), tensors(started.get_batch(2)))
+
+    metadata = td.sampler_checkpoint_metadata(
+        identity(schema=schema, stream_origin=origin),
+        total_accepted_tokens=accepted)
+    assert metadata["identity"]["stream_origin_accepted_tokens"] == origin
+    assert metadata["absolute_rank_sample_index"] == 3
+    assert first.shape == (3, 8)
+
+
+def test_v2_stream_origin_is_part_of_sample_identity_and_distribution(corpus):
+    origin = 150_134_063_104
+    first = dataset(
+        corpus, accepted=origin, schema=td.BOUNDARY_COUNTER_SAMPLER_SCHEMA,
+        stream_origin=origin)
+    other_origin = origin + 4 * 8
+    second = dataset(
+        corpus, accepted=other_origin,
+        schema=td.BOUNDARY_COUNTER_SAMPLER_SCHEMA,
+        stream_origin=other_origin)
+    assert first.sample_id(0) != second.sample_id(0)
+    assert first.candidate_byte_position(0, 0) != second.candidate_byte_position(0, 0)
+
+
+def test_v1_identity_metadata_remains_byte_compatible_and_zero_origin():
+    metadata = identity().to_metadata()
+    assert "stream_origin_accepted_tokens" not in metadata
+    with pytest.raises(ValueError, match="counter-v1 is anchored"):
+        identity(stream_origin=1)
 
 
 def test_fresh_process_restore_produces_identical_next_batch(corpus, tmp_path):

@@ -11,7 +11,9 @@ import torch
 import torch.distributed as dist
 
 from ndm.data.tokenized_dataset import (
+    BOUNDARY_COUNTER_SAMPLER_SCHEMA,
     COUNTER_SAMPLER_SCHEMA,
+    COUNTER_SAMPLER_SCHEMAS,
     LEGACY_SAMPLER_SCHEMA,
     CounterSamplerIdentity,
     TokenizedStreamDataset,
@@ -70,6 +72,7 @@ def parse_args():
     parser.add_argument("--sampler-tokenizer-sha256")
     parser.add_argument("--sampler-key", type=int)
     parser.add_argument("--sampler-data-world-size", type=int)
+    parser.add_argument("--sampler-stream-origin-accepted-tokens", type=int)
     parser.add_argument(
         "--sampler-transition-from-legacy", action="store_true",
         help="Explicitly transition one complete K-aligned legacy authority to the "
@@ -87,18 +90,27 @@ def _sampler_identity(args, *, world_size: int) -> CounterSamplerIdentity | None
         "sampler_key": args.sampler_key,
         "data_world_size": args.sampler_data_world_size,
     }
+    stream_origin = getattr(
+        args, "sampler_stream_origin_accepted_tokens", None)
     if args.sampler_schema is None:
         provided = [name for name, value in values.items() if value is not None]
+        if stream_origin is not None:
+            provided.append("stream_origin_accepted_tokens")
         if provided or args.sampler_transition_from_legacy:
             raise RuntimeError(
                 "sampler fields/transition require --sampler-schema: "
                 + ", ".join(provided))
         return None
-    if args.sampler_schema != COUNTER_SAMPLER_SCHEMA:
+    if args.sampler_schema not in COUNTER_SAMPLER_SCHEMAS:
         raise RuntimeError(
-            f"unsupported sampler schema {args.sampler_schema!r}; expected "
-            f"{COUNTER_SAMPLER_SCHEMA!r}")
+            f"unsupported sampler schema {args.sampler_schema!r}; expected one of "
+            f"{sorted(COUNTER_SAMPLER_SCHEMAS)!r}")
     missing = [name for name, value in values.items() if value is None]
+    if (args.sampler_schema == BOUNDARY_COUNTER_SAMPLER_SCHEMA
+            and stream_origin is None):
+        missing.append("stream_origin_accepted_tokens")
+    if args.sampler_schema == COUNTER_SAMPLER_SCHEMA and stream_origin not in (None, 0):
+        raise RuntimeError("counter-v1 cannot use a nonzero stream origin")
     if missing:
         raise RuntimeError("counter sampler identity missing: " + ", ".join(missing))
     if int(args.sampler_data_world_size) != int(world_size):
@@ -111,6 +123,7 @@ def _sampler_identity(args, *, world_size: int) -> CounterSamplerIdentity | None
         sampler_key=args.sampler_key,
         data_world_size=args.sampler_data_world_size,
         context_size=args.chunk_size,
+        stream_origin_accepted_tokens=int(stream_origin or 0),
     )
 
 
@@ -199,6 +212,14 @@ def main() -> None:
         if args.sampler_transition_from_legacy and args.resume_root is None:
             raise RuntimeError(
                 "--sampler-transition-from-legacy requires --resume-root")
+        if (args.sampler_transition_from_legacy
+                and sampler_identity.schema != BOUNDARY_COUNTER_SAMPLER_SCHEMA):
+            raise RuntimeError("legacy transition requires boundary-relative counter-v2")
+        if (sampler_identity is not None
+                and sampler_identity.stream_origin_accepted_tokens > 0
+                and args.resume_root is None):
+            raise RuntimeError(
+                "a positive counter-v2 stream origin requires resume authority")
         if groups.node_count > 1 and args.minutes > 0:
             raise RuntimeError(
                 "multinode production requires an exact max-steps boundary; "

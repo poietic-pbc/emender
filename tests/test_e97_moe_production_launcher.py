@@ -23,6 +23,8 @@ def test_production_launcher_is_fixed_world_fail_stop_and_canonical():
     assert 'RESUME_ROOT="$CHECKPOINT_ROOT"' in text
     assert '"schema=${SAMPLER_SCHEMA:-legacy-mutable-rng-v0}"' in text
     assert '--sampler-data-world-size "$SAMPLER_DATA_WORLD_SIZE"' in text
+    assert '--sampler-stream-origin-accepted-tokens "$SAMPLER_STREAM_ORIGIN_ACCEPTED_TOKENS"' in text
+    assert "counter-v2 requires a nonnegative stream origin" in text
     assert "--sampler-transition-from-legacy" in text
     assert "partial sampler identity or transition without schema" in text
     assert "scontrol requeue" not in text
@@ -38,6 +40,7 @@ def test_submitter_verifies_partition_and_qos_separately():
     assert "HEAD == origin/main" in text
     assert "SAMPLER_CORPUS_SHA256" in text
     assert "SAMPLER_DATA_WORLD_SIZE" in text
+    assert "SAMPLER_STREAM_ORIGIN_ACCEPTED_TOKENS" in text
     assert "SAMPLER_TRANSITION_FROM_LEGACY" in text
     assert "scancel" in text
 

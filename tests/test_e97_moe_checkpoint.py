@@ -1,6 +1,7 @@
 import pytest
 
 from ndm.data.tokenized_dataset import (
+    BOUNDARY_COUNTER_SAMPLER_SCHEMA,
     COUNTER_SAMPLER_SCHEMA,
     LEGACY_SAMPLER_SCHEMA,
     CounterSamplerIdentity,
@@ -95,16 +96,36 @@ def test_legacy_checkpoint_is_not_silently_relabelled(legacy_kind):
 
 @pytest.mark.parametrize("legacy_kind", ["legacy", "missing"])
 def test_explicit_legacy_transition_requires_complete_k_boundary(legacy_kind):
-    manifest = _manifest(step=81, sampler=legacy_kind)
+    accepted = 150_134_063_104
+    expected = _identity(
+        schema=BOUNDARY_COUNTER_SAMPLER_SCHEMA,
+        stream_origin_accepted_tokens=accepted)
+    manifest = _manifest(step=81, accepted_tokens=accepted, sampler=legacy_kind)
     with pytest.raises(RuntimeError, match="K-aligned"):
         validate_moe_sampler_manifest(
-            manifest, expected_identity=_identity(),
+            manifest, expected_identity=expected,
             allow_legacy_transition=True, diloco_k=40)
 
     manifest["step"] = 80
     assert validate_moe_sampler_manifest(
-        manifest, expected_identity=_identity(),
+        manifest, expected_identity=expected,
         allow_legacy_transition=True, diloco_k=40) == "legacy-transition"
+
+
+def test_legacy_transition_rejects_v1_and_wrong_v2_origin():
+    accepted = 150_134_063_104
+    manifest = _manifest(
+        step=2_332_080, accepted_tokens=accepted, sampler="missing")
+    with pytest.raises(RuntimeError, match="counter-v2"):
+        validate_moe_sampler_manifest(
+            manifest, expected_identity=_identity(),
+            allow_legacy_transition=True, diloco_k=40)
+    with pytest.raises(RuntimeError, match="must equal"):
+        validate_moe_sampler_manifest(
+            manifest, expected_identity=_identity(
+                schema=BOUNDARY_COUNTER_SAMPLER_SCHEMA,
+                stream_origin_accepted_tokens=accepted - 1),
+            allow_legacy_transition=True, diloco_k=40)
 
 
 def test_legacy_launch_refuses_counter_checkpoint():

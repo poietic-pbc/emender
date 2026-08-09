@@ -20,6 +20,9 @@ import tiktoken
 
 
 COUNTER_SAMPLER_SCHEMA = "emender-byte-window-counter-v1"
+BOUNDARY_COUNTER_SAMPLER_SCHEMA = "emender-byte-window-counter-v2"
+COUNTER_SAMPLER_SCHEMAS = frozenset(
+    (COUNTER_SAMPLER_SCHEMA, BOUNDARY_COUNTER_SAMPLER_SCHEMA))
 LEGACY_SAMPLER_SCHEMA = "legacy-mutable-rng-v0"
 DEFAULT_MAX_RETRIES = 64
 
@@ -34,12 +37,13 @@ class CounterSamplerIdentity:
     sampler_key: int
     data_world_size: int
     context_size: int
+    stream_origin_accepted_tokens: int = 0
 
     def __post_init__(self) -> None:
-        if self.schema != COUNTER_SAMPLER_SCHEMA:
+        if self.schema not in COUNTER_SAMPLER_SCHEMAS:
             raise ValueError(
                 f"unsupported sampler schema {self.schema!r}; "
-                f"expected {COUNTER_SAMPLER_SCHEMA!r}")
+                f"expected one of {sorted(COUNTER_SAMPLER_SCHEMAS)!r}")
         for name in ("corpus_sha256", "tokenizer_sha256"):
             value = getattr(self, name)
             if len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
@@ -50,20 +54,38 @@ class CounterSamplerIdentity:
             raise ValueError("data_world_size must be positive")
         if self.context_size <= 0:
             raise ValueError("context_size must be positive")
+        if self.stream_origin_accepted_tokens < 0:
+            raise ValueError("stream_origin_accepted_tokens must be nonnegative")
+        if (self.schema == COUNTER_SAMPLER_SCHEMA
+                and self.stream_origin_accepted_tokens != 0):
+            raise ValueError(
+                "counter-v1 is anchored at accepted token zero; use counter-v2 "
+                "for a boundary-relative stream")
 
     def to_metadata(self) -> dict[str, Any]:
-        return asdict(self)
+        metadata = asdict(self)
+        if self.schema == COUNTER_SAMPLER_SCHEMA:
+            # Preserve the already frozen paper-study v1 identity byte for byte.
+            metadata.pop("stream_origin_accepted_tokens")
+        return metadata
 
     @classmethod
     def from_metadata(cls, metadata: Mapping[str, Any]) -> "CounterSamplerIdentity":
-        required = {field.name for field in cls.__dataclass_fields__.values()}
         observed = set(metadata)
+        schema = metadata.get("schema")
+        required = {
+            "schema", "corpus_sha256", "tokenizer_sha256", "sampler_key",
+            "data_world_size", "context_size",
+        }
+        if schema == BOUNDARY_COUNTER_SAMPLER_SCHEMA:
+            required.add("stream_origin_accepted_tokens")
         if observed != required:
             raise ValueError(
                 "sampler identity fields mismatch: "
                 f"missing={sorted(required - observed)}, "
                 f"unexpected={sorted(observed - required)}")
-        return cls(**{name: metadata[name] for name in required})
+        values = {name: metadata[name] for name in required}
+        return cls(**values)
 
     def assert_matches(self, expected: "CounterSamplerIdentity") -> None:
         if self != expected:
@@ -80,18 +102,28 @@ def absolute_rank_sample_index(
     *,
     data_world_size: int,
     context_size: int,
+    stream_origin_accepted_tokens: int = 0,
 ) -> int:
-    """Convert the accepted-token authority into an exact per-rank cursor."""
-    if total_accepted_tokens < 0:
-        raise ValueError("total_accepted_tokens must be nonnegative")
+    """Convert an accepted-token authority into an exact per-rank cursor.
+
+    Counter-v1 is anchored at token zero. Counter-v2 records an immutable
+    legacy-to-counter boundary and advances relative to that origin, allowing
+    historical clocks whose residue cannot ever become world/context aligned.
+    """
+    if total_accepted_tokens < 0 or stream_origin_accepted_tokens < 0:
+        raise ValueError("accepted tokens and stream origin must be nonnegative")
+    if total_accepted_tokens < stream_origin_accepted_tokens:
+        raise ValueError("total_accepted_tokens precedes the sampler stream origin")
     if data_world_size <= 0 or context_size <= 0:
         raise ValueError("data_world_size and context_size must be positive")
     tokens_per_global_sample = data_world_size * context_size
-    cursor, remainder = divmod(total_accepted_tokens, tokens_per_global_sample)
+    relative_tokens = total_accepted_tokens - stream_origin_accepted_tokens
+    cursor, remainder = divmod(relative_tokens, tokens_per_global_sample)
     if remainder:
         raise ValueError(
-            "accepted-token cursor is not exactly divisible by data world and "
-            f"context: {total_accepted_tokens} % {tokens_per_global_sample} "
+            "boundary-relative accepted-token cursor is not exactly divisible "
+            f"by data world and context: ({total_accepted_tokens} - "
+            f"{stream_origin_accepted_tokens}) % {tokens_per_global_sample} "
             f"= {remainder}")
     return cursor
 
@@ -106,6 +138,7 @@ def sampler_checkpoint_metadata(
         total_accepted_tokens,
         data_world_size=identity.data_world_size,
         context_size=identity.context_size,
+        stream_origin_accepted_tokens=identity.stream_origin_accepted_tokens,
     )
     return {
         "identity": identity.to_metadata(),
@@ -130,6 +163,7 @@ def restore_sampler_checkpoint_metadata(
         accepted_tokens,
         data_world_size=identity.data_world_size,
         context_size=identity.context_size,
+        stream_origin_accepted_tokens=identity.stream_origin_accepted_tokens,
     )
     if int(metadata["absolute_rank_sample_index"]) != cursor:
         raise ValueError("stored sampler cursor disagrees with accepted-token clock")
@@ -214,6 +248,8 @@ class TokenizedStreamDataset(Dataset):
                     total_accepted_tokens,
                     data_world_size=self.world_size,
                     context_size=sampler_identity.context_size,
+                    stream_origin_accepted_tokens=(
+                        sampler_identity.stream_origin_accepted_tokens),
                 )
             except Exception:
                 self.close()
