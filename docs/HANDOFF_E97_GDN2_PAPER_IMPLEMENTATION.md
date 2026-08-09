@@ -36,7 +36,8 @@ milestone. `[~]` means actively in progress; `[x]` requires committed evidence.
 - [x] Work is running directly in one attended session; no WG dispatcher or
   worker service is active.
 - [x] Frontier debugging is serialized to at most one active debug-QoS job.
-- [x] Independent MoE continuation job 5208321 is left untouched by this study.
+- [x] Independent MoE continuation job 5208321 was left untouched and completed
+  `0:0` at its exact 150,134,063,104-token authority.
 
 ### Phase A — identities and deterministic sampling
 
@@ -107,20 +108,19 @@ Every accepted implementation/evidence change must be committed and pushed.
 ## Current operational state at handoff
 
 The 35B MoE continuation is independent of this from-scratch study. Job
-**5201882** completed the immutable 100.474B authority. The separately
-authorized stage-1 continuation is now running as job **5208321** from immutable
-source `54bf2f2b03b2ef8e1ae65d4176df2d8453a96bec`:
+**5201882** completed the immutable 100.474B authority. The separately authorized stage-1 continuation job **5208321** completed `0:0`
+from immutable source `54bf2f2b03b2ef8e1ae65d4176df2d8453a96bec`:
 
 - 256 nodes / 2,048 ranks;
 - `Partition=batch`, `QOS=normal`, `Requeue=0`;
-- resumes step 2,329,120 / 100,473,503,744 accepted tokens;
-- targets step 2,332,080 / 150,134,063,104 accepted tokens;
-- finite live loss and the exact packed parameter-count guards passed;
-- the mutable repository checkout cannot change its loaded code.
+- final step 2,332,080 / 150,134,063,104 accepted tokens;
+- all 2,960 steps and 74 K40 merges completed with finite loss;
+- the exact packed parameter-count guards passed;
+- the complete final eight-shard authority is preserved.
 
-Do not cancel, relabel, or modify job 5208321. The deterministic sampler below
-applies only to future executions and must not retroactively relabel its legacy
-stream.
+Evidence: `docs/validation/e97-35b-moe-150b-job5208321.md`. The deterministic
+sampler below applies only to future executions and must not retroactively
+relabel this legacy stream.
 
 ## Frozen primary model recipes
 
