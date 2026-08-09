@@ -105,7 +105,7 @@ def main() -> int:
 
     configs = {arm: load(path) for arm, path in CONFIGS.items()}
     nonlinear, linear = configs["e97-mlp"], configs["e97-linear-mlp"]
-    permitted_differences = {"arm", "linear_state", "use_chunked_e97"}
+    permitted_differences = {"arm", "linear_state"}
     differences = {
         key for key in set(nonlinear) | set(linear)
         if nonlinear.get(key) != linear.get(key)

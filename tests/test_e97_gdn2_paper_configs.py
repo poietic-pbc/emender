@@ -19,9 +19,10 @@ def test_primary_arm_configs_are_matched_and_exact():
         key for key in set(nonlinear) | set(linear)
         if nonlinear.get(key) != linear.get(key)
     }
-    assert differences == {"arm", "linear_state", "use_chunked_e97"}
+    assert differences == {"arm", "linear_state"}
     assert nonlinear["linear_state"] == 0
     assert linear["linear_state"] == 1
+    assert nonlinear["use_chunked_e97"] == linear["use_chunked_e97"] == 0
     assert nonlinear["exact_parameters"] == linear["exact_parameters"] == 1_286_589_072
     assert nonlinear["derived_mlp_hidden"] == 4032
 
