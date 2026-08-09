@@ -21,6 +21,7 @@ REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
 CONTEXT_SIZE=${CONTEXT_SIZE:-8192}
 LOSS_CHUNK_SIZE=${LOSS_CHUNK_SIZE:-2048}
 CHECKPOINT_INTERVAL=${CHECKPOINT_INTERVAL:-16}
+PROJECTION_CHUNK_SIZE=${PROJECTION_CHUNK_SIZE:-0}
 MAX_STEPS=${MAX_STEPS:-2}
 DILOCO_K=${DILOCO_K:-1}
 EXPERT_BACKEND=${EXPERT_BACKEND:-rocblas}
@@ -45,6 +46,7 @@ scontrol show job -dd "$SLURM_JOB_ID" > "$RUN_ROOT/scontrol.txt"
 printf '%s\n' \
   "source_commit=$SOURCE_COMMIT" "context_size=$CONTEXT_SIZE" \
   "loss_chunk_size=$LOSS_CHUNK_SIZE" "checkpoint_interval=$CHECKPOINT_INTERVAL" \
+  "projection_chunk_size=$PROJECTION_CHUNK_SIZE" \
   "gradient_checkpointing=$GRADIENT_CHECKPOINTING" "max_steps=$MAX_STEPS" \
   "diloco_k=$DILOCO_K" "expert_backend=$EXPERT_BACKEND" \
   "empty_cache_interval=$EMPTY_CACHE_INTERVAL" > "$RUN_ROOT/recipe.txt"
@@ -61,7 +63,7 @@ export EMENDER_SOURCE_COMMIT=$SOURCE_COMMIT
 
 GC_FLAG=--no-gradient-checkpointing
 [[ "$GRADIENT_CHECKPOINTING" == 1 ]] && GC_FLAG=--gradient-checkpointing
-export GC_FLAG CONTEXT_SIZE LOSS_CHUNK_SIZE CHECKPOINT_INTERVAL MAX_STEPS DILOCO_K EXPERT_BACKEND EMPTY_CACHE_INTERVAL
+export GC_FLAG CONTEXT_SIZE LOSS_CHUNK_SIZE CHECKPOINT_INTERVAL PROJECTION_CHUNK_SIZE MAX_STEPS DILOCO_K EXPERT_BACKEND EMPTY_CACHE_INTERVAL
 srun --label --kill-on-bad-exit=1 bash -lc '
   set -euo pipefail
   source "'"$REPO"'/scripts/frontier/activate_emender_frontier.sh" >/dev/null
@@ -72,7 +74,8 @@ srun --label --kill-on-bad-exit=1 bash -lc '
   "$EMENDER_PYTHON" scripts/frontier/e97_35b_moe_train.py \
     --max-steps "$MAX_STEPS" --minutes 0 --batch-size 1 --chunk-size "$CONTEXT_SIZE" \
     "$GC_FLAG" --loss-chunk-size "$LOSS_CHUNK_SIZE" \
-    --checkpoint-interval "$CHECKPOINT_INTERVAL" --diloco-k "$DILOCO_K" \
+    --checkpoint-interval "$CHECKPOINT_INTERVAL" \
+    --projection-chunk-size "$PROJECTION_CHUNK_SIZE" --diloco-k "$DILOCO_K" \
     --expert-backend "$EXPERT_BACKEND" --empty-cache-interval "$EMPTY_CACHE_INTERVAL" \
     --profile-phases \
     --log-jsonl "'"$RUN_ROOT"'/training.jsonl"

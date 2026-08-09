@@ -1406,9 +1406,26 @@ class E88FLAHybrid(nn.Module):
             S_new: [B, H, n_state, head_v_dim] updated state
             output: [B, C, H, head_v_dim] output for this chunk
         """
-        k, v, q, decay, g, qkv_silu_in_kernel = self._compute_projections(x_chunk, input_dtype, use_fused_l2)
+        k, v, q, decay, g, qkv_silu_in_kernel = self._compute_projections(
+            x_chunk, input_dtype, use_fused_l2)
 
-        if self.use_triton:
+        if self.use_triton and self.use_split_edit:
+            B, C, _ = x_chunk.shape
+            erase_gate = torch.sigmoid(self.erase_gate_proj(x_chunk)).view(
+                B, C, self.n_heads, self.n_state).to(input_dtype)
+            value_write_gate = torch.sigmoid(self.value_write_gate_proj(x_chunk)).view(
+                B, C, self.n_heads, self.head_v_dim).to(input_dtype)
+            from ndm.triton.e97_sequential import e97_split_edit_triton_apply
+            S_new, output = e97_split_edit_triton_apply(
+                self.training, k, v, q, decay, g, S_prev,
+                self.n_heads, True, use_fused_l2, self.checkpoint_interval,
+                apply_silu_qkv=qkv_silu_in_kernel,
+                raw_write=self.raw_write,
+                linear_state=self.linear_state,
+                erase_gate=erase_gate,
+                value_write_gate=value_write_gate,
+            )
+        elif self.use_triton:
             from ndm.triton.e88_triton_optimized import e88_triton_optimized_apply
             S_new, output = e88_triton_optimized_apply(
                 self.training, k, v, q, decay, g, S_prev,
@@ -1536,7 +1553,8 @@ class E88FLAHybrid(nn.Module):
                 self.projection_chunk_size > 0 and
                 T > self.projection_chunk_size and
                 not self.use_conv and
-                not self.use_split_edit
+                not self.use_output_norm and
+                (not self.use_split_edit or self.use_triton)
             )
 
             if not _will_chunk:
@@ -1745,10 +1763,16 @@ class E88FLAHybrid(nn.Module):
                 self.projection_chunk_size > 0 and
                 T > self.projection_chunk_size and
                 not self.use_conv and  # Conv1d has cross-chunk dependencies
-                not self.use_split_edit
+                not self.use_output_norm and
+                (not self.use_split_edit or self.use_triton)
             )
 
             if can_chunk:
+                # _process_chunk fuses the SiLU output gate. Output-norm variants
+                # are excluded by can_chunk because their gate ordering differs.
+                apply_gate_in_kernel = True
+                self._maybe_log_runtime_path(
+                    x, use_optimized=True, use_chunked=False, log_decay=False)
                 # === Chunked path: recompute projections per-chunk during backward ===
                 # Full-T projections were skipped above — computed per-chunk here instead
                 C = self.projection_chunk_size

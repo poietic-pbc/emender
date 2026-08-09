@@ -6,6 +6,7 @@ LAUNCHER = ROOT / "scripts/frontier/e97_35b_moe_production.sbatch"
 SUBMITTER = ROOT / "scripts/frontier/submit_e97_35b_moe_scale.sh"
 RUNNER = ROOT / "scripts/frontier/e97_35b_moe_train.py"
 EP_TRITON = ROOT / "ndm/triton/e97_moe_ep.py"
+E97_MIXER = ROOT / "ndm/models/e88_fla_hybrid.py"
 LONG_CONTEXT_LAUNCHER = ROOT / "scripts/frontier/e97_35b_moe_long_context_debug.sbatch"
 
 
@@ -55,9 +56,20 @@ def test_long_context_launcher_is_debug_fail_stop_and_immutable():
     assert '--gradient-checkpointing' in text
     assert '--loss-chunk-size "$LOSS_CHUNK_SIZE"' in text
     assert '--checkpoint-interval "$CHECKPOINT_INTERVAL"' in text
+    assert '--projection-chunk-size "$PROJECTION_CHUNK_SIZE"' in text
     assert '--empty-cache-interval "$EMPTY_CACHE_INTERVAL"' in text
     assert '--profile-phases' in text
     assert '--kill-on-bad-exit=1' in text
+
+
+def test_split_edit_projection_recomputation_uses_existing_e97_kernel():
+    text = E97_MIXER.read_text()
+    assert "(not self.use_split_edit or self.use_triton)" in text
+    assert "not self.use_output_norm" in text
+    assert "if self.use_triton and self.use_split_edit:" in text
+    assert "e97_split_edit_triton_apply(" in text
+    assert "erase_gate=erase_gate" in text
+    assert "value_write_gate=value_write_gate" in text
 
 
 def test_ragged_ep_rows_do_not_create_unbounded_triton_specializations():
@@ -90,9 +102,11 @@ def test_runner_exposes_existing_long_context_memory_controls():
     assert '"--gradient-checkpointing", action=argparse.BooleanOptionalAction' in text
     assert 'parser.add_argument("--loss-chunk-size", type=int, default=0)' in text
     assert 'parser.add_argument("--checkpoint-interval", type=int, default=16)' in text
+    assert 'parser.add_argument("--projection-chunk-size", type=int, default=0)' in text
     assert "model.gradient_checkpointing = bool(args.gradient_checkpointing)" in text
     assert "model.loss_chunk_size = int(args.loss_chunk_size)" in text
     assert "module.checkpoint_interval = int(args.checkpoint_interval)" in text
+    assert "module.projection_chunk_size = int(args.projection_chunk_size)" in text
     assert 'torch.cuda.reset_peak_memory_stats()' in text
     assert 'forward_max_hbm_allocated=forward_max_hbm_allocated' in text
     assert 'backward_max_hbm_allocated=backward_max_hbm_allocated' in text

@@ -61,6 +61,7 @@ def parse_args():
         default=False)
     parser.add_argument("--loss-chunk-size", type=int, default=0)
     parser.add_argument("--checkpoint-interval", type=int, default=16)
+    parser.add_argument("--projection-chunk-size", type=int, default=0)
     parser.add_argument("--lr", type=float, default=1.007e-3)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--diloco-k", type=int, default=40)
@@ -203,11 +204,17 @@ def main() -> None:
         raise SystemExit("set positive max-steps and/or minutes; zero means no limit")
     if args.save_every < 0 or args.keep_checkpoints < 1:
         raise SystemExit("save-every must be nonnegative and keep-checkpoints must be positive")
-    if args.chunk_size <= 0 or args.loss_chunk_size < 0 or args.checkpoint_interval <= 0:
+    if (args.chunk_size <= 0 or args.loss_chunk_size < 0
+            or args.checkpoint_interval <= 0 or args.projection_chunk_size < 0):
         raise SystemExit(
-            "chunk-size/checkpoint-interval must be positive and loss-chunk-size nonnegative")
+            "chunk-size/checkpoint-interval must be positive and chunk controls nonnegative")
     if args.chunk_size % args.checkpoint_interval:
         raise SystemExit("chunk-size must be divisible by checkpoint-interval")
+    if (args.projection_chunk_size > 0
+            and (args.chunk_size % args.projection_chunk_size
+                 or args.projection_chunk_size % args.checkpoint_interval)):
+        raise SystemExit(
+            "projection-chunk-size must divide context and be divisible by checkpoint-interval")
     if args.save_every and args.checkpoint_root is None:
         raise SystemExit("save-every requires checkpoint-root")
     if args.save_every and args.save_every % args.diloco_k:
@@ -257,6 +264,7 @@ def main() -> None:
         for module in model.modules():
             if hasattr(module, "checkpoint_interval"):
                 module.checkpoint_interval = int(args.checkpoint_interval)
+                module.projection_chunk_size = int(args.projection_chunk_size)
                 recurrent_mixers.append(module)
         if len(recurrent_mixers) != model.depth:
             raise RuntimeError(
@@ -280,6 +288,7 @@ def main() -> None:
              gradient_checkpointing=model.gradient_checkpointing,
              loss_chunk_size=model.loss_chunk_size,
              checkpoint_interval=args.checkpoint_interval,
+             projection_chunk_size=args.projection_chunk_size,
              context_size=args.chunk_size,
              hbm_allocated=torch.cuda.memory_allocated(),
              hbm_reserved=torch.cuda.memory_reserved())
