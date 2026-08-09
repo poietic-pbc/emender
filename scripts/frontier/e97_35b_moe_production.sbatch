@@ -40,6 +40,7 @@ SAMPLER_CORPUS_SHA256=${SAMPLER_CORPUS_SHA256:-}
 SAMPLER_TOKENIZER_SHA256=${SAMPLER_TOKENIZER_SHA256:-}
 SAMPLER_KEY=${SAMPLER_KEY:-}
 SAMPLER_DATA_WORLD_SIZE=${SAMPLER_DATA_WORLD_SIZE:-}
+SAMPLER_STREAM_ORIGIN_ACCEPTED_TOKENS=${SAMPLER_STREAM_ORIGIN_ACCEPTED_TOKENS:-}
 SAMPLER_TRANSITION_FROM_LEGACY=${SAMPLER_TRANSITION_FROM_LEGACY:-0}
 
 [[ "$RUN_ROOT" == /* && "$RUN_ID" != */* ]] || { echo "invalid stable run identity" >&2; exit 64; }
@@ -51,12 +52,12 @@ SAMPLER_TRANSITION_FROM_LEGACY=${SAMPLER_TRANSITION_FROM_LEGACY:-0}
   echo "SAVE_EVERY must be positive and K-aligned" >&2; exit 64;
 }
 if [[ -z "$SAMPLER_SCHEMA" ]]; then
-  [[ -z "$SAMPLER_CORPUS_SHA256$SAMPLER_TOKENIZER_SHA256$SAMPLER_KEY$SAMPLER_DATA_WORLD_SIZE" \
+  [[ -z "$SAMPLER_CORPUS_SHA256$SAMPLER_TOKENIZER_SHA256$SAMPLER_KEY$SAMPLER_DATA_WORLD_SIZE$SAMPLER_STREAM_ORIGIN_ACCEPTED_TOKENS" \
      && "$SAMPLER_TRANSITION_FROM_LEGACY" == 0 ]] || {
     echo "partial sampler identity or transition without schema" >&2; exit 64;
   }
 else
-  [[ "$SAMPLER_SCHEMA" == emender-byte-window-counter-v1 \
+  [[ "$SAMPLER_SCHEMA" =~ ^emender-byte-window-counter-v[12]$ \
      && "$SAMPLER_CORPUS_SHA256" =~ ^[0-9a-f]{64}$ \
      && "$SAMPLER_TOKENIZER_SHA256" =~ ^[0-9a-f]{64}$ \
      && "$SAMPLER_KEY" =~ ^[0-9]+$ \
@@ -64,6 +65,16 @@ else
      && "$SAMPLER_TRANSITION_FROM_LEGACY" =~ ^[01]$ ]] || {
     echo "invalid or launch-world-mismatched counter sampler identity" >&2; exit 64;
   }
+  if [[ "$SAMPLER_SCHEMA" == emender-byte-window-counter-v1 ]]; then
+    [[ -z "$SAMPLER_STREAM_ORIGIN_ACCEPTED_TOKENS" \
+       && "$SAMPLER_TRANSITION_FROM_LEGACY" == 0 ]] || {
+      echo "counter-v1 is zero-origin and cannot transition legacy state" >&2; exit 64;
+    }
+  else
+    [[ "$SAMPLER_STREAM_ORIGIN_ACCEPTED_TOKENS" =~ ^[0-9]+$ ]] || {
+      echo "counter-v2 requires a nonnegative stream origin" >&2; exit 64;
+    }
+  fi
 fi
 cd "$REPO"
 git cat-file -e "${SOURCE_COMMIT}^{commit}"
@@ -92,6 +103,7 @@ printf '%s\n' \
   "sampler_key=${SAMPLER_KEY:-legacy-mutable}" \
   "data_world_size=${SAMPLER_DATA_WORLD_SIZE:-legacy-launch-world}" \
   "context_size=2048" \
+  "stream_origin_accepted_tokens=${SAMPLER_STREAM_ORIGIN_ACCEPTED_TOKENS:-legacy-unbound}" \
   "transition_from_legacy=$SAMPLER_TRANSITION_FROM_LEGACY" \
   > "$RUN_ROOT/identity/sampler-${SLURM_JOB_ID}.txt"
 squeue -j "$SLURM_JOB_ID" -h -o 'JobID=%i|Partition=%P|QOS=%q|State=%T|NodeList=%N|TimeLimit=%l' \
@@ -139,7 +151,8 @@ export EMENDER_SOURCE_COMMIT=$SOURCE_COMMIT
 export SNAPSHOT JOB_SEED JOB_SEED_ARGS DATA_PATH CHECKPOINT_ROOT RESUME_ROOT TRAIN_MINUTES MAX_STEPS
 export SAVE_EVERY KEEP_CHECKPOINTS DILOCO_K RUN_ROOT
 export SAMPLER_SCHEMA SAMPLER_CORPUS_SHA256 SAMPLER_TOKENIZER_SHA256 SAMPLER_KEY
-export SAMPLER_DATA_WORLD_SIZE SAMPLER_TRANSITION_FROM_LEGACY
+export SAMPLER_DATA_WORLD_SIZE SAMPLER_STREAM_ORIGIN_ACCEPTED_TOKENS
+export SAMPLER_TRANSITION_FROM_LEGACY
 
 set +e
 srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
@@ -160,6 +173,8 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
       --sampler-tokenizer-sha256 "$SAMPLER_TOKENIZER_SHA256"
       --sampler-key "$SAMPLER_KEY"
       --sampler-data-world-size "$SAMPLER_DATA_WORLD_SIZE")
+    [[ -z "$SAMPLER_STREAM_ORIGIN_ACCEPTED_TOKENS" ]] || sampler+=(
+      --sampler-stream-origin-accepted-tokens "$SAMPLER_STREAM_ORIGIN_ACCEPTED_TOKENS")
     [[ "$SAMPLER_TRANSITION_FROM_LEGACY" == 0 ]] || \
       sampler+=(--sampler-transition-from-legacy)
   fi

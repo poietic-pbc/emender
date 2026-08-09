@@ -190,6 +190,27 @@ def test_training_dataset_uses_accepted_token_cursor_and_fixed_identity(monkeypa
     assert captured["total_accepted_tokens"] == 4 * 2048 * 6
 
 
+def test_dense_counter_v2_uses_boundary_relative_origin(monkeypatch):
+    captured = {}
+
+    class Dataset:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(train, "TokenizedStreamDataset", Dataset)
+    origin = 150_134_063_104
+    args = _counter_sampler_args(
+        sampler_schema=train.BOUNDARY_COUNTER_SAMPLER_SCHEMA,
+        sampler_stream_origin_accepted_tokens=origin)
+    train.build_training_dataset(
+        args, rank=2, dist_enabled=True, world_size=4,
+        total_accepted_tokens=origin)
+    identity = captured["sampler_identity"]
+    assert identity.schema == train.BOUNDARY_COUNTER_SAMPLER_SCHEMA
+    assert identity.stream_origin_accepted_tokens == origin
+    assert captured["total_accepted_tokens"] == origin
+
+
 def test_dense_e97_gdn2_and_moe_resolve_identical_samples(tmp_path, monkeypatch):
     import ndm.data.tokenized_dataset as td
 

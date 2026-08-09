@@ -66,7 +66,9 @@ elif os.environ.get('ELMAN_PARARNN_HYBRID') == '1':
 
 from ndm.data import DocumentStreamDataset, BatchedStreamDataset, create_dataloader
 from ndm.data.tokenized_dataset import (
+    BOUNDARY_COUNTER_SAMPLER_SCHEMA,
     COUNTER_SAMPLER_SCHEMA,
+    COUNTER_SAMPLER_SCHEMAS,
     LEGACY_SAMPLER_SCHEMA,
     CounterSamplerIdentity,
     TokenizedStreamDataset,
@@ -500,8 +502,8 @@ def parse_args():
                              'value as sole authority.')
     parser.add_argument('--sampler_schema', type=str, default=None,
                         help='Versioned accepted-token sampler schema. Unset is explicitly '
-                             'legacy mutable-RNG mode; scientific runs must pass '
-                             f'{COUNTER_SAMPLER_SCHEMA}.')
+                             'legacy mutable-RNG mode; scientific runs must pass a member of '
+                             f'{sorted(COUNTER_SAMPLER_SCHEMAS)}.')
     parser.add_argument('--sampler_corpus_sha256', type=str, default=None,
                         help='Frozen canonical corpus SHA-256 for the counter sampler.')
     parser.add_argument('--sampler_tokenizer_sha256', type=str, default=None,
@@ -510,6 +512,8 @@ def parse_args():
                         help='Fixed nonnegative counter sampler key (paper study: 42).')
     parser.add_argument('--sampler_data_world_size', type=int, default=None,
                         help='Declared fixed data world; must exactly match launched WORLD_SIZE.')
+    parser.add_argument('--sampler_stream_origin_accepted_tokens', type=int, default=None,
+                        help='Counter-v2 immutable accepted-token stream origin; v1 is zero.')
     parser.add_argument('--tbptt', action='store_true',
                         help='Enable TBPTT (carry hidden state across chunks)')
     parser.add_argument('--orth_reg', type=float, default=0.0,
@@ -1163,17 +1167,24 @@ def counter_sampler_identity_from_args(args, *, world_size):
         'sampler_key': getattr(args, 'sampler_key', None),
         'data_world_size': getattr(args, 'sampler_data_world_size', None),
     }
+    stream_origin = getattr(args, 'sampler_stream_origin_accepted_tokens', None)
     if schema is None:
         provided = [name for name, value in fields.items() if value is not None]
+        if stream_origin is not None:
+            provided.append('stream_origin_accepted_tokens')
         if provided:
             raise ValueError(
                 "sampler identity fields require --sampler_schema: " + ", ".join(provided))
         return None
-    if schema != COUNTER_SAMPLER_SCHEMA:
+    if schema not in COUNTER_SAMPLER_SCHEMAS:
         raise ValueError(
-            f"unsupported --sampler_schema {schema!r}; expected "
-            f"{COUNTER_SAMPLER_SCHEMA!r}")
+            f"unsupported --sampler_schema {schema!r}; expected one of "
+            f"{sorted(COUNTER_SAMPLER_SCHEMAS)!r}")
     missing = [name for name, value in fields.items() if value is None]
+    if schema == BOUNDARY_COUNTER_SAMPLER_SCHEMA and stream_origin is None:
+        missing.append('stream_origin_accepted_tokens')
+    if schema == COUNTER_SAMPLER_SCHEMA and stream_origin not in (None, 0):
+        raise ValueError("counter-v1 cannot use a nonzero stream origin")
     if missing:
         raise ValueError("counter sampler identity missing fields: " + ", ".join(missing))
     if int(fields['data_world_size']) != int(world_size):
@@ -1190,6 +1201,7 @@ def counter_sampler_identity_from_args(args, *, world_size):
         sampler_key=int(fields['sampler_key']),
         data_world_size=int(fields['data_world_size']),
         context_size=int(args.chunk_size),
+        stream_origin_accepted_tokens=int(stream_origin or 0),
     )
 
 

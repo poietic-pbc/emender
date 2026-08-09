@@ -12,6 +12,7 @@ import torch
 import torch.distributed as dist
 
 from ndm.data.tokenized_dataset import (
+    BOUNDARY_COUNTER_SAMPLER_SCHEMA,
     LEGACY_SAMPLER_SCHEMA,
     CounterSamplerIdentity,
     restore_sampler_checkpoint_metadata,
@@ -76,6 +77,14 @@ def validate_moe_sampler_manifest(
         if step < 0 or step % diloco_k:
             raise RuntimeError(
                 "legacy sampler transition requires a complete K-aligned checkpoint")
+        if expected_identity.schema != BOUNDARY_COUNTER_SAMPLER_SCHEMA:
+            raise RuntimeError(
+                "legacy sampler transition requires boundary-relative counter-v2")
+        if expected_identity.stream_origin_accepted_tokens != accepted_tokens:
+            raise RuntimeError(
+                "counter-v2 stream origin must equal the legacy checkpoint "
+                f"accepted-token boundary: {expected_identity.stream_origin_accepted_tokens} "
+                f"!= {accepted_tokens}")
         return "legacy-transition"
     try:
         _identity, sampler_tokens, _cursor = restore_sampler_checkpoint_metadata(
