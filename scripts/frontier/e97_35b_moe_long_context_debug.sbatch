@@ -32,6 +32,13 @@ RUN_ROOT=${RUN_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-
 SEED_CHECKPOINT=${SEED_CHECKPOINT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/final-seed-production-256n/milestones/step-2322520-tokens-513013841920/checkpoint_step_2322520_loss_2.2798.pt}
 SEED_ARGS_JSON=${SEED_ARGS_JSON:-$(dirname "$SEED_CHECKPOINT")/args.json}
 DATA_PATH=${DATA_PATH:-/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt}
+RESUME_ROOT=${RESUME_ROOT:-}
+SAMPLER_SCHEMA=${SAMPLER_SCHEMA:-}
+SAMPLER_CORPUS_SHA256=${SAMPLER_CORPUS_SHA256:-}
+SAMPLER_TOKENIZER_SHA256=${SAMPLER_TOKENIZER_SHA256:-}
+SAMPLER_KEY=${SAMPLER_KEY:-}
+SAMPLER_STREAM_ORIGIN_ACCEPTED_TOKENS=${SAMPLER_STREAM_ORIGIN_ACCEPTED_TOKENS:-}
+SAMPLER_TRANSITION_FROM_COUNTER=${SAMPLER_TRANSITION_FROM_COUNTER:-0}
 
 [[ "$CONTEXT_SIZE" =~ ^[1-9][0-9]*$ && "$LOSS_CHUNK_SIZE" =~ ^[0-9]+$ \
    && "$CHECKPOINT_INTERVAL" =~ ^[1-9][0-9]*$ && "$MAX_STEPS" =~ ^[1-9][0-9]*$ \
@@ -73,7 +80,9 @@ export EMENDER_SOURCE_COMMIT=$SOURCE_COMMIT
 
 GC_FLAG=--no-gradient-checkpointing
 [[ "$GRADIENT_CHECKPOINTING" == 1 ]] && GC_FLAG=--gradient-checkpointing
-export GC_FLAG CONTEXT_SIZE LOSS_CHUNK_SIZE CHECKPOINT_INTERVAL PROJECTION_CHUNK_SIZE SEQUENCE_CHUNK_SIZE MAX_STEPS DILOCO_K EXPERT_BACKEND EMPTY_CACHE_INTERVAL JOB_SEED JOB_SEED_ARGS DATA_PATH
+export GC_FLAG CONTEXT_SIZE LOSS_CHUNK_SIZE CHECKPOINT_INTERVAL PROJECTION_CHUNK_SIZE SEQUENCE_CHUNK_SIZE MAX_STEPS DILOCO_K EXPERT_BACKEND EMPTY_CACHE_INTERVAL JOB_SEED JOB_SEED_ARGS DATA_PATH RESUME_ROOT
+export SAMPLER_SCHEMA SAMPLER_CORPUS_SHA256 SAMPLER_TOKENIZER_SHA256 SAMPLER_KEY
+export SAMPLER_STREAM_ORIGIN_ACCEPTED_TOKENS SAMPLER_TRANSITION_FROM_COUNTER
 srun --label --kill-on-bad-exit=1 bash -lc '
   set -euo pipefail
   source "'"$REPO"'/scripts/frontier/activate_emender_frontier.sh" >/dev/null
@@ -81,9 +90,22 @@ srun --label --kill-on-bad-exit=1 bash -lc '
   export RANK=$SLURM_PROCID LOCAL_RANK=$SLURM_LOCALID
   export TRITON_CACHE_DIR="/tmp/e97-moe-longctx-${SLURM_JOB_ID}-${SLURM_PROCID}"
   rm -rf "$TRITON_CACHE_DIR"
+  resume=(); [[ -z "$RESUME_ROOT" ]] || resume=(--resume-root "$RESUME_ROOT")
+  sampler=()
+  if [[ -n "$SAMPLER_SCHEMA" ]]; then
+    sampler=(
+      --sampler-schema "$SAMPLER_SCHEMA"
+      --sampler-corpus-sha256 "$SAMPLER_CORPUS_SHA256"
+      --sampler-tokenizer-sha256 "$SAMPLER_TOKENIZER_SHA256"
+      --sampler-key "$SAMPLER_KEY"
+      --sampler-data-world-size "$WORLD_SIZE"
+      --sampler-stream-origin-accepted-tokens "$SAMPLER_STREAM_ORIGIN_ACCEPTED_TOKENS")
+    [[ "$SAMPLER_TRANSITION_FROM_COUNTER" == 0 ]] || \
+      sampler+=(--sampler-transition-from-counter)
+  fi
   "$EMENDER_PYTHON" scripts/frontier/e97_35b_moe_train.py \
     --seed-checkpoint "$JOB_SEED" --seed-args-json "$JOB_SEED_ARGS" --data "$DATA_PATH" \
-    --max-steps "$MAX_STEPS" --minutes 0 --batch-size 1 --chunk-size "$CONTEXT_SIZE" \
+    "${resume[@]}" "${sampler[@]}" --max-steps "$MAX_STEPS" --minutes 0 --batch-size 1 --chunk-size "$CONTEXT_SIZE" \
     "$GC_FLAG" --loss-chunk-size "$LOSS_CHUNK_SIZE" \
     --checkpoint-interval "$CHECKPOINT_INTERVAL" \
     --projection-chunk-size "$PROJECTION_CHUNK_SIZE" \
