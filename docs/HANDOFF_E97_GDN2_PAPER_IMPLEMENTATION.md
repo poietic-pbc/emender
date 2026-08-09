@@ -82,7 +82,12 @@ milestone. `[~]` means actively in progress; `[x]` requires committed evidence.
 
 Exact jobs, accepted-token totals, memory, scheduler evidence, and the linear
 failure investigation are recorded in
-`docs/validation/e97-gdn2-paper-frontier-qualification.md`.
+`docs/validation/e97-gdn2-paper-frontier-qualification.md`. Follow-up finite
+tracing localized the failure to explosive head state in layer 9. Controlled
+32-node treatments with per-head output RMSNorm (job 5215887) and clip 0.25
+(job 5215911) both passed; the same-source baseline (5215983) reproduced rank
+179's step-36 failure. No treatment is promoted pending a scientific choice and
+256-node validation.
 
 Each box is checked only after exact-source predecessor evidence passes. Ladder
 checkpoints are throwaway and never enter the scientific chain.

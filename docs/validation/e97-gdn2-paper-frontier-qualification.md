@@ -86,6 +86,51 @@ change the frozen matched comparison and requires an explicit scientific-plan
 decision. Qualification therefore stops here rather than masking, retrying, or
 launching production from a non-reproducibly passing allocation.
 
+## Linear-state root-cause diagnostics (2026-08-09 follow-up)
+
+The failure is not caused by a missing global gradient-clip call: `train.py`
+already computes the global norm and applies `clip_grad_norm_(..., 1.0)` before
+every optimizer step. Exact failing rank 179 has unusually large pre-clip norms
+(up to 70 in an isolated 40-step replay), so clipping is active on essentially
+every update.
+
+The E97 mixer does, however, omit the per-head output RMSNorm normally used for
+linear Gated Delta Net dynamics. The implementation itself records the reason:
+tanh-bounded E88/E97 did better without it, while linear dynamics can grow
+unbounded and benefit from it. The paper ablation inherited the nonlinear E97
+setting `use_output_norm=False` when `linear_state` was flipped.
+
+A layer-level finite trace reproduced the exact 32-node failure in job 5216040.
+Rank 179 entered layer 9 with a completely finite normalized input (maximum
+absolute value 4.3125). Layer 9's linear E97 mixer returned 60,928 non-finite
+BF16 output elements and finite elements as large as `1.54523e37`. Matrix-state
+head 37 was the first clear source: only 2,016/2,048 final-state elements were
+finite and its largest finite element was `2.51224e38`. Other heads remained
+mostly ordinary. This localizes the failure inside one linear split-edit state
+scan, before the MLP, residual stream, loss, or DiLoCo merge.
+
+This is mathematically plausible despite `decay<=1` and normalized keys. With a
+coordinate-wise erase gate, the linear transition is
+`A_t = d_t I - k_t (e_t ⊙ k_t)^T`. It is generally non-normal (not a symmetric
+contraction), so changing key/erase directions can produce large transient
+amplification. The tanh arm bounds that amplification. Global gradient clipping
+cannot bound a within-sequence forward state after the parameters have moved.
+
+Two controlled 32-node, 256-rank, 160-step diagnostics used the same problematic
+world/rank streams and passed four K40 merges:
+
+- job 5215887: per-head output RMSNorm, original LR and clip 1.0; `COMPLETED 0:0`,
+  final-100 loss 8.1127, peak allocation 19,363 MiB;
+- job 5215911: no output norm, global clip reduced from 1.0 to 0.25;
+  `COMPLETED 0:0`, final-100 loss 7.5315, peak allocation 16,939 MiB.
+
+A same-source baseline repetition, job 5215983, failed again on rank 179 at step
+36, confirming that the two passing treatments fixed the deterministic smaller
+rung rather than merely receiving a lucky stream assignment. Output RMSNorm is
+the more architecture-standard repair; clip 0.25 is a useful secondary control
+but only constrains optimizer updates, not the state directly. Neither treatment
+is promoted into the frozen arm yet, and each still requires 256-node validation.
+
 ## Production boundary
 
 No 6,000-step production allocation was submitted. E97-MLP and GDN2-MLP have
