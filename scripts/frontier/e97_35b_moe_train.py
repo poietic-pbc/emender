@@ -56,6 +56,11 @@ def parse_args():
     parser.add_argument("--max-steps", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--chunk-size", type=int, default=2048)
+    parser.add_argument(
+        "--gradient-checkpointing", action=argparse.BooleanOptionalAction,
+        default=False)
+    parser.add_argument("--loss-chunk-size", type=int, default=0)
+    parser.add_argument("--checkpoint-interval", type=int, default=16)
     parser.add_argument("--lr", type=float, default=1.007e-3)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--diloco-k", type=int, default=40)
@@ -198,6 +203,11 @@ def main() -> None:
         raise SystemExit("set positive max-steps and/or minutes; zero means no limit")
     if args.save_every < 0 or args.keep_checkpoints < 1:
         raise SystemExit("save-every must be nonnegative and keep-checkpoints must be positive")
+    if args.chunk_size <= 0 or args.loss_chunk_size < 0 or args.checkpoint_interval <= 0:
+        raise SystemExit(
+            "chunk-size/checkpoint-interval must be positive and loss-chunk-size nonnegative")
+    if args.chunk_size % args.checkpoint_interval:
+        raise SystemExit("chunk-size must be divisible by checkpoint-interval")
     if args.save_every and args.checkpoint_root is None:
         raise SystemExit("save-every requires checkpoint-root")
     if args.save_every and args.save_every % args.diloco_k:
@@ -241,6 +251,16 @@ def main() -> None:
         if loaded.step != 2322520 or int(loaded.config.get("dim", -1)) != 1792:
             raise RuntimeError("loaded checkpoint is not the bound final 513B E97 seed")
         model = loaded.model
+        model.gradient_checkpointing = bool(args.gradient_checkpointing)
+        model.loss_chunk_size = int(args.loss_chunk_size)
+        recurrent_mixers = []
+        for module in model.modules():
+            if hasattr(module, "checkpoint_interval"):
+                module.checkpoint_interval = int(args.checkpoint_interval)
+                recurrent_mixers.append(module)
+        if len(recurrent_mixers) != model.depth:
+            raise RuntimeError(
+                f"expected {model.depth} recurrent mixers, found {len(recurrent_mixers)}")
         convert_e97_ffns_to_node_local_moe(
             model,
             E97MoEConfig(hidden_dim=8832, routed_experts=64, shared_experts=1,
@@ -257,6 +277,10 @@ def main() -> None:
                 f"packed shard count mismatch: total={parameter_count_local}, local={local_expert_count}")
         emit(args.log_jsonl, "model_ready", local_parameter_count=parameter_count_local,
              local_expert_parameter_count=local_expert_count,
+             gradient_checkpointing=model.gradient_checkpointing,
+             loss_chunk_size=model.loss_chunk_size,
+             checkpoint_interval=args.checkpoint_interval,
+             context_size=args.chunk_size,
              hbm_allocated=torch.cuda.memory_allocated(),
              hbm_reserved=torch.cuda.memory_reserved())
 
@@ -327,6 +351,7 @@ def main() -> None:
             if start is not None and args.minutes > 0 and time.monotonic() - start >= args.minutes * 60:
                 break
             optimizer.zero_grad(set_to_none=True)
+            torch.cuda.reset_peak_memory_stats()
             chunks, _, actual_lengths = dataset.get_batch(
                 args.batch_size, device=torch.device("cuda"))
             step_start = time.monotonic()
@@ -340,12 +365,18 @@ def main() -> None:
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 loss = model(chunks, return_loss=True)
             auxiliary = e97_moe_auxiliary_loss(model)
+            objective = loss + auxiliary
+            forward_hbm_allocated = torch.cuda.memory_allocated()
+            forward_hbm_reserved = torch.cuda.memory_reserved()
+            forward_max_hbm_allocated = torch.cuda.max_memory_allocated()
             if phase_events is not None:
                 phase_events["forward"].record()
-            objective = loss + auxiliary
             if not torch.isfinite(objective):
                 raise FloatingPointError(f"nonfinite objective at step {step}")
             objective.backward()
+            backward_hbm_allocated = torch.cuda.memory_allocated()
+            backward_hbm_reserved = torch.cuda.memory_reserved()
+            backward_max_hbm_allocated = torch.cuda.max_memory_allocated()
             if phase_events is not None:
                 phase_events["backward"].record()
             replicated_ids = {id(parameter) for parameter in replicated}
@@ -385,7 +416,13 @@ def main() -> None:
                      backward_ms=phase_events["forward"].elapsed_time(phase_events["backward"]),
                      replicated_reduce_ms=phase_events["backward"].elapsed_time(phase_events["reduce"]),
                      optimizer_ms=phase_events["reduce"].elapsed_time(phase_events["optimizer"]),
-                     merge_ms=phase_events["optimizer"].elapsed_time(phase_events["merge"]))
+                     merge_ms=phase_events["optimizer"].elapsed_time(phase_events["merge"]),
+                     forward_hbm_allocated=forward_hbm_allocated,
+                     forward_hbm_reserved=forward_hbm_reserved,
+                     forward_max_hbm_allocated=forward_max_hbm_allocated,
+                     backward_hbm_allocated=backward_hbm_allocated,
+                     backward_hbm_reserved=backward_hbm_reserved,
+                     backward_max_hbm_allocated=backward_max_hbm_allocated)
             dist.all_reduce(loss, op=dist.ReduceOp.AVG, group=groups.node_group)
             dist.all_reduce(auxiliary, op=dist.ReduceOp.AVG, group=groups.node_group)
             step_seconds = time.monotonic() - step_start

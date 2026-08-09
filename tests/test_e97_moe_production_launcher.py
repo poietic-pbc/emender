@@ -6,6 +6,7 @@ LAUNCHER = ROOT / "scripts/frontier/e97_35b_moe_production.sbatch"
 SUBMITTER = ROOT / "scripts/frontier/submit_e97_35b_moe_scale.sh"
 RUNNER = ROOT / "scripts/frontier/e97_35b_moe_train.py"
 EP_TRITON = ROOT / "ndm/triton/e97_moe_ep.py"
+LONG_CONTEXT_LAUNCHER = ROOT / "scripts/frontier/e97_35b_moe_long_context_debug.sbatch"
 
 
 def test_production_launcher_is_fixed_world_fail_stop_and_canonical():
@@ -45,6 +46,19 @@ def test_submitter_verifies_partition_and_qos_separately():
     assert "scancel" in text
 
 
+def test_long_context_launcher_is_debug_fail_stop_and_immutable():
+    text = LONG_CONTEXT_LAUNCHER.read_text()
+    assert "#SBATCH -q debug" in text
+    assert "#SBATCH --no-requeue" in text
+    assert 'SOURCE_COMMIT:?immutable source commit required' in text
+    assert 'git archive "$SOURCE_COMMIT"' in text
+    assert '--gradient-checkpointing' in text
+    assert '--loss-chunk-size "$LOSS_CHUNK_SIZE"' in text
+    assert '--checkpoint-interval "$CHECKPOINT_INTERVAL"' in text
+    assert '--profile-phases' in text
+    assert '--kill-on-bad-exit=1' in text
+
+
 def test_ragged_ep_rows_do_not_create_unbounded_triton_specializations():
     text = EP_TRITON.read_text()
     # Received assignment counts vary by rank, layer, and step. Specializing
@@ -68,3 +82,16 @@ def test_runner_uses_restored_step_for_data_and_one_canonical_island():
     assert 'if dist.get_rank() == 0:' in text
     assert 'args.checkpoint_root / f"node-' not in text
     assert "step % args.save_every == 0" in text
+
+
+def test_runner_exposes_existing_long_context_memory_controls():
+    text = RUNNER.read_text()
+    assert '"--gradient-checkpointing", action=argparse.BooleanOptionalAction' in text
+    assert 'parser.add_argument("--loss-chunk-size", type=int, default=0)' in text
+    assert 'parser.add_argument("--checkpoint-interval", type=int, default=16)' in text
+    assert "model.gradient_checkpointing = bool(args.gradient_checkpointing)" in text
+    assert "model.loss_chunk_size = int(args.loss_chunk_size)" in text
+    assert "module.checkpoint_interval = int(args.checkpoint_interval)" in text
+    assert 'torch.cuda.reset_peak_memory_stats()' in text
+    assert 'forward_max_hbm_allocated=forward_max_hbm_allocated' in text
+    assert 'backward_max_hbm_allocated=backward_max_hbm_allocated' in text
