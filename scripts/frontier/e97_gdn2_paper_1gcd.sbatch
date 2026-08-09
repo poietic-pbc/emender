@@ -31,14 +31,21 @@ printf '%s\n' "$record" | tee "$RUN_ROOT/receipts/live-scontrol.txt"
 squeue -h -j "$SLURM_JOB_ID" -o '%i|%P|%q|%T|%D|%l' \
   | tee "$RUN_ROOT/receipts/live-squeue.txt"
 
-SNAPSHOT="$RUN_ROOT/source/$SOURCE_COMMIT"
-tmp="$SNAPSHOT.tmp"
-rm -rf "$tmp"; mkdir -p "$tmp"
-git archive "$SOURCE_COMMIT" | tar -xf - -C "$tmp"
-mv -T "$tmp" "$SNAPSHOT"
+SNAPSHOT="$RUN_BASE/sources/$SOURCE_COMMIT"
+if [[ ! -f "$SNAPSHOT/train.py" ]]; then
+  tmp="$SNAPSHOT.tmp-$SLURM_JOB_ID"
+  rm -rf "$tmp"; mkdir -p "$tmp"
+  git archive "$SOURCE_COMMIT" | tar -xf - -C "$tmp"
+  if ! mv -T "$tmp" "$SNAPSHOT" 2>/dev/null; then
+    rm -rf "$tmp"
+    [[ -f "$SNAPSHOT/train.py" ]] || exit 68
+  fi
+fi
 printf '%s\n' "$SOURCE_COMMIT" > "$RUN_ROOT/receipts/source-commit.txt"
-
-source "$SNAPSHOT/scripts/frontier/activate_emender_frontier.sh"
+printf '%s\n' "$SNAPSHOT" > "$RUN_ROOT/receipts/source-snapshot.txt"
+git show "$SOURCE_COMMIT:scripts/frontier/activate_emender_frontier.sh" \
+  | cmp - "$REPO/scripts/frontier/activate_emender_frontier.sh"
+source "$REPO/scripts/frontier/activate_emender_frontier.sh"
 GDN2_STAGE=
 if [[ "$ARM" == gdn2-mlp ]]; then
   GDN2_STAGE="$RUN_ROOT/external/gdn2-95709fc"
@@ -58,7 +65,7 @@ export EMENDER_GDN2_EXPECTED_COMMIT=95709fc250357c2dd109361c353192f2aa5913f9
 
 srun --label --kill-on-bad-exit=1 --wait=60 bash -lc '
   set -euo pipefail
-  source "$SNAPSHOT/scripts/frontier/activate_emender_frontier.sh" >/dev/null
+  source "$REPO/scripts/frontier/activate_emender_frontier.sh" >/dev/null
   cd "$SNAPSHOT"
   export PYTHONPATH="$SNAPSHOT${PYTHONPATH:+:$PYTHONPATH}"
   export RANK=0 WORLD_SIZE=1 LOCAL_RANK=0
