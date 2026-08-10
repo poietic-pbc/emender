@@ -81,12 +81,19 @@ def test_long_context_launcher_is_debug_fail_stop_and_immutable():
 def test_long_context_study_configs_freeze_qualified_execution_not_architecture():
     short = json.loads((LONG_CONTEXT_CONFIGS / "32k.json").read_text())
     long = json.loads((LONG_CONTEXT_CONFIGS / "128k.json").read_text())
-    assert short["schema"] == long["schema"] == "emender-e97-moe-long-context-study-v1"
+    fallback = json.loads(
+        (LONG_CONTEXT_CONFIGS / "128k_tbptt_fallback.json").read_text())
+    assert short["schema"] == long["schema"] == fallback["schema"] == (
+        "emender-e97-moe-long-context-study-v1")
     assert short["context_size"] == short["gradient_horizon"] == 32768
     assert short["sequence_chunk_size"] == 0
-    assert long["context_size"] == 131072
-    assert long["sequence_chunk_size"] == long["gradient_horizon"] == 32768
-    for recipe in (short, long):
+    assert long["context_size"] == long["gradient_horizon"] == 131072
+    assert long["sequence_chunk_size"] == long["moe_token_chunk_size"] == 32768
+    assert long["full_bptt_segments"] is True
+    assert fallback["context_size"] == 131072
+    assert fallback["sequence_chunk_size"] == fallback["gradient_horizon"] == 32768
+    assert fallback["full_bptt_segments"] is False
+    for recipe in (short, long, fallback):
         assert recipe["parent_step"] == 2338080
         assert recipe["parent_accepted_tokens"] == 250797359104
         assert recipe["projection_chunk_size"] == recipe["loss_chunk_size"] == 2048
@@ -144,6 +151,7 @@ def test_runner_exposes_existing_long_context_memory_controls():
     assert 'parser.add_argument("--sequence-chunk-size", type=int, default=0)' in text
     assert 'parser.add_argument("--full-bptt-segments", action="store_true")' in text
     assert "def _segmented_full_bptt_objective(" in text
+    assert "smaller chunks change the router balance objective" in text
     assert 'parser.add_argument("--checkpoint-group-size", type=int, default=1)' in text
     assert 'parser.add_argument("--moe-token-chunk-size", type=int, default=0)' in text
     assert 'parser.add_argument("--resume-lr-override", type=float)' in text

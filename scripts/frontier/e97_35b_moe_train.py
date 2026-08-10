@@ -303,6 +303,12 @@ def main() -> None:
             "sequence-chunk-size must divide context and be divisible by checkpoint-interval")
     if args.full_bptt_segments and args.sequence_chunk_size <= 0:
         raise SystemExit("full-bptt-segments requires a positive sequence-chunk-size")
+    effective_rows = args.sequence_chunk_size or args.chunk_size
+    if (args.moe_token_chunk_size > 0
+            and args.moe_token_chunk_size != effective_rows):
+        raise SystemExit(
+            "training moe-token-chunk-size must equal the effective sequence segment; "
+            "smaller chunks change the router balance objective")
     if args.resume_lr_override is not None:
         if args.resume_root is None or args.resume_lr_override <= 0:
             raise SystemExit("positive resume-lr-override requires resume-root")

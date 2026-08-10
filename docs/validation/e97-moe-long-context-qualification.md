@@ -45,11 +45,17 @@ made.
 2. Nonlinear split-edit projections can be recomputed in bounded time segments.
    Each segment calls the existing sequential split-edit Triton recurrence and
    carries `S_final` into the next segment without changing the recurrence.
-3. 128K uses state-continuous TBPTT with 32K gradient segments. Forward state
-   spans the complete 128K window; recurrent gradients are deliberately
-   truncated at 32K boundaries. Gradients from all four segments are averaged
-   before one optimizer update.
-4. Counter-to-counter phase transitions are explicit and fail closed. A new
+3. The fallback 128K recipe uses state-continuous TBPTT with a 32K gradient
+   horizon. This remains available as `128k_tbptt_fallback.json`.
+4. Literal 128K full BPTT builds one graph from four bounded 32K forward
+   segments. Recurrent states remain attached across every segment boundary,
+   so one final backward traverses the complete 128K window.
+5. Complete-block grouped checkpointing retains one `(x, residual)` boundary
+   for all 11 blocks. Each MoE records compact top-3 routing plans during
+   forward and consumes those plans in reverse during replay, eliminating the
+   ragged-shape failure of naive rerouting. Checkpointed 2K loss chunks and
+   complete ScheduleFree-state CPU offload provide the remaining HBM margin.
+6. Counter-to-counter phase transitions are explicit and fail closed. A new
    context/world identity begins at the exact parent accepted-token boundary;
    historical 2K samples are not relabelled.
 
@@ -61,8 +67,14 @@ Implementation commits, in order:
 - `a62022d2` — explicit counter-to-counter sampler transition
 - `a46e0187` — trained-checkpoint transition launcher
 - `2dbf11a0` — explicit LR override after optimizer restore
+- `5e4bae1e` — grouped block replay and bounded MoE execution
+- `53600b54` — deterministic top-3 route replay
+- `176db9ba` — checkpointed LM-loss chunks
+- `f73b252d` — optional pre-backward HIP cache trim
+- `0bff17d9`, `466bba66` — ScheduleFree optimizer-state CPU offload
+- `43dbd4aa` — full BPTT across bounded context segments
 
-Focused integrated tests: 46 passed.
+Focused integrated tests: 48 passed.
 
 ## Diagnostic sequence
 
@@ -89,7 +101,7 @@ A whole-model activation-checkpoint experiment, job `5219406`, was rejected.
 Dropless routing row counts changed during recomputation and PyTorch correctly
 raised `CheckpointError` for different tensor metadata. This path is not used.
 
-### Accepted 128K execution path
+### Accepted 128K/32K-TBPTT fallback
 
 | Job | Asset | Nodes | Context | Gradient horizon | K | Result |
 |---|---|---:|---:|---:|---:|---|
@@ -121,6 +133,46 @@ Decisive 32-node 128K receipt, job `5219603`:
 - steady step time: 143.95 seconds;
 - steady global throughput: 233,093 tokens/s;
 - DiLoCo merge: 23.52 seconds.
+
+### Accepted literal 128K full-BPTT path
+
+The accepted exact recipe uses four 32K materialization segments, retains
+attached recurrent states across all four, checkpoints all 11 complete blocks
+as one replay group, checkpoints 2K loss chunks, and offloads the complete
+ScheduleFree state. Setting the MoE execution bound to 32K preserves the
+original full-segment router auxiliary objective exactly while bounding all
+routing/exchange buffers to one segment.
+
+| Job | Nodes | Steps | K | Result |
+|---|---:|---:|---:|---|
+| 5222503 | 1 | 2 | 1 | PASS, repeated full-BPTT optimizer updates |
+| 5222295 | 2 | 1 | 1 | PASS, DiLoCo merge |
+| 5222617 | 32 | 1 | 1 | PASS, scale qualification |
+
+Decisive one-node receipt, job `5222503`:
+
+- scheduler: `COMPLETED 0:0`, 1 node, 00:14:57;
+- two literal full-128K optimizer steps;
+- losses: `1.7997439`, `1.8153541`;
+- first auxiliary loss: `0.01143238`, matching the 32K-segment objective;
+- steady step time: 97.53 seconds, 10,751 tokens/s;
+- peak allocated HBM: `60,535,007,232` B (56.38 GiB).
+
+Two-node job `5222295` completed `0:0` with a K1 DiLoCo merge in 22.68 seconds.
+The 32-node gate, job `5222617`, completed `0:0`:
+
+- one optimizer step and one K1 DiLoCo merge;
+- accepted tokens: `33,554,432`;
+- peak allocated HBM: `59,829,827,584` B (55.72 GiB);
+- step time: 156.18 seconds;
+- global throughput: 214,842 tokens/s;
+- DiLoCo merge: 50.50 seconds.
+
+An 8K MoE execution bound also completed through 32 nodes (`5222024`,
+`5222102`, `5222295`, and `5222368`), but diagnosis showed that it averages
+router balance losses per MoE chunk rather than preserving the full-32K
+auxiliary objective. It is rejected. The runner now fails closed when a
+training MoE bound differs from the effective sequence segment.
 
 ### Accepted 32K full-BPTT path
 
@@ -155,13 +207,22 @@ The unchanged corpus/tokenizer path was sampled directly:
 - the corresponding 128K window contained 94 RS tokens;
 - RS remains an ordinary visible token; recurrent state is not reset at RS.
 
+### Effect of the new controls at 32K
+
+Job `5222225` isolated checkpointed 2K loss chunks on the unchanged trained
+32K full-BPTT path. Forward live allocation fell from approximately 47.48 GB
+to 37.59 GB (9.89 GB / 20.8%) while steady step time changed from 23.54 to
+23.83 seconds (1.2%). Backward parameter gradients still set the overall peak,
+so this control is optional at 32K. Grouped whole-model replay and optimizer
+state offload are not needed for 32K and remain disabled in `32k.json`.
+
 ## Qualification conclusion
 
-- **32K:** qualified for full-BPTT training through 32 nodes.
-- **128K:** qualified through 32 nodes with continuous forward state and 32K
-  TBPTT gradient horizon.
-- **Not qualified:** literal full 128K BPTT. The present HBM envelope does not
-  support it, and the nondeterministic dropless-routing shape makes naive
-  whole-model recomputation invalid.
+- **32K:** qualified for full-BPTT training through 32 nodes; the new loss
+  checkpoint control provides substantial forward headroom at negligible cost.
+- **128K:** literal full 128K BPTT is qualified on the trained asset through 32
+  nodes, including repeated one-node updates and two-/32-node K1 DiLoCo.
+- **Fallback:** 128K forward context / 32K gradient horizon remains separately
+  frozen and qualified; it must not be described as full 128K BPTT.
 - Production adaptation still requires a separately frozen token budget, LR,
   node count, sampler world identity, checkpoint root, and evaluation plan.
