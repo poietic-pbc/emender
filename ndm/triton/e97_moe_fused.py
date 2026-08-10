@@ -102,6 +102,43 @@ def _top3_softmax_metrics_kernel(
 
 
 @triton.jit
+def _forced_top3_softmax_metrics_kernel(
+    LOGITS, FORCED_INDEX, TOP_WEIGHT, COUNTS, PROB_SUM, Z, ENTROPY, MAX_PROB,
+    M: tl.constexpr, E: tl.constexpr, BLOCK_E: tl.constexpr,
+):
+    """Recompute router weights/metrics for recorded top-3 expert IDs."""
+    m = tl.program_id(0)
+    e = tl.arange(0, BLOCK_E)
+    mask = e < E
+    values = tl.load(LOGITS + m * E + e, mask=mask, other=-float("inf")).to(tl.float32)
+    vmax = tl.max(values, axis=0)
+    expv = tl.exp(values - vmax)
+    denom = tl.sum(tl.where(mask, expv, 0.0), axis=0)
+    probs = expv / denom
+    i0 = tl.load(FORCED_INDEX + m * 3 + 0)
+    i1 = tl.load(FORCED_INDEX + m * 3 + 1)
+    i2 = tl.load(FORCED_INDEX + m * 3 + 2)
+    a0 = tl.sum(tl.where(e == i0, values, 0.0), axis=0)
+    a1 = tl.sum(tl.where(e == i1, values, 0.0), axis=0)
+    a2 = tl.sum(tl.where(e == i2, values, 0.0), axis=0)
+    am = tl.maximum(a0, tl.maximum(a1, a2))
+    q0, q1, q2 = tl.exp(a0-am), tl.exp(a1-am), tl.exp(a2-am)
+    qsum = q0 + q1 + q2
+    tl.store(TOP_WEIGHT + m * 3 + 0, q0 / qsum)
+    tl.store(TOP_WEIGHT + m * 3 + 1, q1 / qsum)
+    tl.store(TOP_WEIGHT + m * 3 + 2, q2 / qsum)
+    tl.atomic_add(COUNTS + i0, 1)
+    tl.atomic_add(COUNTS + i1, 1)
+    tl.atomic_add(COUNTS + i2, 1)
+    tl.atomic_add(PROB_SUM + e, tl.where(mask, probs, 0.0), mask=mask)
+    lse = tl.log(denom) + vmax
+    tl.store(Z + m, lse * lse)
+    entropy = -tl.sum(tl.where(mask, probs * tl.log(tl.maximum(probs, 1.0e-30)), 0.0), axis=0)
+    tl.store(ENTROPY + m, entropy)
+    tl.store(MAX_PROB + m, tl.max(tl.where(mask, probs, 0.0), axis=0))
+
+
+@triton.jit
 def _router_aux_metrics_kernel(
     COUNTS, PROB_SUM, Z_PER_TOKEN, LOAD_BALANCE, Z_MEAN,
     M: tl.constexpr, E: tl.constexpr,
@@ -1014,7 +1051,7 @@ def fused_shared_routed_swiglu_forward_backward_parity(
 
 class _FusedTop3RouterFunction(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x, router_weight):
+    def forward(ctx, x, router_weight, forced_indices):
         _require_hip_triton(x)
         if x.ndim != 2 or x.dtype != torch.bfloat16 or not x.is_contiguous():
             raise ValueError("router input must be contiguous BF16 [tokens, dim]")
@@ -1029,16 +1066,31 @@ class _FusedTop3RouterFunction(torch.autograd.Function):
             x.stride(0), x.stride(1), router_weight.stride(0), router_weight.stride(1),
             logits.stride(0), logits.stride(1), BM=16, BE=16, BK=32,
             num_warps=4, num_stages=1)
-        indices = torch.empty((M, 3), device=x.device, dtype=torch.int32)
+        forced = forced_indices.numel() > 0
+        if forced:
+            if (forced_indices.shape != (M, 3)
+                    or forced_indices.dtype != torch.int32
+                    or not forced_indices.is_contiguous()):
+                raise ValueError("forced router indices must be contiguous int32 [tokens,3]")
+            indices = forced_indices
+        else:
+            indices = torch.empty((M, 3), device=x.device, dtype=torch.int32)
         weights = torch.empty((M, 3), device=x.device, dtype=torch.float32)
         counts = torch.zeros(E, device=x.device, dtype=torch.int32)
         probability_sums = torch.zeros(E, device=x.device, dtype=torch.float32)
         z_per_token = torch.empty(M, device=x.device, dtype=torch.float32)
         entropy = torch.empty_like(z_per_token)
         max_probability = torch.empty_like(z_per_token)
-        _top3_softmax_metrics_kernel[(M,)](
-            logits, indices, weights, counts, probability_sums,
-            z_per_token, entropy, max_probability, M, E, BLOCK_E=64, num_warps=1)
+        if forced:
+            _forced_top3_softmax_metrics_kernel[(M,)](
+                logits, indices, weights, counts, probability_sums,
+                z_per_token, entropy, max_probability,
+                M, E, BLOCK_E=64, num_warps=1)
+        else:
+            _top3_softmax_metrics_kernel[(M,)](
+                logits, indices, weights, counts, probability_sums,
+                z_per_token, entropy, max_probability,
+                M, E, BLOCK_E=64, num_warps=1)
         load_balance = torch.zeros((), device=x.device, dtype=torch.float32)
         z_loss = torch.zeros((), device=x.device, dtype=torch.float32)
         _router_aux_metrics_kernel[(max(M, E),)](
@@ -1073,14 +1125,17 @@ class _FusedTop3RouterFunction(torch.autograd.Function):
         _router_input_backward_kernel[(M, triton.cdiv(D, 128))](
             grad_logits, router_weight, grad_x, M, D, 64,
             BLOCK_D=128, BLOCK_E=64, num_warps=4)
-        return grad_x, grad_router
+        return grad_x, grad_router, None
 
 
 def fused_top3_router_autograd(
     x: torch.Tensor, router_weight: torch.Tensor,
+    forced_indices: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Fused production 64-expert top-3 router with auxiliary gradients."""
-    return _FusedTop3RouterFunction.apply(x, router_weight)
+    """Fused production router, optionally replaying recorded top-3 IDs."""
+    if forced_indices is None:
+        forced_indices = torch.empty(0, device=x.device, dtype=torch.int32)
+    return _FusedTop3RouterFunction.apply(x, router_weight, forced_indices)
 
 
 class _FusedSharedExpertFunction(torch.autograd.Function):

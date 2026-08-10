@@ -54,6 +54,7 @@ class EPExchange:
 @dataclass(frozen=True)
 class NodeLocalMoEResult:
     output: torch.Tensor
+    top_indices: torch.Tensor
     expert_counts: torch.Tensor
     load_balance_loss: torch.Tensor
     z_loss: torch.Tensor
@@ -249,12 +250,14 @@ def node_local_fused_moe_autograd(
     group=None,
     topology: NodeLocalEPTopology | None = None,
     expert_backend: str = "triton",
+    forced_top_indices: torch.Tensor | None = None,
 ) -> NodeLocalMoEResult:
     """Execute one complete shared+routed MoE layer across one eight-GCD node."""
     if topology is None:
         topology = assert_node_local_ep_group(group)
     top_indices, top_weights, counts, load_balance, z_loss = (
-        fused_top3_router_autograd(x, router_weight))
+        fused_top3_router_autograd(
+            x, router_weight, forced_indices=forced_top_indices))
     exchange = exchange_expert_assignments(
         x, top_indices, group=group, topology=topology)
     local_plan = build_local_expert_plan(
@@ -286,6 +289,7 @@ def node_local_fused_moe_autograd(
         top_weights, shared_output)
     return NodeLocalMoEResult(
         output=output,
+        top_indices=top_indices,
         expert_counts=counts,
         load_balance_loss=load_balance,
         z_loss=z_loss,

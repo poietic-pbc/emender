@@ -13,6 +13,7 @@ Architecture matches Mamba exactly:
 """
 
 import os
+from contextlib import contextmanager
 
 import torch
 import torch.nn as nn
@@ -1253,6 +1254,21 @@ class LadderLM(nn.Module):
     def _init_weights(self):
         nn.init.normal_(self.embedding.weight, std=0.02)
 
+    @contextmanager
+    def _routing_checkpoint_context(self, layers, mode):
+        replayable = []
+        for layer in layers:
+            mlp = getattr(layer, "mlp", None)
+            method = getattr(mlp, f"begin_routing_{mode}", None)
+            if method is not None:
+                method()
+                replayable.append(mlp)
+        try:
+            yield
+        finally:
+            for mlp in replayable:
+                mlp.end_routing_context()
+
     def _checkpointed_layer_groups(self, x, prev_hiddens, group_size):
         """Checkpoint prenorm+recurrent+MLP blocks in multi-layer groups.
 
@@ -1301,8 +1317,14 @@ class LadderLM(nn.Module):
                     local_x, local_residual, tuple(local_finals),
                     torch.stack(local_auxiliaries))
 
+            def routing_contexts(_layers=group_layers):
+                return (
+                    self._routing_checkpoint_context(_layers, "record"),
+                    self._routing_checkpoint_context(_layers, "replay"))
+
             x, residual, group_finals, group_auxiliaries = torch_checkpoint(
-                run_group, x, residual, *group_hiddens, use_reentrant=False)
+                run_group, x, residual, *group_hiddens,
+                use_reentrant=False, context_fn=routing_contexts)
             final_hiddens.extend(group_finals)
             auxiliary_losses.extend(group_auxiliaries.unbind())
         return x, residual, final_hiddens, auxiliary_losses
