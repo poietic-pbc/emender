@@ -113,7 +113,12 @@ def diloco_average_schedulefree_(model, optimizer, *, lane_group) -> None:
         state = optimizer.state.get(parameter, {})
         z = state.get("z")
         if z is not None:
-            dist.all_reduce(z, op=dist.ReduceOp.AVG, group=lane_group)
+            if z.is_cuda:
+                dist.all_reduce(z, op=dist.ReduceOp.AVG, group=lane_group)
+            else:
+                z_work = z.to(parameter.device, non_blocking=False)
+                dist.all_reduce(z_work, op=dist.ReduceOp.AVG, group=lane_group)
+                z.copy_(z_work, non_blocking=False)
     optimizer.train()
     optimizer.assert_no_master_weights()
 

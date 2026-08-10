@@ -42,6 +42,32 @@ class FusedScheduleFreeAdamW(torch.optim.Optimizer):
             scheduled_lr=0.0,
         )
         super().__init__(params, defaults)
+        self.z_offloaded = False
+
+    @staticmethod
+    def _materialize_z(parameter, state):
+        z = state["z"]
+        return z if z.is_cuda else z.to(parameter.device, non_blocking=False)
+
+    @staticmethod
+    def _commit_z(state, z_work) -> None:
+        if state["z"] is not z_work:
+            state["z"].copy_(z_work, non_blocking=False)
+
+    @torch.no_grad()
+    def offload_z_(self) -> None:
+        """Move ScheduleFree z to pinned host memory between GPU uses."""
+        for parameter in self.param_groups[0]["params"]:
+            state = self.state.get(parameter, {})
+            z = state.get("z")
+            if z is None or not z.is_cuda:
+                continue
+            host = torch.empty(
+                z.shape, dtype=z.dtype, device="cpu", pin_memory=True)
+            host.copy_(z, non_blocking=False)
+            state["z"] = host
+        self.z_offloaded = True
+        torch.cuda.empty_cache()
 
     @torch.no_grad()
     def train(self) -> None:
@@ -52,8 +78,10 @@ class FusedScheduleFreeAdamW(torch.optim.Optimizer):
             for parameter in group["params"]:
                 state = self.state[parameter]
                 if "z" in state:
+                    z_work = self._materialize_z(parameter, state)
                     fused_schedulefree_lerp_(
-                        parameter, state["z"], weight=1.0 - beta1)
+                        parameter, z_work, weight=1.0 - beta1)
+                    self._commit_z(state, z_work)
             group["train_mode"] = True
 
     @torch.no_grad()
@@ -65,8 +93,10 @@ class FusedScheduleFreeAdamW(torch.optim.Optimizer):
             for parameter in group["params"]:
                 state = self.state[parameter]
                 if "z" in state:
+                    z_work = self._materialize_z(parameter, state)
                     fused_schedulefree_lerp_(
-                        parameter, state["z"], weight=1.0 - 1.0 / beta1)
+                        parameter, z_work, weight=1.0 - 1.0 / beta1)
+                    self._commit_z(state, z_work)
             group["train_mode"] = False
 
     @torch.no_grad()
@@ -103,12 +133,16 @@ class FusedScheduleFreeAdamW(torch.optim.Optimizer):
                 if "z" not in state:
                     state["z"] = parameter.detach().clone()
                     state["exp_avg_sq"] = torch.zeros_like(parameter)
+                z_work = self._materialize_z(parameter, state)
                 fused_schedulefree_adamw_update_(
-                    parameter, grad, state["z"], state["exp_avg_sq"],
+                    parameter, grad, z_work, state["exp_avg_sq"],
                     lr=lr, beta1=beta1, beta2=beta2,
                     bias_correction2=bias_correction2, eps=group["eps"],
                     weight_decay=group["weight_decay"], ckp1=ckp1)
+                self._commit_z(state, z_work)
             group["k"] = k + 1
+        if self.z_offloaded:
+            self.offload_z_()
         return None
 
     def assert_no_master_weights(self) -> None:

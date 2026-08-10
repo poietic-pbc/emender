@@ -24,6 +24,16 @@ def test_fused_schedulefree_trajectory_modes_and_no_master_weights():
         fp32.grad = torch.full_like(fp32, -0.03 * (step + 1))
         optimizer.step()
     optimizer.assert_no_master_weights()
+    optimizer.offload_z_()
+    for parameter in (bf16, fp32):
+        assert optimizer.state[parameter]["z"].device.type == "cpu"
+        assert optimizer.state[parameter]["z"].is_pinned()
+    bf16.grad = torch.full_like(bf16, 0.01)
+    fp32.grad = torch.full_like(fp32, -0.01)
+    optimizer.step()
+    for parameter in (bf16, fp32):
+        assert optimizer.state[parameter]["z"].device.type == "cpu"
+    optimizer.assert_no_master_weights()
     for parameter in (bf16, fp32):
         assert optimizer.state[parameter]["z"].dtype == parameter.dtype
         assert optimizer.state[parameter]["exp_avg_sq"].dtype == parameter.dtype

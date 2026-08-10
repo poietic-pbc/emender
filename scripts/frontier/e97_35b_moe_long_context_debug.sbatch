@@ -31,6 +31,7 @@ DILOCO_K=${DILOCO_K:-1}
 EXPERT_BACKEND=${EXPERT_BACKEND:-rocblas}
 EMPTY_CACHE_INTERVAL=${EMPTY_CACHE_INTERVAL:-1}
 EMPTY_CACHE_BEFORE_BACKWARD=${EMPTY_CACHE_BEFORE_BACKWARD:-0}
+OFFLOAD_SCHEDULEFREE_Z=${OFFLOAD_SCHEDULEFREE_Z:-0}
 GRADIENT_CHECKPOINTING=${GRADIENT_CHECKPOINTING:-1}
 RUN_ROOT=${RUN_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-35b-moe/longctx-debug-${SLURM_JOB_NUM_NODES}n-c${CONTEXT_SIZE}-j${SLURM_JOB_ID}}
 SEED_CHECKPOINT=${SEED_CHECKPOINT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/final-seed-production-256n/milestones/step-2322520-tokens-513013841920/checkpoint_step_2322520_loss_2.2798.pt}
@@ -76,7 +77,8 @@ printf '%s\n' \
   "gradient_checkpointing=$GRADIENT_CHECKPOINTING" "max_steps=$MAX_STEPS" \
   "diloco_k=$DILOCO_K" "expert_backend=$EXPERT_BACKEND" \
   "empty_cache_interval=$EMPTY_CACHE_INTERVAL" \
-  "empty_cache_before_backward=$EMPTY_CACHE_BEFORE_BACKWARD" > "$RUN_ROOT/recipe.txt"
+  "empty_cache_before_backward=$EMPTY_CACHE_BEFORE_BACKWARD" \
+  "offload_schedulefree_z=$OFFLOAD_SCHEDULEFREE_Z" > "$RUN_ROOT/recipe.txt"
 
 source "$REPO/scripts/frontier/activate_emender_frontier.sh"
 MASTER_HOST=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -1)
@@ -92,7 +94,7 @@ GC_FLAG=--no-gradient-checkpointing
 [[ "$GRADIENT_CHECKPOINTING" == 1 ]] && GC_FLAG=--gradient-checkpointing
 LOSS_CHECKPOINT_FLAG=--no-checkpoint-loss-chunks
 [[ "$CHECKPOINT_LOSS_CHUNKS" == 1 ]] && LOSS_CHECKPOINT_FLAG=--checkpoint-loss-chunks
-export GC_FLAG LOSS_CHECKPOINT_FLAG CONTEXT_SIZE LOSS_CHUNK_SIZE CHECKPOINT_INTERVAL PROJECTION_CHUNK_SIZE SEQUENCE_CHUNK_SIZE CHECKPOINT_GROUP_SIZE MOE_TOKEN_CHUNK_SIZE MAX_STEPS DILOCO_K EXPERT_BACKEND EMPTY_CACHE_INTERVAL EMPTY_CACHE_BEFORE_BACKWARD JOB_SEED JOB_SEED_ARGS DATA_PATH RESUME_ROOT RESUME_LR_OVERRIDE
+export GC_FLAG LOSS_CHECKPOINT_FLAG CONTEXT_SIZE LOSS_CHUNK_SIZE CHECKPOINT_INTERVAL PROJECTION_CHUNK_SIZE SEQUENCE_CHUNK_SIZE CHECKPOINT_GROUP_SIZE MOE_TOKEN_CHUNK_SIZE MAX_STEPS DILOCO_K EXPERT_BACKEND EMPTY_CACHE_INTERVAL EMPTY_CACHE_BEFORE_BACKWARD OFFLOAD_SCHEDULEFREE_Z JOB_SEED JOB_SEED_ARGS DATA_PATH RESUME_ROOT RESUME_LR_OVERRIDE
 export SAMPLER_SCHEMA SAMPLER_CORPUS_SHA256 SAMPLER_TOKENIZER_SHA256 SAMPLER_KEY
 export SAMPLER_STREAM_ORIGIN_ACCEPTED_TOKENS SAMPLER_TRANSITION_FROM_COUNTER
 srun --label --kill-on-bad-exit=1 bash -lc '
@@ -104,6 +106,8 @@ srun --label --kill-on-bad-exit=1 bash -lc '
   rm -rf "$TRITON_CACHE_DIR"
   cache_before_backward=()
   [[ "$EMPTY_CACHE_BEFORE_BACKWARD" == 0 ]] || cache_before_backward=(--empty-cache-before-backward)
+  z_offload=()
+  [[ "$OFFLOAD_SCHEDULEFREE_Z" == 0 ]] || z_offload=(--offload-schedulefree-z)
   resume=(); [[ -z "$RESUME_ROOT" ]] || resume=(--resume-root "$RESUME_ROOT")
   [[ -z "$RESUME_LR_OVERRIDE" ]] || resume+=(--resume-lr-override "$RESUME_LR_OVERRIDE")
   sampler=()
@@ -128,6 +132,6 @@ srun --label --kill-on-bad-exit=1 bash -lc '
     --checkpoint-group-size "$CHECKPOINT_GROUP_SIZE" \
     --moe-token-chunk-size "$MOE_TOKEN_CHUNK_SIZE" --diloco-k "$DILOCO_K" \
     --expert-backend "$EXPERT_BACKEND" --empty-cache-interval "$EMPTY_CACHE_INTERVAL" \
-    "${cache_before_backward[@]}" --profile-phases \
+    "${cache_before_backward[@]}" "${z_offload[@]}" --profile-phases \
     --log-jsonl "'"$RUN_ROOT"'/training.jsonl"
 '

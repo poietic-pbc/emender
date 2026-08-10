@@ -82,6 +82,7 @@ def parse_args():
     parser.add_argument("--keep-checkpoints", type=int, default=2)
     parser.add_argument("--empty-cache-interval", type=int, default=0)
     parser.add_argument("--empty-cache-before-backward", action="store_true")
+    parser.add_argument("--offload-schedulefree-z", action="store_true")
     parser.add_argument("--sampler-schema")
     parser.add_argument("--sampler-corpus-sha256")
     parser.add_argument("--sampler-tokenizer-sha256")
@@ -362,6 +363,7 @@ def main() -> None:
              tbptt_truncated=args.sequence_chunk_size > 0,
              checkpoint_group_size=args.checkpoint_group_size,
              moe_token_chunk_size=args.moe_token_chunk_size,
+             offload_schedulefree_z=args.offload_schedulefree_z,
              loss_chunk_size=model.loss_chunk_size,
              checkpoint_loss_chunks=model.checkpoint_loss_chunks,
              checkpoint_interval=args.checkpoint_interval,
@@ -437,6 +439,11 @@ def main() -> None:
                      dataset.initial_absolute_rank_sample_index),
                  sampler_transition=sampler_transition)
         optimizer.train()
+        if args.offload_schedulefree_z:
+            optimizer.offload_z_()
+            emit(args.log_jsonl, "optimizer_z_offloaded",
+                 hbm_allocated=torch.cuda.memory_allocated(),
+                 hbm_reserved=torch.cuda.memory_reserved())
         replicated = tuple(node_replicated_parameters(model))
         start = None
         step = starting_step
