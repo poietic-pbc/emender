@@ -67,6 +67,7 @@ def test_long_context_launcher_is_debug_fail_stop_and_immutable():
     assert '--checkpoint-interval "$CHECKPOINT_INTERVAL"' in text
     assert '--projection-chunk-size "$PROJECTION_CHUNK_SIZE"' in text
     assert '--sequence-chunk-size "$SEQUENCE_CHUNK_SIZE"' in text
+    assert 'full_bptt=(--full-bptt-segments)' in text
     assert '--checkpoint-group-size "$CHECKPOINT_GROUP_SIZE"' in text
     assert '--moe-token-chunk-size "$MOE_TOKEN_CHUNK_SIZE"' in text
     assert '--empty-cache-interval "$EMPTY_CACHE_INTERVAL"' in text
@@ -141,6 +142,8 @@ def test_runner_exposes_existing_long_context_memory_controls():
     assert 'parser.add_argument("--checkpoint-interval", type=int, default=16)' in text
     assert 'parser.add_argument("--projection-chunk-size", type=int, default=0)' in text
     assert 'parser.add_argument("--sequence-chunk-size", type=int, default=0)' in text
+    assert 'parser.add_argument("--full-bptt-segments", action="store_true")' in text
+    assert "def _segmented_full_bptt_objective(" in text
     assert 'parser.add_argument("--checkpoint-group-size", type=int, default=1)' in text
     assert 'parser.add_argument("--moe-token-chunk-size", type=int, default=0)' in text
     assert 'parser.add_argument("--resume-lr-override", type=float)' in text
@@ -152,7 +155,7 @@ def test_runner_exposes_existing_long_context_memory_controls():
     assert "def _tbptt_objective_backward(model, chunks: torch.Tensor" in text
     assert "prev_hiddens=previous_hiddens" in text
     assert "_detach_recurrent_hiddens(new_hiddens)" in text
-    assert "tbptt_truncated=args.sequence_chunk_size > 0" in text
+    assert "args.sequence_chunk_size > 0 and not args.full_bptt_segments" in text
     assert 'torch.cuda.reset_peak_memory_stats()' in text
     assert 'forward_max_hbm_allocated=forward_max_hbm_allocated' in text
     assert 'backward_max_hbm_allocated=backward_max_hbm_allocated' in text

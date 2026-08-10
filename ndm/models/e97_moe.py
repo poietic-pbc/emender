@@ -157,22 +157,30 @@ class NodeLocalSharedRoutedMoE(nn.Module):
         # single-dispatch path and does not enter the parameter/state schema.
         self.token_chunk_size = 0
         self._routing_replay_mode = "off"
-        self._routing_records: list[torch.Tensor] = []
+        self._routing_plan_stack: list[list[torch.Tensor]] = []
+        self._active_routing_records: list[torch.Tensor] = []
         self._routing_replay_cursor = 0
 
     def begin_routing_record(self) -> None:
         self._routing_replay_mode = "record"
-        self._routing_records = []
+        self._active_routing_records = []
         self._routing_replay_cursor = 0
 
     def begin_routing_replay(self) -> None:
-        if not self._routing_records:
+        if not self._routing_plan_stack:
             raise RuntimeError("routing replay requested without recorded top-3 plans")
         self._routing_replay_mode = "replay"
+        self._active_routing_records = self._routing_plan_stack.pop()
         self._routing_replay_cursor = 0
 
     def end_routing_context(self) -> None:
+        if self._routing_replay_mode == "record":
+            self._routing_plan_stack.append(self._active_routing_records)
+        elif (self._routing_replay_mode == "replay"
+              and self._routing_replay_cursor != len(self._active_routing_records)):
+            raise RuntimeError("routing replay did not consume every recorded chunk")
         self._routing_replay_mode = "off"
+        self._active_routing_records = []
 
     @classmethod
     def from_dense(cls, seed: SwiGLUMLP, config: E97MoEConfig, *,
@@ -203,9 +211,9 @@ class NodeLocalSharedRoutedMoE(nn.Module):
         def execute(token_rows):
             forced_indices = None
             if self._routing_replay_mode == "replay":
-                if self._routing_replay_cursor >= len(self._routing_records):
+                if self._routing_replay_cursor >= len(self._active_routing_records):
                     raise RuntimeError("routing replay consumed more chunks than recorded")
-                forced_indices = self._routing_records[self._routing_replay_cursor]
+                forced_indices = self._active_routing_records[self._routing_replay_cursor]
                 self._routing_replay_cursor += 1
             result = node_local_fused_moe_autograd(
                 token_rows, self.router.weight,
@@ -217,7 +225,7 @@ class NodeLocalSharedRoutedMoE(nn.Module):
                 expert_backend=self.config.expert_backend,
                 forced_top_indices=forced_indices)
             if self._routing_replay_mode == "record":
-                self._routing_records.append(result.top_indices.detach())
+                self._active_routing_records.append(result.top_indices.detach())
             return (result.output, result.load_balance_loss,
                     result.z_loss, result.expert_counts)
 

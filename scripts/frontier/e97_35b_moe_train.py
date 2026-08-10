@@ -67,6 +67,7 @@ def parse_args():
     parser.add_argument("--checkpoint-interval", type=int, default=16)
     parser.add_argument("--projection-chunk-size", type=int, default=0)
     parser.add_argument("--sequence-chunk-size", type=int, default=0)
+    parser.add_argument("--full-bptt-segments", action="store_true")
     parser.add_argument("--checkpoint-group-size", type=int, default=1)
     parser.add_argument("--moe-token-chunk-size", type=int, default=0)
     parser.add_argument("--lr", type=float, default=1.007e-3)
@@ -220,6 +221,30 @@ def _detach_recurrent_hiddens(hiddens):
     ]
 
 
+def _segmented_full_bptt_objective(
+        model, chunks: torch.Tensor, *, sequence_chunk_size: int):
+    """Build one full-BPTT graph from bounded forward segments.
+
+    Recurrent states remain attached across segment boundaries. Per-segment
+    block/loss checkpoints bound active materialization; one final backward
+    traverses the entire context in reverse.
+    """
+    prediction_tokens = chunks.shape[1] - 1
+    if prediction_tokens <= 0 or prediction_tokens % sequence_chunk_size:
+        raise RuntimeError("full-BPTT segment must exactly partition prediction tokens")
+    previous_hiddens = None
+    losses = []
+    auxiliaries = []
+    for start in range(0, prediction_tokens, sequence_chunk_size):
+        token_segment = chunks[:, start:start + sequence_chunk_size + 1]
+        segment_loss, (previous_hiddens, _conv) = model(
+            token_segment, return_loss=True, return_prev_hiddens=True,
+            prev_hiddens=previous_hiddens)
+        losses.append(segment_loss)
+        auxiliaries.append(e97_moe_auxiliary_loss(model))
+    return torch.stack(losses).mean(), torch.stack(auxiliaries).mean()
+
+
 def _tbptt_objective_backward(model, chunks: torch.Tensor, *, sequence_chunk_size: int):
     """Backpropagate one long window in bounded, state-continuous TBPTT segments.
 
@@ -276,6 +301,8 @@ def main() -> None:
                  or args.sequence_chunk_size % args.checkpoint_interval)):
         raise SystemExit(
             "sequence-chunk-size must divide context and be divisible by checkpoint-interval")
+    if args.full_bptt_segments and args.sequence_chunk_size <= 0:
+        raise SystemExit("full-bptt-segments requires a positive sequence-chunk-size")
     if args.resume_lr_override is not None:
         if args.resume_root is None or args.resume_lr_override <= 0:
             raise SystemExit("positive resume-lr-override requires resume-root")
@@ -361,7 +388,9 @@ def main() -> None:
              gradient_checkpointing=model.gradient_checkpointing,
              gradient_checkpointing_requested=args.gradient_checkpointing,
              sequence_chunk_size=args.sequence_chunk_size,
-             tbptt_truncated=args.sequence_chunk_size > 0,
+             full_bptt_segments=args.full_bptt_segments,
+             tbptt_truncated=(
+                 args.sequence_chunk_size > 0 and not args.full_bptt_segments),
              checkpoint_group_size=args.checkpoint_group_size,
              moe_token_chunk_size=args.moe_token_chunk_size,
              offload_schedulefree_z=args.offload_schedulefree_z,
@@ -475,10 +504,17 @@ def main() -> None:
                 phase_events["start"].record()
             if args.sequence_chunk_size > 0:
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    loss, auxiliary = _tbptt_objective_backward(
-                        model, chunks, sequence_chunk_size=args.sequence_chunk_size)
+                    if args.full_bptt_segments:
+                        loss, auxiliary = _segmented_full_bptt_objective(
+                            model, chunks,
+                            sequence_chunk_size=args.sequence_chunk_size)
+                        gradients_ready = False
+                    else:
+                        loss, auxiliary = _tbptt_objective_backward(
+                            model, chunks,
+                            sequence_chunk_size=args.sequence_chunk_size)
+                        gradients_ready = True
                 objective = loss + auxiliary
-                gradients_ready = True
             else:
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                     loss = model(chunks, return_loss=True)
