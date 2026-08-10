@@ -116,7 +116,8 @@ checkpoints are throwaway and never enter the scientific chain.
    checkpoint background.
 7. `docs/E97_MOE_LONG_CONTEXT_STUDY_PLAN.md` and
    `docs/validation/e97-moe-long-context-qualification.md` — qualified 32K
-   full-BPTT and 128K-forward/32K-TBPTT study paths through 32 nodes.
+   full BPTT, literal 128K full BPTT, and the 128K-forward/32K-TBPTT fallback
+   through 32 nodes.
 
 Work directly from a clean, freshly fetched `main`. Keep `main` synchronized
 with `origin/main`; do not accumulate essential work only on a feature branch.
@@ -138,9 +139,11 @@ from immutable source `54bf2f2b03b2ef8e1ae65d4176df2d8453a96bec`:
 The subsequent 256-node continuation job **5216579** completed `0:0` in
 05:02:58 and published step 2,338,080 / 250,797,359,104 accepted tokens. This
 is the frozen parent for long-context study work. Jobs 5219603 and 5219673
-qualified the 128K-forward/32K-TBPTT and 32K-full-BPTT recipes respectively at
-32 nodes; trained-parent transition jobs 5219935 and 5220015 passed on one
-node. No production long-context token budget has been authorized.
+qualified the 128K-forward/32K-TBPTT fallback and 32K-full-BPTT recipes at 32
+nodes; trained-parent transition jobs 5219935 and 5220015 passed on one node.
+Literal full 128K BPTT subsequently passed repeated trained-parent updates on
+one node (`5222503`), K1 DiLoCo on two nodes (`5222295`), and the 32-node scale
+gate (`5222617`). No production long-context token budget has been authorized.
 
 Evidence: `docs/validation/e97-35b-moe-150b-job5208321.md`. The deterministic
 sampler below applies only to future executions and must not retroactively

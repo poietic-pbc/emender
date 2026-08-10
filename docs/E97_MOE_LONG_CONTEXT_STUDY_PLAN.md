@@ -11,15 +11,17 @@ Qualification receipt:
 Compare continued adaptation of the frozen trained E97-MoE asset at:
 
 1. 32,768 tokens with full 32K BPTT;
-2. 131,072 tokens with forward-state continuity over 128K and a 32K TBPTT
-   gradient horizon;
+2. 131,072 tokens with literal full 128K BPTT;
 3. a 32K-to-128K curriculum.
+
+A separately frozen 128K-forward/32K-TBPTT arm remains an operational fallback.
 
 The architecture, tensor schema, expert topology, recurrence, tokenizer, corpus,
 and RS handling remain unchanged.
 
-The 128K arm must always be described as **128K forward context / 32K gradient
-horizon**, not full 128K BPTT.
+The primary 128K arm is literal full 128K BPTT. The fallback must always be
+described as **128K forward context / 32K gradient horizon**, never as full
+128K BPTT.
 
 ## Parent authority
 
@@ -46,11 +48,14 @@ The arm-specific context and launch world are part of its new identity.
 | loss chunk | 2,048 | 2,048 |
 | projection chunk | 2,048 | 2,048 |
 | recurrence checkpoint interval | 16 | 16 |
-| layer activation checkpointing | enabled | enabled |
-| TBPTT segment | disabled | 32,768 |
+| layer activation checkpointing | enabled | enabled, one 11-block group |
+| bounded materialization segment | disabled | 32,768, states attached |
 | forward state horizon | 32K | 128K |
-| gradient horizon | 32K | 32K |
-| cache trim | every step | every step |
+| gradient horizon | 32K | 128K |
+| checkpointed loss chunks | optional | enabled |
+| MoE execution bound | full 32K | full 32K segment |
+| ScheduleFree state CPU offload | disabled | enabled |
+| cache trim | every step | every step and pre-backward |
 | expert backend | rocBLAS | rocBLAS |
 | RS behavior | visible token 218, no reset | visible token 218, no reset |
 
@@ -108,7 +113,8 @@ counter identity. Train full 32K BPTT.
 ### B. Direct 128K
 
 Start independently from the same parent and transition to a new
-128K/world-256 counter identity. Use state-continuous 32K TBPTT segments.
+128K/world-256 counter identity. Build one full-BPTT graph from four bounded
+32K materialization segments without detaching recurrent states.
 
 ### C. Curriculum
 
@@ -139,8 +145,8 @@ Long-context SFT should begin only after selecting a base arm.
 - Keep RS as the visible example/conversation separator.
 - Mask prompt/user tokens and train assistant tokens only.
 - Use 32K as the common SFT window.
-- Include a smaller set of genuine 128K examples using the same 32K TBPTT
-  execution path.
+- Include a smaller set of genuine 128K examples using the qualified bounded
+  materialization / full-128K-BPTT execution path.
 - Use a new explicit sampler/data identity and a lower LR than adaptation.
 - Preserve the selected long-context checkpoint as an immutable parent.
 
