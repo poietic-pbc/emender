@@ -66,6 +66,10 @@ def swe_chat_rows(path: Path) -> Iterator[Mapping]:
         [("session_id", "ascending"), ("turn_number", "ascending")])
     current = None
     messages = []
+    allowed_turn_types = {
+        "user_prompt", "system_injected", "assistant_response",
+        "assistant_thinking", "tool_use", "tool_result", "summary",
+    }
     for item in table.to_pylist():
         session = item["session_id"]
         if current is not None and session != current:
@@ -74,6 +78,8 @@ def swe_chat_rows(path: Path) -> Iterator[Mapping]:
             messages = []
         current = session
         role, turn_type, content = item.get("role"), item.get("turn_type"), item.get("content")
+        if turn_type not in allowed_turn_types:
+            continue
         if turn_type == "assistant_thinking":
             message = {"role": "assistant", "reasoning_content": content}
         elif role == "tool_use" or turn_type == "tool_use":

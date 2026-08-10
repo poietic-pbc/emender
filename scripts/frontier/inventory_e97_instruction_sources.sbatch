@@ -27,12 +27,14 @@ if [[ "${ALLOW_PARTIAL:-0}" == 1 ]]; then
   sources=(nemotron_swe_v3 open_swe_traces nemotron_terminal agent_trove swe_next open_thoughts3)
 else
   [[ -s "$ROOT/download-receipt.json" ]] || { echo 'complete download receipt missing' >&2; exit 2; }
-  "$EMENDER_PYTHON" scripts/restore_nemotron_chat_prompts.py \
-    --input "$SRC/nemotron_instruction_chat_v3/data/chat.jsonl" \
-    --output "$SRC/nemotron_instruction_chat_v3/data/chat.with_prompts.jsonl" \
-    --lmsys-root "$SRC/lmsys_chat_1m" \
-    --wildchat-root "$SRC/wildchat_1m" \
-    --receipt "$ROOT/nemotron-prompt-restoration.json"
+  if [[ ! -s "$ROOT/nemotron-prompt-restoration.json" ]]; then
+    "$EMENDER_PYTHON" scripts/restore_nemotron_chat_prompts.py \
+      --input "$SRC/nemotron_instruction_chat_v3/data/chat.jsonl" \
+      --output "$SRC/nemotron_instruction_chat_v3/data/chat.with_prompts.jsonl" \
+      --lmsys-root "$SRC/lmsys_chat_1m" \
+      --wildchat-root "$SRC/wildchat_1m" \
+      --receipt "$ROOT/nemotron-prompt-restoration.json"
+  fi
   sources=(nemotron_instruction_chat_v3 nemotron_swe_v3 open_swe_traces nemotron_terminal swe_chat agent_trove gair_openswe swe_next open_thoughts3)
 fi
 pids=()
