@@ -165,8 +165,10 @@ def main() -> None:
                 stats["rows_seen"] += 1
                 if args.source == "nemotron_instruction_chat_v3":
                     messages = row.get("messages") or []
+                    # A null system turn means "no system prompt" and is valid.
+                    # Only a withheld/null user prompt makes the trajectory incomplete.
                     incomplete = any(
-                        isinstance(m, Mapping) and m.get("role") in ("system", "user")
+                        isinstance(m, Mapping) and m.get("role") == "user"
                         and m.get("content") is None for m in messages[:2])
                     if incomplete:
                         stats["incomplete_nemotron_chat"] += 1
