@@ -38,7 +38,8 @@ def main() -> None:
     api = HfApi(token=True)
     results = []
     failures = []
-    for source in spec["sources"]:
+    all_sources = spec["sources"] + spec.get("prompt_restoration_sources", [])
+    for source in all_sources:
         name, repo, revision = source["name"], source["repo"], source["revision"]
         local = args.output_root / name
         started = time.time()

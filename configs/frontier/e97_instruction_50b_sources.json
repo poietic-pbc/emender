@@ -72,6 +72,19 @@
       "target_tokens": 1500000000
     }
   ],
+  "prompt_restoration_sources": [
+    {
+      "name": "lmsys_chat_1m",
+      "repo": "lmsys/lmsys-chat-1m",
+      "revision": "200748d9d3cddcc9d782887541057aca0b18c5da",
+      "gated": true
+    },
+    {
+      "name": "wildchat_1m",
+      "repo": "allenai/WildChat-1M",
+      "revision": "7d6490e462285cf85d91eabea0f9a954fbddcd1f"
+    }
+  ],
   "long_context": {
     "name": "long32k",
     "share": 0.03,
