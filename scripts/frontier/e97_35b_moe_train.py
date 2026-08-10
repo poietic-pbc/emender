@@ -81,6 +81,7 @@ def parse_args():
     parser.add_argument("--save-every", type=int, default=0)
     parser.add_argument("--keep-checkpoints", type=int, default=2)
     parser.add_argument("--empty-cache-interval", type=int, default=0)
+    parser.add_argument("--empty-cache-before-backward", action="store_true")
     parser.add_argument("--sampler-schema")
     parser.add_argument("--sampler-corpus-sha256")
     parser.add_argument("--sampler-tokenizer-sha256")
@@ -478,6 +479,8 @@ def main() -> None:
             if not torch.isfinite(objective):
                 raise FloatingPointError(f"nonfinite objective at step {step}")
             if not gradients_ready:
+                if args.empty_cache_before_backward:
+                    torch.cuda.empty_cache()
                 objective.backward()
             backward_hbm_allocated = torch.cuda.memory_allocated()
             backward_hbm_reserved = torch.cuda.memory_reserved()

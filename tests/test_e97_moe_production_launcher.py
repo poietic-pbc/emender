@@ -70,6 +70,7 @@ def test_long_context_launcher_is_debug_fail_stop_and_immutable():
     assert '--checkpoint-group-size "$CHECKPOINT_GROUP_SIZE"' in text
     assert '--moe-token-chunk-size "$MOE_TOKEN_CHUNK_SIZE"' in text
     assert '--empty-cache-interval "$EMPTY_CACHE_INTERVAL"' in text
+    assert 'cache_before_backward=(--empty-cache-before-backward)' in text
     assert '--profile-phases' in text
     assert '--kill-on-bad-exit=1' in text
 
