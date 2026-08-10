@@ -60,8 +60,12 @@ chat tokens are introduced. Structured values use deterministic compact JSON.
 Line endings are normalized to LF. Invalid UTF-8 is replaced. Any embedded raw
 `0x1e` inside a record is replaced with one ASCII space and counted.
 
-Message objects are serialized in source order. Empty message fields are not
-invented. The Nemotron chat source deliberately withholds some externally
+Message objects are serialized in source order. This intentionally differs
+from the Nemotron chat card's recommendation to train only its final assistant
+turn: this corpus preserves the complete restored trajectory and applies the
+same ordinary causal loss to every token, as required by the study design.
+Empty message fields are not invented. The Nemotron chat source deliberately
+withholds some externally
 sourced seed prompts; those rows are admitted only after NVIDIA's pinned
 `prepare_chat_prompts.py` reconstruction succeeds against the authorized
 upstream datasets. Records that remain incomplete or contain no usable

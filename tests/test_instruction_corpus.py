@@ -6,14 +6,14 @@ from ndm.data.instruction_corpus import RS, serialize_row
 
 
 def test_serializes_complete_chat_as_plain_utf8():
-    text, replaced = serialize_row("chat", {"messages": [
+    text, replaced = serialize_row("chat", {"tools": [{"name": "bash"}], "messages": [
         {"role": "system", "content": "Be useful."},
         {"role": "user", "content": "Fix it."},
         {"role": "assistant", "reasoning_content": "Inspect first.",
          "content": "Done.", "tool_calls": [{"name": "bash", "x": 1}]},
         {"role": "tool", "content": "ok"},
     ]})
-    assert text.startswith("System:\nBe useful.\n\nUser:\nFix it.")
+    assert text.startswith('Tools:\n[{"name":"bash"}]\n\nSystem:\nBe useful.\n\nUser:\nFix it.')
     assert "Assistant reasoning:\nInspect first." in text
     assert 'Assistant tool call:\n[{"name":"bash","x":1}]' in text
     assert text.endswith("Tool:\nok")

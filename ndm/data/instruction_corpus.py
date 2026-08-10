@@ -112,4 +112,11 @@ def serialize_row(source: str, row: Mapping[str, Any]) -> tuple[str, int]:
     text, replaced = serialize_messages(sequence)
     if not text:
         raise ValueError(f"{source}: message sequence serialized to empty text")
+    tools = row.get("tools")
+    if tools not in (None, "", []):
+        tools = _decode_sequence(tools)
+        rendered, n = _clean(tools)
+        replaced += n
+        if rendered:
+            text = f"Tools:\n{rendered}\n\n{text}"
     return text, replaced
