@@ -1,0 +1,81 @@
+{
+  "schema": "emender-e97-instruction-corpus-sources-v1",
+  "tokenizer": "p50k_base",
+  "target_tokens": 50000000000,
+  "long_context_min_tokens": 32768,
+  "seed": 42,
+  "sources": [
+    {
+      "name": "nemotron_instruction_chat_v3",
+      "repo": "nvidia/Nemotron-SFT-Instruction-Following-Chat-v3",
+      "revision": "be3b3e04ef605ac9d3f8f35b9d5a632f4a3a3402",
+      "share": 0.25,
+      "target_tokens": 12500000000
+    },
+    {
+      "name": "nemotron_swe_v3",
+      "repo": "nvidia/Nemotron-SFT-SWE-v3",
+      "revision": "3f73de64c1fe928a8f538fe45ccc10c228cc4c6a",
+      "share": 0.15,
+      "target_tokens": 7500000000
+    },
+    {
+      "name": "open_swe_traces",
+      "repo": "nvidia/Open-SWE-Traces",
+      "revision": "ad4805a5aa7de70d99cab0bb8f99b15304c76de0",
+      "share": 0.12,
+      "target_tokens": 6000000000
+    },
+    {
+      "name": "nemotron_terminal",
+      "repo": "nvidia/Nemotron-Terminal-Corpus",
+      "revision": "a1667c4ffdadea02a89bffe4f1bb7ca2ff19f8d9",
+      "share": 0.12,
+      "target_tokens": 6000000000
+    },
+    {
+      "name": "swe_chat",
+      "repo": "SALT-NLP/SWE-chat",
+      "revision": "f66cca95b14caaa4177f7ed5eaa424608dadcffa",
+      "share": 0.10,
+      "target_tokens": 5000000000,
+      "gated": true
+    },
+    {
+      "name": "agent_trove",
+      "repo": "open-thoughts/AgentTrove",
+      "revision": "b395a4307a2bc9950a90dc899438f149e115fc60",
+      "share": 0.10,
+      "target_tokens": 5000000000
+    },
+    {
+      "name": "gair_openswe",
+      "repo": "GAIR/OpenSWE",
+      "revision": "a8db93af5335df2c8baac0cd1ff367e4d475d3d7",
+      "share": 0.05,
+      "target_tokens": 2500000000,
+      "gated": true
+    },
+    {
+      "name": "swe_next",
+      "repo": "TIGER-Lab/SWE-Next-SFT-Trajectories",
+      "revision": "e378a60ddd7050fe9519a31a4d41d4872eeec6ac",
+      "share": 0.05,
+      "target_tokens": 2500000000
+    },
+    {
+      "name": "open_thoughts3",
+      "repo": "open-thoughts/OpenThoughts3-1.2M",
+      "revision": "61bcf9d4eb38b30295efc2021227a63cc5bb34c8",
+      "share": 0.03,
+      "target_tokens": 1500000000
+    }
+  ],
+  "long_context": {
+    "name": "long32k",
+    "share": 0.03,
+    "target_tokens": 1500000000,
+    "eligible_sources": "all",
+    "selected_occurrences_also_written_to_main": true
+  }
+}
