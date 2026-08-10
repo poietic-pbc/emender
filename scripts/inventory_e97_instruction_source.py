@@ -124,22 +124,37 @@ def main() -> None:
     index_partial = args.output_root / f"{args.source}.index.partial"
     stats_path = args.output_root / f"{args.source}.inventory.json"
     enc = tiktoken.get_encoding(args.tokenizer)
-    sha = hashlib.sha256()
-    stats = {
-        "schema": "emender-e97-instruction-inventory-v1",
-        "serializer_schema": SERIALIZER_SCHEMA,
-        "source": args.source,
-        "input_root": str(args.input_root.resolve()),
-        "input_files": [str(x.relative_to(args.input_root)) for x in files],
-        "tokenizer": args.tokenizer,
-        "rows_seen": 0, "records": 0, "rejected": 0,
-        "incomplete_nemotron_chat": 0,
-        "tokens": 0, "bytes": 0, "embedded_rs_replaced": 0,
-        "records_ge_32k": 0, "records_ge_64k": 0, "records_ge_128k": 0,
-        "started_unix": time.time(),
-    }
-    with records_partial.open("wb") as records, index_partial.open("wb") as index:
+    checkpoint_path = args.output_root / f"{args.source}.checkpoint.json"
+    if checkpoint_path.exists():
+        checkpoint = json.loads(checkpoint_path.read_text())
+        stats = checkpoint["stats"]
+        completed_files = set(checkpoint["completed_files"])
+        records_size = int(checkpoint["records_size"])
+        index_size = int(checkpoint["index_size"])
+        records_mode = index_mode = "r+b"
+    else:
+        stats = {
+            "schema": "emender-e97-instruction-inventory-v1",
+            "serializer_schema": SERIALIZER_SCHEMA,
+            "source": args.source,
+            "input_root": str(args.input_root.resolve()),
+            "input_files": [str(x.relative_to(args.input_root)) for x in files],
+            "tokenizer": args.tokenizer,
+            "rows_seen": 0, "records": 0, "rejected": 0,
+            "incomplete_nemotron_chat": 0,
+            "tokens": 0, "bytes": 0, "embedded_rs_replaced": 0,
+            "records_ge_32k": 0, "records_ge_64k": 0, "records_ge_128k": 0,
+            "started_unix": time.time(),
+        }
+        completed_files, records_size, index_size = set(), 0, 0
+        records_mode = index_mode = "w+b"
+    with records_partial.open(records_mode) as records, index_partial.open(index_mode) as index:
+        records.truncate(records_size); records.seek(records_size)
+        index.truncate(index_size); index.seek(index_size)
         for path in files:
+            relative = str(path.relative_to(args.input_root))
+            if relative in completed_files:
+                continue
             for row in source_rows(args.source, path):
                 stats["rows_seen"] += 1
                 if args.source == "nemotron_instruction_chat_v3":
@@ -162,7 +177,6 @@ def main() -> None:
                 offset = records.tell()
                 records.write(payload)
                 index.write(INDEX.pack(offset, len(payload), tokens, replaced))
-                sha.update(payload)
                 stats["records"] += 1
                 stats["tokens"] += tokens
                 stats["bytes"] += len(payload)
@@ -174,6 +188,11 @@ def main() -> None:
                     print(json.dumps({k: stats[k] for k in (
                         "source", "rows_seen", "records", "rejected", "tokens", "bytes")}),
                         flush=True)
+            records.flush(); index.flush()
+            completed_files.add(relative)
+            write_json(checkpoint_path, {
+                "completed_files": sorted(completed_files), "stats": stats,
+                "records_size": records.tell(), "index_size": index.tell()})
     if stats["records"] == 0:
         raise SystemExit(f"{args.source} produced zero complete records")
     if (args.source == "nemotron_instruction_chat_v3"
@@ -186,10 +205,15 @@ def main() -> None:
     index_path = args.output_root / f"{args.source}.index"
     records_partial.replace(records_path)
     index_partial.replace(index_path)
+    sha = hashlib.sha256()
+    with records_path.open("rb") as handle:
+        for block in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+            sha.update(block)
     stats.update(completed_unix=time.time(), elapsed_s=time.time() - stats["started_unix"],
                  records_sha256=sha.hexdigest(), index_entry_bytes=INDEX.size,
                  records_path=str(records_path), index_path=str(index_path))
     write_json(stats_path, stats)
+    checkpoint_path.unlink(missing_ok=True)
     print(json.dumps(stats, sort_keys=True))
 
 
