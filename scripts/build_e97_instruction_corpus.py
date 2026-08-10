@@ -40,9 +40,18 @@ def spool_selection(*, source_name: str, target: int, index: np.ndarray,
     selected_tokens = selected_bytes = selected_records = epochs = 0
     while selected_tokens < target:
         epochs += 1
-        for local_idx in rng.permutation(len(candidates)):
-            i = int(candidates[local_idx])
-            row = index[i]
+        permutation = rng.permutation(len(candidates))
+        contribution = index["tokens"][candidates[permutation]].astype(np.uint64) + 1
+        remaining = target - selected_tokens
+        cumulative = np.cumsum(contribution, dtype=np.uint64)
+        take = min(len(permutation), int(np.searchsorted(cumulative, remaining)) + 1)
+        chosen = candidates[permutation[:take]]
+        selected_tokens += int(contribution[:take].sum(dtype=np.uint64))
+        # Selection is random, but physical reads are sorted. The later bucket
+        # shuffle removes this temporary order and avoids millions of random
+        # small reads from the Lustre inventory stream.
+        for i in np.sort(chosen):
+            row = index[int(i)]
             start, size = int(row["offset"]), int(row["bytes"])
             payload = records[start:start + size]
             bucket = int(rng.integers(len(bucket_handles)))
@@ -52,12 +61,8 @@ def spool_selection(*, source_name: str, target: int, index: np.ndarray,
                 mirror = int(rng.integers(len(mirror_handles)))
                 mirror_handles[mirror].write(LENGTH.pack(size))
                 mirror_handles[mirror].write(payload)
-            # Assign the one-token RS following an occurrence to that occurrence.
-            selected_tokens += int(row["tokens"]) + 1
             selected_bytes += size
             selected_records += 1
-            if selected_tokens >= target:
-                break
     return {
         "source": source_name, "target_tokens": target,
         "actual_contribution_tokens": selected_tokens,
@@ -96,18 +101,17 @@ def emit(buckets: list[Path], output: Path, rng: np.random.Generator) -> dict:
             offsets = bucket_offsets(path)
             if not len(offsets):
                 continue
-            with path.open("rb") as handle:
-                data = mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ)
-                try:
-                    for j in rng.permutation(len(offsets)):
-                        offset, size = map(int, offsets[int(j)])
-                        payload = data[offset:offset + size]
-                        if records:
-                            out.write(RS); sha.update(RS)
-                        out.write(payload); sha.update(payload)
-                        records += 1; payload_bytes += size
-                finally:
-                    data.close()
+            # Buckets are deliberately memory-sized. Read each sequentially
+            # once, then shuffle record slices in RAM rather than issuing
+            # random small reads to Lustre.
+            data = path.read_bytes()
+            for j in rng.permutation(len(offsets)):
+                offset, size = map(int, offsets[int(j)])
+                payload = data[offset:offset + size]
+                if records:
+                    out.write(RS); sha.update(RS)
+                out.write(payload); sha.update(payload)
+                records += 1; payload_bytes += size
     partial.replace(output)
     return {"path": str(output), "records": records, "payload_bytes": payload_bytes,
             "file_bytes": output.stat().st_size, "rs_count": max(0, records - 1),
@@ -171,15 +175,21 @@ def main() -> None:
                 union.append((pool_id, int(i), int(index[int(i)]["tokens"])))
         target = int(spec["long_context"]["target_tokens"])
         actual = payload_tokens = payload_bytes = count = 0
+        selected_long = []
         while actual < target:
-            pool_id, row_id, tokens = union[int(rng.integers(len(union)))]
+            item = union[int(rng.integers(len(union)))]
+            selected_long.append(item)
+            actual += item[2] + 1
+        # As above, sort physical reads while preserving randomized bucket
+        # assignment and final output order.
+        for pool_id, row_id, tokens in sorted(selected_long):
             name, index, records, _eligible = long_candidates[pool_id]
             row = index[row_id]; start, size = int(row["offset"]), int(row["bytes"])
             payload = records[start:start + size]
             for handles in (main_handles, long_handles):
                 b = int(rng.integers(len(handles)))
                 handles[b].write(LENGTH.pack(size)); handles[b].write(payload)
-            actual += tokens + 1; payload_tokens += tokens; payload_bytes += size; count += 1
+            payload_tokens += tokens; payload_bytes += size; count += 1
         selections.append({"source": "long32k", "target_tokens": target,
                            "actual_contribution_tokens": actual,
                            "payload_tokens": payload_tokens, "rs_tokens": count,
@@ -192,9 +202,16 @@ def main() -> None:
             records.close(); handle.close()
     main_receipt = emit(main_paths, main_output, rng)
     long_receipt = emit(long_paths, long_output, rng)
+    main_accounted_tokens = sum(
+        int(row["actual_contribution_tokens"]) for row in selections) - 1
+    long_row = next(row for row in selections if row["source"] == "long32k")
     manifest = {
         "schema": "emender-e97-instruction-corpus-v1",
         "created_unix": time.time(), "seed": spec["seed"], "delimiter_hex": "1e",
+        "target_tokens": int(spec["target_tokens"]),
+        "main_accounted_tokens": main_accounted_tokens,
+        "main_overshoot_tokens": main_accounted_tokens - int(spec["target_tokens"]),
+        "long32k_accounted_tokens": int(long_row["actual_contribution_tokens"]) - 1,
         "tokenizer": spec["tokenizer"],
         "tokenizer_sha256": spec["tokenizer_sha256"],
         "token_accounting": "p50k payload tokens plus one RS token per selected occurrence; final stream has one fewer RS",

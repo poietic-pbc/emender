@@ -26,7 +26,7 @@ def test_builder_writes_main_and_long_rs_streams(tmp_path):
     _inventory(inventory, "b", [("Assistant:\nb", 4), ("Assistant:\nlong-b", 9)])
     spec = {
         "seed": 7, "tokenizer": "p50k_base", "tokenizer_sha256": "a" * 64,
-        "long_context_min_tokens": 8,
+        "target_tokens": 33, "long_context_min_tokens": 8,
         "sources": [
             {"name": "a", "target_tokens": 10},
             {"name": "b", "target_tokens": 11},
