@@ -5,7 +5,7 @@
 #SBATCH -e /lustre/orion/bif148/proj-shared/commapile/e97_instruction_50b_v1/inventory-%j.err
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -c 64
+#SBATCH -c 56
 #SBATCH -t 01:55:00
 #SBATCH -p batch
 #SBATCH --qos=normal
@@ -14,22 +14,33 @@
 set -euo pipefail
 cd /lustre/orion/bif148/scratch/erikgarrison/emender
 source scripts/frontier/activate_emender_frontier.sh
+export TIKTOKEN_CACHE_DIR=/lustre/orion/bif148/proj-shared/emender/tiktoken-cache
+[[ -s "$TIKTOKEN_CACHE_DIR/ec7223a39ce59f226a68acc30dc1af2788490e15" ]] || {
+  echo 'p50k tokenizer cache missing' >&2; exit 2;
+}
 ROOT=/lustre/orion/bif148/proj-shared/commapile/e97_instruction_50b_v1
 SRC=$ROOT/sources
 INV=$ROOT/inventory
-[[ -s "$ROOT/download-receipt.json" ]] || { echo 'complete download receipt missing' >&2; exit 2; }
 mkdir -p "$INV"
-
-"$EMENDER_PYTHON" scripts/restore_nemotron_chat_prompts.py \
-  --input "$SRC/nemotron_instruction_chat_v3/data/chat.jsonl" \
-  --output "$SRC/nemotron_instruction_chat_v3/data/chat.with_prompts.jsonl" \
-  --lmsys-root "$SRC/lmsys_chat_1m" \
-  --wildchat-root "$SRC/wildchat_1m" \
-  --receipt "$ROOT/nemotron-prompt-restoration.json"
-
-sources=(nemotron_instruction_chat_v3 nemotron_swe_v3 open_swe_traces nemotron_terminal swe_chat agent_trove gair_openswe swe_next open_thoughts3)
+if [[ "${ALLOW_PARTIAL:-0}" == 1 ]]; then
+  # Public-source inventory can proceed while the operator accepts gated terms.
+  sources=(nemotron_swe_v3 open_swe_traces nemotron_terminal agent_trove swe_next open_thoughts3)
+else
+  [[ -s "$ROOT/download-receipt.json" ]] || { echo 'complete download receipt missing' >&2; exit 2; }
+  "$EMENDER_PYTHON" scripts/restore_nemotron_chat_prompts.py \
+    --input "$SRC/nemotron_instruction_chat_v3/data/chat.jsonl" \
+    --output "$SRC/nemotron_instruction_chat_v3/data/chat.with_prompts.jsonl" \
+    --lmsys-root "$SRC/lmsys_chat_1m" \
+    --wildchat-root "$SRC/wildchat_1m" \
+    --receipt "$ROOT/nemotron-prompt-restoration.json"
+  sources=(nemotron_instruction_chat_v3 nemotron_swe_v3 open_swe_traces nemotron_terminal swe_chat agent_trove gair_openswe swe_next open_thoughts3)
+fi
 pids=()
 for source in "${sources[@]}"; do
+  if [[ -s "$INV/$source.inventory.json" ]]; then
+    echo "SKIP_COMPLETE $source"
+    continue
+  fi
   srun --exclusive -N1 -n1 -c7 --cpu-bind=cores \
     "$EMENDER_PYTHON" scripts/inventory_e97_instruction_source.py \
       --source "$source" --input-root "$SRC/$source" --output-root "$INV" \
