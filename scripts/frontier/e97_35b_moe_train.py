@@ -36,6 +36,7 @@ from ndm.models.e97_moe import (
     E97MoEConfig,
     convert_e97_ffns_to_node_local_moe,
     e97_moe_auxiliary_loss,
+    iter_e97_moe_layers,
 )
 
 
@@ -63,6 +64,8 @@ def parse_args():
     parser.add_argument("--checkpoint-interval", type=int, default=16)
     parser.add_argument("--projection-chunk-size", type=int, default=0)
     parser.add_argument("--sequence-chunk-size", type=int, default=0)
+    parser.add_argument("--checkpoint-group-size", type=int, default=1)
+    parser.add_argument("--moe-token-chunk-size", type=int, default=0)
     parser.add_argument("--lr", type=float, default=1.007e-3)
     parser.add_argument("--resume-lr-override", type=float)
     parser.add_argument("--weight-decay", type=float, default=0.01)
@@ -251,7 +254,8 @@ def main() -> None:
         raise SystemExit("save-every must be nonnegative and keep-checkpoints must be positive")
     if (args.chunk_size <= 0 or args.loss_chunk_size < 0
             or args.checkpoint_interval <= 0 or args.projection_chunk_size < 0
-            or args.sequence_chunk_size < 0):
+            or args.sequence_chunk_size < 0 or args.checkpoint_group_size <= 0
+            or args.moe_token_chunk_size < 0):
         raise SystemExit(
             "chunk-size/checkpoint-interval must be positive and chunk controls nonnegative")
     if args.chunk_size % args.checkpoint_interval:
@@ -318,6 +322,7 @@ def main() -> None:
             raise RuntimeError("loaded checkpoint is not the bound final 513B E97 seed")
         model = loaded.model
         model.gradient_checkpointing = bool(args.gradient_checkpointing)
+        model.gradient_checkpoint_group_size = int(args.checkpoint_group_size)
         model.loss_chunk_size = int(args.loss_chunk_size)
         recurrent_mixers = []
         for module in model.modules():
@@ -334,6 +339,8 @@ def main() -> None:
                          top_k=3, expert_parallel_size=8,
                          expert_backend=args.expert_backend),
             local_expert_rank=local_rank, expert_group=groups.node_group)
+        for moe_layer in iter_e97_moe_layers(model):
+            moe_layer.token_chunk_size = int(args.moe_token_chunk_size)
         model.train()
         parameter_count_local = sum(parameter.numel() for parameter in model.parameters())
         local_expert_count = sum(
@@ -348,6 +355,8 @@ def main() -> None:
              gradient_checkpointing_requested=args.gradient_checkpointing,
              sequence_chunk_size=args.sequence_chunk_size,
              tbptt_truncated=args.sequence_chunk_size > 0,
+             checkpoint_group_size=args.checkpoint_group_size,
+             moe_token_chunk_size=args.moe_token_chunk_size,
              loss_chunk_size=model.loss_chunk_size,
              checkpoint_interval=args.checkpoint_interval,
              projection_chunk_size=args.projection_chunk_size,

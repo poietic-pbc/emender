@@ -66,6 +66,8 @@ def test_long_context_launcher_is_debug_fail_stop_and_immutable():
     assert '--checkpoint-interval "$CHECKPOINT_INTERVAL"' in text
     assert '--projection-chunk-size "$PROJECTION_CHUNK_SIZE"' in text
     assert '--sequence-chunk-size "$SEQUENCE_CHUNK_SIZE"' in text
+    assert '--checkpoint-group-size "$CHECKPOINT_GROUP_SIZE"' in text
+    assert '--moe-token-chunk-size "$MOE_TOKEN_CHUNK_SIZE"' in text
     assert '--empty-cache-interval "$EMPTY_CACHE_INTERVAL"' in text
     assert '--profile-phases' in text
     assert '--kill-on-bad-exit=1' in text
@@ -133,6 +135,8 @@ def test_runner_exposes_existing_long_context_memory_controls():
     assert 'parser.add_argument("--checkpoint-interval", type=int, default=16)' in text
     assert 'parser.add_argument("--projection-chunk-size", type=int, default=0)' in text
     assert 'parser.add_argument("--sequence-chunk-size", type=int, default=0)' in text
+    assert 'parser.add_argument("--checkpoint-group-size", type=int, default=1)' in text
+    assert 'parser.add_argument("--moe-token-chunk-size", type=int, default=0)' in text
     assert 'parser.add_argument("--resume-lr-override", type=float)' in text
     assert 'optimizer_group["lr"] = float(args.resume_lr_override)' in text
     assert "model.gradient_checkpointing = bool(args.gradient_checkpointing)" in text

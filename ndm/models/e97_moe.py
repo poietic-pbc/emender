@@ -20,6 +20,7 @@ from typing import Iterable, Mapping, Sequence
 import torch
 from torch import nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
 from .ladder_lm import MixerMLPWrapper, SwiGLUMLP
 
@@ -152,6 +153,9 @@ class NodeLocalSharedRoutedMoE(nn.Module):
         self._z_loss: torch.Tensor | None = None
         self.last_metrics: dict[str, torch.Tensor | int | str] = {}
         self._topology = None
+        # Execution-only long-context control. Zero preserves the original
+        # single-dispatch path and does not enter the parameter/state schema.
+        self.token_chunk_size = 0
 
     @classmethod
     def from_dense(cls, seed: SwiGLUMLP, config: E97MoEConfig, *,
@@ -178,23 +182,50 @@ class NodeLocalSharedRoutedMoE(nn.Module):
         if self._topology is None:
             self._topology = assert_node_local_ep_group(self.expert_group)
         flat = x.reshape(-1, self.dim).contiguous()
-        result = node_local_fused_moe_autograd(
-            flat, self.router.weight,
-            self.local_gate_weight, self.local_up_weight, self.local_down_weight,
-            self.shared_expert.w1.weight, self.shared_expert.w2.weight,
-            self.shared_expert.w3.weight,
-            group=self.expert_group, topology=self._topology,
-            expert_backend=self.config.expert_backend)
-        self._load_balance_loss = result.load_balance_loss
-        self._z_loss = result.z_loss
+
+        def execute(token_rows):
+            result = node_local_fused_moe_autograd(
+                token_rows, self.router.weight,
+                self.local_gate_weight, self.local_up_weight,
+                self.local_down_weight,
+                self.shared_expert.w1.weight, self.shared_expert.w2.weight,
+                self.shared_expert.w3.weight,
+                group=self.expert_group, topology=self._topology,
+                expert_backend=self.config.expert_backend)
+            return (result.output, result.load_balance_loss,
+                    result.z_loss, result.expert_counts)
+
+        chunk_size = int(getattr(self, "token_chunk_size", 0))
+        if self.training and chunk_size > 0 and flat.shape[0] > chunk_size:
+            outputs = []
+            load_balance = flat.new_zeros((), dtype=torch.float32)
+            z_loss = flat.new_zeros((), dtype=torch.float32)
+            counts = torch.zeros(64, device=flat.device, dtype=torch.int32)
+            total_rows = flat.shape[0]
+            for start in range(0, total_rows, chunk_size):
+                rows = flat[start:start + chunk_size]
+                output, chunk_load, chunk_z, chunk_counts = torch_checkpoint(
+                    execute, rows, use_reentrant=False)
+                weight = rows.shape[0] / total_rows
+                outputs.append(output)
+                load_balance = load_balance + chunk_load * weight
+                z_loss = z_loss + chunk_z * weight
+                counts = counts + chunk_counts
+            output = torch.cat(outputs, dim=0)
+            self._load_balance_loss = load_balance
+            self._z_loss = z_loss
+            expert_counts = counts
+        else:
+            output, self._load_balance_loss, self._z_loss, expert_counts = execute(flat)
         self.last_metrics = {
-            "expert_token_counts": result.expert_counts.detach(),
+            "expert_token_counts": expert_counts.detach(),
             "expert_traffic_scope": "one-node-eight-rank-group-only",
-            "hostname": result.topology.hostname,
+            "hostname": self._topology.hostname,
             "local_expert_rank": self.local_expert_rank,
             "dropped_tokens": 0,
+            "token_chunk_size": chunk_size,
         }
-        return result.output.reshape_as(x)
+        return output.reshape_as(x)
 
 
 class SharedRoutedMoE(nn.Module):

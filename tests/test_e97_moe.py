@@ -89,6 +89,7 @@ def test_gradient_checkpointed_ladder_returns_router_auxiliary_graph():
     convert_e97_ffns_to_moe(
         model, E97MoEConfig(hidden_dim=16, routed_experts=8, top_k=3,
                             expert_parallel_size=4))
+    model.gradient_checkpoint_group_size = 2
     model.train()
     loss = model(torch.randint(0, 32, (1, 9)), return_loss=True)
     auxiliary = e97_moe_auxiliary_loss(model)

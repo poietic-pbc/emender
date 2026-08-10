@@ -1253,6 +1253,60 @@ class LadderLM(nn.Module):
     def _init_weights(self):
         nn.init.normal_(self.embedding.weight, std=0.02)
 
+    def _checkpointed_layer_groups(self, x, prev_hiddens, group_size):
+        """Checkpoint prenorm+recurrent+MLP blocks in multi-layer groups.
+
+        Saving one (x, residual) pair per group rather than per layer bounds
+        full-sequence activation residency while recomputing exact blocks in
+        backward. Recurrent states and router auxiliary scalars are explicit
+        checkpoint outputs.
+        """
+        residual = None
+        final_hiddens = []
+        auxiliary_losses = []
+        for start in range(0, self.depth, group_size):
+            stop = min(start + group_size, self.depth)
+            group_norms = tuple(self.layer_norms[start:stop])
+            group_layers = tuple(self.layers[start:stop])
+            group_hiddens = tuple(prev_hiddens[start:stop])
+
+            def run_group(group_x, group_residual, *hidden_inputs,
+                          _norms=group_norms, _layers=group_layers):
+                local_x = group_x
+                local_residual = group_residual
+                local_finals = []
+                local_auxiliaries = []
+                for ln, layer, hidden in zip(_norms, _layers, hidden_inputs):
+                    if self.fused_add_norm:
+                        local_x, local_residual = rms_norm_fn(
+                            local_x, ln.weight, None, residual=local_residual,
+                            prenorm=True,
+                            residual_in_fp32=self.residual_in_fp32,
+                            eps=ln.eps)
+                    else:
+                        local_residual = (
+                            local_x + local_residual
+                            if local_residual is not None else local_x)
+                        local_x = ln(local_residual.to(dtype=ln.weight.dtype))
+                        if self.residual_in_fp32:
+                            local_residual = local_residual.float()
+                    local_x, local_final = layer(local_x, hidden)
+                    mlp = getattr(layer, "mlp", None)
+                    auxiliary = getattr(mlp, "auxiliary_loss", None)
+                    if auxiliary is None:
+                        auxiliary = local_x.new_zeros(())
+                    local_finals.append(local_final)
+                    local_auxiliaries.append(auxiliary)
+                return (
+                    local_x, local_residual, tuple(local_finals),
+                    torch.stack(local_auxiliaries))
+
+            x, residual, group_finals, group_auxiliaries = torch_checkpoint(
+                run_group, x, residual, *group_hiddens, use_reentrant=False)
+            final_hiddens.extend(group_finals)
+            auxiliary_losses.extend(group_auxiliaries.unbind())
+        return x, residual, final_hiddens, auxiliary_losses
+
     def forward(
         self,
         x,
@@ -1307,10 +1361,24 @@ class LadderLM(nn.Module):
             and int(diagnostic_rank) == int(os.environ.get("RANK", "0"))
         )
 
-        # Run through layers with fused add+norm (exactly like Mamba's Block)
-        # Pattern: residual = x + residual; x = norm(residual); x = mixer(x)
+        # Run through layers with fused add+norm (exactly like Mamba's Block).
+        # At long context, checkpoint several complete blocks together so only
+        # sparse group boundaries retain full-sequence x/residual tensors.
         residual = None
-        for i, (ln, layer) in enumerate(zip(self.layer_norms, self.layers)):
+        checkpoint_group_size = int(
+            getattr(self, "gradient_checkpoint_group_size", 1))
+        grouped_checkpointing = (
+            self.gradient_checkpointing and self.training
+            and checkpoint_group_size > 1)
+        if grouped_checkpointing:
+            x, residual, new_hidden_states, checkpointed_auxiliary_losses = (
+                self._checkpointed_layer_groups(
+                    x, prev_hiddens, checkpoint_group_size))
+            layer_iterator = ()
+        else:
+            layer_iterator = enumerate(zip(self.layer_norms, self.layers))
+
+        for i, (ln, layer) in layer_iterator:
             if self.fused_add_norm:
                 # Fused add + RMSNorm (like Mamba)
                 x, residual = rms_norm_fn(
