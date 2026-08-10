@@ -61,8 +61,11 @@ Line endings are normalized to LF. Invalid UTF-8 is replaced. Any embedded raw
 `0x1e` inside a record is replaced with one ASCII space and counted.
 
 Message objects are serialized in source order. Empty message fields are not
-invented or reconstructed. Records with no usable conversational text are
-rejected and counted.
+invented. The Nemotron chat source deliberately withholds some externally
+sourced seed prompts; those rows are admitted only after NVIDIA's pinned
+`prepare_chat_prompts.py` reconstruction succeeds against the authorized
+upstream datasets. Records that remain incomplete or contain no usable
+conversational text are rejected and counted.
 
 ## Determinism and provenance
 
@@ -98,4 +101,6 @@ frozen 50B mixture.
 Construction fails closed unless every pinned source is readable. At build
 start, the current Hugging Face credential could inspect metadata but did not
 have file access to `SALT-NLP/SWE-chat`; `GAIR/OpenSWE` also requires gated-file
-verification. No source may be silently omitted, renamed, or reweighted.
+verification. Restoring withheld Nemotron chat prompts may additionally require
+accepted access to `lmsys/lmsys-chat-1m`. No source may be silently omitted,
+renamed, or reweighted.
