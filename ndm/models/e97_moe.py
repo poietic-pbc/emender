@@ -208,8 +208,8 @@ class NodeLocalSharedRoutedMoE(nn.Module):
             self._topology = assert_node_local_ep_group(self.expert_group)
         flat = x.reshape(-1, self.dim).contiguous()
 
-        def execute(token_rows):
-            forced_indices = None
+        def execute(token_rows, planned_indices=None):
+            forced_indices = planned_indices
             if self._routing_replay_mode == "replay":
                 if self._routing_replay_cursor >= len(self._active_routing_records):
                     raise RuntimeError("routing replay consumed more chunks than recorded")
@@ -231,27 +231,30 @@ class NodeLocalSharedRoutedMoE(nn.Module):
 
         chunk_size = int(getattr(self, "token_chunk_size", 0))
         if self.training and chunk_size > 0 and flat.shape[0] > chunk_size:
+            # Compute the router auxiliary once over the complete effective
+            # sequence segment. Expert traffic can then be materialized in
+            # smaller chunks without changing either the balance objective or
+            # its router/input gradients. The extra router pass is small
+            # (64 FP32 logits per token) relative to expert activations and
+            # also supplies one deterministic top-3 plan for every chunk.
+            from ndm.triton.e97_moe_fused import fused_top3_router_autograd
+            (segment_indices, _segment_weights, expert_counts,
+             self._load_balance_loss, self._z_loss) = (
+                fused_top3_router_autograd(flat, self.router.weight))
             outputs = []
-            load_balance = flat.new_zeros((), dtype=torch.float32)
-            z_loss = flat.new_zeros((), dtype=torch.float32)
-            counts = torch.zeros(64, device=flat.device, dtype=torch.int32)
             total_rows = flat.shape[0]
             for start in range(0, total_rows, chunk_size):
-                rows = flat[start:start + chunk_size]
+                stop = min(start + chunk_size, total_rows)
+                rows = flat[start:stop]
+                planned_indices = segment_indices[start:stop].contiguous()
                 if self._routing_replay_mode == "off":
-                    output, chunk_load, chunk_z, chunk_counts = torch_checkpoint(
-                        execute, rows, use_reentrant=False)
+                    output, _chunk_load, _chunk_z, _chunk_counts = torch_checkpoint(
+                        execute, rows, planned_indices, use_reentrant=False)
                 else:
-                    output, chunk_load, chunk_z, chunk_counts = execute(rows)
-                weight = rows.shape[0] / total_rows
+                    output, _chunk_load, _chunk_z, _chunk_counts = execute(
+                        rows, planned_indices)
                 outputs.append(output)
-                load_balance = load_balance + chunk_load * weight
-                z_loss = z_loss + chunk_z * weight
-                counts = counts + chunk_counts
             output = torch.cat(outputs, dim=0)
-            self._load_balance_loss = load_balance
-            self._z_loss = z_loss
-            expert_counts = counts
         else:
             output, self._load_balance_loss, self._z_loss, expert_counts = execute(flat)
         self.last_metrics = {

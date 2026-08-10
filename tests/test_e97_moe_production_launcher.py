@@ -151,7 +151,10 @@ def test_runner_exposes_existing_long_context_memory_controls():
     assert 'parser.add_argument("--sequence-chunk-size", type=int, default=0)' in text
     assert 'parser.add_argument("--full-bptt-segments", action="store_true")' in text
     assert "def _segmented_full_bptt_objective(" in text
-    assert "smaller chunks change the router balance objective" in text
+    assert "moe-token-chunk-size must divide the effective sequence segment" in text
+    model_text = (ROOT / "ndm/models/e97_moe.py").read_text()
+    assert "Compute the router auxiliary once over the complete effective" in model_text
+    assert "fused_top3_router_autograd(flat, self.router.weight)" in model_text
     assert 'parser.add_argument("--checkpoint-group-size", type=int, default=1)' in text
     assert 'parser.add_argument("--moe-token-chunk-size", type=int, default=0)' in text
     assert 'parser.add_argument("--resume-lr-override", type=float)' in text
