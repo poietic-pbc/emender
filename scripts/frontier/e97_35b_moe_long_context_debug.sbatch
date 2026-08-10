@@ -36,6 +36,9 @@ OFFLOAD_SCHEDULEFREE_Z=${OFFLOAD_SCHEDULEFREE_Z:-0}
 OFFLOAD_SCHEDULEFREE_STATE=${OFFLOAD_SCHEDULEFREE_STATE:-0}
 GRADIENT_CHECKPOINTING=${GRADIENT_CHECKPOINTING:-1}
 RUN_ROOT=${RUN_ROOT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-35b-moe/longctx-debug-${SLURM_JOB_NUM_NODES}n-c${CONTEXT_SIZE}-j${SLURM_JOB_ID}}
+CHECKPOINT_ROOT=${CHECKPOINT_ROOT:-}
+SAVE_EVERY=${SAVE_EVERY:-0}
+KEEP_CHECKPOINTS=${KEEP_CHECKPOINTS:-2}
 SEED_CHECKPOINT=${SEED_CHECKPOINT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/final-seed-production-256n/milestones/step-2322520-tokens-513013841920/checkpoint_step_2322520_loss_2.2798.pt}
 SEED_ARGS_JSON=${SEED_ARGS_JSON:-$(dirname "$SEED_CHECKPOINT")/args.json}
 DATA_PATH=${DATA_PATH:-/lustre/orion/bif148/proj-shared/commapile/commapile_mainmix_v0.1_1tb.txt}
@@ -54,6 +57,14 @@ SAMPLER_TRANSITION_FROM_COUNTER=${SAMPLER_TRANSITION_FROM_COUNTER:-0}
   echo "invalid long-context controls" >&2; exit 64;
 }
 [[ "$GRADIENT_CHECKPOINTING" =~ ^[01]$ ]] || exit 64
+[[ "$SAVE_EVERY" =~ ^[0-9]+$ && "$KEEP_CHECKPOINTS" =~ ^[1-9][0-9]*$ ]] || exit 64
+if [[ -n "$CHECKPOINT_ROOT" ]]; then
+  (( SAVE_EVERY > 0 && SAVE_EVERY % DILOCO_K == 0 )) || {
+    echo "checkpoint publication requires positive K-aligned SAVE_EVERY" >&2; exit 64;
+  }
+elif (( SAVE_EVERY != 0 )); then
+  echo "SAVE_EVERY requires CHECKPOINT_ROOT" >&2; exit 64
+fi
 cd "$REPO"
 git cat-file -e "${SOURCE_COMMIT}^{commit}"
 mkdir -p logs/frontier/e97_moe "$RUN_ROOT"
@@ -82,7 +93,9 @@ printf '%s\n' \
   "empty_cache_interval=$EMPTY_CACHE_INTERVAL" \
   "empty_cache_before_backward=$EMPTY_CACHE_BEFORE_BACKWARD" \
   "offload_schedulefree_z=$OFFLOAD_SCHEDULEFREE_Z" \
-  "offload_schedulefree_state=$OFFLOAD_SCHEDULEFREE_STATE" > "$RUN_ROOT/recipe.txt"
+  "offload_schedulefree_state=$OFFLOAD_SCHEDULEFREE_STATE" \
+  "checkpoint_root=$CHECKPOINT_ROOT" "save_every=$SAVE_EVERY" \
+  "keep_checkpoints=$KEEP_CHECKPOINTS" > "$RUN_ROOT/recipe.txt"
 
 source "$REPO/scripts/frontier/activate_emender_frontier.sh"
 MASTER_HOST=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -1)
@@ -98,7 +111,7 @@ GC_FLAG=--no-gradient-checkpointing
 [[ "$GRADIENT_CHECKPOINTING" == 1 ]] && GC_FLAG=--gradient-checkpointing
 LOSS_CHECKPOINT_FLAG=--no-checkpoint-loss-chunks
 [[ "$CHECKPOINT_LOSS_CHUNKS" == 1 ]] && LOSS_CHECKPOINT_FLAG=--checkpoint-loss-chunks
-export GC_FLAG LOSS_CHECKPOINT_FLAG CONTEXT_SIZE LOSS_CHUNK_SIZE CHECKPOINT_INTERVAL PROJECTION_CHUNK_SIZE SEQUENCE_CHUNK_SIZE FULL_BPTT_SEGMENTS CHECKPOINT_GROUP_SIZE MOE_TOKEN_CHUNK_SIZE MAX_STEPS DILOCO_K EXPERT_BACKEND EMPTY_CACHE_INTERVAL EMPTY_CACHE_BEFORE_BACKWARD OFFLOAD_SCHEDULEFREE_Z OFFLOAD_SCHEDULEFREE_STATE JOB_SEED JOB_SEED_ARGS DATA_PATH RESUME_ROOT RESUME_LR_OVERRIDE
+export GC_FLAG LOSS_CHECKPOINT_FLAG CONTEXT_SIZE LOSS_CHUNK_SIZE CHECKPOINT_INTERVAL PROJECTION_CHUNK_SIZE SEQUENCE_CHUNK_SIZE FULL_BPTT_SEGMENTS CHECKPOINT_GROUP_SIZE MOE_TOKEN_CHUNK_SIZE MAX_STEPS DILOCO_K EXPERT_BACKEND EMPTY_CACHE_INTERVAL EMPTY_CACHE_BEFORE_BACKWARD OFFLOAD_SCHEDULEFREE_Z OFFLOAD_SCHEDULEFREE_STATE JOB_SEED JOB_SEED_ARGS DATA_PATH RESUME_ROOT RESUME_LR_OVERRIDE CHECKPOINT_ROOT SAVE_EVERY KEEP_CHECKPOINTS
 export SAMPLER_SCHEMA SAMPLER_CORPUS_SHA256 SAMPLER_TOKENIZER_SHA256 SAMPLER_KEY
 export SAMPLER_STREAM_ORIGIN_ACCEPTED_TOKENS SAMPLER_TRANSITION_FROM_COUNTER
 srun --label --kill-on-bad-exit=1 bash -lc '
@@ -117,6 +130,10 @@ srun --label --kill-on-bad-exit=1 bash -lc '
   [[ "$OFFLOAD_SCHEDULEFREE_STATE" == 0 ]] || z_offload=(--offload-schedulefree-state)
   resume=(); [[ -z "$RESUME_ROOT" ]] || resume=(--resume-root "$RESUME_ROOT")
   [[ -z "$RESUME_LR_OVERRIDE" ]] || resume+=(--resume-lr-override "$RESUME_LR_OVERRIDE")
+  checkpoint=()
+  [[ -z "$CHECKPOINT_ROOT" ]] || checkpoint=(
+    --checkpoint-root "$CHECKPOINT_ROOT" --save-every "$SAVE_EVERY"
+    --keep-checkpoints "$KEEP_CHECKPOINTS")
   sampler=()
   if [[ -n "$SAMPLER_SCHEMA" ]]; then
     sampler=(
@@ -131,7 +148,7 @@ srun --label --kill-on-bad-exit=1 bash -lc '
   fi
   "$EMENDER_PYTHON" scripts/frontier/e97_35b_moe_train.py \
     --seed-checkpoint "$JOB_SEED" --seed-args-json "$JOB_SEED_ARGS" --data "$DATA_PATH" \
-    "${resume[@]}" "${sampler[@]}" --max-steps "$MAX_STEPS" --minutes 0 --batch-size 1 --chunk-size "$CONTEXT_SIZE" \
+    "${resume[@]}" "${checkpoint[@]}" "${sampler[@]}" --max-steps "$MAX_STEPS" --minutes 0 --batch-size 1 --chunk-size "$CONTEXT_SIZE" \
     "$GC_FLAG" "$LOSS_CHECKPOINT_FLAG" --loss-chunk-size "$LOSS_CHUNK_SIZE" \
     --checkpoint-interval "$CHECKPOINT_INTERVAL" \
     --projection-chunk-size "$PROJECTION_CHUNK_SIZE" \
