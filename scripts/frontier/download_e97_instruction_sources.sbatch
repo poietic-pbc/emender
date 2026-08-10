@@ -6,7 +6,7 @@
 #SBATCH -N 1
 #SBATCH -n 1
 #SBATCH -c 8
-#SBATCH -t 06:00:00
+#SBATCH -t 01:55:00
 #SBATCH -p batch
 #SBATCH --qos=normal
 #SBATCH --requeue=0
