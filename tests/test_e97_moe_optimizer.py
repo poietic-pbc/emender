@@ -33,6 +33,15 @@ def test_fused_schedulefree_trajectory_modes_and_no_master_weights():
     optimizer.step()
     for parameter in (bf16, fp32):
         assert optimizer.state[parameter]["z"].device.type == "cpu"
+    optimizer.offload_state_()
+    for parameter in (bf16, fp32):
+        assert optimizer.state[parameter]["exp_avg_sq"].device.type == "cpu"
+    bf16.grad = torch.full_like(bf16, 0.005)
+    fp32.grad = torch.full_like(fp32, -0.005)
+    optimizer.step()
+    for parameter in (bf16, fp32):
+        assert optimizer.state[parameter]["z"].device.type == "cpu"
+        assert optimizer.state[parameter]["exp_avg_sq"].device.type == "cpu"
     optimizer.assert_no_master_weights()
     for parameter in (bf16, fp32):
         assert optimizer.state[parameter]["z"].dtype == parameter.dtype

@@ -43,6 +43,7 @@ class FusedScheduleFreeAdamW(torch.optim.Optimizer):
         )
         super().__init__(params, defaults)
         self.z_offloaded = False
+        self.exp_avg_sq_offloaded = False
 
     @staticmethod
     def _materialize_z(parameter, state):
@@ -55,18 +56,31 @@ class FusedScheduleFreeAdamW(torch.optim.Optimizer):
             state["z"].copy_(z_work, non_blocking=False)
 
     @torch.no_grad()
-    def offload_z_(self) -> None:
-        """Move ScheduleFree z to pinned host memory between GPU uses."""
+    def _offload_state_tensor_(self, name: str) -> None:
         for parameter in self.param_groups[0]["params"]:
             state = self.state.get(parameter, {})
-            z = state.get("z")
-            if z is None or not z.is_cuda:
+            tensor = state.get(name)
+            if tensor is None or not tensor.is_cuda:
                 continue
             host = torch.empty(
-                z.shape, dtype=z.dtype, device="cpu", pin_memory=True)
-            host.copy_(z, non_blocking=False)
-            state["z"] = host
+                tensor.shape, dtype=tensor.dtype, device="cpu", pin_memory=True)
+            host.copy_(tensor, non_blocking=False)
+            state[name] = host
+
+    @torch.no_grad()
+    def offload_z_(self) -> None:
+        """Move ScheduleFree z to pinned host memory between GPU uses."""
+        self._offload_state_tensor_("z")
         self.z_offloaded = True
+        torch.cuda.empty_cache()
+
+    @torch.no_grad()
+    def offload_state_(self) -> None:
+        """Offload both z and second moments for the minimum GPU footprint."""
+        self._offload_state_tensor_("z")
+        self._offload_state_tensor_("exp_avg_sq")
+        self.z_offloaded = True
+        self.exp_avg_sq_offloaded = True
         torch.cuda.empty_cache()
 
     @torch.no_grad()
@@ -134,14 +148,22 @@ class FusedScheduleFreeAdamW(torch.optim.Optimizer):
                     state["z"] = parameter.detach().clone()
                     state["exp_avg_sq"] = torch.zeros_like(parameter)
                 z_work = self._materialize_z(parameter, state)
+                exp_saved = state["exp_avg_sq"]
+                exp_work = (
+                    exp_saved if exp_saved.is_cuda
+                    else exp_saved.to(parameter.device, non_blocking=False))
                 fused_schedulefree_adamw_update_(
-                    parameter, grad, z_work, state["exp_avg_sq"],
+                    parameter, grad, z_work, exp_work,
                     lr=lr, beta1=beta1, beta2=beta2,
                     bias_correction2=bias_correction2, eps=group["eps"],
                     weight_decay=group["weight_decay"], ckp1=ckp1)
                 self._commit_z(state, z_work)
+                if exp_saved is not exp_work:
+                    exp_saved.copy_(exp_work, non_blocking=False)
             group["k"] = k + 1
-        if self.z_offloaded:
+        if self.exp_avg_sq_offloaded:
+            self.offload_state_()
+        elif self.z_offloaded:
             self.offload_z_()
         return None
 

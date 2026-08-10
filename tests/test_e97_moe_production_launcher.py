@@ -72,6 +72,7 @@ def test_long_context_launcher_is_debug_fail_stop_and_immutable():
     assert '--empty-cache-interval "$EMPTY_CACHE_INTERVAL"' in text
     assert 'cache_before_backward=(--empty-cache-before-backward)' in text
     assert 'z_offload=(--offload-schedulefree-z)' in text
+    assert 'z_offload=(--offload-schedulefree-state)' in text
     assert '--profile-phases' in text
     assert '--kill-on-bad-exit=1' in text
 
