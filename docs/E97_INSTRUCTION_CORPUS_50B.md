@@ -67,8 +67,11 @@ same ordinary causal loss to every token, as required by the study design.
 Empty message fields are not invented. The Nemotron chat source deliberately
 withholds some externally
 sourced seed prompts; those rows are admitted only after NVIDIA's pinned
-`prepare_chat_prompts.py` reconstruction succeeds against the authorized
-upstream datasets. Records that remain incomplete or contain no usable
+prompt reconstruction succeeds against the authorized pinned upstream
+datasets. Some LMSYS prompts remain redacted even after gated access; rows whose
+prompt hash cannot be recovered are excluded rather than emitted as incomplete
+trajectories. Every unavailable hash and excluded row is counted in the prompt
+restoration receipt. Records that remain incomplete or contain no usable
 conversational text are rejected and counted.
 
 ## Determinism and provenance

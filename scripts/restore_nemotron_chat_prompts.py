@@ -64,6 +64,7 @@ def main():
             value = (row.get("metadata") or {}).get("seed_prompt_sha256")
             if fam and value: needed[fam].add(value)
     replacements = {}
+    missing_by_family = {}
     for fam, root in (("lmsys", args.lmsys_root), ("wildchat", args.wildchat_root)):
         remaining = set(needed[fam])
         for row in parquet_rows(root):
@@ -73,16 +74,21 @@ def main():
             if key in remaining:
                 replacements[(fam, key)] = (system, user); remaining.remove(key)
                 if not remaining: break
-        if remaining:
-            raise RuntimeError(f"missing {len(remaining)} {fam} prompt hashes")
+        missing_by_family[fam] = sorted(remaining)
     partial = args.output.with_suffix(args.output.suffix + ".partial")
-    restored = 0
+    restored = dropped_missing = 0
     with args.input.open(encoding="utf-8") as src, partial.open("w", encoding="utf-8") as out:
         for line_number, line in enumerate(src, 1):
             row = json.loads(line); fam = family(row)
             key = (row.get("metadata") or {}).get("seed_prompt_sha256")
             if fam and key:
-                system, user = replacements[(fam, key)]
+                replacement = replacements.get((fam, key))
+                if replacement is None:
+                    # Upstream protected datasets redact some prompts even
+                    # after gated access. Never emit an incomplete trajectory.
+                    dropped_missing += 1
+                    continue
+                system, user = replacement
                 messages = row.get("messages") or []
                 if messages and messages[0].get("role") == "system": messages[0]["content"] = system
                 user_message = next((x for x in messages if x.get("role") == "user"), None)
@@ -94,7 +100,9 @@ def main():
                "created_unix": time.time(), "input": str(args.input), "output": str(args.output),
                "input_sha256": digest(args.input), "output_sha256": digest(args.output),
                "needed_unique_hashes": {k: len(v) for k,v in needed.items()},
-               "restored_rows": restored, "lmsys_root": str(args.lmsys_root),
+               "missing_unique_hashes": {k: len(v) for k,v in missing_by_family.items()},
+               "restored_rows": restored, "dropped_rows_with_unavailable_prompt": dropped_missing,
+               "lmsys_root": str(args.lmsys_root),
                "wildchat_root": str(args.wildchat_root)}
     args.receipt.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
     print(json.dumps(receipt, sort_keys=True))
