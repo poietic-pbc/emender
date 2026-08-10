@@ -1506,14 +1506,27 @@ class LadderLM(nn.Module):
                 total_count = 0
                 for t0 in range(0, T_total, loss_chunk):
                     t1 = min(t0 + loss_chunk, T_total)
-                    logits_c = self.lm_head(x[:, t0:t1])
+                    hidden_c = x[:, t0:t1]
                     target_c = target[:, t0:t1]
-                    chunk_loss_sum = F.cross_entropy(
-                        logits_c.reshape(-1, self.vocab_size),
-                        target_c.reshape(-1),
-                        ignore_index=-100,
-                        reduction='sum',
-                    )
+
+                    def chunk_cross_entropy(hidden, targets):
+                        logits_c = self.lm_head(hidden)
+                        return F.cross_entropy(
+                            logits_c.reshape(-1, self.vocab_size),
+                            targets.reshape(-1),
+                            ignore_index=-100,
+                            reduction='sum')
+
+                    if (self.training and getattr(
+                            self, "checkpoint_loss_chunks", False)):
+                        # A Python loop alone bounds forward workspace but CE
+                        # autograd otherwise retains every chunk's V-wide
+                        # softmax for backward. Replay each chunk instead.
+                        chunk_loss_sum = torch_checkpoint(
+                            chunk_cross_entropy, hidden_c, target_c,
+                            use_reentrant=False)
+                    else:
+                        chunk_loss_sum = chunk_cross_entropy(hidden_c, target_c)
                     total_sum = total_sum + chunk_loss_sum
                     total_count = total_count + (target_c != -100).sum()
                 loss = total_sum / total_count.clamp(min=1)

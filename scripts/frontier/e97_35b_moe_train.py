@@ -61,6 +61,9 @@ def parse_args():
         "--gradient-checkpointing", action=argparse.BooleanOptionalAction,
         default=False)
     parser.add_argument("--loss-chunk-size", type=int, default=0)
+    parser.add_argument(
+        "--checkpoint-loss-chunks", action=argparse.BooleanOptionalAction,
+        default=False)
     parser.add_argument("--checkpoint-interval", type=int, default=16)
     parser.add_argument("--projection-chunk-size", type=int, default=0)
     parser.add_argument("--sequence-chunk-size", type=int, default=0)
@@ -324,6 +327,7 @@ def main() -> None:
         model.gradient_checkpointing = bool(args.gradient_checkpointing)
         model.gradient_checkpoint_group_size = int(args.checkpoint_group_size)
         model.loss_chunk_size = int(args.loss_chunk_size)
+        model.checkpoint_loss_chunks = bool(args.checkpoint_loss_chunks)
         recurrent_mixers = []
         for module in model.modules():
             if hasattr(module, "checkpoint_interval"):
@@ -358,6 +362,7 @@ def main() -> None:
              checkpoint_group_size=args.checkpoint_group_size,
              moe_token_chunk_size=args.moe_token_chunk_size,
              loss_chunk_size=model.loss_chunk_size,
+             checkpoint_loss_chunks=model.checkpoint_loss_chunks,
              checkpoint_interval=args.checkpoint_interval,
              projection_chunk_size=args.projection_chunk_size,
              context_size=args.chunk_size,

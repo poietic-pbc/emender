@@ -20,6 +20,7 @@ set -euo pipefail
 REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
 CONTEXT_SIZE=${CONTEXT_SIZE:-8192}
 LOSS_CHUNK_SIZE=${LOSS_CHUNK_SIZE:-2048}
+CHECKPOINT_LOSS_CHUNKS=${CHECKPOINT_LOSS_CHUNKS:-0}
 CHECKPOINT_INTERVAL=${CHECKPOINT_INTERVAL:-16}
 PROJECTION_CHUNK_SIZE=${PROJECTION_CHUNK_SIZE:-0}
 SEQUENCE_CHUNK_SIZE=${SEQUENCE_CHUNK_SIZE:-0}
@@ -64,7 +65,9 @@ squeue -j "$SLURM_JOB_ID" -h -o 'JobID=%i|Partition=%P|QOS=%q|State=%T|Nodes=%D|
 scontrol show job -dd "$SLURM_JOB_ID" > "$RUN_ROOT/scontrol.txt"
 printf '%s\n' \
   "source_commit=$SOURCE_COMMIT" "context_size=$CONTEXT_SIZE" \
-  "loss_chunk_size=$LOSS_CHUNK_SIZE" "checkpoint_interval=$CHECKPOINT_INTERVAL" \
+  "loss_chunk_size=$LOSS_CHUNK_SIZE" \
+  "checkpoint_loss_chunks=$CHECKPOINT_LOSS_CHUNKS" \
+  "checkpoint_interval=$CHECKPOINT_INTERVAL" \
   "projection_chunk_size=$PROJECTION_CHUNK_SIZE" \
   "sequence_chunk_size=$SEQUENCE_CHUNK_SIZE" \
   "checkpoint_group_size=$CHECKPOINT_GROUP_SIZE" \
@@ -85,7 +88,9 @@ export EMENDER_SOURCE_COMMIT=$SOURCE_COMMIT
 
 GC_FLAG=--no-gradient-checkpointing
 [[ "$GRADIENT_CHECKPOINTING" == 1 ]] && GC_FLAG=--gradient-checkpointing
-export GC_FLAG CONTEXT_SIZE LOSS_CHUNK_SIZE CHECKPOINT_INTERVAL PROJECTION_CHUNK_SIZE SEQUENCE_CHUNK_SIZE CHECKPOINT_GROUP_SIZE MOE_TOKEN_CHUNK_SIZE MAX_STEPS DILOCO_K EXPERT_BACKEND EMPTY_CACHE_INTERVAL JOB_SEED JOB_SEED_ARGS DATA_PATH RESUME_ROOT RESUME_LR_OVERRIDE
+LOSS_CHECKPOINT_FLAG=--no-checkpoint-loss-chunks
+[[ "$CHECKPOINT_LOSS_CHUNKS" == 1 ]] && LOSS_CHECKPOINT_FLAG=--checkpoint-loss-chunks
+export GC_FLAG LOSS_CHECKPOINT_FLAG CONTEXT_SIZE LOSS_CHUNK_SIZE CHECKPOINT_INTERVAL PROJECTION_CHUNK_SIZE SEQUENCE_CHUNK_SIZE CHECKPOINT_GROUP_SIZE MOE_TOKEN_CHUNK_SIZE MAX_STEPS DILOCO_K EXPERT_BACKEND EMPTY_CACHE_INTERVAL JOB_SEED JOB_SEED_ARGS DATA_PATH RESUME_ROOT RESUME_LR_OVERRIDE
 export SAMPLER_SCHEMA SAMPLER_CORPUS_SHA256 SAMPLER_TOKENIZER_SHA256 SAMPLER_KEY
 export SAMPLER_STREAM_ORIGIN_ACCEPTED_TOKENS SAMPLER_TRANSITION_FROM_COUNTER
 srun --label --kill-on-bad-exit=1 bash -lc '
@@ -112,7 +117,7 @@ srun --label --kill-on-bad-exit=1 bash -lc '
   "$EMENDER_PYTHON" scripts/frontier/e97_35b_moe_train.py \
     --seed-checkpoint "$JOB_SEED" --seed-args-json "$JOB_SEED_ARGS" --data "$DATA_PATH" \
     "${resume[@]}" "${sampler[@]}" --max-steps "$MAX_STEPS" --minutes 0 --batch-size 1 --chunk-size "$CONTEXT_SIZE" \
-    "$GC_FLAG" --loss-chunk-size "$LOSS_CHUNK_SIZE" \
+    "$GC_FLAG" "$LOSS_CHECKPOINT_FLAG" --loss-chunk-size "$LOSS_CHUNK_SIZE" \
     --checkpoint-interval "$CHECKPOINT_INTERVAL" \
     --projection-chunk-size "$PROJECTION_CHUNK_SIZE" \
     --sequence-chunk-size "$SEQUENCE_CHUNK_SIZE" \

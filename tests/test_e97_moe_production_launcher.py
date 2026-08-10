@@ -63,6 +63,7 @@ def test_long_context_launcher_is_debug_fail_stop_and_immutable():
     assert '--sampler-data-world-size "$WORLD_SIZE"' in text
     assert '--gradient-checkpointing' in text
     assert '--loss-chunk-size "$LOSS_CHUNK_SIZE"' in text
+    assert 'LOSS_CHECKPOINT_FLAG=--no-checkpoint-loss-chunks' in text
     assert '--checkpoint-interval "$CHECKPOINT_INTERVAL"' in text
     assert '--projection-chunk-size "$PROJECTION_CHUNK_SIZE"' in text
     assert '--sequence-chunk-size "$SEQUENCE_CHUNK_SIZE"' in text
@@ -132,6 +133,8 @@ def test_runner_exposes_existing_long_context_memory_controls():
     text = RUNNER.read_text()
     assert '"--gradient-checkpointing", action=argparse.BooleanOptionalAction' in text
     assert 'parser.add_argument("--loss-chunk-size", type=int, default=0)' in text
+    assert '"--checkpoint-loss-chunks", action=argparse.BooleanOptionalAction' in text
+    assert 'model.checkpoint_loss_chunks = bool(args.checkpoint_loss_chunks)' in text
     assert 'parser.add_argument("--checkpoint-interval", type=int, default=16)' in text
     assert 'parser.add_argument("--projection-chunk-size", type=int, default=0)' in text
     assert 'parser.add_argument("--sequence-chunk-size", type=int, default=0)' in text
