@@ -39,6 +39,9 @@ def main() -> None:
     results = []
     failures = []
     all_sources = spec["sources"] + spec.get("prompt_restoration_sources", [])
+    # A failed gated Xet request can poison the process-global transfer worker.
+    # Complete all public snapshots before probing gated repositories.
+    all_sources.sort(key=lambda source: bool(source.get("gated", False)))
     for source in all_sources:
         name, repo, revision = source["name"], source["repo"], source["revision"]
         local = args.output_root / name
