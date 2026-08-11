@@ -18,6 +18,7 @@ export HF_TOKEN="$("$EMENDER_PYTHON" -c 'from huggingface_hub import get_token; 
 test -n "$HF_TOKEN" || { echo 'missing Hugging Face token' >&2; exit 2; }
 export HF_HOME=/lustre/orion/bif148/proj-shared/commapile/e97_instruction_50b_v1/hf-home
 export HF_HUB_DISABLE_PROGRESS_BARS=1
+export HF_HUB_DISABLE_XET=1
 mkdir -p "$HF_HOME"
 "$EMENDER_PYTHON" scripts/download_e97_instruction_sources.py \
   --spec configs/frontier/e97_instruction_50b_sources.json \

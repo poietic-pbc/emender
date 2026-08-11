@@ -1,6 +1,20 @@
 # E97 instruction continued-training corpus (50B)
 
-Status: construction in progress. This document is the normative build contract.
+Status: **complete and validated**. This document is the normative build
+contract and final resource description.
+
+Final authoritative receipt:
+
+- main file: 153,710,521,868 bytes; 3,049,886 records;
+- accounted construction tokens: 50,000,556,252 (556,252 complete-record overshoot);
+- main SHA-256: `224acfad07fb5778b89b3630ac0851c7ee5743c45250173836b77fc298123da8`;
+- long-only file: 4,665,941,053 bytes; 22,535 records;
+- long-only SHA-256: `9b68ad96c8df5114caf29b9ef049835fda0c9748d2b0e5e89593db48e9e9481f`;
+- minimum long-only record length: exactly 32,768 p50k tokens;
+- validation job `5229854`: `COMPLETED 0:0`.
+
+The training run must still stop at exactly 50,000,000,000 accepted tokens; the
+small corpus overshoot exists solely because complete records are never split.
 
 ## Deliverables
 

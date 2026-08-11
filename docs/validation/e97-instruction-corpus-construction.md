@@ -1,7 +1,7 @@
 # E97 50B instruction corpus construction receipt
 
-Status: **in progress; blocked only on operator acceptance of three Hugging
-Face gated datasets.** No final corpus has been published yet.
+Status: **complete and validated.** Both final corpus files and adjacent
+machine-readable receipts are published.
 
 Normative build contract: `docs/E97_INSTRUCTION_CORPUS_50B.md`.
 
@@ -29,13 +29,10 @@ Complete public snapshots:
 - OpenThoughts3-1.2M;
 - WildChat-1M restoration source.
 
-Current gated failures are explicit in `download-receipt.partial.json`:
-
-- `SALT-NLP/SWE-chat`;
-- `GAIR/OpenSWE`;
-- `lmsys/lmsys-chat-1m`, required to restore withheld Nemotron chat prompts.
-
-No unavailable source has been omitted or reweighted.
+The operator subsequently accepted `SALT-NLP/SWE-chat`, `GAIR/OpenSWE`, and
+`lmsys/lmsys-chat-1m`. The pinned snapshots were downloaded with Xet disabled
+and the final `download-receipt.json` has zero failures. No source was omitted
+or reweighted.
 
 ## Public-source serialization inventory
 
@@ -57,8 +54,17 @@ public pass `5226185` completed `0:0`.
 The inventories occupy 214 GB and include random-access record bytes, fixed
 binary offset/token indexes, per-source JSON receipts, record-stream SHA-256,
 length buckets, rejection counts, and embedded-RS replacement counts.
-SWE-Next's 2.5B target will require approximately 38.3 complete passes; the
-final quota receipt will report the exact selected count and overshoot.
+The three gated/restored inventories subsequently added:
+
+| Source | Accepted records | Serialized p50k tokens | Serialized bytes | >=32K records | >=128K records |
+|---|---:|---:|---:|---:|---:|
+| Nemotron Instruction/Chat v3 | 812,124 | 5.813B | 17.0 GB | 15,438 | 224 |
+| SWE-chat | 5,804 | 0.386B | 1.15 GB | 2,996 | 772 |
+| GAIR/OpenSWE | 12,431 | 1.115B | 3.45 GB | 12,297 | 612 |
+
+SWE-Next's 2.5B target required 39 shuffled epochs; SWE-chat required 13,
+GAIR/OpenSWE 3, and Nemotron Instruction/Chat 3. The final manifest reports
+exact selected counts and overshoot for every bucket.
 
 Adjacent machine-readable receipt:
 
@@ -67,14 +73,54 @@ Adjacent machine-readable receipt:
   public-inventory-summary.json
 ```
 
-## Remaining sequence
+## Protected prompt restoration
 
-1. Operator accepts the three gated datasets.
-2. Rerun the pinned downloader; require `download-receipt.json` with zero
-   failures.
-3. Restore Nemotron protected prompts from the pinned local LMSYS/WildChat
-   snapshots and publish its receipt.
-4. Inventory Nemotron Instruction/Chat, SWE-chat, and GAIR/OpenSWE.
-5. Run the deterministic 50B quota selector and external record shuffle.
-6. Validate both UTF-8/RS files, publish SHA-256 and final manifest, and replace
-   adjacent `.partial` documentation with final `README.md` and source spec.
+The pinned LMSYS and WildChat snapshots restored 280,495 Nemotron chat rows.
+The upstream protected datasets still redact 5,110 unique LMSYS and 14,286
+unique WildChat prompt hashes; 75,287 affected rows were excluded rather than
+emitted as incomplete trajectories. The exact hashes/counts and source/output
+digests are recorded in `nemotron-prompt-restoration.json`.
+
+## Final construction
+
+The final inventories contain all nine named sources. Job `5227925` completed
+all quota selection and the full 256-bucket external shuffle spool, then timed
+out while emitting the main file. Job `5229672` deterministically replayed the
+selection clock, verified the complete spool, and emitted both files in 16:10.
+
+Authoritative all-data file:
+
+```text
+/lustre/orion/bif148/proj-shared/commapile/e97_instruction_50b_v1/
+  e97_instruction_50b_v1.txt
+```
+
+- 153,710,521,868 bytes;
+- 3,049,886 complete records / 3,049,885 RS delimiters;
+- 50,000,556,252 accounted p50k construction tokens;
+- complete-record overshoot: 556,252 tokens;
+- SHA-256: `224acfad07fb5778b89b3630ac0851c7ee5743c45250173836b77fc298123da8`.
+
+Derived long-only file:
+
+```text
+e97_instruction_50b_v1_long32k.txt
+```
+
+- 4,665,941,053 bytes;
+- 22,535 complete records / 22,534 RS delimiters;
+- 1,500,095,041 accounted p50k tokens;
+- SHA-256: `9b68ad96c8df5114caf29b9ef049835fda0c9748d2b0e5e89593db48e9e9481f`.
+
+## Final validation
+
+Job `5229854` completed `0:0` in 08:43. It streamed both files in full and
+verified strict UTF-8, byte counts, RS counts, record counts, and SHA-256. It
+retokenized every long-only record with the frozen p50k authority: minimum
+32,768 tokens, maximum 1,556,124. The unchanged online loader also returned
+correct samples at 2K, 32K, and 128K contexts. Machine receipt:
+`e97_instruction_50b_v1.validation.json`.
+
+The main file is the sole training input. The long-only file is a derived audit
+and optional future sampling resource; its records already occur in the main
+mixture.
