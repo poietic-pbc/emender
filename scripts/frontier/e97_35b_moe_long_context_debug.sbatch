@@ -103,7 +103,12 @@ export MASTER_ADDR=$(getent ahostsv4 "$MASTER_HOST" | awk 'NR==1 {print $1}')
 export MASTER_PORT=$((34000 + SLURM_JOB_ID % 10000))
 export WORLD_SIZE=$SLURM_NTASKS OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-7}
 export MPICH_GPU_SUPPORT_ENABLED=1 NCCL_DEBUG=WARN
-export PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
+# Torch 2.10's unified allocator reads PYTORCH_ALLOC_CONF first. Export all
+# compatibility names before any rank imports torch; HIP-only configuration can
+# otherwise leave multi-GiB cached slabs unusable during ragged MoE replay.
+export PYTORCH_ALLOC_CONF=expandable_segments:True
+export PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_ALLOC_CONF
+export PYTORCH_HIP_ALLOC_CONF=$PYTORCH_ALLOC_CONF
 export TIKTOKEN_CACHE_DIR=/lustre/orion/bif148/proj-shared/tiktoken_cache
 export EMENDER_SOURCE_COMMIT=$SOURCE_COMMIT
 
