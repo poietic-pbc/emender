@@ -645,6 +645,10 @@ def main() -> None:
             emit(args.log_jsonl, "optimizer_z_offloaded",
                  hbm_allocated=torch.cuda.memory_allocated(),
                  hbm_reserved=torch.cuda.memory_reserved())
+        if sft_identity is not None and args.sft_validation_batches > 0:
+            initial_validation = _run_sft_validation(
+                args, model, optimizer, groups, sft_identity)
+            emit(args.log_jsonl, "sft_validation", phase="initial", **initial_validation)
         replicated = tuple(node_replicated_parameters(model))
         start = None
         step = starting_step
@@ -855,7 +859,7 @@ def main() -> None:
         validation = _run_sft_validation(
             args, model, optimizer, groups, sft_identity) if sft_identity is not None else None
         if validation is not None:
-            emit(args.log_jsonl, "sft_validation", **validation)
+            emit(args.log_jsonl, "sft_validation", phase="final", **validation)
         emit(args.log_jsonl, "complete", step=step, steps_completed=completed_steps,
              accepted_tokens=accepted_tokens,
              sft_total_tokens=(sft_total_tokens if sft_identity is not None else None),

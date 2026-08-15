@@ -208,7 +208,7 @@ Frontier qualification sequence:
 
 1. one-node forward/backward;
 2. fresh-process checkpoint restore;
-3. eight-node K8 run;
+3. eight-node 4K/K64 run (token-distance equivalent to 32K/K8);
 4. variable assistant-token counts;
 5. finite state and zero dropped-token gates;
 6. complete canonical checkpoint publication;
@@ -218,15 +218,18 @@ Frontier qualification sequence:
 
 Corrected evaluation rejected 300B/304B as primary parents: all-token instruction
 continuation worsened external assistant-response and WikiText likelihood and did
-not reveal native-template assistant behavior. Use one 16-node Debug allocation:
+not reveal native-template assistant behavior. Qualified source uses one 32-node
+Debug allocation split into independent fixed worlds:
 
-- eight nodes: masked SFT from 282B at `2e-6`;
-- eight nodes: identical masked SFT from 282B at `5e-6`.
+- 16 nodes: masked SFT from 282B at `2e-6`;
+- 16 nodes: identical masked SFT from 282B at `5e-6`.
 
-Initial budget: approximately 100M total tokens per arm. The exact
-assistant-target count is determined by the completed corpus receipt. Use
-identical data and ordering. Do not infer quality from training loss alone. Keep
-250B as rollback/control; run a small 250B arm only if masked SFT from 282B fails.
+Each arm uses complete-record 4K packs, 512 updates, K64, eight target-weighted
+DiLoCo merges, and fresh optimizer state. Expected accepted exposure is about
+225M packed tokens and 160M assistant targets per arm, measured exactly at
+runtime. Use identical data coordinates and do not infer quality from training
+loss alone. Keep 250B as rollback/control; run a small 250B arm only if masked
+SFT from 282B fails.
 
 A selectable checkpoint must show coherent greedy responses, reliable RS/EOT
 termination, improved held-out assistant NLL and constraint following, no
@@ -236,7 +239,7 @@ an automatic scientific law.
 
 ### Phase 6 — LR and long-supervision canaries
 
-On the selected parent, compare `2e-6` and `5e-6`, then compare ordinary masked
+Select between the matched `2e-6` and `5e-6` arms, then compare ordinary masked
 SFT against the same mixture containing 10–15% long examples whose target truly
 depends on distant information.
 
@@ -279,16 +282,15 @@ behavior exists.
 - [x] Run and analyze corrected four-node evaluation (`5275758`, `COMPLETED 0:0`, 17m05s, `Partition=batch`, `QOS=debug`); select 282B provisionally and reject further all-token instruction continuation (`docs/validation/e97-moe-trajectory-eval-job5275758.md`).
 - [x] Select and freeze stock Tülu 3 masked-SFT source at revision `b14afda60f1bbebe55d5d2fa1e4df5042f97f8be`.
 - [x] Download and inspect all six raw parquet shards (939,343 observed records; roles restricted to system/user/assistant; every record ends assistant).
-- [ ] Build and independently validate immutable token-plus-mask SFT artifact.
-- [ ] Implement masked objective and record-aware sampler.
-- [ ] Complete CPU and Frontier qualification.
-- [ ] Run matched 282B `2e-6`/`5e-6` masked-SFT canary.
+- [x] Build and independently validate immutable token-plus-mask SFT artifact (job `5276678`; manifest `e2461a28...`).
+- [x] Implement masked objective and record-aware sampler (`18c8eae0`; focused CPU parity passes).
+- [x] Complete one-node, fresh-process restore, and eight-node 4K/K64 qualification (jobs `5276974`, `5277148`, `5277224`; `docs/validation/e97-moe-masked-sft-qualification.md`).
+- [ ] Run matched 282B `2e-6`/`5e-6` 32-node masked-SFT canary.
 - [ ] Select masked-SFT LR; retain 250B as fallback control.
 - [ ] Run long-supervision canary.
 - [ ] Authorize or reject bounded production SFT.
 
 ## Current next action
 
-Implement the corrected four-checkpoint evaluation first. It is the cheapest
-way to measure the 250B->282B long-context delta, the instruction trajectory,
-and prompt-template sensitivity before changing training code.
+Run the authorized 32-node matched LR canary from the qualified 282B masked-SFT
+path, then evaluate both immutable outputs before extending either arm.
