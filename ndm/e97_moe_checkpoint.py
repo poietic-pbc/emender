@@ -222,6 +222,85 @@ def save_node_sharded_checkpoint(
     return generation
 
 
+def _resolve_complete_generation(root_or_generation: str | Path) -> tuple[Path, dict]:
+    candidate = Path(root_or_generation)
+    generation = candidate if (candidate / "manifest.json").is_file() else (
+        candidate / "latest").resolve(strict=True)
+    manifest = json.loads((generation / "manifest.json").read_text())
+    if manifest.get("schema") != SCHEMA or manifest.get("complete") is not True:
+        raise RuntimeError("checkpoint manifest is not a complete E97 MoE shard set")
+    return generation, manifest
+
+
+def load_node_sharded_model(
+    root_or_generation: str | Path,
+    model,
+    *,
+    node_group=None,
+    verify_sha256: bool = True,
+):
+    """Restore model parameters only from a complete canonical eight-shard set.
+
+    This read-only evaluation path accepts either a checkpoint root containing
+    ``latest`` or an immutable generation directory. ScheduleFree state is not
+    materialized on GPU. Replicated tensors retain the canonical owner/broadcast
+    protocol used by training restores.
+    """
+    if dist.get_world_size(node_group) != 8:
+        raise RuntimeError("checkpoint restore requires one complete eight-rank node")
+    rank = dist.get_rank(node_group)
+    generation, manifest = _resolve_complete_generation(root_or_generation)
+    sidecars = manifest.get("ranks", [])
+    if len(sidecars) != 8 or int(sidecars[rank].get("rank", -1)) != rank:
+        raise RuntimeError("checkpoint manifest does not contain eight ordered rank sidecars")
+    sidecar = sidecars[rank]
+    named = dict(model.named_parameters())
+    expected_local = sorted(
+        name for name in named if name.endswith(_LOCAL_SUFFIXES))
+    expected_replicated = sorted(
+        name for name in named
+        if not name.endswith(_LOCAL_SUFFIXES) and _replicated_owner(name) == rank)
+    if (sidecar["local"].get("names") != expected_local
+            or sidecar["replicated"].get("names") != expected_replicated):
+        raise RuntimeError("checkpoint sidecar parameter ownership does not match model")
+    restore_paths = [
+        generation / sidecar["local"]["file"],
+        generation / sidecar["replicated"]["file"],
+    ]
+    for kind, path in zip(("local", "replicated"), restore_paths):
+        info = sidecar[kind]
+        if path.stat().st_size != info["bytes"]:
+            raise RuntimeError(f"checkpoint shard size mismatch: {path}")
+        if verify_sha256 and _sha256(path) != info["sha256"]:
+            raise RuntimeError(f"checkpoint shard failed integrity: {path}")
+
+    with torch.no_grad():
+        for kind, restore_path in zip(("local", "replicated"), restore_paths):
+            payload = torch.load(
+                restore_path, map_location="cpu", weights_only=False, mmap=True)
+            if (payload.get("sampler") != manifest.get("sampler")
+                    or int(payload.get("step", -1)) != int(manifest["step"])
+                    or int(payload.get("accepted_tokens", -1))
+                    != int(manifest["accepted_tokens"])):
+                raise RuntimeError(
+                    f"checkpoint shard sampler/clock authority mismatch: {restore_path}")
+            entries = payload.get("entries", {})
+            if sorted(entries) != sidecar[kind]["names"]:
+                raise RuntimeError(
+                    f"checkpoint payload entries contradict sidecar: {restore_path}")
+            for name, saved in entries.items():
+                named[name].copy_(saved["parameter"])
+            del payload
+
+        for name, parameter in named.items():
+            if name.endswith(_LOCAL_SUFFIXES):
+                continue
+            owner = _replicated_owner(name)
+            source = dist.get_global_rank(node_group, owner)
+            dist.broadcast(parameter.data, src=source, group=node_group)
+    return manifest
+
+
 def load_node_sharded_checkpoint(
     root: str | Path,
     model,
@@ -237,11 +316,7 @@ def load_node_sharded_checkpoint(
     if dist.get_world_size(node_group) != 8:
         raise RuntimeError("checkpoint restore requires one complete eight-rank node")
     rank = dist.get_rank(node_group)
-    root = Path(root)
-    generation = (root / "latest").resolve(strict=True)
-    manifest = json.loads((generation / "manifest.json").read_text())
-    if manifest.get("schema") != SCHEMA or manifest.get("complete") is not True:
-        raise RuntimeError("checkpoint manifest is not a complete E97 MoE shard set")
+    generation, manifest = _resolve_complete_generation(root)
     sampler_status = validate_moe_sampler_manifest(
         manifest, expected_identity=expected_sampler_identity,
         allow_legacy_transition=allow_legacy_sampler_transition,

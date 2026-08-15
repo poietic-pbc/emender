@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from ndm.data.tokenized_dataset import (
@@ -10,6 +12,7 @@ from ndm.data.tokenized_dataset import (
 from ndm.e97_moe_checkpoint import (
     SCHEMA,
     _replicated_owner,
+    _resolve_complete_generation,
     validate_moe_sampler_manifest,
 )
 
@@ -46,6 +49,28 @@ def _manifest(*, step=80, accepted_tokens=2048 * 2048 * 2,
     else:
         raise AssertionError(sampler)
     return result
+
+
+def test_complete_generation_resolves_direct_path_or_latest(tmp_path):
+    generation = tmp_path / "step-00000080-tokens-0000000000002048"
+    generation.mkdir()
+    manifest = {"schema": SCHEMA, "complete": True, "step": 80}
+    (generation / "manifest.json").write_text(json.dumps(manifest))
+    resolved, observed = _resolve_complete_generation(generation)
+    assert resolved == generation
+    assert observed == manifest
+
+    (tmp_path / "latest").symlink_to(generation.name)
+    resolved, observed = _resolve_complete_generation(tmp_path)
+    assert resolved == generation.resolve()
+    assert observed == manifest
+
+
+def test_incomplete_direct_generation_fails_closed(tmp_path):
+    (tmp_path / "manifest.json").write_text(json.dumps({
+        "schema": SCHEMA, "complete": False}))
+    with pytest.raises(RuntimeError, match="not a complete"):
+        _resolve_complete_generation(tmp_path)
 
 
 def test_checkpoint_schema_and_replicated_ownership_are_stable_and_complete():
