@@ -12,8 +12,12 @@ is disappointing.
 
 ## Current conclusion
 
-The preserved 282.070B checkpoint is a viable pretrained language-model parent,
-not an aligned assistant. The 304.619B checkpoint received 22.549B tokens of
+The preserved 282.070B checkpoint is the provisional masked-SFT parent: a viable
+pretrained language model, not an aligned assistant and not a demonstrated
+long-context retriever. Corrected trajectory evaluation `5275758` found that it
+has the best paired WikiText and external assistant-response likelihood of the
+four authorities, while remaining near chance on natural-filler retrieval. The
+304.619B checkpoint received 22.549B tokens of
 instruction-shaped **all-token causal continued training**, not conventional
 assistant-masked SFT. The first matched evaluation did not show useful assistant
 behavior and found modest general-language and retrieval regression after that
@@ -210,17 +214,19 @@ Frontier qualification sequence:
 6. complete canonical checkpoint publication;
 7. explicit scheduler evidence for partition and QoS.
 
-### Phase 5 — matched parent canary
+### Phase 5 — matched masked-SFT LR canary
 
-Use one 16-node Debug allocation:
+Corrected evaluation rejected 300B/304B as primary parents: all-token instruction
+continuation worsened external assistant-response and WikiText likelihood and did
+not reveal native-template assistant behavior. Use one 16-node Debug allocation:
 
-- eight nodes: masked SFT from 282B;
-- eight nodes: identical masked SFT from 304B.
+- eight nodes: masked SFT from 282B at `2e-6`;
+- eight nodes: identical masked SFT from 282B at `5e-6`.
 
-Initial budget: approximately 100M total tokens per arm at a common LR selected
-between the `2e-6` and `5e-6` stock anchors. The exact assistant-target count is
-determined by the completed corpus receipt. Use identical data and ordering.
-Do not infer parent quality from training loss alone.
+Initial budget: approximately 100M total tokens per arm. The exact
+assistant-target count is determined by the completed corpus receipt. Use
+identical data and ordering. Do not infer quality from training loss alone. Keep
+250B as rollback/control; run a small 250B arm only if masked SFT from 282B fails.
 
 A selectable checkpoint must show coherent greedy responses, reliable RS/EOT
 termination, improved held-out assistant NLL and constraint following, no
@@ -270,14 +276,14 @@ behavior exists.
 - [x] Run initial paired 282B/304B evaluation (`5274663`).
 - [x] Recover comparison and fix postprocessing launcher (`00d9f65d`).
 - [x] Build corrected four-checkpoint panel (`emender-e97-moe-paired-eval-panel-v2`, SHA-256 `fcb1fbd09ca38c27fec03be945c7cbfcb45cff4dbcaf8a4bf4afcb2ef013018f`).
-- [x] Run corrected four-node evaluation (`5275758`, `COMPLETED 0:0`, 17m05s, `Partition=batch`, `QOS=debug`); analysis and verdict remain pending.
+- [x] Run and analyze corrected four-node evaluation (`5275758`, `COMPLETED 0:0`, 17m05s, `Partition=batch`, `QOS=debug`); select 282B provisionally and reject further all-token instruction continuation (`docs/validation/e97-moe-trajectory-eval-job5275758.md`).
 - [x] Select and freeze stock Tülu 3 masked-SFT source at revision `b14afda60f1bbebe55d5d2fa1e4df5042f97f8be`.
 - [x] Download and inspect all six raw parquet shards (939,343 observed records; roles restricted to system/user/assistant; every record ends assistant).
 - [ ] Build and independently validate immutable token-plus-mask SFT artifact.
 - [ ] Implement masked objective and record-aware sampler.
 - [ ] Complete CPU and Frontier qualification.
-- [ ] Run matched 282B/304B parent canary.
-- [ ] Select parent and LR.
+- [ ] Run matched 282B `2e-6`/`5e-6` masked-SFT canary.
+- [ ] Select masked-SFT LR; retain 250B as fallback control.
 - [ ] Run long-supervision canary.
 - [ ] Authorize or reject bounded production SFT.
 
