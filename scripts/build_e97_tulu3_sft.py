@@ -21,6 +21,7 @@ DATASET_ID = "allenai/tulu-3-sft-mixture"
 DATASET_REVISION = "b14afda60f1bbebe55d5d2fa1e4df5042f97f8be"
 TOKENIZER = "p50k_base"
 TOKENIZER_SHA256 = "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069"
+TOKENIZER_CACHE_KEY = "ec7223a39ce59f226a68acc30dc1af2788490e15"
 EXPECTED_ROWS = 939343
 RS = "\x1e"
 INDEX = struct.Struct("<QQQB7x")  # token offset, token count, target count, split
@@ -142,11 +143,10 @@ def main():
     cache_root = os.environ.get("TIKTOKEN_CACHE_DIR")
     if not cache_root:
         raise SystemExit("TIKTOKEN_CACHE_DIR must bind the verified shared p50k cache")
-    cache_files = list(Path(cache_root).glob("*"))
-    verified_cache = [path for path in cache_files if path.is_file()
-                      and sha256(path) == TOKENIZER_SHA256]
-    if len(verified_cache) != 1:
-        raise SystemExit("verified p50k cache object is missing or ambiguous")
+    cache_object = Path(cache_root) / TOKENIZER_CACHE_KEY
+    if (not cache_object.is_file()
+            or sha256(cache_object) != TOKENIZER_SHA256):
+        raise SystemExit("verified p50k cache object is missing or corrupt")
     # Populate the process-local constructor before creating workers, so a bad
     # cache binding fails once instead of causing a worker respawn loop.
     _worker_init()
