@@ -90,6 +90,7 @@ def serialize_row(row):
     pieces = []
     roles = []
     replacements = 0
+    boundary_whitespace_trimmed = 0
     for index, message in enumerate(messages):
         if not isinstance(message, dict):
             return {"error": "invalid_message"}
@@ -99,7 +100,9 @@ def serialize_row(row):
         if not isinstance(content, str) or not content.strip():
             return {"error": "empty_content"}
         replacements += content.count(RS)
-        content = content.replace(RS, " ").replace("\r\n", "\n").replace("\r", "\n")
+        normalized = content.replace(RS, " ").replace("\r\n", "\n").replace("\r", "\n")
+        content = normalized.strip()
+        boundary_whitespace_trimmed += len(normalized) - len(content)
         if index:
             pieces.append(("\n\n", False))
         pieces.append((f"{ROLES[role]}:\n", False))
@@ -123,6 +126,7 @@ def serialize_row(row):
         "id": identity, "source": source, "roles": roles,
         "split": _split(source, identity), "tokens": len(tokens),
         "targets": sum(masks), "rs_replacements": replacements,
+        "boundary_whitespace_trimmed_characters": boundary_whitespace_trimmed,
         "sha256": record_digest, "token_bytes": token_bytes,
         "mask_bytes": mask_bytes,
     }
@@ -211,6 +215,8 @@ def main():
                 counts["assistant_target_tokens"] += result["targets"]
                 counts[f"{split_name}_assistant_target_tokens"] += result["targets"]
                 counts["rs_replacements"] += result["rs_replacements"]
+                counts["boundary_whitespace_trimmed_characters"] += (
+                    result["boundary_whitespace_trimmed_characters"])
                 source_counts[result["source"]] += 1
                 role_counts.update(result["roles"])
                 for threshold in (4096, 8192, 16384, 32768):

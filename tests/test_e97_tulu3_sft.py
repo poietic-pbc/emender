@@ -37,6 +37,20 @@ def test_tulu_record_serialization_and_assistant_mask_are_exact():
     assert result["targets"] == sum(result["mask_bytes"])
 
 
+def test_tulu_record_trims_role_boundary_whitespace_before_masking():
+    result = builder.serialize_row({
+        "id": "whitespace", "source": "fixture", "messages": [
+            {"role": "user", "content": "  question  "},
+            {"role": "assistant", "content": "\n answer \n"},
+        ]})
+    assert "error" not in result
+    tokens = list(builder.struct.unpack(
+        f"<{result['tokens']}I", result["token_bytes"]))
+    assert builder._WORKER_ENCODING.decode(tokens) == (
+        "User:\nquestion\n\nAssistant:\nanswer\x1e")
+    assert result["boundary_whitespace_trimmed_characters"] == 8
+
+
 def test_tulu_record_rejects_nonassistant_final_message_and_unknown_role():
     base = {"id": "bad", "source": "fixture"}
     result = builder.serialize_row({
