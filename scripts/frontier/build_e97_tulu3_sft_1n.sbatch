@@ -37,6 +37,7 @@ mkdir -p "$temporary"
 git archive "$SOURCE_COMMIT" | tar -xf - -C "$temporary"
 mv -T "$temporary" "$SNAPSHOT"
 source "$REPO/scripts/frontier/activate_emender_frontier.sh"
+export TIKTOKEN_CACHE_DIR=/lustre/orion/bif148/proj-shared/tiktoken_cache
 cd "$SNAPSHOT"
 export PYTHONPATH="$SNAPSHOT${PYTHONPATH:+:$PYTHONPATH}"
 "$EMENDER_PYTHON" scripts/build_e97_tulu3_sft.py \
