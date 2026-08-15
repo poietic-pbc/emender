@@ -25,7 +25,7 @@ from ndm.models.e97_moe import (
     iter_e97_moe_layers,
 )
 
-SCHEMA = "emender-e97-moe-paired-eval-result-v1"
+SCHEMA = "emender-e97-moe-paired-eval-result-v2"
 LETTERS = "ABCD"
 POSITION_BUCKETS = (0, 2048, 4096, 8192, 16384, 24576, 32768)
 
@@ -198,6 +198,22 @@ def continuation_score(model, encoding, prompt: str, continuation: str, device, 
     return float((-losses.sum()).item()), float((-losses.mean()).item()), len(targets)
 
 
+def score_assistant_responses(model, panel, encoding, device, routing):
+    local = []
+    rank, world = dist.get_rank(), dist.get_world_size()
+    examples = panel["assistant_response_likelihood"]
+    if len(examples) % world:
+        raise RuntimeError("assistant-response count must divide world size")
+    for base in range(0, len(examples), world):
+        example = examples[base + rank]
+        total_logprob, mean_logprob, count = continuation_score(
+            model, encoding, example["prompt"], example["response"], device, routing)
+        local.append({"id": example["id"], "tokens": count,
+                      "nll": -mean_logprob, "total_nll": -total_logprob})
+    event("assistant_response_likelihood_complete", examples=len(examples))
+    return gather_records(local)
+
+
 def score_hellaswag(model, panel, encoding, device, routing):
     local = []
     rank, world = dist.get_rank(), dist.get_world_size()
@@ -241,20 +257,36 @@ def advance_without_logits(model, tokens, device, routing, segment_size=4096):
     return logits[0, -1].float(), hiddens
 
 
-def retrieval_example(encoding, distance, seed):
+def retrieval_example(encoding, filler_bank, distance, seed, variant):
     rng = random.Random(seed)
     values = [" blue", " green", " red", " yellow", " white", " black", " orange", " purple"]
     ids = [encoding.encode_ordinary(value) for value in values]
     if any(len(value) != 1 for value in ids):
         raise RuntimeError("retrieval candidates must be single p50k tokens")
     answer = rng.randrange(len(values))
-    declaration = encoding.encode_ordinary(
-        f"Memorize this fact exactly: the passkey value is{values[answer]}.\n")
-    query = encoding.encode_ordinary("\nQuestion: What is the passkey value? The passkey value is")
-    filler_source = encoding.encode_ordinary(
-        " This is neutral filler text about rivers, stones, clouds, books, lamps, roads, gardens, and ordinary daily events.")
+    if variant == "natural-multikey":
+        facts = [f"The primary passkey value is{values[answer]}.\n"]
+        for index, name in enumerate(("secondary", "archive", "backup", "garden", "river", "lamp", "road")):
+            distractor = (answer + index + 1) % len(values)
+            facts.append(f"The {name} passkey value is{values[distractor]}.\n")
+        distractor_facts = facts[1:]
+        rng.shuffle(distractor_facts)
+        declaration = encoding.encode_ordinary(
+            "Memorize these facts exactly:\n" + facts[0] + "".join(distractor_facts))
+        query = encoding.encode_ordinary(
+            "\nQuestion: What is the primary passkey value? The primary passkey value is")
+    else:
+        declaration = encoding.encode_ordinary(
+            f"Memorize this fact exactly: the passkey value is{values[answer]}.\n")
+        query = encoding.encode_ordinary(
+            "\nQuestion: What is the passkey value? The passkey value is")
     filler_count = max(0, distance - len(declaration) - len(query))
-    filler = (filler_source * (filler_count // len(filler_source) + 1))[:filler_count]
+    start = rng.randrange(len(filler_bank))
+    filler = [int(filler_bank[(start + offset) % len(filler_bank)])
+              for offset in range(filler_count)]
+    if variant == "natural-rs":
+        for position in range(511, len(filler), 512):
+            filler[position] = 218
     return declaration + filler + query, answer, [value[0] for value in ids]
 
 
@@ -265,24 +297,40 @@ def score_retrieval(model, panel, encoding, device, routing):
     count = int(spec["examples_per_distance"])
     if count % world:
         raise RuntimeError("retrieval count must divide world size")
+    filler_bank = panel["retrieval_filler_tokens"].tolist()
+    variants = spec["variants"]
     for distance in spec["distances"]:
         for base in range(0, count, world):
             index = base + rank
+            variant = variants[index % len(variants)]
             tokens, answer, candidates = retrieval_example(
-                encoding, int(distance), int(spec["seed"]) + int(distance) * 1000 + index)
+                encoding, filler_bank, int(distance),
+                int(spec["seed"]) + int(distance) * 1000 + index, variant)
             logits, hiddens = advance_without_logits(model, tokens, device, routing)
             scores = logits[candidates].cpu().tolist()
             predicted = max(range(len(scores)), key=lambda choice: scores[choice])
             distractor = max(score for choice, score in enumerate(scores) if choice != answer)
             local.append({"id": f"retrieval-d{distance}-{index}", "distance": int(distance),
-                          "answer": answer, "prediction": predicted, "correct": predicted == answer,
+                          "variant": variant, "answer": answer, "prediction": predicted,
+                          "correct": predicted == answer,
                           "margin": scores[answer] - distractor, "scores": scores,
                           "hidden_health": hidden_health(hiddens)})
         event("retrieval_distance_complete", distance=int(distance), examples=count)
     return gather_records(local)
 
 
-def generate(model, panel, encoding, device, routing, maximum_tokens):
+def sample_top_p(logits, *, generator, temperature=0.7, top_p=0.9):
+    probabilities = torch.softmax(logits.float() / temperature, dim=-1)
+    sorted_probabilities, sorted_indices = probabilities.sort(descending=True)
+    remove = sorted_probabilities.cumsum(dim=-1) > top_p
+    remove[0] = False
+    sorted_probabilities[remove] = 0
+    sorted_probabilities /= sorted_probabilities.sum()
+    selected = torch.multinomial(sorted_probabilities, 1, generator=generator)
+    return int(sorted_indices[selected].item())
+
+
+def generate(model, panel, encoding, device, routing, maximum_tokens, *, mode):
     local = []
     rank, world = dist.get_rank(), dist.get_world_size()
     prompts = panel["generation_prompts"]
@@ -296,23 +344,34 @@ def generate(model, panel, encoding, device, routing, maximum_tokens):
         with torch.inference_mode():
             logits, (hiddens, _conv) = model(inputs, return_prev_hiddens=True)
         add_routing_counts(routing, model)
+        generator = torch.Generator(device=device)
+        generator.manual_seed(int(panel["seed"]) + base + rank + (100000 if mode == "sample" else 0))
+        choose = (lambda values: int(values.argmax().item())) if mode == "greedy" else (
+            lambda values: sample_top_p(values, generator=generator))
         generated = []
-        token = int(logits[0, -1].argmax().item())
+        token = choose(logits[0, -1])
         finished = False
+        stop_tokens = {eos, 218}
+        stop_token = None
         for _ in range(maximum_tokens):
+            if not finished and token in stop_tokens:
+                finished = True
+                stop_token = token
             if not finished:
                 generated.append(token)
-                finished = token == eos
+            else:
+                token = eos
             input_token = torch.tensor([[token]], device=device)
             with torch.inference_mode():
                 next_logits, (hiddens, _conv) = model(
                     input_token, return_prev_hiddens=True, prev_hiddens=hiddens)
-            token = int(next_logits[0, -1].argmax().item()) if not finished else eos
+            token = choose(next_logits[0, -1]) if not finished else eos
         add_routing_counts(routing, model)
-        local.append({"id": example["id"], "prompt": example["prompt"],
-                      "generated_tokens": len(generated), "stopped_on_eot": bool(generated and generated[-1] == eos),
-                      "response": encoding.decode(generated)})
-    event("generation_complete", examples=len(prompts), maximum_tokens=maximum_tokens)
+        local.append({"id": example["id"], "template": example.get("template"),
+                      "mode": mode, "prompt": example["prompt"],
+                      "generated_tokens": len(generated), "stopped": stop_token is not None,
+                      "stop_token": stop_token, "response": encoding.decode(generated)})
+    event("generation_complete", examples=len(prompts), maximum_tokens=maximum_tokens, mode=mode)
     return gather_records(local)
 
 
@@ -344,6 +403,9 @@ def aggregate(result):
         "mmlu_accuracy": accuracy(result["mmlu"]),
         "hellaswag_accuracy": accuracy(result["hellaswag"], "raw_correct"),
         "hellaswag_normalized_accuracy": accuracy(result["hellaswag"], "normalized_correct"),
+        "assistant_response_nll": (
+            sum(row["total_nll"] for row in result["assistant_responses"])
+            / sum(row["tokens"] for row in result["assistant_responses"])),
         "retrieval_accuracy_by_distance": {
             str(distance): accuracy([row for row in result["retrieval"] if row["distance"] == distance])
             for distance in sorted({row["distance"] for row in result["retrieval"]})
@@ -352,6 +414,10 @@ def aggregate(result):
             str(distance): sum(row["margin"] for row in result["retrieval"] if row["distance"] == distance)
             / len([row for row in result["retrieval"] if row["distance"] == distance])
             for distance in sorted({row["distance"] for row in result["retrieval"]})
+        },
+        "retrieval_accuracy_by_variant": {
+            variant: accuracy([row for row in result["retrieval"] if row["variant"] == variant])
+            for variant in sorted({row["variant"] for row in result["retrieval"]})
         },
     }
 
@@ -372,7 +438,7 @@ def main():
         torch.manual_seed(970035)
         panel_sha = sha256(args.panel)
         panel = torch.load(args.panel, map_location="cpu", weights_only=False)
-        if panel.get("schema") != "emender-e97-moe-paired-eval-panel-v1":
+        if panel.get("schema") != "emender-e97-moe-paired-eval-panel-v2":
             raise RuntimeError("unexpected evaluation panel schema")
         event("load_start", label=args.label, generation=str(args.generation), panel_sha256=panel_sha)
         loaded = load_e97_checkpoint(
@@ -412,8 +478,12 @@ def main():
             "wikitext": score_wikitext(model, panel, device, routing),
             "mmlu": score_mmlu(model, panel, encoding, device, routing),
             "hellaswag": score_hellaswag(model, panel, encoding, device, routing),
+            "assistant_responses": score_assistant_responses(
+                model, panel, encoding, device, routing),
             "retrieval": score_retrieval(model, panel, encoding, device, routing),
-            "generations": generate(model, panel, encoding, device, routing, args.generation_tokens),
+            "generations": (
+                generate(model, panel, encoding, device, routing, args.generation_tokens, mode="greedy")
+                + generate(model, panel, encoding, device, routing, args.generation_tokens, mode="sample")),
         }
         if dist.get_rank() == 0:
             result["routing"] = summarize_routing(routing)

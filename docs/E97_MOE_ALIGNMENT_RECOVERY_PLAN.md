@@ -251,7 +251,7 @@ behavior exists.
 - [x] Preserve 250B, 282B, 300.861B, and 304.619B authorities.
 - [x] Run initial paired 282B/304B evaluation (`5274663`).
 - [x] Recover comparison and fix postprocessing launcher (`00d9f65d`).
-- [ ] Build corrected four-checkpoint panel.
+- [x] Build corrected four-checkpoint panel (`emender-e97-moe-paired-eval-panel-v2`, SHA-256 `fcb1fbd09ca38c27fec03be945c7cbfcb45cff4dbcaf8a4bf4afcb2ef013018f`).
 - [ ] Run corrected four-node evaluation.
 - [ ] Select and freeze initial masked-SFT data sources and held-out split.
 - [ ] Build immutable token-plus-mask SFT artifact.
