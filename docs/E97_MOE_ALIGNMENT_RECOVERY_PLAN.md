@@ -123,18 +123,31 @@ Decision:
 
 ### Phase 2 — immutable assistant-masked SFT corpus
 
+The first assistant-foundation authority uses the stock
+`allenai/tulu-3-sft-mixture` at immutable revision
+`b14afda60f1bbebe55d5d2fa1e4df5042f97f8be`. This is the published mixture
+used for Tülu 3, including its 70B SFT model, and avoids inventing another
+mixture before proving that masked SFT works. The six pinned parquet shards
+contain 939,343 observed rows, 1,110,933 assistant messages, 1,110,918 user
+messages, and 795 system messages; every record ends in an assistant message.
+The card advertises 939,344 examples, so receipts must preserve the observed
+file count rather than silently adopting the card total.
+
+The raw pinned authority is downloaded at:
+
+`/lustre/orion/bif148/proj-shared/emender/sft/tulu3-v1/raw`
+
+Tülu 3 is ODC-BY overall, but component sources have mixed licenses and some
+are noncommercial. Preserve the upstream README, source field, component
+counts, revisions, and digests. This is a research artifact, not a blanket
+license conclusion.
+
+The first canary uses this stock mixture without custom reweighting. A later
+long-instruction phase may add genuine retrieval/document-QA data only after
+ordinary assistant behavior is demonstrated. Smol-Magpie-Ultra is the reserved
+Apache-2.0 cleanliness fallback if Tülu results are ambiguous.
+
 Build a record-aware tokenized authority. Do not use random byte windows.
-
-Initial target mixture:
-
-- 50–60% clean single- and multi-turn instruction/chat;
-- 15–20% reasoning and math;
-- 15–20% direct code generation and debugging;
-- 10–15% genuine long-context retrieval and document QA.
-
-Terminal transcripts and long agent/tool trajectories must not dominate this
-foundation stage. Add agent specialization only after ordinary instruction
-behavior is demonstrated.
 
 Target-mask contract:
 
@@ -174,8 +187,12 @@ Preserve the graph, fused MoE path, 32K full BPTT, 16K bounded MoE execution,
 eight-way node-local EP, K8 DiLoCo, router objective, and canonical eight-shard
 checkpoint publication.
 
-Initial learning-rate candidates are `1e-5` and `3e-5`. Reusing `0.001007` for
-masked SFT is forbidden without separate evidence.
+The official Tülu 3 full-parameter anchors are `5e-6` for Llama 3.1 8B and
+`2e-6` for Llama 3.1 70B, both at 4K for two epochs with 3% warmup and no weight
+decay. E97 uses a different optimizer and sparse graph, so these are canary
+anchors rather than copied truth. Initial E97 candidates are `2e-6` and `5e-6`.
+Reusing `0.001007`, or beginning at `1e-5`/`3e-5`, is forbidden without separate
+evidence.
 
 ### Phase 4 — qualification
 
@@ -200,9 +217,10 @@ Use one 16-node Debug allocation:
 - eight nodes: masked SFT from 282B;
 - eight nodes: identical masked SFT from 304B.
 
-Initial budget: approximately 100M total tokens and 30–50M assistant target
-tokens per arm at a common midpoint LR near `2e-5`. Use identical data and
-ordering. Do not infer parent quality from training loss alone.
+Initial budget: approximately 100M total tokens per arm at a common LR selected
+between the `2e-6` and `5e-6` stock anchors. The exact assistant-target count is
+determined by the completed corpus receipt. Use identical data and ordering.
+Do not infer parent quality from training loss alone.
 
 A selectable checkpoint must show coherent greedy responses, reliable RS/EOT
 termination, improved held-out assistant NLL and constraint following, no
@@ -212,7 +230,7 @@ an automatic scientific law.
 
 ### Phase 6 — LR and long-supervision canaries
 
-On the selected parent, compare `1e-5` and `3e-5`, then compare ordinary masked
+On the selected parent, compare `2e-6` and `5e-6`, then compare ordinary masked
 SFT against the same mixture containing 10–15% long examples whose target truly
 depends on distant information.
 
@@ -252,9 +270,10 @@ behavior exists.
 - [x] Run initial paired 282B/304B evaluation (`5274663`).
 - [x] Recover comparison and fix postprocessing launcher (`00d9f65d`).
 - [x] Build corrected four-checkpoint panel (`emender-e97-moe-paired-eval-panel-v2`, SHA-256 `fcb1fbd09ca38c27fec03be945c7cbfcb45cff4dbcaf8a4bf4afcb2ef013018f`).
-- [ ] Run corrected four-node evaluation.
-- [ ] Select and freeze initial masked-SFT data sources and held-out split.
-- [ ] Build immutable token-plus-mask SFT artifact.
+- [x] Run corrected four-node evaluation (`5275758`, `COMPLETED 0:0`, 17m05s, `Partition=batch`, `QOS=debug`); analysis and verdict remain pending.
+- [x] Select and freeze stock Tülu 3 masked-SFT source at revision `b14afda60f1bbebe55d5d2fa1e4df5042f97f8be`.
+- [x] Download and inspect all six raw parquet shards (939,343 observed records; roles restricted to system/user/assistant; every record ends assistant).
+- [ ] Build and independently validate immutable token-plus-mask SFT artifact.
 - [ ] Implement masked objective and record-aware sampler.
 - [ ] Complete CPU and Frontier qualification.
 - [ ] Run matched 282B/304B parent canary.
