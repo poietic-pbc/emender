@@ -104,5 +104,5 @@ cd "$SNAPSHOT"
 "$EMENDER_PYTHON" scripts/compare_e97_moe_paired_eval.py \
   --before "$RUN_ROOT/results/before.json" --after "$RUN_ROOT/results/after.json" \
   --output-json "$RUN_ROOT/results/comparison.json" \
-  --output-md "$RUN_ROOT/results/comparison.md" \
+  --output-md "$RUN_ROOT/results/comparison.md"
 printf '0\n' > "$RUN_ROOT/terminal/job-${SLURM_JOB_ID}-rc.txt"
