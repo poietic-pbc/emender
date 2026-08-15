@@ -10,6 +10,13 @@ import time
 import torch
 import torch.distributed as dist
 
+from ndm.data.masked_sft_dataset import (
+    MaskedSFTPackedDataset,
+    SFTSamplerIdentity,
+    restore_sft_checkpoint_metadata,
+    sft_checkpoint_metadata,
+    sha256,
+)
 from ndm.data.tokenized_dataset import (
     BOUNDARY_COUNTER_SAMPLER_SCHEMA,
     COUNTER_SAMPLER_SCHEMA,
@@ -22,11 +29,13 @@ from ndm.data.tokenized_dataset import (
 from ndm.e97 import load_e97_checkpoint
 from ndm.e97_moe_checkpoint import (
     load_node_sharded_checkpoint,
+    load_node_sharded_model,
     save_node_sharded_checkpoint,
 )
 from ndm.e97_moe_ep import (
     assert_node_local_ep_group,
     average_replicated_gradients_,
+    sum_replicated_gradients_,
     create_moe_process_groups,
     diloco_average_schedulefree_,
     node_replicated_parameters,
@@ -91,6 +100,15 @@ def parse_args():
     parser.add_argument("--sampler-key", type=int)
     parser.add_argument("--sampler-data-world-size", type=int)
     parser.add_argument("--sampler-stream-origin-accepted-tokens", type=int)
+    parser.add_argument("--sft-authority-root", type=Path)
+    parser.add_argument("--sft-authority-manifest-sha256")
+    parser.add_argument("--sft-pack-root", type=Path)
+    parser.add_argument("--sft-pack-manifest-sha256")
+    parser.add_argument("--sft-sampler-key", type=int)
+    parser.add_argument("--sft-parent-root", type=Path)
+    parser.add_argument("--sft-parent-manifest-sha256")
+    parser.add_argument("--sft-validation-batches", type=int, default=0)
+    parser.add_argument("--final-checkpoint-delay-seconds", type=float, default=0.0)
     parser.add_argument(
         "--sampler-transition-from-legacy", action="store_true",
         help="Explicitly transition one complete K-aligned legacy authority to the "
@@ -157,6 +175,109 @@ def _sampler_metadata(identity, *, accepted_tokens: int):
         identity, total_accepted_tokens=accepted_tokens)
 
 
+def _sft_identity(args, *, world_size: int) -> SFTSamplerIdentity | None:
+    fields = (
+        args.sft_authority_root, args.sft_authority_manifest_sha256,
+        args.sft_pack_root, args.sft_pack_manifest_sha256,
+        args.sft_sampler_key, args.sft_parent_root,
+        args.sft_parent_manifest_sha256,
+    )
+    if all(value is None for value in fields):
+        return None
+    if any(value is None for value in fields):
+        raise RuntimeError("masked SFT requires a complete authority/pack/parent identity")
+    if args.sampler_schema is not None:
+        raise RuntimeError("byte-window and record-pack samplers are mutually exclusive")
+    return SFTSamplerIdentity(
+        authority_manifest_sha256=args.sft_authority_manifest_sha256,
+        pack_manifest_sha256=args.sft_pack_manifest_sha256,
+        sampler_key=args.sft_sampler_key, data_world_size=world_size,
+        context_size=args.chunk_size, split="train")
+
+
+def _parent_authority(args) -> dict:
+    generation = args.sft_parent_root
+    if not (generation / "manifest.json").is_file():
+        generation = (generation / "latest").resolve(strict=True)
+    manifest_path = generation / "manifest.json"
+    if sha256(manifest_path) != args.sft_parent_manifest_sha256:
+        raise RuntimeError("SFT parent manifest SHA-256 mismatch")
+    manifest = json.loads(manifest_path.read_text())
+    if manifest.get("complete") is not True:
+        raise RuntimeError("SFT parent is not a complete checkpoint authority")
+    return {
+        "manifest_sha256": args.sft_parent_manifest_sha256,
+        "step": int(manifest["step"]),
+        "accepted_tokens": int(manifest["accepted_tokens"]),
+        "generation": str(generation.resolve()),
+    }
+
+
+def _sft_metadata(identity, parent, *, total_tokens, target_tokens, cursor):
+    return sft_checkpoint_metadata(
+        identity, parent=parent, total_tokens=total_tokens,
+        assistant_target_tokens=target_tokens,
+        absolute_rank_sample_index=cursor)
+
+
+def _masked_sft_objective(model, chunks, masks, actual_lengths, *, node_group):
+    """Exact node-wide assistant-target normalization for node-local EP.
+
+    Expert gradients already sum contributions arriving through differentiable
+    all-to-all. Replicated gradients are therefore reduced with SUM rather than
+    AVG by the caller, while every source loss uses the shared node denominator.
+    """
+    target_mask = masks[:, 1:].contiguous()
+    positions = torch.arange(target_mask.shape[1], device=chunks.device).unsqueeze(0)
+    target_mask = target_mask & (positions < (actual_lengths.unsqueeze(1) - 1))
+    local_targets = target_mask.sum(dtype=torch.int64)
+    node_targets = local_targets.clone()
+    dist.all_reduce(node_targets, op=dist.ReduceOp.SUM, group=node_group)
+    if int(node_targets.item()) <= 0:
+        raise RuntimeError("masked SFT batch contains zero node-wide assistant targets")
+    loss_sum = model(
+        chunks, return_loss=True, actual_length=actual_lengths,
+        loss_mask=target_mask, loss_reduction="sum")
+    loss = loss_sum / node_targets.to(dtype=loss_sum.dtype)
+    return loss, loss_sum.detach(), local_targets, node_targets
+
+
+def _run_sft_validation(args, model, optimizer, groups, train_identity):
+    if args.sft_validation_batches <= 0:
+        return None
+    validation_identity = SFTSamplerIdentity(
+        authority_manifest_sha256=train_identity.authority_manifest_sha256,
+        pack_manifest_sha256=train_identity.pack_manifest_sha256,
+        sampler_key=train_identity.sampler_key,
+        data_world_size=train_identity.data_world_size,
+        context_size=train_identity.context_size, split="validation")
+    dataset = MaskedSFTPackedDataset(
+        args.sft_authority_root, args.sft_pack_root,
+        identity=validation_identity, rank=dist.get_rank())
+    optimizer.eval()
+    model.eval()
+    totals = torch.zeros(2, device="cuda", dtype=torch.float64)
+    try:
+        with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            for _ in range(args.sft_validation_batches):
+                chunks, masks, lengths, _targets = dataset.get_batch(
+                    args.batch_size, device=torch.device("cuda"))
+                _loss, local_sum, local_targets, _node_targets = _masked_sft_objective(
+                    model, chunks, masks, lengths, node_group=groups.node_group)
+                totals[0] += local_sum.double()
+                totals[1] += local_targets.double()
+        dist.all_reduce(totals, op=dist.ReduceOp.SUM)
+        if totals[1].item() <= 0:
+            raise RuntimeError("SFT validation has zero assistant targets")
+        return {"loss": float((totals[0] / totals[1]).item()),
+                "target_tokens": int(totals[1].item()),
+                "batches": args.sft_validation_batches}
+    finally:
+        dataset.close()
+        model.train()
+        optimizer.train()
+
+
 def emit(path: Path, event: str, **fields) -> None:
     record = {"event": event, "time_unix": time.time(), **fields}
     line = json.dumps(record, sort_keys=True)
@@ -168,15 +289,14 @@ def emit(path: Path, event: str, **fields) -> None:
 
 
 def _canonical_checkpoint(args, groups, model, optimizer, *, step, accepted_tokens,
-                          source_commit, sampler_identity, sampler_transition):
+                          source_commit, sampler_metadata, sampler_transition):
     """Publish one canonical eight-rank island, coordinated by global rank zero."""
     dist.barrier()
     if groups.node_index == 0:
         save_node_sharded_checkpoint(
             args.checkpoint_root, model, optimizer, step=step,
             accepted_tokens=accepted_tokens, source_commit=source_commit,
-            sampler=_sampler_metadata(
-                sampler_identity, accepted_tokens=accepted_tokens),
+            sampler=sampler_metadata,
             sampler_transition=sampler_transition,
             node_group=groups.node_group, keep_generations=args.keep_checkpoints)
     dist.barrier()
@@ -195,8 +315,7 @@ def _canonical_checkpoint(args, groups, model, optimizer, *, step, accepted_toke
                      and manifest.get("complete") is True
                      and int(manifest.get("step", -1)) == step
                      and int(manifest.get("accepted_tokens", -1)) == accepted_tokens
-                     and manifest.get("sampler") == _sampler_metadata(
-                         sampler_identity, accepted_tokens=accepted_tokens)
+                     and manifest.get("sampler") == sampler_metadata
                      and manifest.get("sampler_transition") == sampler_transition)
             authority.copy_(torch.tensor(
                 [int(valid), int(manifest.get("step", -1)),
@@ -316,6 +435,8 @@ def main() -> None:
         raise SystemExit("save-every requires checkpoint-root")
     if args.save_every and args.save_every % args.diloco_k:
         raise SystemExit("save-every must be aligned to completed DiLoCo K boundaries")
+    if args.sft_validation_batches < 0 or args.final_checkpoint_delay_seconds < 0:
+        raise SystemExit("SFT validation batches and checkpoint delay must be nonnegative")
     local_rank = int(os.environ["SLURM_LOCALID"])
     torch.cuda.set_device(0)
     dist.init_process_group("nccl", init_method="env://")
@@ -323,6 +444,11 @@ def main() -> None:
         groups = create_moe_process_groups()
         sampler_identity = _sampler_identity(
             args, world_size=dist.get_world_size())
+        sft_identity = _sft_identity(args, world_size=dist.get_world_size())
+        sft_parent = _parent_authority(args) if sft_identity is not None else None
+        if sft_identity is not None and (args.sequence_chunk_size > 0
+                                         or args.full_bptt_segments):
+            raise RuntimeError("initial masked SFT requires one complete unsegmented context")
         if (args.sampler_transition_from_legacy
                 and args.sampler_transition_from_counter):
             raise RuntimeError("sampler transition modes are mutually exclusive")
@@ -381,6 +507,15 @@ def main() -> None:
             local_expert_rank=local_rank, expert_group=groups.node_group)
         for moe_layer in iter_e97_moe_layers(model):
             moe_layer.token_chunk_size = int(args.moe_token_chunk_size)
+        parent_manifest = None
+        if sft_identity is not None and args.resume_root is None:
+            parent_manifest = load_node_sharded_model(
+                sft_parent["generation"], model, node_group=groups.node_group)
+            if (int(parent_manifest["step"]) != sft_parent["step"]
+                    or int(parent_manifest["accepted_tokens"])
+                    != sft_parent["accepted_tokens"]):
+                raise RuntimeError("loaded SFT parent clock mismatch")
+            emit(args.log_jsonl, "sft_parent_loaded", parent=sft_parent)
         model.train()
         parameter_count_local = sum(parameter.numel() for parameter in model.parameters())
         local_expert_count = sum(
@@ -412,18 +547,29 @@ def main() -> None:
         optimizer = FusedScheduleFreeAdamW(
             model.parameters(), lr=args.lr, weight_decay=args.weight_decay,
             betas=(0.9, 0.95), warmup_steps=0)
-        starting_step = int(loaded.step)
-        accepted_tokens = 0
+        starting_step = int(sft_parent["step"] if sft_identity is not None else loaded.step)
+        accepted_tokens = int(sft_parent["accepted_tokens"] if sft_identity is not None else 0)
+        sft_total_tokens = 0
+        sft_target_tokens = 0
+        sft_cursor = 0
+        sft_steps = 0
         sampler_transition = None
         if args.resume_root is not None:
             manifest = load_node_sharded_checkpoint(
                 args.resume_root, model, optimizer, node_group=groups.node_group,
                 expected_sampler_identity=sampler_identity,
+                expected_sft_identity=sft_identity,
+                expected_sft_parent=sft_parent,
                 allow_legacy_sampler_transition=args.sampler_transition_from_legacy,
                 allow_counter_sampler_transition=args.sampler_transition_from_counter,
                 diloco_k=args.diloco_k)
             starting_step = int(manifest["step"])
             accepted_tokens = int(manifest["accepted_tokens"])
+            if sft_identity is not None:
+                sft_total_tokens, sft_target_tokens, sft_cursor = manifest["sft_restore_clocks"]
+                sft_steps = starting_step - int(sft_parent["step"])
+                if sft_steps < 0 or sft_cursor != sft_steps * args.batch_size:
+                    raise RuntimeError("SFT step and per-rank sample cursor disagree")
             if args.resume_lr_override is not None:
                 for optimizer_group in optimizer.param_groups:
                     optimizer_group["lr"] = float(args.resume_lr_override)
@@ -451,17 +597,30 @@ def main() -> None:
                  learning_rates=[group["lr"] for group in optimizer.param_groups],
                  resume_lr_override=args.resume_lr_override,
                  sampler_restore_status=restore_status,
-                 sampler_transition=sampler_transition)
+                 sampler_transition=sampler_transition,
+                 sft_total_tokens=sft_total_tokens,
+                 sft_target_tokens=sft_target_tokens, sft_cursor=sft_cursor)
         data_seed_base = 42 + starting_step
-        dataset = TokenizedStreamDataset(
+        dataset = (MaskedSFTPackedDataset(
+            args.sft_authority_root, args.sft_pack_root,
+            identity=sft_identity, rank=dist.get_rank(),
+            initial_absolute_rank_sample_index=sft_cursor)
+            if sft_identity is not None else TokenizedStreamDataset(
             data_path=str(args.data), chunk_size=args.chunk_size + 1,
             rank=dist.get_rank(), world_size=dist.get_world_size(),
             seed=data_seed_base, tokenizer_name="p50k_base",
             sampler_identity=sampler_identity,
             total_accepted_tokens=(
                 accepted_tokens if sampler_identity is not None else None),
-            accepted_tokens_per_sample=args.chunk_size)
-        if sampler_identity is None:
+            accepted_tokens_per_sample=args.chunk_size))
+        if sft_identity is not None:
+            emit(args.log_jsonl, "sft_data_ready", starting_step=starting_step,
+                 sampler_identity=sft_identity.to_metadata(), parent=sft_parent,
+                 sft_total_tokens=sft_total_tokens,
+                 sft_target_tokens=sft_target_tokens,
+                 absolute_rank_sample_index=sft_cursor,
+                 pack_counts=dataset.pack_manifest["splits"])
+        elif sampler_identity is None:
             emit(args.log_jsonl, "data_stream_ready", starting_step=starting_step,
                  sampler_schema=LEGACY_SAMPLER_SCHEMA,
                  seed_base=data_seed_base,
@@ -491,6 +650,7 @@ def main() -> None:
         step = starting_step
         completed_steps = 0
         last_checkpoint_step = None
+        interval_node_target_tokens = 0
         while True:
             if completed_steps >= args.max_steps and args.max_steps > 0:
                 break
@@ -498,8 +658,14 @@ def main() -> None:
                 break
             optimizer.zero_grad(set_to_none=True)
             torch.cuda.reset_peak_memory_stats()
-            chunks, _, actual_lengths = dataset.get_batch(
-                args.batch_size, device=torch.device("cuda"))
+            if sft_identity is not None:
+                chunks, assistant_masks, actual_lengths, batch_target_counts = (
+                    dataset.get_batch(args.batch_size, device=torch.device("cuda")))
+            else:
+                chunks, _, actual_lengths = dataset.get_batch(
+                    args.batch_size, device=torch.device("cuda"))
+                assistant_masks = None
+                batch_target_counts = None
             step_start = time.monotonic()
             phase_events = None
             if args.profile_phases:
@@ -508,7 +674,19 @@ def main() -> None:
                     for name in ("start", "forward", "backward", "reduce", "optimizer", "merge")
                 }
                 phase_events["start"].record()
-            if args.sequence_chunk_size > 0:
+            local_loss_sum = None
+            local_target_count = None
+            node_target_count = None
+            if sft_identity is not None:
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    loss, local_loss_sum, local_target_count, node_target_count = (
+                        _masked_sft_objective(
+                            model, chunks, assistant_masks, actual_lengths,
+                            node_group=groups.node_group))
+                auxiliary = e97_moe_auxiliary_loss(model)
+                objective = loss + auxiliary / dist.get_world_size(groups.node_group)
+                gradients_ready = False
+            elif args.sequence_chunk_size > 0:
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                     if args.full_bptt_segments:
                         loss, auxiliary = _segmented_full_bptt_objective(
@@ -552,8 +730,12 @@ def main() -> None:
                      names=missing_replicated)
                 raise RuntimeError(
                     f"replicated parameters missing gradients: {missing_replicated}")
-            average_replicated_gradients_(
-                replicated, group=groups.node_group, topology=topology)
+            if sft_identity is not None:
+                sum_replicated_gradients_(
+                    replicated, group=groups.node_group, topology=topology)
+            else:
+                average_replicated_gradients_(
+                    replicated, group=groups.node_group, topology=topology)
             if phase_events is not None:
                 phase_events["reduce"].record()
             optimizer.step()
@@ -561,7 +743,12 @@ def main() -> None:
             if phase_events is not None:
                 phase_events["optimizer"].record()
             merge_seconds = 0.0
-            if groups.node_count > 1 and (step + 1) % args.diloco_k == 0:
+            if sft_identity is not None:
+                interval_node_target_tokens += int(node_target_count.item())
+            merge_boundary = (
+                (sft_steps + 1) % args.diloco_k == 0
+                if sft_identity is not None else (step + 1) % args.diloco_k == 0)
+            if groups.node_count > 1 and merge_boundary:
                 # Release inactive variable-routing blocks before RCCL allocates its
                 # cross-node collective workspace.  At 32 nodes, one lane rank can
                 # otherwise retain enough allocator cache to starve RCCL despite
@@ -570,8 +757,12 @@ def main() -> None:
                 dist.barrier(group=groups.diloco_lane_group)
                 merge_start = time.monotonic()
                 diloco_average_schedulefree_(
-                    model, optimizer, lane_group=groups.diloco_lane_group)
+                    model, optimizer, lane_group=groups.diloco_lane_group,
+                    weight=(interval_node_target_tokens
+                            if sft_identity is not None else None))
                 merge_seconds = time.monotonic() - merge_start
+                if sft_identity is not None:
+                    interval_node_target_tokens = 0
             if phase_events is not None:
                 phase_events["merge"].record()
                 phase_events["merge"].synchronize()
@@ -587,16 +778,38 @@ def main() -> None:
                      backward_hbm_allocated=backward_hbm_allocated,
                      backward_hbm_reserved=backward_hbm_reserved,
                      backward_max_hbm_allocated=backward_max_hbm_allocated)
-            dist.all_reduce(loss, op=dist.ReduceOp.AVG, group=groups.node_group)
+            if sft_identity is not None:
+                node_loss_sum = local_loss_sum.clone()
+                dist.all_reduce(node_loss_sum, op=dist.ReduceOp.SUM, group=groups.node_group)
+                reported_loss = node_loss_sum / node_target_count.to(node_loss_sum.dtype)
+            else:
+                dist.all_reduce(loss, op=dist.ReduceOp.AVG, group=groups.node_group)
+                reported_loss = loss
             dist.all_reduce(auxiliary, op=dist.ReduceOp.AVG, group=groups.node_group)
             step_seconds = time.monotonic() - step_start
             tokens = int(actual_lengths.sum().item()) - args.batch_size
-            accepted_tokens += tokens * dist.get_world_size()
-            emit(args.log_jsonl, "step", step=step, loss=float(loss.item()),
+            global_counts = torch.tensor(
+                [tokens, int(batch_target_counts.sum().item()) if sft_identity is not None else 0],
+                device="cuda", dtype=torch.int64)
+            if sft_identity is not None:
+                dist.all_reduce(global_counts, op=dist.ReduceOp.SUM)
+                step_global_tokens, step_global_targets = (
+                    int(global_counts[0].item()), int(global_counts[1].item()))
+                sft_total_tokens += step_global_tokens
+                sft_target_tokens += step_global_targets
+                accepted_tokens = sft_parent["accepted_tokens"] + sft_total_tokens
+            else:
+                step_global_tokens = tokens * dist.get_world_size()
+                step_global_targets = 0
+                accepted_tokens += step_global_tokens
+            emit(args.log_jsonl, "step", step=step, loss=float(reported_loss.item()),
                  auxiliary_loss=float(auxiliary.item()), step_seconds=step_seconds,
                  diloco_merge_seconds=merge_seconds, node_count=groups.node_count,
                  accepted_tokens=accepted_tokens,
-                 tokens_per_second=(tokens * dist.get_world_size() / step_seconds),
+                 sft_total_tokens=(sft_total_tokens if sft_identity is not None else None),
+                 sft_target_tokens=(sft_target_tokens if sft_identity is not None else None),
+                 step_target_tokens=step_global_targets,
+                 tokens_per_second=(step_global_tokens / step_seconds),
                  hbm_allocated=torch.cuda.memory_allocated(),
                  hbm_reserved=torch.cuda.memory_reserved(),
                  max_hbm_allocated=torch.cuda.max_memory_allocated())
@@ -611,13 +824,26 @@ def main() -> None:
                 start = time.monotonic()
             step += 1
             completed_steps += 1
-            if (args.checkpoint_root is not None and args.save_every > 0
-                    and step % args.save_every == 0):
+            if sft_identity is not None:
+                sft_steps += 1
+                sft_cursor += args.batch_size
+                if dataset.next_absolute_rank_sample_index != sft_cursor:
+                    raise RuntimeError("SFT in-process sampler cursor drift")
+            save_boundary = (
+                sft_steps % args.save_every == 0
+                if sft_identity is not None and args.save_every > 0
+                else step % args.save_every == 0 if args.save_every > 0 else False)
+            if args.checkpoint_root is not None and save_boundary:
                 checkpoint_start = time.monotonic()
                 checkpoint = _canonical_checkpoint(
                     args, groups, model, optimizer, step=step,
                     accepted_tokens=accepted_tokens, source_commit=source_commit,
-                    sampler_identity=sampler_identity,
+                    sampler_metadata=(
+                        _sft_metadata(
+                            sft_identity, sft_parent, total_tokens=sft_total_tokens,
+                            target_tokens=sft_target_tokens, cursor=sft_cursor)
+                        if sft_identity is not None else _sampler_metadata(
+                            sampler_identity, accepted_tokens=accepted_tokens)),
                     sampler_transition=sampler_transition)
                 last_checkpoint_step = step
                 emit(args.log_jsonl, "checkpoint_complete",
@@ -626,17 +852,33 @@ def main() -> None:
                      checkpoint_seconds=time.monotonic() - checkpoint_start,
                      canonical_node=0)
         measured_seconds = 0.0 if start is None else time.monotonic() - start
+        validation = _run_sft_validation(
+            args, model, optimizer, groups, sft_identity) if sft_identity is not None else None
+        if validation is not None:
+            emit(args.log_jsonl, "sft_validation", **validation)
         emit(args.log_jsonl, "complete", step=step, steps_completed=completed_steps,
              accepted_tokens=accepted_tokens,
+             sft_total_tokens=(sft_total_tokens if sft_identity is not None else None),
+             sft_target_tokens=(sft_target_tokens if sft_identity is not None else None),
+             sft_cursor=(sft_cursor if sft_identity is not None else None),
              measured_training_seconds=measured_seconds,
              hbm_allocated=torch.cuda.memory_allocated(),
              max_hbm_allocated=torch.cuda.max_memory_allocated())
         if args.checkpoint_root is not None and last_checkpoint_step != step:
+            if args.final_checkpoint_delay_seconds:
+                emit(args.log_jsonl, "final_checkpoint_delay",
+                     seconds=args.final_checkpoint_delay_seconds)
+                time.sleep(args.final_checkpoint_delay_seconds)
             checkpoint_start = time.monotonic()
             checkpoint = _canonical_checkpoint(
                 args, groups, model, optimizer, step=step,
                 accepted_tokens=accepted_tokens, source_commit=source_commit,
-                sampler_identity=sampler_identity,
+                sampler_metadata=(
+                    _sft_metadata(
+                        sft_identity, sft_parent, total_tokens=sft_total_tokens,
+                        target_tokens=sft_target_tokens, cursor=sft_cursor)
+                    if sft_identity is not None else _sampler_metadata(
+                        sampler_identity, accepted_tokens=accepted_tokens)),
                 sampler_transition=sampler_transition)
             emit(args.log_jsonl, "checkpoint_complete",
                  checkpoint_path=str(checkpoint), step=step,

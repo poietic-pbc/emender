@@ -11,6 +11,10 @@ from typing import Mapping
 import torch
 import torch.distributed as dist
 
+from ndm.data.masked_sft_dataset import (
+    SFTSamplerIdentity,
+    restore_sft_checkpoint_metadata,
+)
 from ndm.data.tokenized_dataset import (
     BOUNDARY_COUNTER_SAMPLER_SCHEMA,
     LEGACY_SAMPLER_SCHEMA,
@@ -308,6 +312,8 @@ def load_node_sharded_checkpoint(
     *,
     node_group=None,
     expected_sampler_identity: CounterSamplerIdentity | None = None,
+    expected_sft_identity: SFTSamplerIdentity | None = None,
+    expected_sft_parent: Mapping | None = None,
     allow_legacy_sampler_transition: bool = False,
     allow_counter_sampler_transition: bool = False,
     diloco_k: int | None = None,
@@ -317,11 +323,25 @@ def load_node_sharded_checkpoint(
         raise RuntimeError("checkpoint restore requires one complete eight-rank node")
     rank = dist.get_rank(node_group)
     generation, manifest = _resolve_complete_generation(root)
-    sampler_status = validate_moe_sampler_manifest(
-        manifest, expected_identity=expected_sampler_identity,
-        allow_legacy_transition=allow_legacy_sampler_transition,
-        allow_counter_transition=allow_counter_sampler_transition,
-        diloco_k=diloco_k)
+    if expected_sft_identity is not None:
+        if expected_sampler_identity is not None or expected_sft_parent is None:
+            raise RuntimeError("SFT restore requires one exclusive sampler and parent")
+        try:
+            sft_clocks = restore_sft_checkpoint_metadata(
+                manifest.get("sampler", {}),
+                expected_identity=expected_sft_identity,
+                expected_parent=expected_sft_parent,
+                model_accepted_tokens=int(manifest["accepted_tokens"]))
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(f"SFT checkpoint metadata mismatch: {error}") from error
+        sampler_status = "sft"
+        manifest["sft_restore_clocks"] = sft_clocks
+    else:
+        sampler_status = validate_moe_sampler_manifest(
+            manifest, expected_identity=expected_sampler_identity,
+            allow_legacy_transition=allow_legacy_sampler_transition,
+            allow_counter_transition=allow_counter_sampler_transition,
+            diloco_k=diloco_k)
     manifest["sampler_restore_status"] = sampler_status
     for rank_sidecar in manifest.get("ranks", []):
         if (rank_sidecar.get("sampler") != manifest.get("sampler")

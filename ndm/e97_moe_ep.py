@@ -98,7 +98,7 @@ def create_moe_process_groups() -> MoEProcessGroups:
         node_index=node_index, local_rank=local_rank, node_count=node_count)
 
 
-def diloco_average_schedulefree_(model, optimizer, *, lane_group) -> None:
+def diloco_average_schedulefree_(model, optimizer, *, lane_group, weight=None) -> None:
     """Average ScheduleFree x/z between corresponding node shards.
 
     Only model and optimizer tensors cross nodes. Expert-token dispatch is not
@@ -108,16 +108,36 @@ def diloco_average_schedulefree_(model, optimizer, *, lane_group) -> None:
     if lane_world <= 1:
         return
     optimizer.eval()
+    denominator = None
+    normalized_weight = None
+    if weight is not None:
+        if int(weight) <= 0:
+            raise ValueError("target-weighted DiLoCo requires a positive weight")
+        denominator = torch.tensor(float(weight), device="cuda", dtype=torch.float64)
+        dist.all_reduce(denominator, op=dist.ReduceOp.SUM, group=lane_group)
+        normalized_weight = float(weight) / float(denominator.item())
     for parameter in model.parameters():
-        dist.all_reduce(parameter.data, op=dist.ReduceOp.AVG, group=lane_group)
+        if denominator is None:
+            dist.all_reduce(parameter.data, op=dist.ReduceOp.AVG, group=lane_group)
+        else:
+            parameter.data.mul_(normalized_weight)
+            dist.all_reduce(parameter.data, op=dist.ReduceOp.SUM, group=lane_group)
         state = optimizer.state.get(parameter, {})
         z = state.get("z")
         if z is not None:
             if z.is_cuda:
-                dist.all_reduce(z, op=dist.ReduceOp.AVG, group=lane_group)
+                if denominator is None:
+                    dist.all_reduce(z, op=dist.ReduceOp.AVG, group=lane_group)
+                else:
+                    z.mul_(normalized_weight)
+                    dist.all_reduce(z, op=dist.ReduceOp.SUM, group=lane_group)
             else:
                 z_work = z.to(parameter.device, non_blocking=False)
-                dist.all_reduce(z_work, op=dist.ReduceOp.AVG, group=lane_group)
+                if denominator is None:
+                    dist.all_reduce(z_work, op=dist.ReduceOp.AVG, group=lane_group)
+                else:
+                    z_work.mul_(normalized_weight)
+                    dist.all_reduce(z_work, op=dist.ReduceOp.SUM, group=lane_group)
                 z.copy_(z_work, non_blocking=False)
     optimizer.train()
     optimizer.assert_no_master_weights()
@@ -227,6 +247,23 @@ def average_replicated_gradients_(
         if parameter.grad is None:
             raise RuntimeError("replicated parameter is missing a gradient")
         dist.all_reduce(parameter.grad, op=dist.ReduceOp.AVG, group=group)
+
+
+def sum_replicated_gradients_(
+    parameters,
+    *,
+    group=None,
+    topology: NodeLocalEPTopology | None = None,
+) -> None:
+    """RCCL-sum replicated gradients for node-target-normalized masked SFT."""
+    if topology is None:
+        topology = assert_node_local_ep_group(group)
+    if len(topology.global_ranks) != EP_SIZE:
+        raise RuntimeError("invalid cached expert topology evidence")
+    for parameter in parameters:
+        if parameter.grad is None:
+            raise RuntimeError("replicated parameter is missing a gradient")
+        dist.all_reduce(parameter.grad, op=dist.ReduceOp.SUM, group=group)
 
 
 def node_replicated_parameters(model):

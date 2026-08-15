@@ -1338,6 +1338,8 @@ class LadderLM(nn.Module):
         prev_conv_buffers=None,
         actual_length=None,
         doc_boundaries=None,
+        loss_mask=None,
+        loss_reduction="mean",
     ):
         """
         Forward pass compatible with train.py interface.
@@ -1350,12 +1352,16 @@ class LadderLM(nn.Module):
             prev_conv_buffers: Unused, for API compatibility
             actual_length: For masking padded chunks
             doc_boundaries: [B, T] boolean tensor for hidden state reset
+            loss_mask: Optional [B, T] boolean mask over prediction targets
+            loss_reduction: ``mean`` (default) or exact target-token ``sum``
 
         Returns:
             If return_loss: (loss, new_hiddens) or loss
             Else: (logits, new_hiddens) or logits
         """
         if return_loss:
+            if loss_reduction not in {"mean", "sum"}:
+                raise ValueError("loss_reduction must be mean or sum")
             # x is [B, T+1], split into input and target
             inp, target = x[:, :-1], x[:, 1:]
         else:
@@ -1489,12 +1495,19 @@ class LadderLM(nn.Module):
         else:
             x = self.norm((x + residual).to(dtype=self.norm.weight.dtype))
         if return_loss:
-            # Mask out padded positions if actual_length is provided
+            # Mask padding and/or non-assistant targets before either dense or
+            # chunked CE. ``loss_mask`` is aligned to target=x[:, 1:], not input.
+            if loss_mask is not None:
+                if loss_mask.shape != target.shape or loss_mask.dtype != torch.bool:
+                    raise ValueError("loss_mask must be boolean and match prediction targets")
+                target = target.clone()
+                target[~loss_mask] = -100
             if actual_length is not None:
                 device = x.device
                 positions = torch.arange(target.size(1), device=device).unsqueeze(0)
                 valid_mask = positions < (actual_length.unsqueeze(1) - 1)
-                target = target.clone()
+                if loss_mask is None:
+                    target = target.clone()
                 target[~valid_mask] = -100
 
             # Chunked CE: when T is large, materializing logits=(B,T,V) costs T*V*2 bytes.
@@ -1529,13 +1542,15 @@ class LadderLM(nn.Module):
                         chunk_loss_sum = chunk_cross_entropy(hidden_c, target_c)
                     total_sum = total_sum + chunk_loss_sum
                     total_count = total_count + (target_c != -100).sum()
-                loss = total_sum / total_count.clamp(min=1)
+                loss = (total_sum if loss_reduction == "sum"
+                        else total_sum / total_count.clamp(min=1))
             else:
                 logits = self.lm_head(x)
                 loss = F.cross_entropy(
                     logits.view(-1, self.vocab_size),
                     target.reshape(-1),
                     ignore_index=-100,
+                    reduction=loss_reduction,
                 )
             if return_prev_hiddens:
                 return loss, (new_hidden_states, None)

@@ -2,6 +2,7 @@ import copy
 
 import pytest
 import torch
+import torch.nn.functional as F
 
 from ndm.models.e97_moe import (
     E97MoEConfig,
@@ -101,6 +102,47 @@ def test_gradient_checkpointed_ladder_returns_router_auxiliary_graph():
     for layer in model.layers:
         assert layer.mlp.router.weight.grad is not None
         assert torch.isfinite(layer.mlp.router.weight.grad).all()
+
+
+def test_assistant_masked_loss_sum_matches_explicit_selected_targets():
+    torch.manual_seed(23)
+    model = LadderLM(
+        vocab_size=32, dim=8, depth=2, level="E97", expansion=1.0,
+        n_state=4, n_heads=2, use_gate=True, gate_activation="sigmoid",
+        linear_state=True, use_triton=False, mlp_ratio=2.0, mlp_multiple=4)
+    tokens = torch.randint(0, 32, (2, 7))
+    target_mask = torch.tensor([
+        [False, False, True, True, False, True],
+        [False, True, False, True, True, True],
+    ])
+    logits = model(tokens[:, :-1])
+    explicit = F.cross_entropy(
+        logits[target_mask], tokens[:, 1:][target_mask], reduction="sum")
+    observed = model(
+        tokens, return_loss=True, loss_mask=target_mask, loss_reduction="sum")
+    torch.testing.assert_close(observed, explicit)
+
+
+def test_chunked_assistant_masked_loss_has_dense_gradient_parity():
+    torch.manual_seed(29)
+    dense = LadderLM(
+        vocab_size=32, dim=8, depth=2, level="E97", expansion=1.0,
+        n_state=4, n_heads=2, use_gate=True, gate_activation="sigmoid",
+        linear_state=True, use_triton=False, mlp_ratio=2.0, mlp_multiple=4)
+    chunked = copy.deepcopy(dense)
+    chunked.loss_chunk_size = 2
+    chunked.checkpoint_loss_chunks = True
+    dense.train(); chunked.train()
+    tokens = torch.randint(0, 32, (1, 8))
+    target_mask = torch.tensor([[False, True, True, False, True, False, True]])
+    dense_loss = dense(tokens, return_loss=True, loss_mask=target_mask,
+                       loss_reduction="sum")
+    chunked_loss = chunked(tokens, return_loss=True, loss_mask=target_mask,
+                           loss_reduction="sum")
+    dense_loss.backward(); chunked_loss.backward()
+    torch.testing.assert_close(chunked_loss, dense_loss)
+    for left, right in zip(dense.parameters(), chunked.parameters()):
+        torch.testing.assert_close(left.grad, right.grad, rtol=1e-5, atol=1e-6)
 
 
 def test_checkpointed_auxiliary_outputs_remain_differentiable_authority():
