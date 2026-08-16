@@ -26,6 +26,9 @@ DILOCO_K=${DILOCO_K:-1}
 # Empty preserves the exact parent/checkpoint LR. A positive value is an
 # explicit post-restore override and is recorded in immutable run identity.
 LR_OVERRIDE=${LR_OVERRIDE:-}
+# Split checkpoints require the same two optimizer groups to be constructed
+# before exact state restoration. Empty retains the legacy all-preserved path.
+PARENT_OPTIMIZER_SPLIT=${PARENT_OPTIMIZER_SPLIT:-}
 INITIALIZER_LR=0.0001
 CONTEXT_SIZE=${CONTEXT_SIZE:-4096}
 BATCH_SIZE=${BATCH_SIZE:-1}
@@ -47,7 +50,8 @@ REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
    && "$MAX_STEPS" =~ ^[1-9][0-9]*$ && "$DILOCO_K" =~ ^[1-9][0-9]*$ \
    && "$CONTEXT_SIZE" == 4096 && "$BATCH_SIZE" == 1 \
    && "$SAVE_EVERY" =~ ^[0-9]+$ \
-   && ( -z "$LR_OVERRIDE" || "$LR_OVERRIDE" =~ ^0\.[0-9]+$ ) ]] || {
+   && ( -z "$LR_OVERRIDE" || "$LR_OVERRIDE" =~ ^0\.[0-9]+$ ) \
+   && "$PARENT_OPTIMIZER_SPLIT" =~ ^(router-preserved|nonrouter-preserved)?$ ]] || {
   echo "invalid masked-SFT controls" >&2; exit 64; }
 (( SAVE_EVERY == 0 || SAVE_EVERY % DILOCO_K == 0 )) || exit 64
 record=$(scontrol show job "$SLURM_JOB_ID" -o)
@@ -82,6 +86,7 @@ printf '%s\n' \
   "authority_manifest_sha256=$AUTHORITY_MANIFEST_SHA256" "pack_manifest_sha256=$PACK_MANIFEST_SHA256" \
   "context_size=$CONTEXT_SIZE" "batch_size=$BATCH_SIZE" "max_steps=$MAX_STEPS" \
   "diloco_k=$DILOCO_K" "optimizer_state=preserve-parent-exact" \
+  "optimizer_split=${PARENT_OPTIMIZER_SPLIT:-none}" \
   "lr_override=${LR_OVERRIDE:-none}" "sampler_key=$SFT_SAMPLER_KEY" \
   > "$RUN_ROOT/identity/recipe-${SLURM_JOB_ID}.txt"
 
@@ -102,7 +107,7 @@ export MASTER_PORT=$((35000 + SLURM_JOB_ID % 10000)) WORLD_SIZE=$SLURM_NTASKS
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-7} MPICH_GPU_SUPPORT_ENABLED=1 NCCL_DEBUG=WARN
 export PYTORCH_ALLOC_CONF=expandable_segments:True PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
 export TIKTOKEN_CACHE_DIR=/lustre/orion/bif148/proj-shared/tiktoken_cache EMENDER_SOURCE_COMMIT=$SOURCE_COMMIT
-export SNAPSHOT JOB_SEED JOB_SEED_ARGS RESUME_ROOT RUN_ROOT MAX_STEPS DILOCO_K LR_OVERRIDE INITIALIZER_LR CONTEXT_SIZE BATCH_SIZE
+export SNAPSHOT JOB_SEED JOB_SEED_ARGS RESUME_ROOT RUN_ROOT MAX_STEPS DILOCO_K LR_OVERRIDE PARENT_OPTIMIZER_SPLIT INITIALIZER_LR CONTEXT_SIZE BATCH_SIZE
 export AUTHORITY_ROOT AUTHORITY_MANIFEST_SHA256 PACK_ROOT PACK_MANIFEST_SHA256 PARENT_ROOT PARENT_MANIFEST_SHA256
 export SFT_SAMPLER_KEY SAVE_EVERY VALIDATION_BATCHES FINAL_CHECKPOINT_DELAY_SECONDS
 set +e
@@ -114,6 +119,10 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   export TRITON_CACHE_DIR="/tmp/e97-masked-sft-${SLURM_JOB_ID}-${SLURM_PROCID}"; rm -rf "$TRITON_CACHE_DIR"
   resume=(); [[ -z "$RESUME_ROOT" ]] || resume=(--resume-root "$RESUME_ROOT")
   lr_override=(); [[ -z "$LR_OVERRIDE" ]] || lr_override=(--resume-lr-override "$LR_OVERRIDE")
+  optimizer_transition=(--sft-resume-parent-optimizer)
+  if [[ -n "$PARENT_OPTIMIZER_SPLIT" ]]; then
+    optimizer_transition=(--sft-parent-optimizer-split "$PARENT_OPTIMIZER_SPLIT")
+  fi
   "$EMENDER_PYTHON" scripts/frontier/e97_35b_moe_train.py \
     --seed-checkpoint "$JOB_SEED" --seed-args-json "$JOB_SEED_ARGS" \
     --max-steps "$MAX_STEPS" --batch-size "$BATCH_SIZE" --chunk-size "$CONTEXT_SIZE" \
@@ -125,7 +134,7 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
     --sft-authority-root "$AUTHORITY_ROOT" --sft-authority-manifest-sha256 "$AUTHORITY_MANIFEST_SHA256" \
     --sft-pack-root "$PACK_ROOT" --sft-pack-manifest-sha256 "$PACK_MANIFEST_SHA256" \
     --sft-sampler-key "$SFT_SAMPLER_KEY" --sft-parent-root "$PARENT_ROOT" \
-    --sft-resume-parent-optimizer \
+    "${optimizer_transition[@]}" \
     --sft-parent-manifest-sha256 "$PARENT_MANIFEST_SHA256" \
     --sft-validation-batches "$VALIDATION_BATCHES" \
     --final-checkpoint-delay-seconds "$FINAL_CHECKPOINT_DELAY_SECONDS" \

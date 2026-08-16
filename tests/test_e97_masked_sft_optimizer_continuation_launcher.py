@@ -33,6 +33,15 @@ def test_preserved_optimizer_launcher_does_not_silently_override_parent_lr():
     assert '--weight-decay 0.01' in text
 
 
+def test_split_checkpoint_resume_reconstructs_optimizer_groups_before_restore():
+    text = LAUNCHER.read_text()
+    assert 'PARENT_OPTIMIZER_SPLIT=${PARENT_OPTIMIZER_SPLIT:-}' in text
+    assert 'optimizer_split=${PARENT_OPTIMIZER_SPLIT:-none}' in text
+    assert 'optimizer_transition=(--sft-resume-parent-optimizer)' in text
+    assert 'optimizer_transition=(--sft-parent-optimizer-split "$PARENT_OPTIMIZER_SPLIT")' in text
+    assert '"${optimizer_transition[@]}"' in text
+
+
 def test_runner_records_explicit_counter_to_sft_optimizer_transition():
     runner = RUNNER.read_text()
     checkpoint = CHECKPOINT.read_text()
