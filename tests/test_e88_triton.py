@@ -81,6 +81,48 @@ def test_e88_triton_unaligned_inference_returns_prepadding_state():
     assert state_valid.abs().max().item() > 0.0
 
 
+def test_e88_triton_fp32_cache_is_chunk_boundary_invariant():
+    """Token-at-a-time inference must retain the fused fp32 state."""
+    S0, k, v, q, decay = _inputs(seed=9)
+    S0 = S0.float()
+    k, v, q, decay = (tensor.bfloat16() for tensor in (k, v, q, decay))
+
+    torch.manual_seed(99)
+    erase = torch.sigmoid(0.20 * torch.randn_like(k))
+    write = torch.sigmoid(0.20 * torch.randn_like(v))
+
+    out_full, state_full = e88_triton(
+        S0, k, v, q, decay,
+        erase_gate=erase,
+        value_write_gate=write,
+    )
+
+    state_cached = S0
+    outputs = []
+    for index in range(k.shape[0]):
+        def padded_step(tensor):
+            result = torch.zeros_like(tensor)
+            result[0] = tensor[index]
+            return result
+
+        out_step, state_cached = e88_triton(
+            state_cached,
+            padded_step(k),
+            padded_step(v),
+            padded_step(q),
+            padded_step(decay),
+            erase_gate=padded_step(erase),
+            value_write_gate=padded_step(write),
+            valid_length=1,
+        )
+        assert state_cached.dtype == torch.float32
+        outputs.append(out_step[:1])
+
+    out_cached = torch.cat(outputs, dim=0)
+    torch.testing.assert_close(out_cached, out_full, rtol=0, atol=0)
+    torch.testing.assert_close(state_cached, state_full, rtol=0, atol=0)
+
+
 def test_e88_triton_fused_norm_and_gate_match_reference():
     S0, k, v, q, decay = _inputs(seed=2)
     gate = 0.20 * torch.randn_like(v)

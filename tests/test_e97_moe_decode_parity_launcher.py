@@ -16,6 +16,7 @@ def test_decode_parity_launcher_is_read_only_bound_one_node():
     assert 'sha256sum "$PARENT_ROOT/manifest.json"' in text
     assert "scripts/eval_e97_moe_decode_parity.py" in text
     assert "unaligned_inference_returns_prepadding_state" in text
+    assert "fp32_cache_is_chunk_boundary_invariant" in text
     assert "--checkpoint-root" not in text
     assert "scontrol requeue" not in text
 

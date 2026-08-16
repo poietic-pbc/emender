@@ -1655,12 +1655,19 @@ class E88FLAHybrid(nn.Module):
             # else: chunked path — projections computed per-chunk in _process_chunk
 
         # === Initialize states ===
-        # State shape: [B, H, n_state, head_v_dim] stacked (for CUDA kernel)
+        # Stateful Triton inference keeps the cache in fp32. A full-prefix
+        # kernel accumulates S in fp32 internally; narrowing S_final to bf16 at
+        # every one-token call otherwise makes incremental decoding depend on
+        # chunk boundaries. Training retains its established activation dtype.
+        keep_fp32_inference_state = not self.training and self.use_triton
+        state_dtype = torch.float32 if keep_fp32_inference_state else x.dtype
         if hidden is None:
-            S0 = torch.zeros(B, H, n, self.head_v_dim, device=x.device, dtype=x.dtype)
+            S0 = torch.zeros(
+                B, H, n, self.head_v_dim, device=x.device, dtype=state_dtype)
         else:
-            # Convert list to stacked tensor
-            S0 = torch.stack(hidden, dim=1)  # [B, H, n, head_v_dim]
+            # Convert the per-head cache to one kernel state tensor.
+            S0 = torch.stack(hidden, dim=1).to(dtype=state_dtype)
+        S0_triton = S0 if keep_fp32_inference_state else S0.to(x.dtype)
 
         # === Fast single-token step kernel (Triton) ===
         # WIP: kernel is correct in isolation (0.006 diff from ref) but end-to-end
@@ -1776,7 +1783,7 @@ class E88FLAHybrid(nn.Module):
                 # === Chunked path: recompute projections per-chunk during backward ===
                 # Full-T projections were skipped above — computed per-chunk here instead
                 C = self.projection_chunk_size
-                S = S0.to(input_dtype)
+                S = S0_triton
                 output_chunks = []
 
                 for t_start in range(0, T, C):
@@ -1909,7 +1916,7 @@ class E88FLAHybrid(nn.Module):
                         S_final, output = e97_split_edit_triton_apply(
                             self.training,
                             k_norm, v.to(input_dtype), q_norm, decay.to(input_dtype),
-                            g_for_kernel, S0.to(input_dtype), H,
+                            g_for_kernel, S0_triton, H,
                             apply_gate_in_kernel, use_fused_l2,
                             self.checkpoint_interval,
                             apply_silu_qkv=qkv_silu_in_kernel,
@@ -1923,7 +1930,7 @@ class E88FLAHybrid(nn.Module):
                         S_final, output = e88_triton_optimized_apply(
                             self.training,
                             k_norm, v.to(input_dtype), q_norm, decay.to(input_dtype),
-                            g_for_kernel, S0.to(input_dtype), H,
+                            g_for_kernel, S0_triton, H,
                             apply_gate_in_kernel, use_fused_l2,
                             self.checkpoint_interval,
                             apply_silu_qkv=qkv_silu_in_kernel,
