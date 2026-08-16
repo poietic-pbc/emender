@@ -116,6 +116,9 @@ def parse_args():
     parser.add_argument(
         "--sft-validation-exhaustive", action="store_true",
         help="Enumerate every validation pack exactly once; requires one eight-rank node.")
+    parser.add_argument(
+        "--sft-validation-only", action="store_true",
+        help="Load the bound SFT parent, run exhaustive validation, and exit without updates.")
     parser.add_argument("--final-checkpoint-delay-seconds", type=float, default=0.0)
     parser.add_argument(
         "--sampler-transition-from-legacy", action="store_true",
@@ -492,7 +495,9 @@ def main() -> None:
     args = parse_args()
     if not args.seed_checkpoint.is_file() or not args.data.is_file():
         raise SystemExit("seed checkpoint or training data is unavailable")
-    if args.max_steps < 0 or args.minutes < 0 or (args.max_steps == 0 and args.minutes == 0):
+    if (args.max_steps < 0 or args.minutes < 0
+            or (args.max_steps == 0 and args.minutes == 0
+                and not args.sft_validation_only)):
         raise SystemExit("set positive max-steps and/or minutes; zero means no limit")
     if args.save_every < 0 or args.keep_checkpoints < 1:
         raise SystemExit("save-every must be nonnegative and keep-checkpoints must be positive")
@@ -544,6 +549,11 @@ def main() -> None:
         sft_parent = _parent_authority(args) if sft_identity is not None else None
         if args.sft_resume_parent_optimizer and sft_identity is None:
             raise RuntimeError("parent-optimizer transition is valid only for masked SFT")
+        if args.sft_validation_only and (
+                sft_identity is None or not args.sft_validation_exhaustive
+                or args.resume_root is not None or args.sft_resume_parent_optimizer):
+            raise RuntimeError(
+                "validation-only requires fresh model-only SFT parent exhaustive evaluation")
         if sft_identity is not None and (args.sequence_chunk_size > 0
                                          or args.full_bptt_segments):
             raise RuntimeError("initial masked SFT requires one complete unsegmented context")
@@ -761,10 +771,16 @@ def main() -> None:
             emit(args.log_jsonl, "optimizer_z_offloaded",
                  hbm_allocated=torch.cuda.memory_allocated(),
                  hbm_reserved=torch.cuda.memory_reserved())
-        if sft_identity is not None and args.sft_validation_batches > 0:
+        if (sft_identity is not None
+                and (args.sft_validation_batches > 0
+                     or args.sft_validation_exhaustive)):
             initial_validation = _run_sft_validation(
                 args, model, optimizer, groups, sft_identity)
             emit(args.log_jsonl, "sft_validation", phase="initial", **initial_validation)
+        if args.sft_validation_only:
+            emit(args.log_jsonl, "validation_only_complete",
+                 step=starting_step, accepted_tokens=accepted_tokens)
+            return
         replicated = tuple(node_replicated_parameters(model))
         start = None
         step = starting_step
