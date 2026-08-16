@@ -85,24 +85,44 @@ other layers. Thus the routing result is model-state drift, not merely noisy
 evaluation accounting.
 
 All recurrent states remained finite. Peak training/evaluation memory was
-bounded. The failure is behavioral and routing-specific, not numerical
-instability.
+bounded. The failure is behavioral and routing-specific, not a NaN/OOM event.
+
+A post-evaluation precision audit changes the immediate next step. Router
+weights are FP32, while nearly all backbone/expert weights and their fused
+ScheduleFree `z`/second-moment state are BF16. At SFT LR `2e-6`/`5e-6`, this is
+an asymmetric update regime:
+
+- layer-10 FP32 router entries differed 100% between LR arms and its relative
+  parent delta scaled from 0.00513 to 0.01178;
+- representative BF16 mixer/shared-expert tensors changed at 89–90% of entries
+  relative to parent, but only 3.3–7.0% of entries differed between the 2e-6
+  and 5e-6 arms;
+- a representative BF16 `dt_bias` was bit-identical between LR arms.
+
+Thus the LR comparison largely controls smooth FP32 router motion while many
+BF16 updates are quantized to the same values. Direct BF16 ScheduleFree
+`eval/train` transforms and cross-node averaging add further rounding. The
+router collapse and lack of behavior cannot be fixed responsibly by merely
+freezing routers or increasing their auxiliary coefficient while leaving this
+precision asymmetry intact.
 
 ## Decision and next experiment
 
 Do not continue either trained checkpoint unchanged and do not begin bounded
 production SFT. Preserve both as scientific evidence.
 
-The next canary should restart from the clean 282B parent at 5e-6 and isolate
-router stabilization while keeping identical data and token budget:
+Before another 35B training canary:
 
-1. frozen-router arm: zero all router-weight gradients, retaining the parent
-   routing function while training backbone and experts;
-2. strengthened-router-objective arm: retain trainable routers but multiply the
-   existing load-balance/z auxiliary by a reviewed fixed factor.
+1. prove cached recurrent decoding matches full-prefix recomputation on the
+   real parent and SFT checkpoints;
+2. add controlled-gradient/no-op update diagnostics that report changed-entry
+   fractions and effective update magnitudes by FP32 router versus BF16 tensor;
+3. select a precision-safe adaptation method. The leading practical option is
+   FP32 low-rank adapters on recurrent/dense projections with base weights and
+   routers frozen; the alternative is a qualified stochastic-rounding/error-
+   feedback full-model optimizer plus FP32 merge workspace;
+4. prove the method on the 1.3B E97 proxy and one-node 35B path before scaling.
 
-Require parent-like layer-10 load/entropy, continued assistant-NLL improvement,
-and the first coherent native-template generations before any extension. If
-routing is healthy but generation remains incoherent after a larger cumulative
-supervised exposure, investigate an architectural/generation limitation on the
-1.3B E97 proxy rather than spending billions of 35B tokens blindly.
+Only then run a matched routing-stable SFT canary. Require parent-like layer-10
+load/entropy, continued assistant-NLL improvement, and the first coherent
+native-template generations before any extension.
