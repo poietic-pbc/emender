@@ -160,9 +160,11 @@ def main():
         rank = dist.get_rank()
         likelihood = panel["assistant_response_likelihood"][rank]
         prompt = encoding.encode_ordinary(likelihood["prompt"])
-        response = encoding.encode_ordinary(likelihood["response"])[:args.tokens]
-        if not prompt or not response:
-            raise RuntimeError("decode parity example tokenization is empty")
+        response_tokens = encoding.encode_ordinary(likelihood["response"])
+        response_valid_tokens = min(len(response_tokens), args.tokens)
+        response = (response_tokens + [encoding.eot_token] * args.tokens)[:args.tokens]
+        if not prompt or response_valid_tokens == 0 or len(response) != args.tokens:
+            raise RuntimeError("decode parity example tokenization is empty or ragged")
         rows = teacher_forced_parity(model, prompt, response, torch.device("cuda"))
         generation_prompt = encoding.encode_ordinary(panel["generation_prompts"][rank]["prompt"])
         cached_generation = greedy_cached(model, generation_prompt, args.tokens, torch.device("cuda"))
@@ -170,6 +172,7 @@ def main():
             model, generation_prompt, args.tokens, torch.device("cuda"))
         local = {
             "rank": rank, "example_id": likelihood["id"], "tokens": len(response),
+            "response_valid_tokens": response_valid_tokens,
             "teacher_forced": rows,
             "greedy_equal": cached_generation == recomputed_generation,
             "cached_generation": cached_generation,

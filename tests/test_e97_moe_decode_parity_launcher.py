@@ -27,4 +27,5 @@ def test_decode_parity_compares_teacher_forced_and_greedy_paths():
     assert '"cached_oneshot_top1_fraction"' in text
     assert '"greedy_exact_fraction"' in text
     assert 'summary["target_logp_max_abs"] <= 0.02' in text
+    assert "[encoding.eot_token] * args.tokens" in text
     assert 'raise RuntimeError("cached recurrent decoding parity failed")' in text
