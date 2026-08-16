@@ -287,16 +287,18 @@ behavior exists.
 - [x] Complete one-node, fresh-process restore, and eight-node 4K/K64 qualification (jobs `5276974`, `5277148`, `5277224`; `docs/validation/e97-moe-masked-sft-qualification.md`).
 - [x] Run matched 282B `2e-6`/`5e-6` 32-node masked-SFT canary (`5277510`) and corrected three-node evaluation (`5280428`); 5e-6 wins likelihood but neither arm is coherent and both collapse final-layer routing (`docs/validation/e97-moe-masked-sft-canary-job5280428.md`).
 - [x] Test exact continuation of the mature 282B ScheduleFree state at preserved `1e-4`, overridden `1.007e-3`, and overridden `5e-6`; every arm regressed held-out assistant NLL within 8–64 updates, so none may scale (`docs/validation/e97-moe-sft-preserved-optimizer-canaries.md`).
-- [ ] Qualify cached/full-prefix decoding parity, then select a full-capacity fresh-state SFT correction; low-rank adaptation is excluded. Retain 250B as fallback control.
+- [x] Run exact 4.35M-target validation and the ten-arm fresh/preserved LR screen (`5281761`, baseline `5281927`): fresh `1e-4` wins NLL (`-0.38970` after 1.21M targets), while full preserved state regresses at every LR and fresh routers lose coverage (`docs/validation/e97-moe-sft-optimizer-lr-sweep-job5281761.md`).
+- [ ] Qualify cached/full-prefix decoding parity and the `1e-4` router-state/non-router-state factorial; low-rank adaptation is excluded. Retain 250B as fallback control.
 - [ ] Run long-supervision canary.
 - [ ] Authorize or reject bounded production SFT.
 
 ## Current next action
 
-Stop 35B continuation. Exact preservation of mature ScheduleFree history has
-now been physically rejected at `5e-6`, stored `1e-4`, and `1.007e-3`; do not
-scale those branches. First prove cached-versus-full-prefix decoding parity and
-exact-format held-out Tülu generation. Any subsequent adaptation must retain
-full model capacity and use fresh objective-appropriate state; low-rank
-adaptation is excluded. Qualify update precision on the 1.3B proxy and one-node
-35B path before another multinode SFT canary.
+Do not scale the old canaries. Exact 1,777-pack evaluation shows a clear fresh
+full-model optimum near `1e-4`, but resetting router state causes unused experts;
+preserving all state protects routing while preventing masked-objective
+learning. First prove cached-versus-full-prefix decoding parity, then cross
+preserved router state with fresh non-router state at `1e-4` against the
+converse/control. Every parameter remains trainable and low-rank adaptation is
+excluded. Only a routing-stable, exact-NLL-winning one-node result may advance
+to an eight-node K64 canary.
