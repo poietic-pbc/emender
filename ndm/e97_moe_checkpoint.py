@@ -305,6 +305,30 @@ def load_node_sharded_model(
     return manifest
 
 
+def validate_sft_parent_optimizer_transition(
+    generation: str | Path, manifest: Mapping, expected_parent: Mapping,
+) -> None:
+    """Fail closed unless an SFT boundary preserves one exact mature optimizer."""
+    required_parent = {"manifest_sha256", "step", "accepted_tokens", "generation"}
+    if set(expected_parent) != required_parent:
+        raise RuntimeError("SFT parent optimizer transition authority fields mismatch")
+    if Path(generation).resolve() != Path(str(expected_parent["generation"])).resolve():
+        raise RuntimeError("SFT parent optimizer transition generation mismatch")
+    if (int(manifest.get("step", -1)) != int(expected_parent["step"])
+            or int(manifest.get("accepted_tokens", -1))
+            != int(expected_parent["accepted_tokens"])):
+        raise RuntimeError("SFT parent optimizer transition clock mismatch")
+    groups = manifest.get("optimizer_groups")
+    if not isinstance(groups, list) or len(groups) != 1:
+        raise RuntimeError("SFT parent optimizer transition requires one optimizer group")
+    group = groups[0]
+    if (int(group.get("k", 0)) <= 0 or float(group.get("weight_sum", 0.0)) <= 0
+            or float(group.get("lr", 0.0)) <= 0
+            or float(group.get("lr_max", 0.0)) <= 0
+            or group.get("train_mode") is not False):
+        raise RuntimeError("SFT parent optimizer state is not mature eval-state ScheduleFree")
+
+
 def load_node_sharded_checkpoint(
     root: str | Path,
     model,
@@ -314,6 +338,7 @@ def load_node_sharded_checkpoint(
     expected_sampler_identity: CounterSamplerIdentity | None = None,
     expected_sft_identity: SFTSamplerIdentity | None = None,
     expected_sft_parent: Mapping | None = None,
+    allow_sft_parent_optimizer_transition: bool = False,
     allow_legacy_sampler_transition: bool = False,
     allow_counter_sampler_transition: bool = False,
     diloco_k: int | None = None,
@@ -326,16 +351,23 @@ def load_node_sharded_checkpoint(
     if expected_sft_identity is not None:
         if expected_sampler_identity is not None or expected_sft_parent is None:
             raise RuntimeError("SFT restore requires one exclusive sampler and parent")
-        try:
-            sft_clocks = restore_sft_checkpoint_metadata(
-                manifest.get("sampler", {}),
-                expected_identity=expected_sft_identity,
-                expected_parent=expected_sft_parent,
-                model_accepted_tokens=int(manifest["accepted_tokens"]))
-        except (TypeError, ValueError) as error:
-            raise RuntimeError(f"SFT checkpoint metadata mismatch: {error}") from error
-        sampler_status = "sft"
-        manifest["sft_restore_clocks"] = sft_clocks
+        parent_transition = bool(allow_sft_parent_optimizer_transition)
+        if parent_transition:
+            validate_sft_parent_optimizer_transition(
+                generation, manifest, expected_sft_parent)
+            sampler_status = "sft-parent-optimizer-transition"
+            manifest["sft_restore_clocks"] = (0, 0, 0)
+        else:
+            try:
+                sft_clocks = restore_sft_checkpoint_metadata(
+                    manifest.get("sampler", {}),
+                    expected_identity=expected_sft_identity,
+                    expected_parent=expected_sft_parent,
+                    model_accepted_tokens=int(manifest["accepted_tokens"]))
+            except (TypeError, ValueError) as error:
+                raise RuntimeError(f"SFT checkpoint metadata mismatch: {error}") from error
+            sampler_status = "sft"
+            manifest["sft_restore_clocks"] = sft_clocks
     else:
         sampler_status = validate_moe_sampler_manifest(
             manifest, expected_identity=expected_sampler_identity,

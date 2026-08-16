@@ -14,6 +14,7 @@ from ndm.e97_moe_checkpoint import (
     _replicated_owner,
     _resolve_complete_generation,
     validate_moe_sampler_manifest,
+    validate_sft_parent_optimizer_transition,
 )
 
 
@@ -71,6 +72,32 @@ def test_incomplete_direct_generation_fails_closed(tmp_path):
         "schema": SCHEMA, "complete": False}))
     with pytest.raises(RuntimeError, match="not a complete"):
         _resolve_complete_generation(tmp_path)
+
+
+def test_sft_parent_optimizer_transition_requires_exact_mature_authority(tmp_path):
+    generation = tmp_path / "parent"
+    generation.mkdir()
+    parent = {
+        "manifest_sha256": "a" * 64, "step": 2_338_536,
+        "accepted_tokens": 282_070_089_728,
+        "generation": str(generation.resolve()),
+    }
+    group = {
+        "k": 16016, "weight_sum": 0.016241008784005282,
+        "lr": 0.0001, "lr_max": 0.001007, "train_mode": False,
+    }
+    manifest = {
+        "step": parent["step"], "accepted_tokens": parent["accepted_tokens"],
+        "optimizer_groups": [group],
+    }
+    validate_sft_parent_optimizer_transition(generation, manifest, parent)
+
+    broken = json.loads(json.dumps(manifest))
+    broken["optimizer_groups"][0]["k"] = 0
+    with pytest.raises(RuntimeError, match="not mature"):
+        validate_sft_parent_optimizer_transition(generation, broken, parent)
+    with pytest.raises(RuntimeError, match="generation mismatch"):
+        validate_sft_parent_optimizer_transition(tmp_path / "wrong", manifest, parent)
 
 
 def test_checkpoint_schema_and_replicated_ownership_are_stable_and_complete():

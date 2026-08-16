@@ -107,6 +107,10 @@ def parse_args():
     parser.add_argument("--sft-sampler-key", type=int)
     parser.add_argument("--sft-parent-root", type=Path)
     parser.add_argument("--sft-parent-manifest-sha256")
+    parser.add_argument(
+        "--sft-resume-parent-optimizer", action="store_true",
+        help="On the initial SFT step, restore the exact parent ScheduleFree state "
+             "and group clocks instead of constructing fresh optimizer state.")
     parser.add_argument("--sft-validation-batches", type=int, default=0)
     parser.add_argument("--final-checkpoint-delay-seconds", type=float, default=0.0)
     parser.add_argument(
@@ -429,8 +433,10 @@ def main() -> None:
         raise SystemExit(
             "training moe-token-chunk-size must divide the effective sequence segment")
     if args.resume_lr_override is not None:
-        if args.resume_root is None or args.resume_lr_override <= 0:
-            raise SystemExit("positive resume-lr-override requires resume-root")
+        if ((args.resume_root is None and not args.sft_resume_parent_optimizer)
+                or args.resume_lr_override <= 0):
+            raise SystemExit(
+                "positive resume-lr-override requires resume-root or parent-optimizer SFT")
     if args.save_every and args.checkpoint_root is None:
         raise SystemExit("save-every requires checkpoint-root")
     if args.save_every and args.save_every % args.diloco_k:
@@ -446,6 +452,8 @@ def main() -> None:
             args, world_size=dist.get_world_size())
         sft_identity = _sft_identity(args, world_size=dist.get_world_size())
         sft_parent = _parent_authority(args) if sft_identity is not None else None
+        if args.sft_resume_parent_optimizer and sft_identity is None:
+            raise RuntimeError("parent-optimizer transition is valid only for masked SFT")
         if sft_identity is not None and (args.sequence_chunk_size > 0
                                          or args.full_bptt_segments):
             raise RuntimeError("initial masked SFT requires one complete unsegmented context")
@@ -508,14 +516,16 @@ def main() -> None:
         for moe_layer in iter_e97_moe_layers(model):
             moe_layer.token_chunk_size = int(args.moe_token_chunk_size)
         parent_manifest = None
-        if sft_identity is not None and args.resume_root is None:
+        if (sft_identity is not None and args.resume_root is None
+                and not args.sft_resume_parent_optimizer):
             parent_manifest = load_node_sharded_model(
                 sft_parent["generation"], model, node_group=groups.node_group)
             if (int(parent_manifest["step"]) != sft_parent["step"]
                     or int(parent_manifest["accepted_tokens"])
                     != sft_parent["accepted_tokens"]):
                 raise RuntimeError("loaded SFT parent clock mismatch")
-            emit(args.log_jsonl, "sft_parent_loaded", parent=sft_parent)
+            emit(args.log_jsonl, "sft_parent_loaded", parent=sft_parent,
+                 optimizer_state="fresh")
         model.train()
         parameter_count_local = sum(parameter.numel() for parameter in model.parameters())
         local_expert_count = sum(
@@ -554,12 +564,19 @@ def main() -> None:
         sft_cursor = 0
         sft_steps = 0
         sampler_transition = None
-        if args.resume_root is not None:
+        restore_root = args.resume_root
+        parent_optimizer_transition = (
+            sft_identity is not None and args.resume_root is None
+            and args.sft_resume_parent_optimizer)
+        if parent_optimizer_transition:
+            restore_root = Path(sft_parent["generation"])
+        if restore_root is not None:
             manifest = load_node_sharded_checkpoint(
-                args.resume_root, model, optimizer, node_group=groups.node_group,
+                restore_root, model, optimizer, node_group=groups.node_group,
                 expected_sampler_identity=sampler_identity,
                 expected_sft_identity=sft_identity,
                 expected_sft_parent=sft_parent,
+                allow_sft_parent_optimizer_transition=parent_optimizer_transition,
                 allow_legacy_sampler_transition=args.sampler_transition_from_legacy,
                 allow_counter_sampler_transition=args.sampler_transition_from_counter,
                 diloco_k=args.diloco_k)
@@ -574,7 +591,16 @@ def main() -> None:
                 for optimizer_group in optimizer.param_groups:
                     optimizer_group["lr"] = float(args.resume_lr_override)
             restore_status = manifest["sampler_restore_status"]
-            if restore_status in {"legacy-transition", "counter-transition"}:
+            if restore_status == "sft-parent-optimizer-transition":
+                sampler_transition = {
+                    "status": "counter-to-sft-preserve-optimizer",
+                    "boundary_step": starting_step,
+                    "boundary_accepted_tokens": accepted_tokens,
+                    "previous_sampler": manifest.get("sampler"),
+                    "new_sampler_identity": sft_identity.to_metadata(),
+                    "optimizer_state": "preserved",
+                }
+            elif restore_status in {"legacy-transition", "counter-transition"}:
                 previous_sampler = manifest.get("sampler")
                 if previous_sampler is None:
                     previous_sampler = {
