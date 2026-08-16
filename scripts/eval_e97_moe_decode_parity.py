@@ -88,31 +88,47 @@ def teacher_forced_parity(model, prompt, response, device):
     return rows
 
 
+def top2_record(logits):
+    values, indices = torch.topk(logits.float(), k=2)
+    return {
+        "tokens": [int(value) for value in indices.tolist()],
+        "logits": [float(value) for value in values.tolist()],
+        "margin": float((values[0] - values[1]).item()),
+    }
+
+
 def greedy_cached(model, prompt, count, device):
     with torch.inference_mode():
         logits, (hiddens, _conv) = model(
             local_tokens(prompt, device), return_prev_hiddens=True)
     result = []
-    token = int(logits[0, -1].argmax().item())
+    trace = []
+    current = logits[0, -1]
+    token = int(current.argmax().item())
     for index in range(count):
+        trace.append(top2_record(current))
         result.append(token)
         if index + 1 < count:
             with torch.inference_mode():
                 logits, (hiddens, _conv) = model(
                     local_tokens([token], device), return_prev_hiddens=True,
                     prev_hiddens=hiddens)
-            token = int(logits[0, -1].argmax().item())
-    return result
+            current = logits[0, -1]
+            token = int(current.argmax().item())
+    return result, trace
 
 
 def greedy_recomputed(model, prompt, count, device):
     result = []
+    trace = []
     for _ in range(count):
         with torch.inference_mode():
             logits, _state = model(
                 local_tokens(prompt + result, device), return_prev_hiddens=True)
-        result.append(int(logits[0, -1].argmax().item()))
-    return result
+        current = logits[0, -1]
+        trace.append(top2_record(current))
+        result.append(int(current.argmax().item()))
+    return result, trace
 
 
 def main():
@@ -167,9 +183,22 @@ def main():
             raise RuntimeError("decode parity example tokenization is empty or ragged")
         rows = teacher_forced_parity(model, prompt, response, torch.device("cuda"))
         generation_prompt = encoding.encode_ordinary(panel["generation_prompts"][rank]["prompt"])
-        cached_generation = greedy_cached(model, generation_prompt, args.tokens, torch.device("cuda"))
-        recomputed_generation = greedy_recomputed(
+        cached_generation, cached_trace = greedy_cached(
             model, generation_prompt, args.tokens, torch.device("cuda"))
+        recomputed_generation, recomputed_trace = greedy_recomputed(
+            model, generation_prompt, args.tokens, torch.device("cuda"))
+        first_divergence = next(
+            (index for index, pair in enumerate(zip(cached_generation, recomputed_generation))
+             if pair[0] != pair[1]),
+            None,
+        )
+        divergence = None
+        if first_divergence is not None:
+            divergence = {
+                "index": first_divergence,
+                "cached": cached_trace[first_divergence],
+                "recomputed": recomputed_trace[first_divergence],
+            }
         local = {
             "rank": rank, "example_id": likelihood["id"], "tokens": len(response),
             "response_valid_tokens": response_valid_tokens,
@@ -177,6 +206,7 @@ def main():
             "greedy_equal": cached_generation == recomputed_generation,
             "cached_generation": cached_generation,
             "recomputed_generation": recomputed_generation,
+            "first_greedy_divergence": divergence,
         }
         gathered = [None] * 8
         dist.all_gather_object(gathered, local)
@@ -185,6 +215,7 @@ def main():
             result = {
                 "schema": SCHEMA,
                 "panel_sha256": panel_sha,
+                "expert_backend": args.expert_backend,
                 "checkpoint": {
                     "generation": str(args.generation.resolve()),
                     "step": int(manifest["step"]),

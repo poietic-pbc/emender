@@ -18,6 +18,8 @@ set -euo pipefail
 : "${RUN_ROOT:?absolute run root required}"
 EXPECTED_QOS=${EXPECTED_QOS:-debug}
 EXPECTED_TIME_LIMIT=${EXPECTED_TIME_LIMIT:-02:00:00}
+EXPERT_BACKEND=${EXPERT_BACKEND:-rocblas}
+[[ "$EXPERT_BACKEND" == rocblas || "$EXPERT_BACKEND" == triton ]] || exit 64
 AUTHORITY_ROOT=${AUTHORITY_ROOT:-/lustre/orion/bif148/proj-shared/emender/sft/tulu3-v1/authority}
 AUTHORITY_MANIFEST_SHA256=${AUTHORITY_MANIFEST_SHA256:-e2461a28e7699637e282564589aeea35a150dc9e6e3cd62ffd6a2b5c0a2f47d8}
 PACK_ROOT=${PACK_ROOT:-/lustre/orion/bif148/proj-shared/emender/sft/tulu3-v1/packs-4096-v1}
@@ -54,6 +56,7 @@ fi
    && $(sha256sum "$PARENT_ROOT/manifest.json" | awk '{print $1}') == "$PARENT_MANIFEST_SHA256" ]] || exit 66
 printf '%s\n' 'schema=emender-e97-moe-decode-parity-run-v1' \
   'teacher_forced_tokens=32' 'greedy_tokens=32' \
+  "expert_backend=$EXPERT_BACKEND" \
   "panel_sha256=$PANEL_SHA256" \
   "parent_manifest_sha256=$PARENT_MANIFEST_SHA256" \
   "pack_manifest_sha256=$PACK_MANIFEST_SHA256" > "$RUN_ROOT/identity/recipe.txt"
@@ -67,7 +70,7 @@ export MASTER_PORT=$((35000 + SLURM_JOB_ID % 10000)) WORLD_SIZE=8
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-7} MPICH_GPU_SUPPORT_ENABLED=1 NCCL_DEBUG=WARN
 export PYTORCH_ALLOC_CONF=expandable_segments:True PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
 export TIKTOKEN_CACHE_DIR=/lustre/orion/bif148/proj-shared/tiktoken_cache EMENDER_SOURCE_COMMIT=$SOURCE_COMMIT
-export SNAPSHOT JOB_SEED JOB_SEED_ARGS RUN_ROOT PANEL PANEL_SHA256 PARENT_ROOT PARENT_MANIFEST_SHA256
+export SNAPSHOT JOB_SEED JOB_SEED_ARGS RUN_ROOT PANEL PANEL_SHA256 PARENT_ROOT PARENT_MANIFEST_SHA256 EXPERT_BACKEND
 set +e
 srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   set -euo pipefail
@@ -80,7 +83,7 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   "$EMENDER_PYTHON" scripts/eval_e97_moe_decode_parity.py \
     --seed-checkpoint "$JOB_SEED" --seed-args-json "$JOB_SEED_ARGS" \
     --generation "$PARENT_ROOT" --panel "$PANEL" --tokens 32 \
-    --output "$RUN_ROOT/results/decode-parity.json" --expert-backend rocblas
+    --output "$RUN_ROOT/results/decode-parity.json" --expert-backend "$EXPERT_BACKEND"
 '
 rc=$?; set -e
 printf '%s\n' "$rc" > "$RUN_ROOT/terminal/job-${SLURM_JOB_ID}-rc.txt"

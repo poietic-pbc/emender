@@ -17,6 +17,8 @@ def test_decode_parity_launcher_is_read_only_bound_one_node():
     assert "scripts/eval_e97_moe_decode_parity.py" in text
     assert "unaligned_inference_returns_prepadding_state" in text
     assert "fp32_cache_is_chunk_boundary_invariant" in text
+    assert 'EXPERT_BACKEND=${EXPERT_BACKEND:-rocblas}' in text
+    assert '--expert-backend "$EXPERT_BACKEND"' in text
     assert "--checkpoint-root" not in text
     assert "scontrol requeue" not in text
 
@@ -29,5 +31,7 @@ def test_decode_parity_compares_teacher_forced_and_greedy_paths():
     assert '"cached_oneshot_top1_fraction"' in text
     assert '"greedy_exact_fraction"' in text
     assert 'summary["target_logp_max_abs"] <= 0.02' in text
+    assert '"first_greedy_divergence"' in text
+    assert '"margin"' in text
     assert "[encoding.eot_token] * args.tokens" in text
     assert 'raise RuntimeError("cached recurrent decoding parity failed")' in text
