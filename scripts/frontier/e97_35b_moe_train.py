@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import time
+import numpy as np
 import torch
 import torch.distributed as dist
 
@@ -112,6 +113,9 @@ def parse_args():
         help="On the initial SFT step, restore the exact parent ScheduleFree state "
              "and group clocks instead of constructing fresh optimizer state.")
     parser.add_argument("--sft-validation-batches", type=int, default=0)
+    parser.add_argument(
+        "--sft-validation-exhaustive", action="store_true",
+        help="Enumerate every validation pack exactly once; requires one eight-rank node.")
     parser.add_argument("--final-checkpoint-delay-seconds", type=float, default=0.0)
     parser.add_argument(
         "--sampler-transition-from-legacy", action="store_true",
@@ -247,7 +251,7 @@ def _masked_sft_objective(model, chunks, masks, actual_lengths, *, node_group):
 
 
 def _run_sft_validation(args, model, optimizer, groups, train_identity):
-    if args.sft_validation_batches <= 0:
+    if args.sft_validation_batches <= 0 and not args.sft_validation_exhaustive:
         return None
     validation_identity = SFTSamplerIdentity(
         authority_manifest_sha256=train_identity.authority_manifest_sha256,
@@ -261,21 +265,107 @@ def _run_sft_validation(args, model, optimizer, groups, train_identity):
     optimizer.eval()
     model.eval()
     totals = torch.zeros(2, device="cuda", dtype=torch.float64)
+    routing_layers = list(iter_e97_moe_layers(model))
+    routing_counts = torch.zeros(
+        (len(routing_layers), 64), device="cuda", dtype=torch.int64)
+
+    def capture_routing() -> None:
+        for layer_index, layer in enumerate(routing_layers):
+            counts = layer.last_metrics.get("expert_token_counts")
+            if counts is None or counts.numel() != 64:
+                raise RuntimeError("SFT validation routing metrics are incomplete")
+            routing_counts[layer_index] += counts.to(
+                device="cuda", dtype=torch.int64)
+
     try:
         with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            for _ in range(args.sft_validation_batches):
-                chunks, masks, lengths, _targets = dataset.get_batch(
-                    args.batch_size, device=torch.device("cuda"))
-                _loss, local_sum, local_targets, _node_targets = _masked_sft_objective(
-                    model, chunks, masks, lengths, node_group=groups.node_group)
-                totals[0] += local_sum.double()
-                totals[1] += local_targets.double()
-        dist.all_reduce(totals, op=dist.ReduceOp.SUM)
+            if args.sft_validation_exhaustive:
+                if dist.get_world_size() != 8 or groups.node_count != 1:
+                    raise RuntimeError(
+                        "exhaustive SFT validation requires one complete eight-rank node")
+                pack_count = len(dataset.packs)
+                pack_losses = torch.zeros(pack_count, device="cuda", dtype=torch.float64)
+                pack_targets = torch.zeros(pack_count, device="cuda", dtype=torch.int64)
+                rank = dist.get_rank()
+                iterations = (pack_count + 7) // 8
+                for iteration in range(iterations):
+                    pack_id = iteration * 8 + rank
+                    if pack_id < pack_count:
+                        token, mask, length, target_count, _sample_id = dataset.pack_at(pack_id)
+                    else:
+                        token = torch.zeros(dataset.sequence_tokens, dtype=torch.long)
+                        mask = torch.zeros(dataset.sequence_tokens, dtype=torch.bool)
+                        length, target_count = 1, 0
+                    chunks = token.unsqueeze(0).to("cuda", non_blocking=True)
+                    masks = mask.unsqueeze(0).to("cuda", non_blocking=True)
+                    lengths = torch.tensor([length], device="cuda", dtype=torch.long)
+                    _loss, local_sum, local_targets, _node_targets = _masked_sft_objective(
+                        model, chunks, masks, lengths, node_group=groups.node_group)
+                    capture_routing()
+                    if pack_id < pack_count:
+                        if int(local_targets.item()) != target_count:
+                            raise RuntimeError("exhaustive validation target accounting drift")
+                        pack_losses[pack_id] = local_sum.double()
+                        pack_targets[pack_id] = local_targets
+                dist.all_reduce(pack_losses, op=dist.ReduceOp.SUM)
+                dist.all_reduce(pack_targets, op=dist.ReduceOp.SUM)
+                if bool((pack_targets <= 0).any().item()):
+                    raise RuntimeError("exhaustive validation contains an unmeasured pack")
+                totals[0] = pack_losses.sum()
+                totals[1] = pack_targets.sum()
+                losses_cpu = pack_losses.cpu().numpy()
+                targets_cpu = pack_targets.cpu().numpy()
+                rng = np.random.default_rng(970035)
+                bootstrap = np.empty(2000, dtype=np.float64)
+                for sample in range(len(bootstrap)):
+                    indices = rng.integers(0, pack_count, size=pack_count)
+                    bootstrap[sample] = (
+                        losses_cpu[indices].sum() / targets_cpu[indices].sum())
+                result = {
+                    "loss": float(totals[0].item() / totals[1].item()),
+                    "target_tokens": int(totals[1].item()),
+                    "packs": pack_count,
+                    "batches": iterations,
+                    "sampling": "exact-pack-enumeration",
+                    "bootstrap_p025": float(np.quantile(bootstrap, 0.025)),
+                    "bootstrap_p975": float(np.quantile(bootstrap, 0.975)),
+                    "pack_mean_nll": float(np.mean(losses_cpu / targets_cpu)),
+                }
+            else:
+                for _ in range(args.sft_validation_batches):
+                    chunks, masks, lengths, _targets = dataset.get_batch(
+                        args.batch_size, device=torch.device("cuda"))
+                    _loss, local_sum, local_targets, _node_targets = _masked_sft_objective(
+                        model, chunks, masks, lengths, node_group=groups.node_group)
+                    capture_routing()
+                    totals[0] += local_sum.double()
+                    totals[1] += local_targets.double()
+                dist.all_reduce(totals, op=dist.ReduceOp.SUM)
+                result = {"loss": float((totals[0] / totals[1]).item()),
+                          "target_tokens": int(totals[1].item()),
+                          "batches": args.sft_validation_batches,
+                          "sampling": "counter-with-replacement"}
         if totals[1].item() <= 0:
             raise RuntimeError("SFT validation has zero assistant targets")
-        return {"loss": float((totals[0] / totals[1]).item()),
-                "target_tokens": int(totals[1].item()),
-                "batches": args.sft_validation_batches}
+        dist.all_reduce(routing_counts, op=dist.ReduceOp.SUM)
+        routing = []
+        for layer_index, counts in enumerate(routing_counts.double()):
+            total = float(counts.sum().item())
+            mean = total / counts.numel()
+            probabilities = counts / total
+            positive = probabilities > 0
+            entropy = float((-(probabilities[positive] * probabilities[positive].log()).sum()
+                             / np.log(counts.numel())).item())
+            routing.append({
+                "layer": layer_index,
+                "max_over_mean": float(counts.max().item() / mean),
+                "coefficient_of_variation": float(
+                    (counts.std(unbiased=False) / mean).item()),
+                "normalized_entropy": entropy,
+                "unused_experts": int((counts == 0).sum().item()),
+            })
+        result["routing"] = routing
+        return result
     finally:
         dataset.close()
         model.train()

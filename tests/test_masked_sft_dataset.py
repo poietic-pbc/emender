@@ -80,6 +80,25 @@ def test_complete_record_packing_and_counter_sampling(tmp_path):
     assert len(dataset.last_batch_sample_ids) == 2
 
 
+def test_exact_pack_access_bypasses_replacement_sampler(tmp_path):
+    authority, packs, train_identity = _fixture(tmp_path)
+    validation_identity = SFTSamplerIdentity(
+        authority_manifest_sha256=train_identity.authority_manifest_sha256,
+        pack_manifest_sha256=train_identity.pack_manifest_sha256,
+        sampler_key=train_identity.sampler_key,
+        data_world_size=train_identity.data_world_size,
+        context_size=train_identity.context_size,
+        split="validation")
+    dataset = MaskedSFTPackedDataset(
+        authority, packs, identity=validation_identity, rank=0)
+    token, mask, length, targets, pack_id = dataset.pack_at(0)
+    assert token.tolist() == [40, 218, 0, 0, 0]
+    assert mask.tolist() == [False, True, False, False, False]
+    assert (length, targets, pack_id) == (2, 1, "pack-00000000")
+    with pytest.raises(IndexError, match="out of range"):
+        dataset.pack_at(1)
+
+
 def test_sft_checkpoint_clocks_fail_closed(tmp_path):
     _authority_root, _packs, identity = _fixture(tmp_path)
     parent = {"manifest_sha256": "a" * 64, "step": 10,

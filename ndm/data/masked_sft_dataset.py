@@ -249,8 +249,11 @@ class MaskedSFTPackedDataset:
     def sample_id(self, absolute_index: int) -> str:
         return self._digest(absolute_index).hex()
 
-    def sample_at(self, absolute_index: int) -> tuple[torch.Tensor, torch.Tensor, int, int, str]:
-        pack_id = self.pack_id_at(absolute_index)
+    def pack_at(self, pack_id: int) -> tuple[torch.Tensor, torch.Tensor, int, int, str]:
+        """Materialize one authority pack by exact index without counter sampling."""
+        if not 0 <= int(pack_id) < len(self.packs):
+            raise IndexError("SFT pack index is out of range")
+        pack_id = int(pack_id)
         pack = self.packs[pack_id]
         record_start = int(pack["record_offset"])
         record_stop = record_start + int(pack["record_count"])
@@ -279,7 +282,12 @@ class MaskedSFTPackedDataset:
             cursor += count
         if cursor != token_count or observed_targets != target_count:
             raise RuntimeError("materialized pack accounting mismatch")
-        return token_out, mask_out, token_count, target_count, self.sample_id(absolute_index)
+        return token_out, mask_out, token_count, target_count, f"pack-{pack_id:08d}"
+
+    def sample_at(self, absolute_index: int) -> tuple[torch.Tensor, torch.Tensor, int, int, str]:
+        pack_id = self.pack_id_at(absolute_index)
+        token, mask, length, targets, _pack_id = self.pack_at(pack_id)
+        return token, mask, length, targets, self.sample_id(absolute_index)
 
     def get_batch(self, batch_size: int, device=None):
         if batch_size <= 0:
