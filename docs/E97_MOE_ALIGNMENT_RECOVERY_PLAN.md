@@ -285,12 +285,14 @@ behavior exists.
 - [x] Build and independently validate immutable token-plus-mask SFT artifact (job `5276678`; manifest `e2461a28...`).
 - [x] Implement masked objective and record-aware sampler (`18c8eae0`; focused CPU parity passes).
 - [x] Complete one-node, fresh-process restore, and eight-node 4K/K64 qualification (jobs `5276974`, `5277148`, `5277224`; `docs/validation/e97-moe-masked-sft-qualification.md`).
-- [ ] Run matched 282B `2e-6`/`5e-6` 32-node masked-SFT canary.
-- [ ] Select masked-SFT LR; retain 250B as fallback control.
+- [x] Run matched 282B `2e-6`/`5e-6` 32-node masked-SFT canary (`5277510`) and corrected three-node evaluation (`5280428`); 5e-6 wins likelihood but neither arm is coherent and both collapse final-layer routing (`docs/validation/e97-moe-masked-sft-canary-job5280428.md`).
+- [ ] Qualify router stabilization from the clean 282B parent at `5e-6`; retain 250B as fallback control.
 - [ ] Run long-supervision canary.
 - [ ] Authorize or reject bounded production SFT.
 
 ## Current next action
 
-Run the authorized 32-node matched LR canary from the qualified 282B masked-SFT
-path, then evaluate both immutable outputs before extending either arm.
+Restart from the clean 282B parent and compare frozen-router SFT against a
+reviewed strengthened-router-objective arm at `5e-6`. Do not extend either
+routing-collapsed checkpoint or begin production alignment until generation and
+routing gates pass.
