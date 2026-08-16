@@ -37,7 +37,7 @@ def test_runner_records_explicit_counter_to_sft_optimizer_transition():
     runner = RUNNER.read_text()
     checkpoint = CHECKPOINT.read_text()
     assert '"counter-to-sft-preserve-optimizer"' in runner
-    assert '"optimizer_state": "preserved"' in runner
+    assert 'args.sft_parent_optimizer_split or "preserved"' in runner
     assert "allow_sft_parent_optimizer_transition=parent_optimizer_transition" in runner
     assert 'sampler_status = "sft-parent-optimizer-transition"' in checkpoint
     assert "validate_sft_parent_optimizer_transition" in checkpoint

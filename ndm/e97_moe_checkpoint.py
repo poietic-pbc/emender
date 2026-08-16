@@ -348,6 +348,7 @@ def load_node_sharded_checkpoint(
         raise RuntimeError("checkpoint restore requires one complete eight-rank node")
     rank = dist.get_rank(node_group)
     generation, manifest = _resolve_complete_generation(root)
+    parent_transition = False
     if expected_sft_identity is not None:
         if expected_sampler_identity is not None or expected_sft_parent is None:
             raise RuntimeError("SFT restore requires one exclusive sampler and parent")
@@ -423,7 +424,15 @@ def load_node_sharded_checkpoint(
             dist.broadcast(parameter.data, src=source, group=node_group)
             dist.broadcast(state["z"], src=source, group=node_group)
             dist.broadcast(state["exp_avg_sq"], src=source, group=node_group)
-    for group, saved_group in zip(optimizer.param_groups, manifest["optimizer_groups"]):
-        group.update(saved_group)
+    saved_groups = manifest["optimizer_groups"]
+    if parent_transition:
+        if len(saved_groups) != 1 or len(optimizer.param_groups) not in (1, 2):
+            raise RuntimeError("SFT parent optimizer transition group layout mismatch")
+        optimizer.param_groups[0].update(saved_groups[0])
+    else:
+        if len(saved_groups) != len(optimizer.param_groups):
+            raise RuntimeError("checkpoint optimizer group count mismatch")
+        for group, saved_group in zip(optimizer.param_groups, saved_groups):
+            group.update(saved_group)
     optimizer.assert_no_master_weights()
     return manifest

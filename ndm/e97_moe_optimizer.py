@@ -57,15 +57,16 @@ class FusedScheduleFreeAdamW(torch.optim.Optimizer):
 
     @torch.no_grad()
     def _offload_state_tensor_(self, name: str) -> None:
-        for parameter in self.param_groups[0]["params"]:
-            state = self.state.get(parameter, {})
-            tensor = state.get(name)
-            if tensor is None or not tensor.is_cuda:
-                continue
-            host = torch.empty(
-                tensor.shape, dtype=tensor.dtype, device="cpu", pin_memory=True)
-            host.copy_(tensor, non_blocking=False)
-            state[name] = host
+        for group in self.param_groups:
+            for parameter in group["params"]:
+                state = self.state.get(parameter, {})
+                tensor = state.get(name)
+                if tensor is None or not tensor.is_cuda:
+                    continue
+                host = torch.empty(
+                    tensor.shape, dtype=tensor.dtype, device="cpu", pin_memory=True)
+                host.copy_(tensor, non_blocking=False)
+                state[name] = host
 
     @torch.no_grad()
     def offload_z_(self) -> None:

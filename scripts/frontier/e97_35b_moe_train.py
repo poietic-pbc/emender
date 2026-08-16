@@ -112,6 +112,11 @@ def parse_args():
         "--sft-resume-parent-optimizer", action="store_true",
         help="On the initial SFT step, restore the exact parent ScheduleFree state "
              "and group clocks instead of constructing fresh optimizer state.")
+    parser.add_argument(
+        "--sft-parent-optimizer-split",
+        choices=("router-preserved", "nonrouter-preserved"),
+        help="Restore mature state only for the selected parameter cohort and use "
+             "fresh ScheduleFree state for the complementary trainable cohort.")
     parser.add_argument("--sft-validation-batches", type=int, default=0)
     parser.add_argument(
         "--sft-validation-exhaustive", action="store_true",
@@ -222,6 +227,21 @@ def _parent_authority(args) -> dict:
         "accepted_tokens": int(manifest["accepted_tokens"]),
         "generation": str(generation.resolve()),
     }
+
+
+def _sft_optimizer_parameter_groups(model, split: str | None):
+    if split is None:
+        return model.parameters()
+    routers = []
+    nonrouters = []
+    for name, parameter in model.named_parameters():
+        (routers if name.endswith(".mlp.router.weight") else nonrouters).append(parameter)
+    if len(routers) != model.depth or not nonrouters:
+        raise RuntimeError("SFT optimizer router/non-router partition is incomplete")
+    preserved, fresh = (
+        (routers, nonrouters) if split == "router-preserved"
+        else (nonrouters, routers))
+    return [{"params": preserved}, {"params": fresh}]
 
 
 def _sft_metadata(identity, parent, *, total_tokens, target_tokens, cursor):
@@ -528,7 +548,8 @@ def main() -> None:
         raise SystemExit(
             "training moe-token-chunk-size must divide the effective sequence segment")
     if args.resume_lr_override is not None:
-        if ((args.resume_root is None and not args.sft_resume_parent_optimizer)
+        if ((args.resume_root is None and not args.sft_resume_parent_optimizer
+             and args.sft_parent_optimizer_split is None)
                 or args.resume_lr_override <= 0):
             raise SystemExit(
                 "positive resume-lr-override requires resume-root or parent-optimizer SFT")
@@ -547,11 +568,15 @@ def main() -> None:
             args, world_size=dist.get_world_size())
         sft_identity = _sft_identity(args, world_size=dist.get_world_size())
         sft_parent = _parent_authority(args) if sft_identity is not None else None
-        if args.sft_resume_parent_optimizer and sft_identity is None:
+        if (args.sft_resume_parent_optimizer and args.sft_parent_optimizer_split):
+            raise RuntimeError("full and split parent-optimizer transitions are exclusive")
+        if ((args.sft_resume_parent_optimizer or args.sft_parent_optimizer_split)
+                and sft_identity is None):
             raise RuntimeError("parent-optimizer transition is valid only for masked SFT")
         if args.sft_validation_only and (
                 sft_identity is None or not args.sft_validation_exhaustive
-                or args.resume_root is not None or args.sft_resume_parent_optimizer):
+                or args.resume_root is not None or args.sft_resume_parent_optimizer
+                or args.sft_parent_optimizer_split is not None):
             raise RuntimeError(
                 "validation-only requires fresh model-only SFT parent exhaustive evaluation")
         if sft_identity is not None and (args.sequence_chunk_size > 0
@@ -617,7 +642,8 @@ def main() -> None:
             moe_layer.token_chunk_size = int(args.moe_token_chunk_size)
         parent_manifest = None
         if (sft_identity is not None and args.resume_root is None
-                and not args.sft_resume_parent_optimizer):
+                and not args.sft_resume_parent_optimizer
+                and args.sft_parent_optimizer_split is None):
             parent_manifest = load_node_sharded_model(
                 sft_parent["generation"], model, node_group=groups.node_group)
             if (int(parent_manifest["step"]) != sft_parent["step"]
@@ -655,7 +681,8 @@ def main() -> None:
              hbm_reserved=torch.cuda.memory_reserved())
 
         optimizer = FusedScheduleFreeAdamW(
-            model.parameters(), lr=args.lr, weight_decay=args.weight_decay,
+            _sft_optimizer_parameter_groups(model, args.sft_parent_optimizer_split),
+            lr=args.lr, weight_decay=args.weight_decay,
             betas=(0.9, 0.95), warmup_steps=0)
         starting_step = int(sft_parent["step"] if sft_identity is not None else loaded.step)
         accepted_tokens = int(sft_parent["accepted_tokens"] if sft_identity is not None else 0)
@@ -667,7 +694,8 @@ def main() -> None:
         restore_root = args.resume_root
         parent_optimizer_transition = (
             sft_identity is not None and args.resume_root is None
-            and args.sft_resume_parent_optimizer)
+            and (args.sft_resume_parent_optimizer
+                 or args.sft_parent_optimizer_split is not None))
         if parent_optimizer_transition:
             restore_root = Path(sft_parent["generation"])
         if restore_root is not None:
@@ -682,11 +710,26 @@ def main() -> None:
                 diloco_k=args.diloco_k)
             starting_step = int(manifest["step"])
             accepted_tokens = int(manifest["accepted_tokens"])
+            if (args.resume_root is not None
+                    and args.sft_parent_optimizer_split is not None
+                    and manifest.get("sampler_transition", {}).get("optimizer_state")
+                    != args.sft_parent_optimizer_split):
+                raise RuntimeError("SFT split optimizer policy mismatch on resume")
             if sft_identity is not None:
                 sft_total_tokens, sft_target_tokens, sft_cursor = manifest["sft_restore_clocks"]
                 sft_steps = starting_step - int(sft_parent["step"])
                 if sft_steps < 0 or sft_cursor != sft_steps * args.batch_size:
                     raise RuntimeError("SFT step and per-rank sample cursor disagree")
+            if parent_optimizer_transition and args.sft_parent_optimizer_split is not None:
+                fresh_group = optimizer.param_groups[1]
+                for parameter in fresh_group["params"]:
+                    optimizer.state[parameter].clear()
+                emit(args.log_jsonl, "sft_optimizer_state_split",
+                     policy=args.sft_parent_optimizer_split,
+                     preserved_parameters=len(optimizer.param_groups[0]["params"]),
+                     fresh_parameters=len(fresh_group["params"]),
+                     preserved_k=optimizer.param_groups[0]["k"],
+                     fresh_k=fresh_group["k"])
             if args.resume_lr_override is not None:
                 for optimizer_group in optimizer.param_groups:
                     optimizer_group["lr"] = float(args.resume_lr_override)
@@ -698,7 +741,8 @@ def main() -> None:
                     "boundary_accepted_tokens": accepted_tokens,
                     "previous_sampler": manifest.get("sampler"),
                     "new_sampler_identity": sft_identity.to_metadata(),
-                    "optimizer_state": "preserved",
+                    "optimizer_state": (
+                        args.sft_parent_optimizer_split or "preserved"),
                 }
             elif restore_status in {"legacy-transition", "counter-transition"}:
                 previous_sampler = manifest.get("sampler")
