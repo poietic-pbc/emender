@@ -61,12 +61,18 @@ def e88_triton_optimized_apply(
     # continuation lengths (e.g. T=11). Right-pad the recurrence inputs to the
     # next multiple of CKPT_INTERVAL and slice the output back: the recurrence
     # is causal, so outputs at the real positions (t < T) cannot depend on the
-    # zero-padded tail, and S_final is discarded at inference. This keeps the
-    # fused kernel — NOT an eager fallback — for unaligned eval (NON-NEGOTIABLE #1).
+    # zero-padded tail. Stateful inference must nevertheless return the state
+    # at T_orig: zero-padded decay would otherwise erase it before the next
+    # incremental call. The fused kernel captures that valid-token boundary.
     from .e88_triton_forward import DEFAULT_CKPT_INTERVAL
     T_orig = T
     _pad = (-T) % DEFAULT_CKPT_INTERVAL
     if _pad:
+        if training:
+            raise RuntimeError(
+                "unaligned recurrence padding is forward-only; training lengths "
+                "must align to the sparse checkpoint interval")
+
         def _padT(t):
             if t is None:
                 return None
@@ -118,6 +124,7 @@ def e88_triton_optimized_apply(
             linear_state=linear_state,
             erase_gate=erase_t,
             value_write_gate=value_write_t,
+            valid_length=T_orig,
         )
         output = out_t.transpose(0, 1)
     else:
@@ -128,6 +135,7 @@ def e88_triton_optimized_apply(
             linear_state=linear_state,
             erase_gate=erase_t,
             value_write_gate=value_write_t,
+            valid_length=T_orig,
         )
         output = out_t.transpose(0, 1)
 

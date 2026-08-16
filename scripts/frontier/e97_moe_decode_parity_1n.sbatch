@@ -75,6 +75,8 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   cd "$SNAPSHOT"; export PYTHONPATH="$SNAPSHOT${PYTHONPATH:+:$PYTHONPATH}"
   export RANK=$SLURM_PROCID LOCAL_RANK=$SLURM_LOCALID
   export TRITON_CACHE_DIR="/tmp/e97-moe-decode-parity-${SLURM_JOB_ID}-${SLURM_PROCID}"; rm -rf "$TRITON_CACHE_DIR"
+  "$EMENDER_PYTHON" -m pytest -q tests/test_e88_triton.py \
+    -k unaligned_inference_returns_prepadding_state
   "$EMENDER_PYTHON" scripts/eval_e97_moe_decode_parity.py \
     --seed-checkpoint "$JOB_SEED" --seed-args-json "$JOB_SEED_ARGS" \
     --generation "$PARENT_ROOT" --panel "$PANEL" --tokens 32 \

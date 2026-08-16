@@ -43,6 +43,44 @@ def test_e88_triton_forward_matches_reference():
     torch.testing.assert_close(S_tri, S_ref, rtol=2e-4, atol=2e-4)
 
 
+def test_e88_triton_unaligned_inference_returns_prepadding_state():
+    """Regression: alignment padding must not become the recurrent cache."""
+    S0, k, v, q, decay = _inputs(seed=8)
+    valid_length = 5
+
+    torch.manual_seed(88)
+    erase = torch.sigmoid(0.20 * torch.randn_like(k))
+    write = torch.sigmoid(0.20 * torch.randn_like(v))
+
+    out_ref, state_ref, _ = e88_torch_reference(
+        S0,
+        k[:valid_length],
+        v[:valid_length],
+        q[:valid_length],
+        decay[:valid_length],
+        erase_gate=erase[:valid_length],
+        value_write_gate=write[:valid_length],
+    )
+
+    # Mirror the optimized inference wrapper: real projections followed by
+    # zero padding to the 16-step sparse-checkpoint interval.
+    padded = [tensor.clone() for tensor in (k, v, q, decay, erase, write)]
+    for tensor in padded:
+        tensor[valid_length:] = 0
+    k_pad, v_pad, q_pad, decay_pad, erase_pad, write_pad = padded
+    out_padded, state_valid = e88_triton(
+        S0, k_pad, v_pad, q_pad, decay_pad,
+        erase_gate=erase_pad,
+        value_write_gate=write_pad,
+        valid_length=valid_length,
+    )
+
+    torch.testing.assert_close(
+        out_padded[:valid_length], out_ref, rtol=2e-4, atol=2e-4)
+    torch.testing.assert_close(state_valid, state_ref, rtol=2e-4, atol=2e-4)
+    assert state_valid.abs().max().item() > 0.0
+
+
 def test_e88_triton_fused_norm_and_gate_match_reference():
     S0, k, v, q, decay = _inputs(seed=2)
     gate = 0.20 * torch.randn_like(v)

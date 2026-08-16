@@ -769,6 +769,7 @@ class E88TritonFunction(torch.autograd.Function):
         erase_gate=None,
         value_write_gate=None,
         linear_state=False,
+        valid_length=None,
     ):
         from ndm.triton.e88_triton_forward import e88_triton_forward
         out, S_final, S_ckpt = e88_triton_forward(
@@ -776,12 +777,14 @@ class E88TritonFunction(torch.autograd.Function):
             apply_silu_qkv=apply_silu_qkv, raw_write=raw_write,
             linear_state=linear_state,
             erase_gate=erase_gate, value_write_gate=value_write_gate,
+            valid_length=valid_length,
         )
         ctx.normalize_kq = bool(normalize_kq)
         ctx.apply_silu_qkv = bool(apply_silu_qkv)
         ctx.raw_write = bool(raw_write)
         ctx.linear_state = bool(linear_state)
         ctx.has_split_edit = erase_gate is not None or value_write_gate is not None
+        ctx.valid_length = k.shape[0] if valid_length is None else int(valid_length)
         # Save for backward. Note: S0 isn't strictly required (it equals
         # S_ckpt[0]), but saving it is cheap and explicit. We must save
         # g if present because backward needs it for d_g and to scale d_out.
@@ -801,6 +804,10 @@ class E88TritonFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, d_out, d_S_final):
+        if ctx.valid_length != d_out.shape[0]:
+            raise RuntimeError(
+                "valid_length shorter than the padded recurrence is "
+                "forward-only; unaligned training must not use inference padding")
         nkq = ctx.normalize_kq
         silu_qkv = ctx.apply_silu_qkv
         raw_write = ctx.raw_write
@@ -821,7 +828,7 @@ class E88TritonFunction(torch.autograd.Function):
             )
             return (
                 d_S0, d_k, d_v, d_q, d_decay, d_g,
-                None, None, None, d_erase, d_value_write, None,
+                None, None, None, d_erase, d_value_write, None, None,
             )
         elif ctx.has_gate:
             k, v, q, decay, S_ckpt, g = ctx.saved_tensors
@@ -836,7 +843,7 @@ class E88TritonFunction(torch.autograd.Function):
                 linear_state=linear_state,
             )
             # Match forward signature order (S0, k, v, q, decay, g, normalize_kq).
-            return d_S0, d_k, d_v, d_q, d_decay, d_g, None, None, None, None, None, None
+            return d_S0, d_k, d_v, d_q, d_decay, d_g, None, None, None, None, None, None, None
         elif ctx.has_split_edit:
             k, v, q, decay, S_ckpt, erase_gate, value_write_gate = ctx.saved_tensors
             d_k, d_v, d_q, d_decay, d_erase, d_value_write, d_S0 = e88_triton_backward(
@@ -852,7 +859,7 @@ class E88TritonFunction(torch.autograd.Function):
             )
             return (
                 d_S0, d_k, d_v, d_q, d_decay, None,
-                None, None, None, d_erase, d_value_write, None,
+                None, None, None, d_erase, d_value_write, None, None,
             )
         else:
             k, v, q, decay, S_ckpt = ctx.saved_tensors
@@ -866,7 +873,7 @@ class E88TritonFunction(torch.autograd.Function):
                 linear_state=linear_state,
             )
             # Match forward signature order (S0, k, v, q, decay, g, normalize_kq).
-            return d_S0, d_k, d_v, d_q, d_decay, None, None, None, None, None, None, None
+            return d_S0, d_k, d_v, d_q, d_decay, None, None, None, None, None, None, None, None
 
 
 def e88_triton(
@@ -882,6 +889,7 @@ def e88_triton(
     erase_gate=None,
     value_write_gate=None,
     linear_state=False,
+    valid_length=None,
 ):
     """Differentiable Triton E88 — returns (out, S_final).
 
@@ -896,5 +904,5 @@ def e88_triton(
     """
     return E88TritonFunction.apply(
         S0, k, v, q, decay, g, normalize_kq, apply_silu_qkv, raw_write,
-        erase_gate, value_write_gate, linear_state,
+        erase_gate, value_write_gate, linear_state, valid_length,
     )

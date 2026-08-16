@@ -103,6 +103,7 @@ def _e88_forward_kernel(
     sf_b, sf_h, sf_n, sf_v,
     sc_t, sc_b, sc_h, sc_n, sc_v,
     # Sizes
+    VALID_T,  # real-token boundary; may be shorter than padded constexpr T
     T: tl.constexpr, B: tl.constexpr, H: tl.constexpr,
     N: tl.constexpr, V: tl.constexpr,
     BLOCK_N: tl.constexpr, BLOCK_V: tl.constexpr,
@@ -265,6 +266,19 @@ def _e88_forward_kernel(
         )
         tl.store(Out_ptr + out_off, out_vec.to(Out_ptr.dtype.element_ty), mask=mask_hv)
 
+        # Stateful inference may right-pad an unaligned sequence to the sparse
+        # checkpoint interval. Capture the state after the last real token,
+        # before nonlinear zero-padding steps mutate it.
+        sf_off = (
+            b * sf_b
+            + h_idx[:, None, None] * sf_h
+            + n_idx[None, :, None] * sf_n
+            + v_idx[None, None, :] * sf_v
+        )
+        tl.store(
+            Sfinal_ptr + sf_off, S.to(Sfinal_ptr.dtype.element_ty),
+            mask=mask_hnv & ((t + 1) == VALID_T))
+
         # Sparse checkpoint write: only when (t+1) is a multiple of
         # CKPT_INTERVAL. The wrapper enforces T % CKPT_INTERVAL == 0, so
         # the last step (t = T-1) is always a checkpoint.
@@ -281,14 +295,6 @@ def _e88_forward_kernel(
             )
             tl.store(Sckpt_ptr + sc_off, S.to(Sckpt_ptr.dtype.element_ty), mask=mask_hnv)
 
-    # Write S_final.
-    sf_off = (
-        b * sf_b
-        + h_idx[:, None, None] * sf_h
-        + n_idx[None, :, None] * sf_n
-        + v_idx[None, None, :] * sf_v
-    )
-    tl.store(Sfinal_ptr + sf_off, S.to(Sfinal_ptr.dtype.element_ty), mask=mask_hnv)
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +343,7 @@ def _autotune_kernel(
     raw_write,
     linear_state,
     split_edit,
+    valid_length,
 ):
     """Tiny in-process autotune. Tries (BLOCK_H, num_warps) and caches winner.
 
@@ -394,7 +401,7 @@ def _autotune_kernel(
                         k_c, v_c, q_c, d_c, s0_c, g_c, e_c, w_c,
                         out, S_final, S_ckpt,
                         *strides,
-                        T=T, B=B, H=H, N=N, V=Vsz,
+                        T=T, VALID_T=valid_length, B=B, H=H, N=N, V=Vsz,
                         BLOCK_N=_next_pow2(N), BLOCK_V=_next_pow2(Vsz),
                         BLOCK_H=bh,
                         CKPT_INTERVAL=ckpt_interval,
@@ -414,7 +421,7 @@ def _autotune_kernel(
                         k_c, v_c, q_c, d_c, s0_c, g_c, e_c, w_c,
                         out, S_final, S_ckpt,
                         *strides,
-                        T=T, B=B, H=H, N=N, V=Vsz,
+                        T=T, VALID_T=valid_length, B=B, H=H, N=N, V=Vsz,
                         BLOCK_N=_next_pow2(N), BLOCK_V=_next_pow2(Vsz),
                         BLOCK_H=bh,
                         CKPT_INTERVAL=ckpt_interval,
@@ -457,7 +464,8 @@ def e88_triton_forward(
     raw_write: bool = False,  # if True, use raw v write instead of delta correction
     linear_state: bool = False,  # if True, drop tanh and use the raw preactivation state
     erase_gate: torch.Tensor = None,  # [T, B, H, N] E97 read/erase gate
-    value_write_gate: torch.Tensor = None,  # [T, B, H, V] E97 value write gate
+    value_write_gate: torch.Tensor = None,  # [T, B,H,V] E97 value write gate
+    valid_length: int = None,  # state boundary before inference-only padding
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Run the E88 forward recurrence in Triton.
 
@@ -493,6 +501,10 @@ def e88_triton_forward(
 
     T, B, H, N = k.shape
     Vsz = v.shape[-1]
+    valid_length = T if valid_length is None else int(valid_length)
+    if not 0 < valid_length <= T:
+        raise ValueError(
+            f"valid_length must be in [1, {T}], got {valid_length}")
     assert q.shape == (T, B, H, N)
     assert v.shape == (T, B, H, Vsz)
     assert decay.shape == (T, B, H)
@@ -614,7 +626,7 @@ def e88_triton_forward(
             block_h_chosen, nw = _autotune_kernel(
                 launch_args, B, T, H, N, Vsz, out_dtype, ckpt_interval,
                 normalize_kq, apply_silu_qkv, raw_write, linear_state,
-                split_edit,
+                split_edit, valid_length,
             )
     else:
         block_h_chosen = int(block_h)
@@ -626,7 +638,7 @@ def e88_triton_forward(
         k_c, v_c, q_c, d_c, s0_c, g_c, e_c, w_c,
         out, S_final, S_ckpt,
         *strides,
-        T=T, B=B, H=H, N=N, V=Vsz,
+        T=T, VALID_T=valid_length, B=B, H=H, N=N, V=Vsz,
         BLOCK_N=BLOCK_N, BLOCK_V=BLOCK_V,
         BLOCK_H=block_h_chosen,
         CKPT_INTERVAL=ckpt_interval,
