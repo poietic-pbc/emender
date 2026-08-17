@@ -39,6 +39,8 @@ SNAPSHOT="$RUN_ROOT/sources/$SOURCE_COMMIT"; mkdir -p "$SNAPSHOT"; [[ -f "$SNAPS
 printf '%s\n' "$record" > "$RUN_ROOT/identity/scontrol-$SLURM_JOB_ID.txt"; squeue -j "$SLURM_JOB_ID" -h -o 'JobID=%i|Partition=%P|QOS=%q|State=%T|NodeList=%N' > "$RUN_ROOT/identity/squeue-$SLURM_JOB_ID.txt"
 source "$REPO/scripts/frontier/activate_emender_frontier.sh" >/dev/null
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 OMP_NUM_THREADS=7
+export TIKTOKEN_CACHE_DIR=/lustre/orion/bif148/proj-shared/tiktoken_cache
+[[ $(sha256sum "$TIKTOKEN_CACHE_DIR/ec7223a39ce59f226a68acc30dc1af2788490e15"|awk '{print $1}') == 94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069 ]] || exit 65
 mapfile -t hosts < <(scontrol show hostnames "$SLURM_JOB_NODELIST"); [[ ${#hosts[@]} == 6 ]] || exit 66
 pids=()
 for i in {0..5}; do
@@ -46,6 +48,7 @@ for i in {0..5}; do
  srun --exclusive -N1 -n8 --ntasks-per-node=8 -w "${hosts[$i]}" --label bash -lc '
    set -euo pipefail; source "'$REPO'/scripts/frontier/activate_emender_frontier.sh" >/dev/null
    cd "'$SNAPSHOT'"; export PYTHONPATH="'$SNAPSHOT'" HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+   export TIKTOKEN_CACHE_DIR=/lustre/orion/bif148/proj-shared/tiktoken_cache
    export TRITON_CACHE_DIR="/tmp/e97-full-hs-${SLURM_JOB_ID}-${SLURM_PROCID}"; rm -rf "$TRITON_CACHE_DIR"
    args_json=(); [[ "'$backend'" != e97 ]] || args_json=(--args-json "'$ARGS'")
    "$EMENDER_PYTHON" scripts/eval_full_hellaswag_shard.py --backend "'$backend'" --model "'$model'" "${args_json[@]}" --data "'$DATA'" --output "'$RUN_ROOT'/results/'$label'/shards/rank-${SLURM_LOCALID}.json" --rank "$SLURM_LOCALID" --world 8 --label "'$label'"
