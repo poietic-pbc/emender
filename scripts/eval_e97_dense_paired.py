@@ -35,6 +35,7 @@ def parse_args():
     parser.add_argument("--panel-sha256", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--label", default="dense-513b")
+    parser.add_argument("--weight-mode", choices=("train", "saved"), default="train")
     parser.add_argument("--generation-tokens", type=int, default=256)
     return parser.parse_args()
 
@@ -56,7 +57,7 @@ def main():
         event("load_start", label=args.label, checkpoint=str(args.checkpoint))
         loaded = load_e97_checkpoint(
             args.checkpoint, device="cuda", dtype=torch.bfloat16,
-            weight_mode="train", use_triton=True, mmap=True,
+            weight_mode=args.weight_mode, use_triton=True, mmap=True,
             args_json=args.args_json)
         if (loaded.step != 2322520
                 or int(loaded.config.get("dim", -1)) != 1792
@@ -82,6 +83,8 @@ def main():
                 "path": str(args.checkpoint.resolve()),
                 "sha256": args.checkpoint_sha256,
                 "step": loaded.step,
+                "weight_mode": loaded.weight_mode,
+                "schedulefree_train_weight_swap": loaded.schedulefree_train_weight_swap,
                 "tokens": int(loaded.checkpoint_metadata.get(
                     "total_tokens", 513013841920)),
             },

@@ -33,5 +33,7 @@ def test_dense_eval_binds_immutable_authorities_and_no_moe_conversion():
     assert "score_wikitext" in evaluator
     assert "score_hellaswag" in evaluator
     assert "convert_e97_ffns_to_node_local_moe" not in evaluator
-    assert 'weight_mode="train"' in evaluator
+    assert '--weight-mode' in evaluator
+    assert 'weight_mode=args.weight_mode' in evaluator
+    assert 'WEIGHT_MODE=${WEIGHT_MODE:-train}' in launcher
     assert 'loaded.step != 2322520' in evaluator
