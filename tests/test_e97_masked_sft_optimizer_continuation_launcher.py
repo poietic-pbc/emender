@@ -42,6 +42,20 @@ def test_split_checkpoint_resume_reconstructs_optimizer_groups_before_restore():
     assert '"${optimizer_transition[@]}"' in text
 
 
+def test_launcher_supports_explicit_fixed_world_sft_scale_transition():
+    text = LAUNCHER.read_text()
+    runner = RUNNER.read_text()
+    checkpoint = CHECKPOINT.read_text()
+    assert 'EXPECTED_NODES" =~ ^(1|8|16|32|64)$' in text
+    assert "SFT_TRANSITION_DATA_WORLD_SIZE" in text
+    assert "--sft-transition-data-world-size" in text
+    assert "allow_sft_world_size_transition" in runner
+    assert '"sft-data-world-size-transition"' in runner
+    assert "validate_sft_sampler_manifest" in checkpoint
+    assert "may change only data_world_size" in checkpoint
+    assert "K-aligned cursor" in checkpoint
+
+
 def test_runner_records_explicit_counter_to_sft_optimizer_transition():
     runner = RUNNER.read_text()
     checkpoint = CHECKPOINT.read_text()

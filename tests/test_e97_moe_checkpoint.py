@@ -2,6 +2,10 @@ import json
 
 import pytest
 
+from ndm.data.masked_sft_dataset import (
+    SFTSamplerIdentity,
+    sft_checkpoint_metadata,
+)
 from ndm.data.tokenized_dataset import (
     BOUNDARY_COUNTER_SAMPLER_SCHEMA,
     COUNTER_SAMPLER_SCHEMA,
@@ -15,6 +19,7 @@ from ndm.e97_moe_checkpoint import (
     _resolve_complete_generation,
     validate_moe_sampler_manifest,
     validate_sft_parent_optimizer_transition,
+    validate_sft_sampler_manifest,
 )
 
 
@@ -98,6 +103,64 @@ def test_sft_parent_optimizer_transition_requires_exact_mature_authority(tmp_pat
         validate_sft_parent_optimizer_transition(generation, broken, parent)
     with pytest.raises(RuntimeError, match="generation mismatch"):
         validate_sft_parent_optimizer_transition(tmp_path / "wrong", manifest, parent)
+
+
+def test_sft_world_size_transition_is_explicit_and_k_aligned():
+    parent = {
+        "manifest_sha256": "a" * 64, "step": 2_338_536,
+        "accepted_tokens": 282_070_089_728, "generation": "/authority",
+    }
+    previous = SFTSamplerIdentity(
+        authority_manifest_sha256="b" * 64,
+        pack_manifest_sha256="c" * 64, sampler_key=42,
+        data_world_size=64, context_size=4096)
+    expected = SFTSamplerIdentity(
+        authority_manifest_sha256="b" * 64,
+        pack_manifest_sha256="c" * 64, sampler_key=42,
+        data_world_size=512, context_size=4096)
+    sampler = sft_checkpoint_metadata(
+        previous, parent=parent, total_tokens=1000,
+        assistant_target_tokens=700, absolute_rank_sample_index=4096)
+    manifest = {"accepted_tokens": parent["accepted_tokens"] + 1000,
+                "sampler": sampler}
+    with pytest.raises(RuntimeError, match="metadata mismatch"):
+        validate_sft_sampler_manifest(
+            manifest, expected_identity=expected, expected_parent=parent,
+            diloco_k=64)
+    clocks, status, observed = validate_sft_sampler_manifest(
+        manifest, expected_identity=expected, expected_parent=parent,
+        allow_world_size_transition=True, diloco_k=64)
+    assert clocks == (1000, 700, 4096)
+    assert status == "sft-world-size-transition"
+    assert observed == previous
+
+    sampler["absolute_rank_sample_index"] = 4097
+    with pytest.raises(RuntimeError, match="K-aligned cursor"):
+        validate_sft_sampler_manifest(
+            manifest, expected_identity=expected, expected_parent=parent,
+            allow_world_size_transition=True, diloco_k=64)
+
+
+def test_sft_world_size_transition_rejects_other_identity_changes():
+    parent = {
+        "manifest_sha256": "a" * 64, "step": 1,
+        "accepted_tokens": 10, "generation": "/authority",
+    }
+    previous = SFTSamplerIdentity(
+        authority_manifest_sha256="b" * 64,
+        pack_manifest_sha256="c" * 64, sampler_key=42,
+        data_world_size=64, context_size=4096)
+    expected = SFTSamplerIdentity(
+        authority_manifest_sha256="b" * 64,
+        pack_manifest_sha256="d" * 64, sampler_key=42,
+        data_world_size=512, context_size=4096)
+    manifest = {"accepted_tokens": 11, "sampler": sft_checkpoint_metadata(
+        previous, parent=parent, total_tokens=1,
+        assistant_target_tokens=1, absolute_rank_sample_index=64)}
+    with pytest.raises(RuntimeError, match="may change only data_world_size"):
+        validate_sft_sampler_manifest(
+            manifest, expected_identity=expected, expected_parent=parent,
+            allow_world_size_transition=True, diloco_k=64)
 
 
 def test_checkpoint_schema_and_replicated_ownership_are_stable_and_complete():

@@ -329,6 +329,48 @@ def validate_sft_parent_optimizer_transition(
         raise RuntimeError("SFT parent optimizer state is not mature eval-state ScheduleFree")
 
 
+def validate_sft_sampler_manifest(
+    manifest: Mapping,
+    *,
+    expected_identity: SFTSamplerIdentity,
+    expected_parent: Mapping,
+    allow_world_size_transition: bool = False,
+    diloco_k: int | None = None,
+) -> tuple[tuple[int, int, int], str, SFTSamplerIdentity | None]:
+    """Restore SFT clocks, allowing only an explicit K-boundary world transition."""
+    persisted = manifest.get("sampler", {})
+    try:
+        clocks = restore_sft_checkpoint_metadata(
+            persisted, expected_identity=expected_identity,
+            expected_parent=expected_parent,
+            model_accepted_tokens=int(manifest["accepted_tokens"]))
+        return clocks, "sft", None
+    except (TypeError, ValueError) as error:
+        if not allow_world_size_transition:
+            raise RuntimeError(f"SFT checkpoint metadata mismatch: {error}") from error
+    try:
+        previous_identity = SFTSamplerIdentity.from_metadata(persisted["identity"])
+        previous_without_world = previous_identity.to_metadata()
+        expected_without_world = expected_identity.to_metadata()
+        previous_without_world.pop("data_world_size")
+        expected_without_world.pop("data_world_size")
+        if (previous_without_world != expected_without_world
+                or previous_identity.data_world_size == expected_identity.data_world_size):
+            raise ValueError("explicit SFT transition may change only data_world_size")
+        clocks = restore_sft_checkpoint_metadata(
+            persisted, expected_identity=previous_identity,
+            expected_parent=expected_parent,
+            model_accepted_tokens=int(manifest["accepted_tokens"]))
+    except (KeyError, TypeError, ValueError) as transition_error:
+        raise RuntimeError(
+            f"invalid previous SFT sampler authority: {transition_error}") \
+            from transition_error
+    if diloco_k is None or diloco_k <= 0 or int(clocks[2]) % diloco_k:
+        raise RuntimeError(
+            "SFT world-size transition requires a complete K-aligned cursor")
+    return clocks, "sft-world-size-transition", previous_identity
+
+
 def load_node_sharded_checkpoint(
     root: str | Path,
     model,
@@ -339,6 +381,7 @@ def load_node_sharded_checkpoint(
     expected_sft_identity: SFTSamplerIdentity | None = None,
     expected_sft_parent: Mapping | None = None,
     allow_sft_parent_optimizer_transition: bool = False,
+    allow_sft_world_size_transition: bool = False,
     allow_legacy_sampler_transition: bool = False,
     allow_counter_sampler_transition: bool = False,
     diloco_k: int | None = None,
@@ -359,15 +402,14 @@ def load_node_sharded_checkpoint(
             sampler_status = "sft-parent-optimizer-transition"
             manifest["sft_restore_clocks"] = (0, 0, 0)
         else:
-            try:
-                sft_clocks = restore_sft_checkpoint_metadata(
-                    manifest.get("sampler", {}),
-                    expected_identity=expected_sft_identity,
+            sft_clocks, sampler_status, previous_identity = (
+                validate_sft_sampler_manifest(
+                    manifest, expected_identity=expected_sft_identity,
                     expected_parent=expected_sft_parent,
-                    model_accepted_tokens=int(manifest["accepted_tokens"]))
-            except (TypeError, ValueError) as error:
-                raise RuntimeError(f"SFT checkpoint metadata mismatch: {error}") from error
-            sampler_status = "sft"
+                    allow_world_size_transition=allow_sft_world_size_transition,
+                    diloco_k=diloco_k))
+            if previous_identity is not None:
+                manifest["previous_sft_identity"] = previous_identity.to_metadata()
             manifest["sft_restore_clocks"] = sft_clocks
     else:
         sampler_status = validate_moe_sampler_manifest(

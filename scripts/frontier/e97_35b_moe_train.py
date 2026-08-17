@@ -117,6 +117,10 @@ def parse_args():
         choices=("router-preserved", "nonrouter-preserved"),
         help="Restore mature state only for the selected parameter cohort and use "
              "fresh ScheduleFree state for the complementary trainable cohort.")
+    parser.add_argument(
+        "--sft-transition-data-world-size", action="store_true",
+        help="Explicitly continue a K-aligned SFT checkpoint with only its fixed "
+             "data-world size changed; all token/target/cursor clocks are retained.")
     parser.add_argument("--sft-validation-batches", type=int, default=0)
     parser.add_argument(
         "--sft-validation-exhaustive", action="store_true",
@@ -705,6 +709,7 @@ def main() -> None:
                 expected_sft_identity=sft_identity,
                 expected_sft_parent=sft_parent,
                 allow_sft_parent_optimizer_transition=parent_optimizer_transition,
+                allow_sft_world_size_transition=args.sft_transition_data_world_size,
                 allow_legacy_sampler_transition=args.sampler_transition_from_legacy,
                 allow_counter_sampler_transition=args.sampler_transition_from_counter,
                 diloco_k=args.diloco_k)
@@ -759,6 +764,16 @@ def main() -> None:
                     "boundary_accepted_tokens": accepted_tokens,
                     "previous_sampler": previous_sampler,
                     "new_sampler_identity": sampler_identity.to_metadata(),
+                }
+            elif restore_status == "sft-world-size-transition":
+                sampler_transition = {
+                    "status": "sft-data-world-size-transition",
+                    "boundary_step": starting_step,
+                    "boundary_accepted_tokens": accepted_tokens,
+                    "boundary_cursor": sft_cursor,
+                    "previous_sampler_identity": manifest["previous_sft_identity"],
+                    "new_sampler_identity": sft_identity.to_metadata(),
+                    "optimizer_state": "preserved-exact",
                 }
             else:
                 sampler_transition = manifest.get("sampler_transition")
