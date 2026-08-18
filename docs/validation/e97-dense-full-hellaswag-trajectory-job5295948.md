@@ -31,10 +31,15 @@ The additional 213B globally counted tokens did not translate into capability
 on this benchmark.
 
 The result does not alone distinguish architecture, data, and optimization.
-The run used very large global token batches with K40 DiLoCo; global token
-exposure is not equivalent to the number of sequential parameter updates or
-per-worker trajectory tokens. Further SFT cannot resolve this foundation-level
-plateau. No additional alignment training is authorized by this result.
+This was local SGD with batch size four per replica and K40 DiLoCo model
+averaging, not conventional synchronous training with one enormous global
+batch. Global exposure sums tokens processed by many independent replicas; it
+is not the number of tokens seen along any one local optimization trajectory.
+From 300B to 513B, each replica made 12,720 local updates and processed about
+104M tokens before the corresponding trajectories were combined through
+periodic model averaging, while the global exposure counter increased by
+213B. Further SFT cannot resolve this foundation-level plateau. No additional
+alignment training is authorized by this result.
 
 Artifacts:
 
