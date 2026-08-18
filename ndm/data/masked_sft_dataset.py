@@ -284,10 +284,36 @@ class MaskedSFTPackedDataset:
             raise RuntimeError("materialized pack accounting mismatch")
         return token_out, mask_out, token_count, target_count, f"pack-{pack_id:08d}"
 
+    def record_spans_at(self, pack_id: int) -> tuple[tuple[int, int], ...]:
+        """Return exact half-open record spans for one immutable pack."""
+        if not 0 <= int(pack_id) < len(self.packs):
+            raise IndexError("SFT pack index is out of range")
+        pack = self.packs[int(pack_id)]
+        first = int(pack["record_offset"])
+        record_ids = self.pack_record_ids[first:first + int(pack["record_count"])]
+        spans = []
+        cursor = 0
+        for record_id_value in record_ids:
+            count = int(self.records[int(record_id_value)]["tokens"])
+            spans.append((cursor, cursor + count))
+            cursor += count
+        if cursor != int(pack["tokens"]) or not spans:
+            raise RuntimeError("pack record spans contradict authority")
+        return tuple(spans)
+
     def sample_at(self, absolute_index: int) -> tuple[torch.Tensor, torch.Tensor, int, int, str]:
         pack_id = self.pack_id_at(absolute_index)
         token, mask, length, targets, _pack_id = self.pack_at(pack_id)
         return token, mask, length, targets, self.sample_id(absolute_index)
+
+    def get_batch_with_record_spans(self, batch_size: int, device=None):
+        """Sample packs and retain boundaries needed for clean recurrent resets."""
+        if batch_size != 1:
+            raise ValueError("record-reset SFT currently requires batch_size=1")
+        absolute = self.next_absolute_rank_sample_index
+        pack_id = self.pack_id_at(absolute)
+        result = self.get_batch(batch_size, device=device)
+        return (*result, (self.record_spans_at(pack_id),))
 
     def get_batch(self, batch_size: int, device=None):
         if batch_size <= 0:

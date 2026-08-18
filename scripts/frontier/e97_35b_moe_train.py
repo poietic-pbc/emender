@@ -123,6 +123,13 @@ def parse_args():
              "data-world size changed; all token/target/cursor clocks are retained.")
     parser.add_argument("--sft-validation-batches", type=int, default=0)
     parser.add_argument(
+        "--sft-reset-state-between-records", action="store_true",
+        help="Run every packed conversation from a clean recurrent state.")
+    parser.add_argument(
+        "--sft-transition-record-reset", action="store_true",
+        help="Explicitly fork a complete K-aligned legacy packed-state SFT checkpoint "
+             "into the record-reset objective lineage.")
+    parser.add_argument(
         "--sft-validation-exhaustive", action="store_true",
         help="Enumerate every validation pack exactly once; requires one eight-rank node.")
     parser.add_argument(
@@ -255,6 +262,66 @@ def _sft_metadata(identity, parent, *, total_tokens, target_tokens, cursor):
         absolute_rank_sample_index=cursor)
 
 
+def _masked_sft_record_reset_objective(
+        model, chunks, masks, actual_lengths, record_spans, *, node_group):
+    """Score each complete conversation from a clean recurrent state.
+
+    Every rank executes the node-wide maximum record count so node-local expert
+    collectives stay ordered. Missing records use a fully masked two-token
+    dummy; they contribute neither language-model nor router-auxiliary weight.
+    """
+    if chunks.shape[0] != 1 or len(record_spans) != 1:
+        raise RuntimeError("record-reset SFT requires one pack per rank")
+    spans = record_spans[0]
+    if not spans or spans[-1][1] != int(actual_lengths[0].item()):
+        raise RuntimeError("record-reset spans do not cover the exact pack")
+    target_mask = masks[:, 1:].contiguous()
+    positions = torch.arange(target_mask.shape[1], device=chunks.device).unsqueeze(0)
+    target_mask = target_mask & (positions < (actual_lengths.unsqueeze(1) - 1))
+    local_targets = target_mask.sum(dtype=torch.int64)
+    node_targets = local_targets.clone()
+    dist.all_reduce(node_targets, op=dist.ReduceOp.SUM, group=node_group)
+    if int(node_targets.item()) <= 0:
+        raise RuntimeError("masked SFT batch contains zero node-wide assistant targets")
+
+    local_records = torch.tensor(len(spans), device=chunks.device, dtype=torch.int64)
+    dist.all_reduce(local_records, op=dist.ReduceOp.MAX, group=node_group)
+    local_prediction_rows = torch.tensor(
+        sum(max(0, stop - start - 1) for start, stop in spans),
+        device=chunks.device, dtype=torch.int64)
+    node_prediction_rows = local_prediction_rows.clone()
+    dist.all_reduce(node_prediction_rows, op=dist.ReduceOp.SUM, group=node_group)
+    loss_parts = []
+    auxiliary = chunks.new_zeros((), dtype=torch.float32)
+    observed_targets = 0
+    for record_index in range(int(local_records.item())):
+        if record_index < len(spans):
+            start, stop = spans[record_index]
+            if stop - start < 2:
+                raise RuntimeError("SFT record is too short for causal training")
+            record_tokens = chunks[:, start:stop]
+            record_mask = masks[:, start + 1:stop].contiguous()
+            record_length = torch.tensor(
+                [stop - start], device=chunks.device, dtype=torch.long)
+            weight = (stop - start - 1) / int(node_prediction_rows.item())
+            observed_targets += int(record_mask.sum().item())
+        else:
+            record_tokens = torch.zeros((1, 2), device=chunks.device, dtype=torch.long)
+            record_mask = torch.zeros((1, 1), device=chunks.device, dtype=torch.bool)
+            record_length = torch.ones(1, device=chunks.device, dtype=torch.long)
+            weight = 0.0
+        part = model(
+            record_tokens, return_loss=True, actual_length=record_length,
+            loss_mask=record_mask, loss_reduction="sum")
+        loss_parts.append(part)
+        auxiliary = auxiliary + e97_moe_auxiliary_loss(model).float() * weight
+    if observed_targets != int(local_targets.item()):
+        raise RuntimeError("record-reset target accounting mismatch")
+    loss_sum = torch.stack(loss_parts).sum()
+    return (loss_sum / node_targets.to(dtype=loss_sum.dtype), loss_sum.detach(),
+            local_targets, node_targets, auxiliary)
+
+
 def _masked_sft_objective(model, chunks, masks, actual_lengths, *, node_group):
     """Exact node-wide assistant-target normalization for node-local EP.
 
@@ -319,15 +386,22 @@ def _run_sft_validation(args, model, optimizer, groups, train_identity):
                     pack_id = iteration * 8 + rank
                     if pack_id < pack_count:
                         token, mask, length, target_count, _sample_id = dataset.pack_at(pack_id)
+                        spans = (dataset.record_spans_at(pack_id),)
                     else:
                         token = torch.zeros(dataset.sequence_tokens, dtype=torch.long)
                         mask = torch.zeros(dataset.sequence_tokens, dtype=torch.bool)
-                        length, target_count = 1, 0
+                        length, target_count, spans = 2, 0, (((0, 2),),)
                     chunks = token.unsqueeze(0).to("cuda", non_blocking=True)
                     masks = mask.unsqueeze(0).to("cuda", non_blocking=True)
                     lengths = torch.tensor([length], device="cuda", dtype=torch.long)
-                    _loss, local_sum, local_targets, _node_targets = _masked_sft_objective(
-                        model, chunks, masks, lengths, node_group=groups.node_group)
+                    if args.sft_reset_state_between_records:
+                        (_loss, local_sum, local_targets, _node_targets,
+                         _auxiliary) = _masked_sft_record_reset_objective(
+                            model, chunks, masks, lengths, spans,
+                            node_group=groups.node_group)
+                    else:
+                        _loss, local_sum, local_targets, _node_targets = _masked_sft_objective(
+                            model, chunks, masks, lengths, node_group=groups.node_group)
                     capture_routing()
                     if pack_id < pack_count:
                         if int(local_targets.item()) != target_count:
@@ -360,10 +434,19 @@ def _run_sft_validation(args, model, optimizer, groups, train_identity):
                 }
             else:
                 for _ in range(args.sft_validation_batches):
-                    chunks, masks, lengths, _targets = dataset.get_batch(
-                        args.batch_size, device=torch.device("cuda"))
-                    _loss, local_sum, local_targets, _node_targets = _masked_sft_objective(
-                        model, chunks, masks, lengths, node_group=groups.node_group)
+                    if args.sft_reset_state_between_records:
+                        (chunks, masks, lengths, _targets, spans) = (
+                            dataset.get_batch_with_record_spans(
+                                args.batch_size, device=torch.device("cuda")))
+                        (_loss, local_sum, local_targets, _node_targets,
+                         _auxiliary) = _masked_sft_record_reset_objective(
+                            model, chunks, masks, lengths, spans,
+                            node_group=groups.node_group)
+                    else:
+                        chunks, masks, lengths, _targets = dataset.get_batch(
+                            args.batch_size, device=torch.device("cuda"))
+                        _loss, local_sum, local_targets, _node_targets = _masked_sft_objective(
+                            model, chunks, masks, lengths, node_group=groups.node_group)
                     capture_routing()
                     totals[0] += local_sum.double()
                     totals[1] += local_targets.double()
@@ -577,6 +660,13 @@ def main() -> None:
         if ((args.sft_resume_parent_optimizer or args.sft_parent_optimizer_split)
                 and sft_identity is None):
             raise RuntimeError("parent-optimizer transition is valid only for masked SFT")
+        if args.sft_transition_record_reset and (
+                not args.sft_reset_state_between_records or args.resume_root is None):
+            raise RuntimeError(
+                "record-reset transition requires reset mode and --resume-root")
+        if args.sft_reset_state_between_records and (
+                sft_identity is None or args.batch_size != 1):
+            raise RuntimeError("record-reset SFT requires masked SFT batch_size=1")
         if args.sft_validation_only and (
                 sft_identity is None or not args.sft_validation_exhaustive
                 or args.resume_root is not None or args.sft_resume_parent_optimizer
@@ -681,6 +771,9 @@ def main() -> None:
              checkpoint_interval=args.checkpoint_interval,
              projection_chunk_size=args.projection_chunk_size,
              context_size=args.chunk_size,
+             sft_state_policy=(
+                 "reset-at-record-boundaries-v1"
+                 if args.sft_reset_state_between_records else "continuous-pack-v1"),
              hbm_allocated=torch.cuda.memory_allocated(),
              hbm_reserved=torch.cuda.memory_reserved())
 
@@ -777,6 +870,26 @@ def main() -> None:
                 }
             else:
                 sampler_transition = manifest.get("sampler_transition")
+            prior_reset = (
+                isinstance(manifest.get("sampler_transition"), dict)
+                and manifest["sampler_transition"].get("objective_state_policy")
+                == "reset-at-record-boundaries-v1")
+            if args.sft_transition_record_reset:
+                if prior_reset or sft_cursor % args.diloco_k:
+                    raise RuntimeError(
+                        "record-reset objective transition requires a legacy K boundary")
+                sampler_transition = {
+                    "status": "sft-record-reset-objective-transition",
+                    "boundary_step": starting_step,
+                    "boundary_accepted_tokens": accepted_tokens,
+                    "boundary_cursor": sft_cursor,
+                    "objective_state_policy": "reset-at-record-boundaries-v1",
+                    "previous_sampler_transition": manifest.get("sampler_transition"),
+                    "optimizer_state": "preserved-exact",
+                }
+            elif args.sft_reset_state_between_records != prior_reset:
+                raise RuntimeError(
+                    "SFT recurrent-state objective policy mismatches checkpoint lineage")
             emit(args.log_jsonl, "restart_loaded", checkpoint_step=starting_step,
                  checkpoint_tokens=accepted_tokens,
                  learning_rates=[group["lr"] for group in optimizer.param_groups],
@@ -853,9 +966,15 @@ def main() -> None:
                 break
             optimizer.zero_grad(set_to_none=True)
             torch.cuda.reset_peak_memory_stats()
+            record_spans = None
             if sft_identity is not None:
-                chunks, assistant_masks, actual_lengths, batch_target_counts = (
-                    dataset.get_batch(args.batch_size, device=torch.device("cuda")))
+                if args.sft_reset_state_between_records:
+                    (chunks, assistant_masks, actual_lengths, batch_target_counts,
+                     record_spans) = dataset.get_batch_with_record_spans(
+                        args.batch_size, device=torch.device("cuda"))
+                else:
+                    chunks, assistant_masks, actual_lengths, batch_target_counts = (
+                        dataset.get_batch(args.batch_size, device=torch.device("cuda")))
             else:
                 chunks, _, actual_lengths = dataset.get_batch(
                     args.batch_size, device=torch.device("cuda"))
@@ -874,12 +993,19 @@ def main() -> None:
             node_target_count = None
             if sft_identity is not None:
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    loss, local_loss_sum, local_target_count, node_target_count = (
-                        _masked_sft_objective(
-                            model, chunks, assistant_masks, actual_lengths,
-                            node_group=groups.node_group))
-                auxiliary = e97_moe_auxiliary_loss(model)
-                objective = loss + auxiliary / dist.get_world_size(groups.node_group)
+                    if args.sft_reset_state_between_records:
+                        (loss, local_loss_sum, local_target_count, node_target_count,
+                         auxiliary) = _masked_sft_record_reset_objective(
+                            model, chunks, assistant_masks, actual_lengths, record_spans,
+                            node_group=groups.node_group)
+                        objective = loss + auxiliary
+                    else:
+                        loss, local_loss_sum, local_target_count, node_target_count = (
+                            _masked_sft_objective(
+                                model, chunks, assistant_masks, actual_lengths,
+                                node_group=groups.node_group))
+                        auxiliary = e97_moe_auxiliary_loss(model)
+                        objective = loss + auxiliary / dist.get_world_size(groups.node_group)
                 gradients_ready = False
             elif args.sequence_chunk_size > 0:
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):

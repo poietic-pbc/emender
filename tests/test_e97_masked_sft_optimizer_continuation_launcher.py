@@ -56,6 +56,18 @@ def test_launcher_supports_explicit_fixed_world_sft_scale_transition():
     assert "K-aligned cursor" in checkpoint
 
 
+def test_launcher_binds_explicit_record_reset_objective_transition():
+    text = LAUNCHER.read_text()
+    runner = RUNNER.read_text()
+    assert "SFT_RESET_STATE_BETWEEN_RECORDS" in text
+    assert "SFT_TRANSITION_RECORD_RESET" in text
+    assert "--sft-reset-state-between-records" in text
+    assert "--sft-transition-record-reset" in text
+    assert "reset-at-record-boundaries-v1" in runner
+    assert "sft-record-reset-objective-transition" in runner
+    assert "record-reset objective transition requires a legacy K boundary" in runner
+
+
 def test_runner_records_explicit_counter_to_sft_optimizer_transition():
     runner = RUNNER.read_text()
     checkpoint = CHECKPOINT.read_text()

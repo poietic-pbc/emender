@@ -30,6 +30,8 @@ LR_OVERRIDE=${LR_OVERRIDE:-}
 # before exact state restoration. Empty retains the legacy all-preserved path.
 PARENT_OPTIMIZER_SPLIT=${PARENT_OPTIMIZER_SPLIT:-}
 SFT_TRANSITION_DATA_WORLD_SIZE=${SFT_TRANSITION_DATA_WORLD_SIZE:-0}
+SFT_RESET_STATE_BETWEEN_RECORDS=${SFT_RESET_STATE_BETWEEN_RECORDS:-0}
+SFT_TRANSITION_RECORD_RESET=${SFT_TRANSITION_RECORD_RESET:-0}
 INITIALIZER_LR=0.0001
 CONTEXT_SIZE=${CONTEXT_SIZE:-4096}
 BATCH_SIZE=${BATCH_SIZE:-1}
@@ -53,7 +55,10 @@ REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
    && "$SAVE_EVERY" =~ ^[0-9]+$ \
    && ( -z "$LR_OVERRIDE" || "$LR_OVERRIDE" =~ ^0\.[0-9]+$ ) \
    && "$PARENT_OPTIMIZER_SPLIT" =~ ^(router-preserved|nonrouter-preserved)?$ \
-   && "$SFT_TRANSITION_DATA_WORLD_SIZE" =~ ^(0|1)$ ]] || {
+   && "$SFT_TRANSITION_DATA_WORLD_SIZE" =~ ^(0|1)$ \
+   && "$SFT_RESET_STATE_BETWEEN_RECORDS" =~ ^(0|1)$ \
+   && "$SFT_TRANSITION_RECORD_RESET" =~ ^(0|1)$ \
+   && ( "$SFT_TRANSITION_RECORD_RESET" == 0 || "$SFT_RESET_STATE_BETWEEN_RECORDS" == 1 ) ]] || {
   echo "invalid masked-SFT controls" >&2; exit 64; }
 (( SAVE_EVERY == 0 || SAVE_EVERY % DILOCO_K == 0 )) || exit 64
 record=$(scontrol show job "$SLURM_JOB_ID" -o)
@@ -90,6 +95,8 @@ printf '%s\n' \
   "diloco_k=$DILOCO_K" "optimizer_state=preserve-parent-exact" \
   "optimizer_split=${PARENT_OPTIMIZER_SPLIT:-none}" \
   "sft_transition_data_world_size=$SFT_TRANSITION_DATA_WORLD_SIZE" \
+  "sft_state_policy=$([[ $SFT_RESET_STATE_BETWEEN_RECORDS == 1 ]] && echo reset-at-record-boundaries-v1 || echo continuous-pack-v1)" \
+  "sft_transition_record_reset=$SFT_TRANSITION_RECORD_RESET" \
   "lr_override=${LR_OVERRIDE:-none}" "sampler_key=$SFT_SAMPLER_KEY" \
   > "$RUN_ROOT/identity/recipe-${SLURM_JOB_ID}.txt"
 
@@ -110,7 +117,7 @@ export MASTER_PORT=$((35000 + SLURM_JOB_ID % 10000)) WORLD_SIZE=$SLURM_NTASKS
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-7} MPICH_GPU_SUPPORT_ENABLED=1 NCCL_DEBUG=WARN
 export PYTORCH_ALLOC_CONF=expandable_segments:True PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
 export TIKTOKEN_CACHE_DIR=/lustre/orion/bif148/proj-shared/tiktoken_cache EMENDER_SOURCE_COMMIT=$SOURCE_COMMIT
-export SNAPSHOT JOB_SEED JOB_SEED_ARGS RESUME_ROOT RUN_ROOT MAX_STEPS DILOCO_K LR_OVERRIDE PARENT_OPTIMIZER_SPLIT SFT_TRANSITION_DATA_WORLD_SIZE INITIALIZER_LR CONTEXT_SIZE BATCH_SIZE
+export SNAPSHOT JOB_SEED JOB_SEED_ARGS RESUME_ROOT RUN_ROOT MAX_STEPS DILOCO_K LR_OVERRIDE PARENT_OPTIMIZER_SPLIT SFT_TRANSITION_DATA_WORLD_SIZE SFT_RESET_STATE_BETWEEN_RECORDS SFT_TRANSITION_RECORD_RESET INITIALIZER_LR CONTEXT_SIZE BATCH_SIZE
 export AUTHORITY_ROOT AUTHORITY_MANIFEST_SHA256 PACK_ROOT PACK_MANIFEST_SHA256 PARENT_ROOT PARENT_MANIFEST_SHA256
 export SFT_SAMPLER_KEY SAVE_EVERY VALIDATION_BATCHES FINAL_CHECKPOINT_DELAY_SECONDS
 set +e
@@ -130,6 +137,14 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   if [[ "$SFT_TRANSITION_DATA_WORLD_SIZE" == 1 ]]; then
     world_transition=(--sft-transition-data-world-size)
   fi
+  record_reset=()
+  if [[ "$SFT_RESET_STATE_BETWEEN_RECORDS" == 1 ]]; then
+    record_reset=(--sft-reset-state-between-records)
+  fi
+  record_reset_transition=()
+  if [[ "$SFT_TRANSITION_RECORD_RESET" == 1 ]]; then
+    record_reset_transition=(--sft-transition-record-reset)
+  fi
   "$EMENDER_PYTHON" scripts/frontier/e97_35b_moe_train.py \
     --seed-checkpoint "$JOB_SEED" --seed-args-json "$JOB_SEED_ARGS" \
     --max-steps "$MAX_STEPS" --batch-size "$BATCH_SIZE" --chunk-size "$CONTEXT_SIZE" \
@@ -146,6 +161,7 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
     --sft-validation-batches "$VALIDATION_BATCHES" \
     --final-checkpoint-delay-seconds "$FINAL_CHECKPOINT_DELAY_SECONDS" \
     "${resume[@]}" "${lr_override[@]}" "${world_transition[@]}" \
+    "${record_reset[@]}" "${record_reset_transition[@]}" \
     --log-jsonl "$RUN_ROOT/logs/training.jsonl"
 '
 rc=$?

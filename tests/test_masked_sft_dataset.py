@@ -79,6 +79,13 @@ def test_complete_record_packing_and_counter_sampling(tmp_path):
     assert dataset.next_absolute_rank_sample_index == 9
     assert len(dataset.last_batch_sample_ids) == 2
 
+    reset_dataset = MaskedSFTPackedDataset(authority, packs, identity=identity, rank=1)
+    reset_batch = reset_dataset.get_batch_with_record_spans(1)
+    assert reset_batch[4] == (((0, 3), (3, 5)),)
+    assert reset_dataset.next_absolute_rank_sample_index == 1
+    with pytest.raises(ValueError, match="batch_size=1"):
+        reset_dataset.get_batch_with_record_spans(2)
+
 
 def test_exact_pack_access_bypasses_replacement_sampler(tmp_path):
     authority, packs, train_identity = _fixture(tmp_path)
