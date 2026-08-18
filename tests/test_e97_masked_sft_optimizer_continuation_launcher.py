@@ -70,6 +70,17 @@ def test_launcher_binds_explicit_record_reset_objective_transition():
     assert "record-reset objective transition requires a legacy K boundary" in runner
 
 
+def test_launcher_supports_explicit_cross_node_gradient_sync_transition():
+    text = LAUNCHER.read_text()
+    runner = RUNNER.read_text()
+    assert "SFT_CROSS_NODE_GRADIENT_SYNC" in text
+    assert "SFT_TRANSITION_CROSS_NODE_GRADIENT_SYNC" in text
+    assert "--sft-cross-node-gradient-sync" in text
+    assert "--sft-transition-cross-node-gradient-sync" in text
+    assert "synchronize_sharded_gradients_" in runner
+    assert "corresponding-lane-gradient-sum-v1" in runner
+
+
 def test_runner_records_explicit_counter_to_sft_optimizer_transition():
     runner = RUNNER.read_text()
     checkpoint = CHECKPOINT.read_text()

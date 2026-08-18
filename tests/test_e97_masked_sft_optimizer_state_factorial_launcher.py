@@ -4,6 +4,7 @@ import torch
 
 from scripts.frontier.e97_35b_moe_train import (
     _sft_optimizer_parameter_groups, _sft_optimizer_split_policy,
+    _sft_transition_has_policy,
 )
 
 
@@ -49,6 +50,10 @@ def test_optimizer_split_policy_survives_record_reset_transition():
     assert _sft_optimizer_split_policy(original) == "router-preserved"
     assert _sft_optimizer_split_policy(reset) == "router-preserved"
     assert _sft_optimizer_split_policy({"optimizer_state": "preserved-exact"}) is None
+    assert _sft_transition_has_policy(
+        reset, "optimizer_state", "router-preserved")
+    assert not _sft_transition_has_policy(
+        reset, "optimizer_sync_policy", "corresponding-lane-gradient-sum-v1")
 
 
 def test_state_factorial_launcher_has_three_isolated_matched_worlds():

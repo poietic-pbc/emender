@@ -37,6 +37,7 @@ from ndm.e97_moe_ep import (
     assert_node_local_ep_group,
     average_replicated_gradients_,
     sum_replicated_gradients_,
+    synchronize_sharded_gradients_,
     create_moe_process_groups,
     diloco_average_schedulefree_,
     node_replicated_parameters,
@@ -129,6 +130,12 @@ def parse_args():
         "--sft-transition-record-reset", action="store_true",
         help="Explicitly fork a complete K-aligned legacy packed-state SFT checkpoint "
              "into the record-reset objective lineage.")
+    parser.add_argument(
+        "--sft-cross-node-gradient-sync", action="store_true",
+        help="Synchronize corresponding parameter-shard gradients before every update.")
+    parser.add_argument(
+        "--sft-transition-cross-node-gradient-sync", action="store_true",
+        help="Explicitly fork a complete SFT checkpoint from model averaging to DDP.")
     parser.add_argument(
         "--sft-validation-exhaustive", action="store_true",
         help="Enumerate every validation pack exactly once; requires one eight-rank node.")
@@ -272,6 +279,16 @@ def _sft_optimizer_split_policy(transition):
             return policy
         transition = transition.get("previous_sampler_transition")
     return None
+
+
+def _sft_transition_has_policy(transition, key, value):
+    seen = set()
+    while isinstance(transition, dict) and id(transition) not in seen:
+        seen.add(id(transition))
+        if transition.get(key) == value:
+            return True
+        transition = transition.get("previous_sampler_transition")
+    return False
 
 
 def _masked_sft_record_reset_objective(
@@ -689,6 +706,15 @@ def main() -> None:
         if args.sft_reset_state_between_records and (
                 sft_identity is None or args.batch_size != 1):
             raise RuntimeError("record-reset SFT requires masked SFT batch_size=1")
+        if args.sft_transition_cross_node_gradient_sync and (
+                not args.sft_cross_node_gradient_sync or args.resume_root is None):
+            raise RuntimeError(
+                "DDP transition requires cross-node gradient sync and --resume-root")
+        if args.sft_cross_node_gradient_sync and (
+                sft_identity is None or groups.node_count <= 1
+                or args.diloco_k != 1):
+            raise RuntimeError(
+                "SFT cross-node gradient sync requires multinode masked SFT and diloco-k=1")
         if args.sft_validation_only and (
                 sft_identity is None or not args.sft_validation_exhaustive
                 or args.resume_root is not None or args.sft_resume_parent_optimizer
@@ -796,6 +822,9 @@ def main() -> None:
              sft_state_policy=(
                  "reset-at-record-boundaries-v1"
                  if args.sft_reset_state_between_records else "continuous-pack-v1"),
+             sft_optimizer_sync_policy=(
+                 "corresponding-lane-gradient-sum-v1"
+                 if args.sft_cross_node_gradient_sync else "diloco-model-average-v1"),
              hbm_allocated=torch.cuda.memory_allocated(),
              hbm_reserved=torch.cuda.memory_reserved())
 
@@ -892,10 +921,9 @@ def main() -> None:
                 }
             else:
                 sampler_transition = manifest.get("sampler_transition")
-            prior_reset = (
-                isinstance(manifest.get("sampler_transition"), dict)
-                and manifest["sampler_transition"].get("objective_state_policy")
-                == "reset-at-record-boundaries-v1")
+            prior_reset = _sft_transition_has_policy(
+                manifest.get("sampler_transition"), "objective_state_policy",
+                "reset-at-record-boundaries-v1")
             if args.sft_transition_record_reset:
                 if prior_reset or sft_cursor % args.diloco_k:
                     raise RuntimeError(
@@ -912,6 +940,26 @@ def main() -> None:
             elif args.sft_reset_state_between_records != prior_reset:
                 raise RuntimeError(
                     "SFT recurrent-state objective policy mismatches checkpoint lineage")
+            prior_ddp = _sft_transition_has_policy(
+                manifest.get("sampler_transition"), "optimizer_sync_policy",
+                "corresponding-lane-gradient-sum-v1")
+            if args.sft_transition_cross_node_gradient_sync:
+                if prior_ddp or sft_cursor % args.diloco_k:
+                    raise RuntimeError("DDP transition requires a complete checkpoint boundary")
+                sampler_transition = {
+                    "status": "sft-cross-node-gradient-sync-transition",
+                    "boundary_step": starting_step,
+                    "boundary_accepted_tokens": accepted_tokens,
+                    "boundary_cursor": sft_cursor,
+                    "objective_state_policy": (
+                        "reset-at-record-boundaries-v1" if prior_reset
+                        else "continuous-pack-v1"),
+                    "optimizer_sync_policy": "corresponding-lane-gradient-sum-v1",
+                    "previous_sampler_transition": manifest.get("sampler_transition"),
+                    "optimizer_state": "preserved-exact",
+                }
+            elif args.sft_cross_node_gradient_sync != prior_ddp:
+                raise RuntimeError("SFT optimizer synchronization policy mismatches lineage")
             emit(args.log_jsonl, "restart_loaded", checkpoint_step=starting_step,
                  checkpoint_tokens=accepted_tokens,
                  learning_rates=[group["lr"] for group in optimizer.param_groups],
@@ -1079,6 +1127,10 @@ def main() -> None:
             else:
                 average_replicated_gradients_(
                     replicated, group=groups.node_group, topology=topology)
+            if args.sft_cross_node_gradient_sync:
+                synchronize_sharded_gradients_(
+                    model.parameters(), lane_group=groups.diloco_lane_group,
+                    local_weight=int(node_target_count.item()))
             if phase_events is not None:
                 phase_events["reduce"].record()
             optimizer.step()
@@ -1086,12 +1138,13 @@ def main() -> None:
             if phase_events is not None:
                 phase_events["optimizer"].record()
             merge_seconds = 0.0
-            if sft_identity is not None:
+            if sft_identity is not None and not args.sft_cross_node_gradient_sync:
                 interval_node_target_tokens += int(node_target_count.item())
             merge_boundary = (
                 (sft_steps + 1) % args.diloco_k == 0
                 if sft_identity is not None else (step + 1) % args.diloco_k == 0)
-            if groups.node_count > 1 and merge_boundary:
+            if (groups.node_count > 1 and merge_boundary
+                    and not args.sft_cross_node_gradient_sync):
                 # Release inactive variable-routing blocks before RCCL allocates its
                 # cross-node collective workspace.  At 32 nodes, one lane rank can
                 # otherwise retain enough allocator cache to starve RCCL despite
@@ -1124,7 +1177,19 @@ def main() -> None:
             if sft_identity is not None:
                 node_loss_sum = local_loss_sum.clone()
                 dist.all_reduce(node_loss_sum, op=dist.ReduceOp.SUM, group=groups.node_group)
-                reported_loss = node_loss_sum / node_target_count.to(node_loss_sum.dtype)
+                if args.sft_cross_node_gradient_sync:
+                    global_loss_sum = node_loss_sum.clone()
+                    global_target_count = node_target_count.clone()
+                    dist.all_reduce(
+                        global_loss_sum, op=dist.ReduceOp.SUM,
+                        group=groups.diloco_lane_group)
+                    dist.all_reduce(
+                        global_target_count, op=dist.ReduceOp.SUM,
+                        group=groups.diloco_lane_group)
+                    reported_loss = global_loss_sum / global_target_count.to(
+                        global_loss_sum.dtype)
+                else:
+                    reported_loss = node_loss_sum / node_target_count.to(node_loss_sum.dtype)
             else:
                 dist.all_reduce(loss, op=dist.ReduceOp.AVG, group=groups.node_group)
                 reported_loss = loss

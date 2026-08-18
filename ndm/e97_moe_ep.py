@@ -266,6 +266,20 @@ def sum_replicated_gradients_(
         dist.all_reduce(parameter.grad, op=dist.ReduceOp.SUM, group=group)
 
 
+def synchronize_sharded_gradients_(parameters, *, lane_group, local_weight: int) -> None:
+    """Exact weighted DDP over corresponding node-local parameter shards."""
+    if int(local_weight) <= 0:
+        raise ValueError("cross-node gradient synchronization requires positive weight")
+    denominator = torch.tensor(float(local_weight), device="cuda", dtype=torch.float64)
+    dist.all_reduce(denominator, op=dist.ReduceOp.SUM, group=lane_group)
+    scale = float(local_weight) / float(denominator.item())
+    for parameter in parameters:
+        if parameter.grad is None:
+            raise RuntimeError("sharded DDP parameter is missing a gradient")
+        parameter.grad.mul_(scale)
+        dist.all_reduce(parameter.grad, op=dist.ReduceOp.SUM, group=lane_group)
+
+
 def node_replicated_parameters(model):
     """Yield replicated parameters, excluding packed rank-owned expert shards."""
     local_ids = set()
