@@ -262,6 +262,18 @@ def _sft_metadata(identity, parent, *, total_tokens, target_tokens, cursor):
         absolute_rank_sample_index=cursor)
 
 
+def _sft_optimizer_split_policy(transition):
+    """Recover the immutable split policy through objective/world transitions."""
+    seen = set()
+    while isinstance(transition, dict) and id(transition) not in seen:
+        seen.add(id(transition))
+        policy = transition.get("optimizer_state")
+        if policy in {"router-preserved", "nonrouter-preserved"}:
+            return policy
+        transition = transition.get("previous_sampler_transition")
+    return None
+
+
 def _masked_sft_record_reset_objective(
         model, chunks, masks, actual_lengths, record_spans, *, node_group):
     """Score each complete conversation from a clean recurrent state.
@@ -820,7 +832,7 @@ def main() -> None:
             accepted_tokens = int(manifest["accepted_tokens"])
             if (args.resume_root is not None
                     and args.sft_parent_optimizer_split is not None
-                    and manifest.get("sampler_transition", {}).get("optimizer_state")
+                    and _sft_optimizer_split_policy(manifest.get("sampler_transition"))
                     != args.sft_parent_optimizer_split):
                 raise RuntimeError("SFT split optimizer policy mismatch on resume")
             if sft_identity is not None:

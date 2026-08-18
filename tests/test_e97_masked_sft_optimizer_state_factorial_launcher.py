@@ -2,7 +2,9 @@ from pathlib import Path
 
 import torch
 
-from scripts.frontier.e97_35b_moe_train import _sft_optimizer_parameter_groups
+from scripts.frontier.e97_35b_moe_train import (
+    _sft_optimizer_parameter_groups, _sft_optimizer_split_policy,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +38,17 @@ def test_optimizer_state_split_partitions_all_parameters_with_preserved_first():
     assert set(router_first[0]["params"] + router_first[1]["params"]) == all_parameters
     assert any(parameter is router for parameter in nonrouter_first[1]["params"])
     assert set(nonrouter_first[0]["params"] + nonrouter_first[1]["params"]) == all_parameters
+
+
+def test_optimizer_split_policy_survives_record_reset_transition():
+    original = {"optimizer_state": "router-preserved"}
+    reset = {
+        "optimizer_state": "preserved-exact",
+        "previous_sampler_transition": original,
+    }
+    assert _sft_optimizer_split_policy(original) == "router-preserved"
+    assert _sft_optimizer_split_policy(reset) == "router-preserved"
+    assert _sft_optimizer_split_policy({"optimizer_state": "preserved-exact"}) is None
 
 
 def test_state_factorial_launcher_has_three_isolated_matched_worlds():
