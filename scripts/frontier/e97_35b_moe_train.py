@@ -299,15 +299,25 @@ def _masked_sft_record_reset_objective(
             start, stop = spans[record_index]
             if stop - start < 2:
                 raise RuntimeError("SFT record is too short for causal training")
-            record_tokens = chunks[:, start:stop]
-            record_mask = masks[:, start + 1:stop].contiguous()
+            real_length = stop - start
+            # The sparse-checkpoint recurrent training kernel requires the
+            # number of prediction/input rows to be divisible by 16. Tail
+            # padding is causally after every real token and is fully masked;
+            # the resulting final state is discarded at this record boundary.
+            padded_length = ((real_length - 2) // 16 + 1) * 16 + 1
+            record_tokens = torch.zeros(
+                (1, padded_length), device=chunks.device, dtype=torch.long)
+            record_tokens[:, :real_length] = chunks[:, start:stop]
+            record_mask = torch.zeros(
+                (1, padded_length - 1), device=chunks.device, dtype=torch.bool)
+            record_mask[:, :real_length - 1] = masks[:, start + 1:stop]
             record_length = torch.tensor(
-                [stop - start], device=chunks.device, dtype=torch.long)
-            weight = (stop - start - 1) / int(node_prediction_rows.item())
+                [real_length], device=chunks.device, dtype=torch.long)
+            weight = (real_length - 1) / int(node_prediction_rows.item())
             observed_targets += int(record_mask.sum().item())
         else:
-            record_tokens = torch.zeros((1, 2), device=chunks.device, dtype=torch.long)
-            record_mask = torch.zeros((1, 1), device=chunks.device, dtype=torch.bool)
+            record_tokens = torch.zeros((1, 17), device=chunks.device, dtype=torch.long)
+            record_mask = torch.zeros((1, 16), device=chunks.device, dtype=torch.bool)
             record_length = torch.ones(1, device=chunks.device, dtype=torch.long)
             weight = 0.0
         part = model(
