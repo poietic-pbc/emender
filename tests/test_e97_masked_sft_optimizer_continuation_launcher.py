@@ -31,6 +31,8 @@ def test_preserved_optimizer_launcher_does_not_silently_override_parent_lr():
     assert 'lr_override=(); [[ -z "$LR_OVERRIDE" ]]' in text
     assert '"${lr_override[@]}"' in text
     assert '--weight-decay 0.01' in text
+    assert 'KEEP_CHECKPOINTS=${KEEP_CHECKPOINTS:-2}' in text
+    assert '--keep-checkpoints "$KEEP_CHECKPOINTS"' in text
 
 
 def test_split_checkpoint_resume_reconstructs_optimizer_groups_before_restore():

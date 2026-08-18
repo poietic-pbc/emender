@@ -36,6 +36,7 @@ INITIALIZER_LR=0.0001
 CONTEXT_SIZE=${CONTEXT_SIZE:-4096}
 BATCH_SIZE=${BATCH_SIZE:-1}
 SAVE_EVERY=${SAVE_EVERY:-0}
+KEEP_CHECKPOINTS=${KEEP_CHECKPOINTS:-2}
 VALIDATION_BATCHES=${VALIDATION_BATCHES:-2}
 FINAL_CHECKPOINT_DELAY_SECONDS=${FINAL_CHECKPOINT_DELAY_SECONDS:-0}
 SFT_SAMPLER_KEY=${SFT_SAMPLER_KEY:-42}
@@ -52,7 +53,7 @@ REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
 [[ "$RUN_ROOT" == /* && "$EXPECTED_NODES" =~ ^(1|8|16|32|64)$ \
    && "$MAX_STEPS" =~ ^[1-9][0-9]*$ && "$DILOCO_K" =~ ^[1-9][0-9]*$ \
    && "$CONTEXT_SIZE" == 4096 && "$BATCH_SIZE" == 1 \
-   && "$SAVE_EVERY" =~ ^[0-9]+$ \
+   && "$SAVE_EVERY" =~ ^[0-9]+$ && "$KEEP_CHECKPOINTS" =~ ^[1-9][0-9]*$ \
    && ( -z "$LR_OVERRIDE" || "$LR_OVERRIDE" =~ ^0\.[0-9]+$ ) \
    && "$PARENT_OPTIMIZER_SPLIT" =~ ^(router-preserved|nonrouter-preserved)?$ \
    && "$SFT_TRANSITION_DATA_WORLD_SIZE" =~ ^(0|1)$ \
@@ -92,7 +93,8 @@ printf '%s\n' \
   "schema=emender-e97-masked-sft-preserved-optimizer-run-v1" "parent_manifest_sha256=$PARENT_MANIFEST_SHA256" \
   "authority_manifest_sha256=$AUTHORITY_MANIFEST_SHA256" "pack_manifest_sha256=$PACK_MANIFEST_SHA256" \
   "context_size=$CONTEXT_SIZE" "batch_size=$BATCH_SIZE" "max_steps=$MAX_STEPS" \
-  "diloco_k=$DILOCO_K" "optimizer_state=preserve-parent-exact" \
+  "diloco_k=$DILOCO_K" "save_every=$SAVE_EVERY" "keep_checkpoints=$KEEP_CHECKPOINTS" \
+  "optimizer_state=preserve-parent-exact" \
   "optimizer_split=${PARENT_OPTIMIZER_SPLIT:-none}" \
   "sft_transition_data_world_size=$SFT_TRANSITION_DATA_WORLD_SIZE" \
   "sft_state_policy=$([[ $SFT_RESET_STATE_BETWEEN_RECORDS == 1 ]] && echo reset-at-record-boundaries-v1 || echo continuous-pack-v1)" \
@@ -119,7 +121,7 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True PYTORCH_CUDA_ALLOC_CONF=expan
 export TIKTOKEN_CACHE_DIR=/lustre/orion/bif148/proj-shared/tiktoken_cache EMENDER_SOURCE_COMMIT=$SOURCE_COMMIT
 export SNAPSHOT JOB_SEED JOB_SEED_ARGS RESUME_ROOT RUN_ROOT MAX_STEPS DILOCO_K LR_OVERRIDE PARENT_OPTIMIZER_SPLIT SFT_TRANSITION_DATA_WORLD_SIZE SFT_RESET_STATE_BETWEEN_RECORDS SFT_TRANSITION_RECORD_RESET INITIALIZER_LR CONTEXT_SIZE BATCH_SIZE
 export AUTHORITY_ROOT AUTHORITY_MANIFEST_SHA256 PACK_ROOT PACK_MANIFEST_SHA256 PARENT_ROOT PARENT_MANIFEST_SHA256
-export SFT_SAMPLER_KEY SAVE_EVERY VALIDATION_BATCHES FINAL_CHECKPOINT_DELAY_SECONDS
+export SFT_SAMPLER_KEY SAVE_EVERY KEEP_CHECKPOINTS VALIDATION_BATCHES FINAL_CHECKPOINT_DELAY_SECONDS
 set +e
 srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   set -euo pipefail
@@ -152,7 +154,7 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
     --checkpoint-interval 16 --projection-chunk-size 2048 --moe-token-chunk-size 4096 \
     --lr "$INITIALIZER_LR" --weight-decay 0.01 --diloco-k "$DILOCO_K" --expert-backend rocblas \
     --empty-cache-interval 1 --offload-schedulefree-state \
-    --checkpoint-root "$RUN_ROOT/checkpoints" --save-every "$SAVE_EVERY" --keep-checkpoints 2 \
+    --checkpoint-root "$RUN_ROOT/checkpoints" --save-every "$SAVE_EVERY" --keep-checkpoints "$KEEP_CHECKPOINTS" \
     --sft-authority-root "$AUTHORITY_ROOT" --sft-authority-manifest-sha256 "$AUTHORITY_MANIFEST_SHA256" \
     --sft-pack-root "$PACK_ROOT" --sft-pack-manifest-sha256 "$PACK_MANIFEST_SHA256" \
     --sft-sampler-key "$SFT_SAMPLER_KEY" --sft-parent-root "$PARENT_ROOT" \
