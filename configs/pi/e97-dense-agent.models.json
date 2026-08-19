@@ -1,0 +1,38 @@
+{
+  "providers": {
+    "emender-local": {
+      "baseUrl": "http://127.0.0.1:8797/v1",
+      "api": "openai-completions",
+      "apiKey": "local",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false,
+        "supportsUsageInStreaming": false,
+        "supportsFinishReason": true,
+        "supportsStrictMode": false,
+        "sendSessionAffinityHeaders": true,
+        "sessionAffinityFormat": "openrouter"
+      },
+      "models": [
+        {
+          "id": "e97-dense-agent",
+          "name": "E97 Dense Recurrent Agent",
+          "reasoning": false,
+          "input": ["text"],
+          "contextWindow": 4096,
+          "maxTokens": 512,
+          "samplingParams": {
+            "temperature": 0,
+            "top_p": 1
+          },
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        }
+      ]
+    }
+  }
+}
