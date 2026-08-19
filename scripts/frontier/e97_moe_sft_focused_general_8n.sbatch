@@ -123,7 +123,10 @@ if (( rc == 0 )); then
     and .sampler.identity.schema == "emender-record-pack-counter-v1"
     and .sampler.identity.data_world_size == 64
     and .sampler.parent.manifest_sha256 == $parent
-    and .sampler_transition.optimizer_state == "router-preserved"
+    and .sampler_transition.status == "sft-pack-manifest-transition"
+    and .sampler_transition.optimizer_state == "preserved-exact"
+    and .sampler_transition.objective_state_policy == "reset-at-record-boundaries-v1"
+    and .sampler_transition.optimizer_sync_policy == "diloco-model-average-v1"
     and (.optimizer_groups | length) == 2
   ' "$manifest" >/dev/null || rc=68
   if (( rc == 0 )); then
