@@ -31,6 +31,8 @@ def test_cache_qualification_checks_incremental_contract():
         "e97_cache_suffix",
         "boundary_greedy_equal",
         "greedy_continuation_equal",
+        "post_generation_argmax_equal",
+        "post_generation_logits_max_abs_difference",
         "state_fp32",
         "transaction_preserved",
         "stop_token_consumed",

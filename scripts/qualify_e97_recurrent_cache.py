@@ -104,7 +104,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--rank", type=int, default=0)
     parser.add_argument("--world", type=int, default=1)
-    parser.add_argument("--generation-tokens", type=int, default=8)
+    parser.add_argument("--generation-tokens", type=int, default=64)
     args = parser.parse_args()
 
     if args.world <= 0 or not 0 <= args.rank < args.world:
@@ -153,7 +153,6 @@ def main() -> None:
         max_new_tokens=args.generation_tokens,
         temperature=0,
         top_k=0,
-        stop_token_ids=(218,),
     )
     generated_split, shadow_split = generate_e97_from_cache(
         loaded,
@@ -161,7 +160,26 @@ def main() -> None:
         max_new_tokens=args.generation_tokens,
         temperature=0,
         top_k=0,
-        stop_token_ids=(218,),
+    )
+    synthetic_stop = int(split.next_logits.argmax().item())
+    stopped_tokens, stopped_shadow = generate_e97_from_cache(
+        loaded,
+        split,
+        max_new_tokens=4,
+        temperature=0,
+        top_k=0,
+        stop_token_ids=(synthetic_stop,),
+    )
+
+    post_generation_hidden_diff = max_abs_difference(
+        shadow_full.hidden, shadow_split.hidden
+    )
+    post_generation_logit_diff = float(
+        (shadow_full.next_logits.float() - shadow_split.next_logits.float())
+        .abs().max().item()
+    )
+    post_generation_argmax_equal = int(shadow_full.next_logits.argmax().item()) == int(
+        shadow_split.next_logits.argmax().item()
     )
 
     state_tensors = list(tensors(split.hidden))
@@ -174,15 +192,15 @@ def main() -> None:
         split.token_ids == committed_tokens and hidden_unchanged(committed_hidden, split)
     )
     stop_consumed = (
-        shadow_split.token_ids[-len(generated_split):] == tuple(generated_split)
-        if generated_split
-        else True
+        stopped_tokens == [synthetic_stop]
+        and stopped_shadow.token_ids[-1] == synthetic_stop
     )
 
     checks = {
         "token_prefix_equal": full.token_ids == split.token_ids == tuple(token_ids),
         "boundary_greedy_equal": full_argmax == split_argmax,
         "greedy_continuation_equal": generated_full == generated_split,
+        "post_generation_argmax_equal": post_generation_argmax_equal,
         "reset_greedy_equal": int(reset.next_logits.argmax().item()) == full_argmax,
         "state_fp32": state_dtypes == ["torch.float32"],
         "state_finite": finite,
@@ -208,6 +226,8 @@ def main() -> None:
         "measurements": {
             "hidden_max_abs_difference": hidden_diff,
             "next_logits_max_abs_difference": logit_diff,
+            "post_generation_hidden_max_abs_difference": post_generation_hidden_diff,
+            "post_generation_logits_max_abs_difference": post_generation_logit_diff,
             "reset_hidden_max_abs_difference": reset_hidden_diff,
             "reset_logits_max_abs_difference": reset_logit_diff,
             "full_boundary_argmax": full_argmax,
@@ -222,7 +242,14 @@ def main() -> None:
             "elapsed_seconds": time.monotonic() - started,
         },
     }
-    if not all(math.isfinite(value) for value in (hidden_diff, logit_diff, reset_hidden_diff, reset_logit_diff)):
+    if not all(math.isfinite(value) for value in (
+        hidden_diff,
+        logit_diff,
+        post_generation_hidden_diff,
+        post_generation_logit_diff,
+        reset_hidden_diff,
+        reset_logit_diff,
+    )):
         result["status"] = "fail"
         result["checks"]["differences_finite"] = False
     else:
