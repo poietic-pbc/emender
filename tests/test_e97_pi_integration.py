@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MODEL_CONFIG = ROOT / "configs/pi/e97-dense-agent.models.json"
 TOOLS = ROOT / "configs/pi/e97-v1-tools.ts"
 V2_TOOLS = ROOT / "configs/pi/e97-v2-tools.ts"
+V3_TOOLS = ROOT / "configs/pi/e97-v3-tools.ts"
 
 
 def test_pi_model_config_is_bounded_state_affine_openai_chat():
@@ -61,5 +62,15 @@ def test_v2_tools_return_typed_values_and_require_grounded_termination():
         "realpath",
     ):
         assert required in text
+    for forbidden in ("child_process", "exec(", "spawn(", "pi.exec", "eval("):
+        assert forbidden not in text
+
+
+def test_v3_lookup_tools_encode_the_requested_field_in_the_tool_name():
+    text = V3_TOOLS.read_text()
+    assert 'name: `lookup_${field}`' in text
+    assert '["owner", "budget"] as const' in text
+    assert 'parameters: Type.Object({ project:' in text
+    assert 'name: "submit_answer"' in text
     for forbidden in ("child_process", "exec(", "spawn(", "pi.exec", "eval("):
         assert forbidden not in text

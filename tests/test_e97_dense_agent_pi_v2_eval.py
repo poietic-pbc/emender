@@ -12,11 +12,23 @@ def test_validation_panel_is_exact_disjoint_300():
     assert all(task["expected"] for task in tasks)
 
 
+def test_simplified_v3_panel_uses_field_specific_lookup_tools():
+    tasks = validation_tasks(9702, "v3")
+    assert len(tasks) == 291
+    lookups = [task for task in tasks if task["kind"] == "lookup"]
+    assert {task["first_tool"] for task in lookups} == {"lookup_owner", "lookup_budget"}
+    assert all(set(task["first_args"]) == {"project"} for task in lookups)
+
+
 def test_sandboxes_reproduce_lookup_and_count_observations(tmp_path: Path):
     tasks = validation_tasks(9702)
     lookup = next(task for task in tasks if task["kind"] == "lookup")
     lookup_root = make_sandbox(tmp_path, lookup)
     assert lookup["expected"] in (lookup_root / lookup["first_args"]["path"]).read_text()
+    lookup_v3 = next(task for task in validation_tasks(9702, "v3") if task["kind"] == "lookup")
+    lookup_v3_root = make_sandbox(tmp_path, lookup_v3)
+    project = lookup_v3["first_args"]["project"]
+    assert lookup_v3["expected"] in (lookup_v3_root / "records" / f"{project}.txt").read_text()
 
     count = next(task for task in tasks if task["kind"] == "count")
     count_root = make_sandbox(tmp_path, count)

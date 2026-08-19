@@ -10,14 +10,21 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from scripts.build_e97_dense_agent_sft_v2 import SYSTEM, split, trace
+from scripts.build_e97_dense_agent_sft_v2 import SYSTEM, split as split_v2, trace as trace_v2
+from scripts.build_e97_dense_agent_sft_v3 import split as split_v3, trace as trace_v3
 
 
-def validation_tasks(seed: int) -> list[dict[str, Any]]:
+def validation_tasks(seed: int, version: str = "v2") -> list[dict[str, Any]]:
+    if version == "v2":
+        split, trace, prefix = split_v2, trace_v2, "agent-v2"
+    elif version == "v3":
+        split, trace, prefix = split_v3, trace_v3, "agent-v3"
+    else:
+        raise ValueError(f"unsupported panel version: {version}")
     tasks = []
     for index in range(30_000):
         kind = ("calculator", "lookup", "count")[index % 3]
-        identity = f"agent-v2-{kind}-{index:08d}"
+        identity = f"{prefix}-{kind}-{index:08d}"
         if not split(identity):
             continue
         user, turns = trace(kind, index, random.Random(seed + index))
@@ -36,8 +43,9 @@ def validation_tasks(seed: int) -> list[dict[str, Any]]:
             "observation": observation,
             "expected": submit_args["value"],
         })
-    if len(tasks) != 300:
-        raise RuntimeError(f"expected 300 validation tasks, found {len(tasks)}")
+    expected_count = 300 if version == "v2" else 291
+    if len(tasks) != expected_count:
+        raise RuntimeError(f"expected {expected_count} {version} validation tasks, found {len(tasks)}")
     return tasks
 
 
@@ -45,9 +53,14 @@ def make_sandbox(root: Path, task: dict[str, Any]) -> Path:
     sandbox = root / task["id"]
     sandbox.mkdir(parents=True, exist_ok=False)
     if task["kind"] == "lookup":
-        path = sandbox / task["first_args"]["path"]
+        if "path" in task["first_args"]:
+            path = sandbox / task["first_args"]["path"]
+            field = task["first_args"]["field"]
+        else:
+            project = task["first_args"]["project"]
+            path = sandbox / "records" / f"{project}.txt"
+            field = task["first_tool"].removeprefix("lookup_")
         path.parent.mkdir(parents=True, exist_ok=True)
-        field = task["first_args"]["field"]
         path.write_text(f"record has {field} {task['expected']}.\n")
     elif task["kind"] == "count":
         directory = sandbox / task["first_args"]["path"]
@@ -103,6 +116,7 @@ def main() -> None:
     parser.add_argument("--rank", type=int, required=True)
     parser.add_argument("--world-size", type=int, required=True)
     parser.add_argument("--seed", type=int, default=9702)
+    parser.add_argument("--panel-version", choices=("v2", "v3"), default="v2")
     parser.add_argument("--limit", type=int, default=0, help="Global validation-task limit; zero runs all 300")
     parser.add_argument("--pi-config-dir", type=Path, required=True)
     parser.add_argument("--extension", type=Path, required=True)
@@ -111,7 +125,7 @@ def main() -> None:
     args = parser.parse_args()
     if not 0 <= args.rank < args.world_size:
         raise ValueError("invalid rank/world size")
-    tasks = validation_tasks(args.seed)
+    tasks = validation_tasks(args.seed, args.panel_version)
     if args.limit:
         tasks = tasks[: args.limit]
     tasks = [task for position, task in enumerate(tasks) if position % args.world_size == args.rank]

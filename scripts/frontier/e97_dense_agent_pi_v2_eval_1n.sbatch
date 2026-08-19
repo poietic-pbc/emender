@@ -20,6 +20,8 @@ set -euo pipefail
 : "${CHECKPOINT_SHA256:?}"
 LIMIT=${LIMIT:-0}
 EXPECTED_TASKS=${EXPECTED_TASKS:-300}
+PANEL_VERSION=${PANEL_VERSION:-v2}
+TOOL_CONFIG=${TOOL_CONFIG:-configs/pi/e97-v2-tools.ts}
 REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
 ARGS_JSON=${ARGS_JSON:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/final-seed-production-256n/milestones/step-2322520-tokens-513013841920/args.json}
 
@@ -73,8 +75,8 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   done
   test "$ready" = 1
   "$EMENDER_PYTHON" scripts/eval_e97_dense_agent_pi_v2.py \
-    --rank "$SLURM_PROCID" --world-size 8 --limit "'$LIMIT'" \
-    --pi-config-dir "$config" --extension "'$SNAPSHOT'/configs/pi/e97-v2-tools.ts" \
+    --rank "$SLURM_PROCID" --world-size 8 --limit "'$LIMIT'" --panel-version "'$PANEL_VERSION'" \
+    --pi-config-dir "$config" --extension "'$SNAPSHOT'/'$TOOL_CONFIG'" \
     --output-root "'$RUN_ROOT'/shards" --timeout-seconds 120
   grep -q "completion cache=miss" "$server_log"
 ' 
