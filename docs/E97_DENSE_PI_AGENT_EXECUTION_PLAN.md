@@ -8,7 +8,8 @@ Progress:
 
 - M0 complete: v1 baseline preserved in `docs/validation/e97-dense-agent-v1-baseline-job5306907.md`.
 - M1 complete: canonical tokenwise FP32 recurrent caching qualified on the real checkpoint in job 5307227; see `docs/validation/e97-dense-recurrent-cache-jobs5307047-5307175-5307227.md`.
-- M2 is the current implementation milestone.
+- M2 complete: the real Pi CLI performed a structured tool roundtrip with a recurrent-cache miss then hit on all eight ranks in job 5308186; see `docs/validation/e97-dense-pi-roundtrip-jobs5307403-5307492-5307670-5307866-5308186.md`.
+- M3 is the current implementation milestone: run and score all 308 excluded v1 tasks end to end through Pi.
 
 ## 1. Objective
 
@@ -261,10 +262,10 @@ If a targeted v2 arm passes, stop broad synthetic expansion and move directly to
 
 ## 10. Immediate work order
 
-M0 and M1 are complete. The active order is now:
+M0-M2 are complete. The active order is now:
 
-1. Implement the minimal OpenAI-compatible server and canonical Pi serialization.
-2. Add protocol, cache-manager, cancellation, and structured-tool-call tests.
-3. Connect a local Pi model definition and bounded v1-compatible tools.
-4. Run the v1 checkpoint end to end through Pi without teacher-forced actions or observations.
+1. Run all 308 excluded v1 tasks through real Pi sessions without teacher-forced actions or observations.
+2. Aggregate protocol, executed-tool, argument, observation, stopping, loop, strict-final, and semantic-final metrics by task family.
+3. Preserve representative Pi session traces and cache diagnostics.
+4. Use the resulting failure taxonomy to finalize dense-agent v2 task/observation design.
 5. Do not begin v2 SFT until the Pi execution traces separate protocol failures from grounding failures.
