@@ -11,7 +11,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -433,6 +433,123 @@ def _uses_triton(model: torch.nn.Module) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class E97RecurrentCache:
+    """Committed recurrent state after an exact token prefix.
+
+    Cache values are immutable from the caller's perspective. Advancing a
+    cache returns a new value, which lets serving code generate into a shadow
+    cache and commit it only after a complete assistant turn is accepted.
+    """
+
+    token_ids: tuple[int, ...]
+    hidden: Any
+    next_logits: torch.Tensor
+    checkpoint: str
+
+    @property
+    def state_bytes(self) -> int:
+        """Bytes occupied by recurrent tensors and boundary logits."""
+
+        def tensor_bytes(value: Any) -> int:
+            if torch.is_tensor(value):
+                return value.numel() * value.element_size()
+            if isinstance(value, (list, tuple)):
+                return sum(tensor_bytes(item) for item in value)
+            if isinstance(value, dict):
+                return sum(tensor_bytes(item) for item in value.values())
+            return 0
+
+        return tensor_bytes(self.hidden) + tensor_bytes(self.next_logits)
+
+
+def _cache_checkpoint_identity(loaded: LoadedE97Checkpoint) -> str:
+    return str(loaded.checkpoint_path)
+
+
+@torch.no_grad()
+def advance_e97_cache(
+    loaded: LoadedE97Checkpoint,
+    token_ids: Sequence[int],
+    cache: E97RecurrentCache | None = None,
+) -> E97RecurrentCache:
+    """Consume ``token_ids`` and return the resulting recurrent boundary.
+
+    The fused E97 recurrence pads unaligned inference chunks internally, but
+    returns the state at the valid-token boundary. Inference states remain
+    FP32, so arbitrary HTTP/turn chunking does not repeatedly narrow them.
+    """
+
+    consumed = tuple(int(token) for token in token_ids)
+    if not consumed:
+        if cache is None:
+            raise ValueError("an initial E97 cache requires at least one token")
+        return cache
+
+    checkpoint = _cache_checkpoint_identity(loaded)
+    if cache is not None and cache.checkpoint != checkpoint:
+        raise ValueError("E97 cache belongs to a different checkpoint")
+    if any(
+        isinstance(module, E97SplitEditLayer) and bool(module.use_conv)
+        for module in loaded.model.modules()
+    ):
+        raise NotImplementedError(
+            "cached E97 inference does not yet carry convolution buffers"
+        )
+
+    model_device = next(loaded.model.parameters()).device
+    tokens = torch.tensor([consumed], dtype=torch.long, device=model_device)
+    logits, (hidden, _) = loaded.model(
+        tokens,
+        return_loss=False,
+        return_prev_hiddens=True,
+        prev_hiddens=None if cache is None else cache.hidden,
+    )
+    return E97RecurrentCache(
+        token_ids=(cache.token_ids if cache is not None else ()) + consumed,
+        hidden=hidden,
+        next_logits=logits[0, -1].detach(),
+        checkpoint=checkpoint,
+    )
+
+
+@torch.no_grad()
+def generate_e97_from_cache(
+    loaded: LoadedE97Checkpoint,
+    cache: E97RecurrentCache,
+    *,
+    max_new_tokens: int = 64,
+    temperature: float = 0.8,
+    top_k: int = 40,
+    top_p: float = 0.0,
+    stop_token_ids: Iterable[int] = (),
+) -> tuple[list[int], E97RecurrentCache]:
+    """Generate into a new cache without mutating the committed input cache."""
+
+    if max_new_tokens < 0:
+        raise ValueError("max_new_tokens must be non-negative")
+    if cache.checkpoint != _cache_checkpoint_identity(loaded):
+        raise ValueError("E97 cache belongs to a different checkpoint")
+
+    stop_tokens = {int(token) for token in stop_token_ids}
+    shadow = cache
+    generated: list[int] = []
+    for _ in range(max_new_tokens):
+        token = _sample_token(
+            shadow.next_logits,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+        )
+        generated.append(token)
+        # Consume every emitted token, including RS/stop, so a committed cache
+        # represents exactly the prefix reconstructed by the next Pi request.
+        shadow = advance_e97_cache(loaded, [token], shadow)
+        if token in stop_tokens:
+            break
+    return generated, shadow
+
+
 @torch.no_grad()
 def generate_e97(
     loaded: LoadedE97Checkpoint,
@@ -449,12 +566,10 @@ def generate_e97(
 ) -> dict[str, Any]:
     """Generate text from a loaded E97 checkpoint.
 
-    ``auto`` selects fused full-context generation when Triton is enabled and
-    exact stateful generation when it is disabled.  The current shared
-    sequential Triton engine pads unaligned lengths for sparse checkpoints; its
-    real-token outputs are causal and correct, but its padded final state must
-    not be carried token by token.  Consequently, stateful generation is
-    deliberately rejected unless the model was loaded with ``use_triton=False``.
+    ``auto`` retains the historical full-context default for fused checkpoints
+    until cached production serving is separately qualified. Explicit
+    ``stateful`` mode uses the valid-length fused final state and FP32 recurrent
+    caches when Triton is enabled.
     """
 
     if max_new_tokens < 0:
@@ -474,49 +589,37 @@ def generate_e97(
     selected_mode = "full-context" if mode == "auto" and fused else mode
     if selected_mode == "auto":
         selected_mode = "stateful"
-    if selected_mode == "stateful" and fused:
-        raise ValueError(
-            "stateful E97 generation requires load_e97_checkpoint(..., use_triton=False); "
-            "use mode='full-context' with the fused sequential kernel"
-        )
 
     model_device = next(loaded.model.parameters()).device
     generated = list(prompt_tokens)
     stop_tokens = {int(token) for token in stop_token_ids}
-    hidden = None
 
-    if selected_mode == "stateful" and max_new_tokens:
-        prompt_tensor = torch.tensor([prompt_tokens], dtype=torch.long, device=model_device)
-        logits, (hidden, _) = loaded.model(
-            prompt_tensor,
-            return_loss=False,
-            return_prev_hiddens=True,
-            prev_hiddens=None,
-        )
-
-    for index in range(max_new_tokens):
-        if selected_mode == "full-context":
-            context = generated[-max_context:]
-            tokens = torch.tensor([context], dtype=torch.long, device=model_device)
-            logits = loaded.model(tokens, return_loss=False)
-        elif index > 0:
-            tokens = torch.tensor([[generated[-1]]], dtype=torch.long, device=model_device)
-            logits, (hidden, _) = loaded.model(
-                tokens,
-                return_loss=False,
-                return_prev_hiddens=True,
-                prev_hiddens=hidden,
-            )
-
-        next_token = _sample_token(
-            logits[0, -1],
+    if selected_mode == "stateful":
+        cache = advance_e97_cache(loaded, prompt_tokens)
+        new_tokens, _ = generate_e97_from_cache(
+            loaded,
+            cache,
+            max_new_tokens=max_new_tokens,
             temperature=temperature,
             top_k=top_k,
             top_p=top_p,
+            stop_token_ids=stop_tokens,
         )
-        generated.append(next_token)
-        if next_token in stop_tokens:
-            break
+        generated.extend(new_tokens)
+    else:
+        for _ in range(max_new_tokens):
+            context = generated[-max_context:]
+            tokens = torch.tensor([context], dtype=torch.long, device=model_device)
+            logits = loaded.model(tokens, return_loss=False)
+            next_token = _sample_token(
+                logits[0, -1],
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+            )
+            generated.append(next_token)
+            if next_token in stop_tokens:
+                break
 
     new_tokens = generated[len(prompt_tokens):]
     return {
@@ -538,11 +641,14 @@ def generate_e97(
 
 
 __all__ = [
+    "E97RecurrentCache",
     "LoadedE97Checkpoint",
+    "advance_e97_cache",
     "build_e97_model",
     "e97_checkpoint_config",
     "e97_model_kwargs_from_config",
     "generate_e97",
+    "generate_e97_from_cache",
     "is_e97_level",
     "load_e97_checkpoint",
     "resolve_e97_checkpoint",

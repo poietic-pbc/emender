@@ -11,9 +11,11 @@ import pytest
 import torch
 
 from ndm.e97 import (
+    advance_e97_cache,
     build_e97_model,
     e97_model_kwargs_from_config,
     generate_e97,
+    generate_e97_from_cache,
     load_e97_checkpoint,
 )
 from ndm.models import E97SplitEditLayer, LadderLM
@@ -221,7 +223,57 @@ def test_e97_checkpoint_roundtrip_and_cpu_generation(tmp_path):
     assert len(result["new_token_ids"]) == 2
 
 
-def test_fused_e97_generation_rejects_stateful_carry(monkeypatch):
+def test_recurrent_cache_is_chunk_boundary_invariant_on_cpu():
+    config = tiny_e97_config(mlp_ratio=0.0)
+    model = build_e97_model(config, vocab_size=256, use_triton=False).eval()
+    loaded = SimpleNamespace(
+        model=model,
+        config=config,
+        checkpoint_path=Path("/test/e97.pt"),
+        step=0,
+        weight_mode="saved",
+    )
+    tokens = [83, 121, 115, 116, 101, 109, 58, 10, 120]
+
+    full = advance_e97_cache(loaded, tokens)
+    split = advance_e97_cache(loaded, tokens[:4])
+    split = advance_e97_cache(loaded, tokens[4:7], split)
+    split = advance_e97_cache(loaded, tokens[7:], split)
+
+    assert split.token_ids == tuple(tokens)
+    assert split.state_bytes > split.next_logits.numel() * split.next_logits.element_size()
+    torch.testing.assert_close(split.next_logits, full.next_logits, rtol=1e-5, atol=1e-6)
+    for split_layer, full_layer in zip(split.hidden, full.hidden):
+        for split_head, full_head in zip(split_layer, full_layer):
+            torch.testing.assert_close(split_head, full_head, rtol=1e-5, atol=1e-6)
+
+
+def test_cached_generation_is_transactional_and_consumes_stop_token():
+    config = tiny_e97_config(mlp_ratio=0.0)
+    model = build_e97_model(config, vocab_size=256, use_triton=False).eval()
+    loaded = SimpleNamespace(
+        model=model,
+        config=config,
+        checkpoint_path=Path("/test/e97.pt"),
+        step=0,
+        weight_mode="saved",
+    )
+    committed = advance_e97_cache(loaded, [120])
+    stop = int(committed.next_logits.argmax().item())
+
+    generated_a, shadow_a = generate_e97_from_cache(
+        loaded, committed, max_new_tokens=4, temperature=0, stop_token_ids=(stop,)
+    )
+    generated_b, shadow_b = generate_e97_from_cache(
+        loaded, committed, max_new_tokens=4, temperature=0, stop_token_ids=(stop,)
+    )
+
+    assert generated_a == generated_b == [stop]
+    assert committed.token_ids == (120,)
+    assert shadow_a.token_ids == shadow_b.token_ids == (120, stop)
+
+
+def test_fused_e97_generation_allows_stateful_carry(monkeypatch):
     e97_module = importlib.import_module("ndm.e97")
     config = tiny_e97_config(use_triton=1, mlp_ratio=0.0)
     loaded_model = build_e97_model(config, vocab_size=256, use_triton=True)
@@ -234,8 +286,9 @@ def test_fused_e97_generation_rejects_stateful_carry(monkeypatch):
     )
     monkeypatch.setattr(e97_module, "_uses_triton", lambda model: True)
 
-    with pytest.raises(ValueError, match="requires load_e97_checkpoint"):
-        generate_e97(loaded, "x", max_new_tokens=1, mode="stateful")
+    result = generate_e97(loaded, "x", max_new_tokens=1, mode="stateful")
+    assert result["mode"] == "stateful"
+    assert len(result["new_token_ids"]) == 1
 
 
 def test_schedulefree_checkpoint_requires_optimizer_for_train_weights(tmp_path):
