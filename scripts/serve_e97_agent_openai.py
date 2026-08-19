@@ -27,6 +27,7 @@ def main() -> None:
     parser.add_argument("--max-output-tokens", type=int, default=512)
     parser.add_argument("--max-sessions", type=int, default=8)
     parser.add_argument("--max-body-bytes", type=int, default=4 * 1024 * 1024)
+    parser.add_argument("--ingest-mode", choices=("tokenwise", "segment"), default="tokenwise")
     parser.add_argument("--trace-generated-errors", action="store_true")
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
@@ -42,7 +43,7 @@ def main() -> None:
         use_triton=args.device == "cuda",
         mmap=True,
     )
-    engine = TorchE97AgentEngine(loaded)
+    engine = TorchE97AgentEngine(loaded, ingest_mode=args.ingest_mode)
     service = AgentCompletionService(
         engine,
         model_id=args.model_id,
@@ -52,7 +53,8 @@ def main() -> None:
     )
     print(
         f"serving model={args.model_id} checkpoint={loaded.checkpoint_path} "
-        f"address={args.host}:{args.port} max_sessions={args.max_sessions}",
+        f"address={args.host}:{args.port} max_sessions={args.max_sessions} "
+        f"ingest_mode={args.ingest_mode}",
         flush=True,
     )
     run_openai_server(

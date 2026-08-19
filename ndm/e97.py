@@ -482,6 +482,62 @@ def e97_cache_suffix(
     return requested[prefix_length:]
 
 
+def _validate_e97_cache_advance(
+    loaded: LoadedE97Checkpoint,
+    consumed: tuple[int, ...],
+    cache: E97RecurrentCache | None,
+) -> str:
+    if not consumed:
+        if cache is None:
+            raise ValueError("an initial E97 cache requires at least one token")
+        return _cache_checkpoint_identity(loaded)
+    checkpoint = _cache_checkpoint_identity(loaded)
+    if cache is not None and cache.checkpoint != checkpoint:
+        raise ValueError("E97 cache belongs to a different checkpoint")
+    if any(
+        isinstance(module, E97SplitEditLayer) and bool(module.use_conv)
+        for module in loaded.model.modules()
+    ):
+        raise NotImplementedError(
+            "cached E97 inference does not yet carry convolution buffers"
+        )
+    return checkpoint
+
+
+@torch.no_grad()
+def advance_e97_cache_segment(
+    loaded: LoadedE97Checkpoint,
+    token_ids: Sequence[int],
+    cache: E97RecurrentCache | None = None,
+) -> E97RecurrentCache:
+    """Consume one explicit logical segment with a fused variable-length call.
+
+    This compatibility path preserves the full-prefix behavior used to
+    evaluate dense-agent v1, but BF16 projection rounding can depend on segment
+    boundaries. New serving authorities should use :func:`advance_e97_cache`.
+    """
+
+    consumed = tuple(int(token) for token in token_ids)
+    checkpoint = _validate_e97_cache_advance(loaded, consumed, cache)
+    if not consumed:
+        assert cache is not None
+        return cache
+    model_device = next(loaded.model.parameters()).device
+    tokens = torch.tensor([consumed], dtype=torch.long, device=model_device)
+    logits, (hidden, _) = loaded.model(
+        tokens,
+        return_loss=False,
+        return_prev_hiddens=True,
+        prev_hiddens=None if cache is None else cache.hidden,
+    )
+    return E97RecurrentCache(
+        token_ids=(cache.token_ids if cache is not None else ()) + consumed,
+        hidden=hidden,
+        next_logits=logits[0, -1].detach(),
+        checkpoint=checkpoint,
+    )
+
+
 @torch.no_grad()
 def advance_e97_cache(
     loaded: LoadedE97Checkpoint,
@@ -496,21 +552,10 @@ def advance_e97_cache(
     """
 
     consumed = tuple(int(token) for token in token_ids)
+    checkpoint = _validate_e97_cache_advance(loaded, consumed, cache)
     if not consumed:
-        if cache is None:
-            raise ValueError("an initial E97 cache requires at least one token")
+        assert cache is not None
         return cache
-
-    checkpoint = _cache_checkpoint_identity(loaded)
-    if cache is not None and cache.checkpoint != checkpoint:
-        raise ValueError("E97 cache belongs to a different checkpoint")
-    if any(
-        isinstance(module, E97SplitEditLayer) and bool(module.use_conv)
-        for module in loaded.model.modules()
-    ):
-        raise NotImplementedError(
-            "cached E97 inference does not yet carry convolution buffers"
-        )
 
     # Canonicalize ingestion to one-token model calls. BF16 projection GEMMs
     # can round differently when their time dimension changes; even small
@@ -671,6 +716,7 @@ __all__ = [
     "E97RecurrentCache",
     "LoadedE97Checkpoint",
     "advance_e97_cache",
+    "advance_e97_cache_segment",
     "build_e97_model",
     "e97_cache_suffix",
     "e97_checkpoint_config",

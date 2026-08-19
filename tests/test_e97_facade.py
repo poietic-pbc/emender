@@ -12,6 +12,7 @@ import torch
 
 from ndm.e97 import (
     advance_e97_cache,
+    advance_e97_cache_segment,
     build_e97_model,
     e97_cache_suffix,
     e97_model_kwargs_from_config,
@@ -222,6 +223,22 @@ def test_e97_checkpoint_roundtrip_and_cpu_generation(tmp_path):
     assert result["kernel_api"] == "e97-split-edit-eager"
     assert result["kernel_core"] == "python-reference"
     assert len(result["new_token_ids"]) == 2
+
+
+def test_segment_cache_matches_one_full_prefix_forward_on_cpu():
+    config = tiny_e97_config(mlp_ratio=0.0)
+    model = build_e97_model(config, vocab_size=256, use_triton=False).eval()
+    loaded = SimpleNamespace(
+        model=model,
+        config=config,
+        checkpoint_path=Path("/test/e97.pt"),
+        step=0,
+        weight_mode="saved",
+    )
+    tokens = [83, 121, 115, 116, 101, 109]
+    cache = advance_e97_cache_segment(loaded, tokens)
+    logits = model(torch.tensor([tokens]), return_loss=False)
+    torch.testing.assert_close(cache.next_logits, logits[0, -1], rtol=0, atol=0)
 
 
 def test_recurrent_cache_is_chunk_boundary_invariant_on_cpu():

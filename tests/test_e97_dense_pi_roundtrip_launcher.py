@@ -21,6 +21,7 @@ def test_pi_roundtrip_launcher_is_fixed_world_immutable_and_bounded():
         "LOCAL_RANK=0",
         "--max-output-tokens 96",
         "--max-sessions 2",
+        "--ingest-mode segment",
         "--no-builtin-tools",
         "configs/pi/e97-v1-tools.ts",
         "--system-prompt",

@@ -14,6 +14,7 @@ from .e97 import (
     E97RecurrentCache,
     LoadedE97Checkpoint,
     advance_e97_cache,
+    advance_e97_cache_segment,
     e97_cache_suffix,
     generate_e97_from_cache,
 )
@@ -138,10 +139,18 @@ class RecurrentSessionStore:
 class TorchE97AgentEngine:
     """Adapter from a loaded dense checkpoint to the serving core protocol."""
 
-    def __init__(self, loaded: LoadedE97Checkpoint):
+    def __init__(
+        self,
+        loaded: LoadedE97Checkpoint,
+        *,
+        ingest_mode: str = "tokenwise",
+    ):
         import tiktoken
 
+        if ingest_mode not in {"tokenwise", "segment"}:
+            raise ValueError("ingest_mode must be tokenwise or segment")
         self.loaded = loaded
+        self.ingest_mode = ingest_mode
         self.checkpoint = str(loaded.checkpoint_path)
         tokenizer_name = loaded.config.get("tokenizer")
         if not tokenizer_name:
@@ -159,7 +168,12 @@ class TorchE97AgentEngine:
         token_ids: Sequence[int],
         cache: E97RecurrentCache | None = None,
     ) -> E97RecurrentCache:
-        return advance_e97_cache(self.loaded, token_ids, cache)
+        advance = (
+            advance_e97_cache
+            if self.ingest_mode == "tokenwise"
+            else advance_e97_cache_segment
+        )
+        return advance(self.loaded, token_ids, cache)
 
     def generate(
         self,

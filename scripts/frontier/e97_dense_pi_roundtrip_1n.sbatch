@@ -66,7 +66,7 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   "$EMENDER_PYTHON" scripts/serve_e97_agent_openai.py \
     --checkpoint "'$LOCAL_CHECKPOINT'" --args-json "'$LOCAL_ARGS'" \
     --host 127.0.0.1 --port "$port" --max-output-tokens 96 --max-sessions 2 \
-    --trace-generated-errors \
+    --ingest-mode segment --trace-generated-errors \
     > "'$RUN_ROOT'/shards/server-${SLURM_PROCID}.out" 2> "$server_log" &
   server_pid=$!
   cleanup() { kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true; }
