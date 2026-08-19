@@ -198,12 +198,14 @@ class AgentCompletionService:
         model_id: str = "e97-dense-agent",
         max_output_tokens: int = 512,
         max_sessions: int = 8,
+        trace_generated_errors: bool = False,
     ):
         if max_output_tokens <= 0:
             raise ValueError("max_output_tokens must be positive")
         self.engine = engine
         self.model_id = model_id
         self.max_output_tokens = max_output_tokens
+        self.trace_generated_errors = bool(trace_generated_errors)
         self.sessions = RecurrentSessionStore(max_sessions=max_sessions)
 
     def prepare_completion(
@@ -248,8 +250,14 @@ class AgentCompletionService:
             top_p=float(top_p),
         )
         generated_text = self.engine.decode(generated_tokens)
-        turn = parse_agent_turn(generated_text)
-        validate_generated_tool(turn, request.get("tools"))
+        try:
+            turn = parse_agent_turn(generated_text)
+            validate_generated_tool(turn, request.get("tools"))
+        except AgentProtocolError as exc:
+            if not self.trace_generated_errors:
+                raise
+            escaped = generated_text[:512].encode("unicode_escape").decode("ascii")
+            raise AgentProtocolError(f"{exc}; generated_prefix={escaped}") from exc
 
         created = int(time.time())
         completion_id = "chatcmpl-" + hashlib.sha256(

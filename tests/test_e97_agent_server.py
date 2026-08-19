@@ -135,6 +135,20 @@ def test_completion_round_trip_uses_cached_suffix_and_structured_tool_call():
     assert service.commit(second) is True
 
 
+def test_generated_error_trace_is_explicit_opt_in():
+    request = {"messages": [{"role": "user", "content": "Do it."}]}
+    ordinary = AgentCompletionService(FakeEngine(["secret malformed output" + RS]))
+    with pytest.raises(AgentProtocolError) as ordinary_error:
+        ordinary.prepare_completion(request, session_id=None)
+    assert "secret" not in str(ordinary_error.value)
+
+    traced = AgentCompletionService(
+        FakeEngine(["secret malformed output" + RS]), trace_generated_errors=True
+    )
+    with pytest.raises(AgentProtocolError, match="generated_prefix=secret"):
+        traced.prepare_completion(request, session_id=None)
+
+
 def test_unknown_tool_and_malformed_generation_do_not_commit():
     for output, match in (
         ('Action: shell\nArguments: {"command":"id"}' + RS, "unknown tool"),

@@ -27,6 +27,7 @@ def main() -> None:
     parser.add_argument("--max-output-tokens", type=int, default=512)
     parser.add_argument("--max-sessions", type=int, default=8)
     parser.add_argument("--max-body-bytes", type=int, default=4 * 1024 * 1024)
+    parser.add_argument("--trace-generated-errors", action="store_true")
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
 
@@ -47,6 +48,7 @@ def main() -> None:
         model_id=args.model_id,
         max_output_tokens=args.max_output_tokens,
         max_sessions=args.max_sessions,
+        trace_generated_errors=args.trace_generated_errors,
     )
     print(
         f"serving model={args.model_id} checkpoint={loaded.checkpoint_path} "
