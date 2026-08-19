@@ -166,6 +166,32 @@ def test_generated_error_trace_is_explicit_opt_in():
         traced.prepare_completion(request, session_id=None)
 
 
+def test_repeated_tool_call_cycle_fails_before_generation():
+    repeated = {
+        "role": "assistant",
+        "tool_calls": [{
+            "type": "function",
+            "function": {"name": "calculator", "arguments": '{"expression":"5"}'},
+        }],
+    }
+    service = AgentCompletionService(FakeEngine(["Final: unreachable" + RS]))
+    with pytest.raises(AgentProtocolError, match="repeated tool call cycle"):
+        service.prepare_completion(
+            {
+                "messages": [
+                    {"role": "user", "content": "calculate"},
+                    repeated,
+                    {"role": "tool", "content": "error"},
+                    repeated,
+                    {"role": "tool", "content": "error"},
+                ]
+            },
+            session_id="cycle",
+        )
+    assert len(service.sessions) == 0
+    assert service.engine.outputs == ["Final: unreachable" + RS]
+
+
 def test_unknown_tool_and_malformed_generation_do_not_commit():
     for output, match in (
         ('Action: shell\nArguments: {"command":"id"}' + RS, "unknown tool"),

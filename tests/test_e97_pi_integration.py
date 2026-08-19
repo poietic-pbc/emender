@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_CONFIG = ROOT / "configs/pi/e97-dense-agent.models.json"
 TOOLS = ROOT / "configs/pi/e97-v1-tools.ts"
+V2_TOOLS = ROOT / "configs/pi/e97-v2-tools.ts"
 
 
 def test_pi_model_config_is_bounded_state_affine_openai_chat():
@@ -44,4 +45,21 @@ def test_v1_pi_tools_have_no_shell_and_bound_paths_reads_and_results():
         "pi.exec",
         "eval(",
     ):
+        assert forbidden not in text
+
+
+def test_v2_tools_return_typed_values_and_require_grounded_termination():
+    text = V2_TOOLS.read_text()
+    for name in ("calculator", "lookup", "count", "submit_answer"):
+        assert f'name: "{name}"' in text
+    for required in (
+        "expectedAnswer",
+        "value !== expectedAnswer",
+        "latest tool result",
+        "terminate: true",
+        "MAX_READ_BYTES = 8192",
+        "realpath",
+    ):
+        assert required in text
+    for forbidden in ("child_process", "exec(", "spawn(", "pi.exec", "eval("):
         assert forbidden not in text

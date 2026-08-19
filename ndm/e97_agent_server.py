@@ -256,6 +256,22 @@ class AgentCompletionService:
         messages = request.get("messages")
         if not isinstance(messages, list):
             raise AgentProtocolError("messages must be an array")
+        seen_tool_calls: set[tuple[str, str]] = set()
+        for message in messages:
+            if not isinstance(message, Mapping) or message.get("role") != "assistant":
+                continue
+            tool_calls = message.get("tool_calls")
+            if not tool_calls:
+                continue
+            if not isinstance(tool_calls, list) or len(tool_calls) != 1:
+                raise AgentProtocolError("E97 supports exactly one tool call per turn")
+            function = tool_calls[0].get("function") if isinstance(tool_calls[0], Mapping) else None
+            if not isinstance(function, Mapping):
+                raise AgentProtocolError("assistant tool call requires function metadata")
+            key = (str(function.get("name")), str(function.get("arguments")))
+            if key in seen_tool_calls:
+                raise AgentProtocolError("repeated tool call cycle detected")
+            seen_tool_calls.add(key)
         if self.system_prompt_override is not None:
             messages = [dict(message) for message in messages]
             if messages and messages[0].get("role") == "system":
