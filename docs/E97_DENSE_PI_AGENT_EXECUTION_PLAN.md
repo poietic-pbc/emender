@@ -4,6 +4,12 @@ Status: active implementation authority
 Scope: dense E97 agent serving, recurrent-state retention, Pi integration, bounded evaluation, and targeted follow-up SFT  
 Initial model authority: 513B-token dense E97-derived agent checkpoint described below
 
+Progress:
+
+- M0 complete: v1 baseline preserved in `docs/validation/e97-dense-agent-v1-baseline-job5306907.md`.
+- M1 complete: canonical tokenwise FP32 recurrent caching qualified on the real checkpoint in job 5307227; see `docs/validation/e97-dense-recurrent-cache-jobs5307047-5307175-5307227.md`.
+- M2 is the current implementation milestone.
+
 ## 1. Objective
 
 Turn the dense 1.3B E97 recurrent model into a bounded single-GPU tool agent that runs through Pi, retains recurrent state across conversation and tool turns, uses constant GPU cache memory with respect to transcript length, and fails safely when it cannot complete a task.
@@ -255,8 +261,10 @@ If a targeted v2 arm passes, stop broad synthetic expansion and move directly to
 
 ## 10. Immediate work order
 
-1. Commit this execution authority and the v1 baseline report.
-2. Update the stale dense generation restriction now that valid-length final-state handling and FP32 inference states exist, but only behind tests.
-3. Add an explicit incremental cache API and replay-equivalence tests.
-4. Run the smallest available GPU qualification under the canonical Frontier environment.
-5. Proceed to the server only after M1 evidence is recorded.
+M0 and M1 are complete. The active order is now:
+
+1. Implement the minimal OpenAI-compatible server and canonical Pi serialization.
+2. Add protocol, cache-manager, cancellation, and structured-tool-call tests.
+3. Connect a local Pi model definition and bounded v1-compatible tools.
+4. Run the v1 checkpoint end to end through Pi without teacher-forced actions or observations.
+5. Do not begin v2 SFT until the Pi execution traces separate protocol failures from grounding failures.
