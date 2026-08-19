@@ -443,6 +443,12 @@ def make_openai_handler(
                 self._error(500, "model completion failed", "server_error")
                 return
 
+            self.log_message(
+                "completion cache=%s suffix_tokens=%s state_bytes=%s",
+                completion.diagnostics["x-emender-cache"],
+                completion.diagnostics["x-emender-suffix-tokens"],
+                completion.diagnostics["x-emender-state-bytes"],
+            )
             stream = request.get("stream", False)
             if not isinstance(stream, bool):
                 service.discard(completion)
