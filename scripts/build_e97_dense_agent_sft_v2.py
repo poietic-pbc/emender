@@ -12,12 +12,10 @@ from pathlib import Path
 import tiktoken
 
 from ndm.data.masked_sft_dataset import AUTHORITY_SCHEMA, RECORD_INDEX, sha256
+from ndm.e97_agent_protocol import DENSE_AGENT_V2_SYSTEM
 
 ENCODING = "p50k_base"
-SYSTEM = (
-    "Use one registered tool to obtain the requested value. Then call submit_answer "
-    "with exactly the value returned by that tool. Respond only with Action and Arguments."
-)
+SYSTEM = DENSE_AGENT_V2_SYSTEM
 
 
 def split(identity: str) -> int:

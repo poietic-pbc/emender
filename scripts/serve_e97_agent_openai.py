@@ -9,7 +9,7 @@ from pathlib import Path
 import torch
 
 from ndm.e97 import load_e97_checkpoint
-from ndm.e97_agent_protocol import DENSE_AGENT_V1_SYSTEM
+from ndm.e97_agent_protocol import DENSE_AGENT_V1_SYSTEM, DENSE_AGENT_V2_SYSTEM
 from ndm.e97_agent_server import (
     AgentCompletionService,
     TorchE97AgentEngine,
@@ -29,7 +29,9 @@ def main() -> None:
     parser.add_argument("--max-sessions", type=int, default=8)
     parser.add_argument("--max-body-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--ingest-mode", choices=("tokenwise", "segment"), default="tokenwise")
-    parser.add_argument("--v1-canonical-system", action="store_true")
+    system_group = parser.add_mutually_exclusive_group()
+    system_group.add_argument("--v1-canonical-system", action="store_true")
+    system_group.add_argument("--v2-canonical-system", action="store_true")
     parser.add_argument("--trace-generated-errors", action="store_true")
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
@@ -52,7 +54,10 @@ def main() -> None:
         max_output_tokens=args.max_output_tokens,
         max_sessions=args.max_sessions,
         trace_generated_errors=args.trace_generated_errors,
-        system_prompt_override=(DENSE_AGENT_V1_SYSTEM if args.v1_canonical_system else None),
+        system_prompt_override=(
+            DENSE_AGENT_V1_SYSTEM if args.v1_canonical_system else
+            DENSE_AGENT_V2_SYSTEM if args.v2_canonical_system else None
+        ),
     )
     print(
         f"serving model={args.model_id} checkpoint={loaded.checkpoint_path} "
