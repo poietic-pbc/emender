@@ -45,20 +45,20 @@ def test_pi_tool_turn_round_trips_to_exact_native_action():
     assert serialized == (
         "System:\nUse tools.\n\n"
         "User:\nCalculate 2 + 3.\n\n"
-        "Assistant:\nAction: calculator\nArguments: {\"expression\":\"2 + 3\"}" + RS + "\n\n"
+        "Assistant:\nAction: calculator\nArguments: {\"expression\":\"2 + 3\"}\n\n"
         "Tool:\n{\"value\":\"5\"}\n\n"
         "Assistant:\n"
     )
 
 
-def test_final_turn_round_trips_with_implicit_rs():
+def test_final_turn_round_trips_without_pretraining_record_separator():
     messages = [
         {"role": "user", "content": "Answer."},
         {"role": "assistant", "content": "Final: Done."},
         {"role": "user", "content": "Again."},
     ]
     assert serialize_pi_messages(messages) == (
-        "User:\nAnswer.\n\nAssistant:\nFinal: Done." + RS +
+        "User:\nAnswer.\n\nAssistant:\nFinal: Done."
         "\n\nUser:\nAgain.\n\nAssistant:\n"
     )
 
@@ -81,7 +81,8 @@ def test_parse_action_preserves_argument_bytes_for_cache_replay():
         },
         {"role": "tool", "content": "contents"},
     ])
-    assert raw in replay
+    assert raw.removesuffix(RS) in replay
+    assert RS not in replay
 
 
 def test_parse_final_strips_only_rs():

@@ -102,7 +102,9 @@ def serialize_pi_messages(
         if role not in ROLE_LABELS:
             raise AgentProtocolError(f"unsupported message role: {role!r}")
         if role == "assistant":
-            body = _assistant_body(message) + RS
+            # RS was a pretraining record boundary, so never place it between
+            # coherent agent turns. Role headers provide transcript framing.
+            body = _assistant_body(message)
         else:
             body = _text_content(message.get("content"))
             if role == "tool" and not body:
@@ -116,7 +118,7 @@ def serialize_pi_messages(
 
 
 def parse_agent_turn(text: str) -> ParsedAgentTurn:
-    """Parse one RS-terminated or complete E97 assistant turn."""
+    """Parse one complete E97 assistant turn (legacy terminal RS is accepted)."""
 
     if not isinstance(text, str):
         raise AgentProtocolError("generated turn must be text")

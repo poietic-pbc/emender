@@ -106,7 +106,7 @@ def test_system_override_removes_harness_runtime_suffix():
 
 def test_completion_round_trip_uses_cached_suffix_and_structured_tool_call():
     engine = FakeEngine([
-        'Action: calculator\nArguments: {"expression":"2 + 3"}' + RS,
+        'Action: calculator\nArguments: {"expression":"2 + 3"}',
         "Final: 2 + 3 = 5." + RS,
     ])
     service = AgentCompletionService(engine, max_sessions=2)

@@ -183,15 +183,31 @@ class TorchE97AgentEngine:
         temperature: float,
         top_p: float,
     ) -> tuple[list[int], E97RecurrentCache]:
-        return generate_e97_from_cache(
-            self.loaded,
-            cache,
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            top_k=0,
-            top_p=top_p,
-            stop_token_ids=(218,),
-        )
+        # Stop a structured action as soon as its JSON object is complete. In
+        # particular, do not let the model emit or consume RS: pretraining used
+        # RS between unrelated records, while a tool turn is the same task.
+        shadow = cache
+        generated: list[int] = []
+        for _ in range(max_new_tokens):
+            next_tokens, shadow = generate_e97_from_cache(
+                self.loaded,
+                shadow,
+                max_new_tokens=1,
+                temperature=temperature,
+                top_k=0,
+                top_p=top_p,
+                stop_token_ids=(218,),
+            )
+            generated.extend(next_tokens)
+            try:
+                turn = parse_agent_turn(self.decode(generated))
+            except AgentProtocolError:
+                turn = None
+            if turn is not None and turn.kind == "tool_call":
+                break
+            if next_tokens and next_tokens[-1] == 218:
+                break
+        return generated, shadow
 
 
 @dataclass(frozen=True)
