@@ -102,6 +102,13 @@ def test_pack_builder_exact_source_filter(tmp_path):
     assert manifest["source_filter"] == {"include_exact": ["keep"]}
     assert manifest["splits"]["train"]["records"] == 1
     assert manifest["splits"]["validation"]["records"] == 1
+    subprocess.run([
+        sys.executable, "scripts/validate_e97_sft_packs.py",
+        "--authority-root", str(authority), "--pack-root", str(packs),
+        "--authority-manifest-sha256", authority_sha,
+        "--pack-manifest-sha256", sha256(packs / "manifest.json"),
+    ], check=True, capture_output=True, text=True)
+    assert json.loads((packs / "validation.json").read_text())["status"] == "pass"
 
 
 def test_exact_pack_access_bypasses_replacement_sampler(tmp_path):

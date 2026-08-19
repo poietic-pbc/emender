@@ -43,6 +43,28 @@ def main() -> None:
         record_path, mode="r", dtype=np.dtype([
             ("offset", "<u8"), ("tokens", "<u8"), ("targets", "<u8"),
             ("split", "u1"), ("pad", "V7")]))
+    source_filter = packs.get("source_filter")
+    source_selected = np.ones(len(records), dtype=np.bool_)
+    if source_filter is not None:
+        included = source_filter.get("include_exact")
+        if not isinstance(included, list) or not included or any(
+                not isinstance(value, str) for value in included):
+            raise SystemExit("invalid pack source filter")
+        metadata_info = authority["outputs"].get("metadata")
+        if metadata_info is None:
+            raise SystemExit("source-filtered packs require authority metadata")
+        metadata_path = args.authority_root / Path(metadata_info["path"]).name
+        if (metadata_path.stat().st_size != metadata_info["bytes"]
+                or sha256(metadata_path) != metadata_info["sha256"]):
+            raise SystemExit("record metadata integrity mismatch")
+        wanted = set(included)
+        selected_values = []
+        with metadata_path.open() as stream:
+            for line in stream:
+                selected_values.append(json.loads(line).get("source") in wanted)
+        if len(selected_values) != len(records):
+            raise SystemExit("record metadata/index count mismatch")
+        source_selected = np.asarray(selected_values, dtype=np.bool_)
     ids_info = packs["outputs"]["pack_records"]
     record_ids = np.memmap(
         args.pack_root / Path(ids_info["path"]).name, mode="r", dtype="<u4")
@@ -75,7 +97,8 @@ def main() -> None:
             if value != expected[field]:
                 raise SystemExit(f"{split_name} {field} accounting mismatch")
         eligible = np.flatnonzero(
-            (records["split"] == split_value) & (records["tokens"] <= sequence_tokens))
+            (records["split"] == split_value) & (records["tokens"] <= sequence_tokens)
+            & source_selected)
         selected_ids = np.asarray(
             [value for value in observed_ids if int(records[value]["split"]) == split_value],
             dtype=np.int64)
