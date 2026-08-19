@@ -13,6 +13,7 @@ import torch
 from ndm.e97 import (
     advance_e97_cache,
     build_e97_model,
+    e97_cache_suffix,
     e97_model_kwargs_from_config,
     generate_e97,
     generate_e97_from_cache,
@@ -246,6 +247,24 @@ def test_recurrent_cache_is_chunk_boundary_invariant_on_cpu():
     for split_layer, full_layer in zip(split.hidden, full.hidden):
         for split_head, full_head in zip(split_layer, full_layer):
             torch.testing.assert_close(split_head, full_head, rtol=1e-5, atol=1e-6)
+
+
+def test_recurrent_cache_accepts_only_exact_append_only_prefixes():
+    config = tiny_e97_config(mlp_ratio=0.0)
+    model = build_e97_model(config, vocab_size=256, use_triton=False).eval()
+    loaded = SimpleNamespace(
+        model=model,
+        config=config,
+        checkpoint_path=Path("/test/e97.pt"),
+        step=0,
+        weight_mode="saved",
+    )
+    cache = advance_e97_cache(loaded, [10, 20, 30])
+
+    assert e97_cache_suffix(cache, [10, 20, 30]) == ()
+    assert e97_cache_suffix(cache, [10, 20, 30, 40, 50]) == (40, 50)
+    assert e97_cache_suffix(cache, [10, 20]) is None
+    assert e97_cache_suffix(cache, [10, 99, 30, 40]) is None
 
 
 def test_cached_generation_is_transactional_and_consumes_stop_token():

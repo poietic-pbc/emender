@@ -467,6 +467,21 @@ def _cache_checkpoint_identity(loaded: LoadedE97Checkpoint) -> str:
     return str(loaded.checkpoint_path)
 
 
+def e97_cache_suffix(
+    cache: E97RecurrentCache,
+    requested_token_ids: Sequence[int],
+) -> tuple[int, ...] | None:
+    """Return an append-only suffix, or ``None`` for an incompatible prefix."""
+
+    requested = tuple(int(token) for token in requested_token_ids)
+    prefix_length = len(cache.token_ids)
+    if len(requested) < prefix_length:
+        return None
+    if requested[:prefix_length] != cache.token_ids:
+        return None
+    return requested[prefix_length:]
+
+
 @torch.no_grad()
 def advance_e97_cache(
     loaded: LoadedE97Checkpoint,
@@ -645,6 +660,7 @@ __all__ = [
     "LoadedE97Checkpoint",
     "advance_e97_cache",
     "build_e97_model",
+    "e97_cache_suffix",
     "e97_checkpoint_config",
     "e97_model_kwargs_from_config",
     "generate_e97",
