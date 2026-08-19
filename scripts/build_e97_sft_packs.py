@@ -29,6 +29,8 @@ def main() -> None:
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--context-size", type=int, required=True)
     parser.add_argument("--authority-manifest-sha256", required=True)
+    parser.add_argument("--include-source", action="append", default=[],
+                        help="Exact metadata source to retain; repeat for a union")
     args = parser.parse_args()
     if args.context_size <= 0:
         raise SystemExit("context-size must be positive")
@@ -46,6 +48,28 @@ def main() -> None:
         record_path, mode="r",
         dtype=np.dtype([("offset", "<u8"), ("tokens", "<u8"),
                         ("targets", "<u8"), ("split", "u1"), ("pad", "V7")]))
+    include_sources = tuple(sorted(set(args.include_source)))
+    included_record_ids = None
+    if include_sources:
+        metadata_entry = authority["outputs"].get("metadata")
+        if metadata_entry is None:
+            raise SystemExit("source filtering requires authority metadata")
+        metadata_path = args.authority_root / Path(metadata_entry["path"]).name
+        if (metadata_path.stat().st_size != metadata_entry["bytes"]
+                or sha256(metadata_path) != metadata_entry["sha256"]):
+            raise SystemExit("record metadata integrity mismatch")
+        wanted = set(include_sources)
+        included_record_ids = set()
+        metadata_count = 0
+        with metadata_path.open() as stream:
+            for record_id, line in enumerate(stream):
+                metadata_count += 1
+                if json.loads(line).get("source") in wanted:
+                    included_record_ids.add(record_id)
+        if metadata_count != len(records):
+            raise SystemExit("record metadata/index count mismatch")
+        if not included_record_ids:
+            raise SystemExit("source filter selected no records")
     args.output_root.mkdir(parents=True, exist_ok=True)
     outputs = {
         "pack_records": args.output_root / "pack_records.uint32.bin",
@@ -87,7 +111,9 @@ def main() -> None:
                     current_ids, current_tokens, current_targets = [], 0, 0
 
                 for record_id, record in enumerate(records):
-                    if int(record["split"]) != split_value:
+                    if (int(record["split"]) != split_value
+                            or (included_record_ids is not None
+                                and record_id not in included_record_ids)):
                         continue
                     token_count = int(record["tokens"])
                     target_count = int(record["targets"])
@@ -119,6 +145,8 @@ def main() -> None:
         "authority_manifest_sha256": args.authority_manifest_sha256,
         "context_size": args.context_size, "sequence_tokens": sequence_tokens,
         "packing": "stable-record-order greedy next-fit; no record splitting",
+        "source_filter": ({"include_exact": list(include_sources)}
+                          if include_sources else None),
         "sampling": "pack IDs sampled with replacement by emender-record-pack-counter-v1",
         "splits": split_receipts,
         "record_index_bytes": RECORD_INDEX.size, "pack_index_bytes": PACK_INDEX.size,

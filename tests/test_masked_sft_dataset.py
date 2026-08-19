@@ -33,7 +33,8 @@ def _authority(root: Path):
             masks.write(bytes(mask_values))
             index.write(RECORD_INDEX.pack(offset, len(token_values), sum(mask_values), split))
             offset += len(token_values)
-    metadata_path.write_text("\n".join("{}" for _ in records) + "\n")
+    metadata_path.write_text("\n".join(json.dumps({"source": source}) for source in
+                                        ("keep", "drop", "drop", "keep")) + "\n")
     outputs = {}
     for name, path in (("tokens", token_path), ("mask", mask_path),
                        ("index", index_path), ("metadata", metadata_path)):
@@ -85,6 +86,22 @@ def test_complete_record_packing_and_counter_sampling(tmp_path):
     assert reset_dataset.next_absolute_rank_sample_index == 1
     with pytest.raises(ValueError, match="batch_size=1"):
         reset_dataset.get_batch_with_record_spans(2)
+
+
+def test_pack_builder_exact_source_filter(tmp_path):
+    authority = tmp_path / "authority"
+    authority_sha = _authority(authority)
+    packs = tmp_path / "filtered-packs"
+    subprocess.run([
+        sys.executable, "scripts/build_e97_sft_packs.py",
+        "--authority-root", str(authority), "--output-root", str(packs),
+        "--context-size", "4", "--authority-manifest-sha256", authority_sha,
+        "--include-source", "keep",
+    ], check=True, capture_output=True, text=True)
+    manifest = json.loads((packs / "manifest.json").read_text())
+    assert manifest["source_filter"] == {"include_exact": ["keep"]}
+    assert manifest["splits"]["train"]["records"] == 1
+    assert manifest["splits"]["validation"]["records"] == 1
 
 
 def test_exact_pack_access_bypasses_replacement_sampler(tmp_path):
