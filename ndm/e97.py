@@ -512,18 +512,30 @@ def advance_e97_cache(
             "cached E97 inference does not yet carry convolution buffers"
         )
 
+    # Canonicalize ingestion to one-token model calls. BF16 projection GEMMs
+    # can round differently when their time dimension changes; even small
+    # boundary differences can eventually change greedy decoding. Tokenwise
+    # ingestion makes replay, HTTP turn boundaries, and arbitrary caller
+    # chunking execute the same shapes. This is the correctness authority;
+    # faster chunk-invariant projection kernels may replace it after separate
+    # qualification.
     model_device = next(loaded.model.parameters()).device
-    tokens = torch.tensor([consumed], dtype=torch.long, device=model_device)
-    logits, (hidden, _) = loaded.model(
-        tokens,
-        return_loss=False,
-        return_prev_hiddens=True,
-        prev_hiddens=None if cache is None else cache.hidden,
-    )
+    hidden = None if cache is None else cache.hidden
+    next_logits = None
+    for token in consumed:
+        tokens = torch.tensor([[token]], dtype=torch.long, device=model_device)
+        logits, (hidden, _) = loaded.model(
+            tokens,
+            return_loss=False,
+            return_prev_hiddens=True,
+            prev_hiddens=hidden,
+        )
+        next_logits = logits[0, -1].detach()
+    assert next_logits is not None
     return E97RecurrentCache(
         token_ids=(cache.token_ids if cache is not None else ()) + consumed,
         hidden=hidden,
-        next_logits=logits[0, -1].detach(),
+        next_logits=next_logits,
         checkpoint=checkpoint,
     )
 

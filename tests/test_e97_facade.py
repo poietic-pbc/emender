@@ -243,10 +243,10 @@ def test_recurrent_cache_is_chunk_boundary_invariant_on_cpu():
 
     assert split.token_ids == tuple(tokens)
     assert split.state_bytes > split.next_logits.numel() * split.next_logits.element_size()
-    torch.testing.assert_close(split.next_logits, full.next_logits, rtol=1e-5, atol=1e-6)
+    torch.testing.assert_close(split.next_logits, full.next_logits, rtol=0, atol=0)
     for split_layer, full_layer in zip(split.hidden, full.hidden):
         for split_head, full_head in zip(split_layer, full_layer):
-            torch.testing.assert_close(split_head, full_head, rtol=1e-5, atol=1e-6)
+            torch.testing.assert_close(split_head, full_head, rtol=0, atol=0)
 
 
 def test_recurrent_cache_accepts_only_exact_append_only_prefixes():
