@@ -213,6 +213,7 @@ class AgentCompletionService:
         max_output_tokens: int = 512,
         max_sessions: int = 8,
         trace_generated_errors: bool = False,
+        system_prompt_override: str | None = None,
     ):
         if max_output_tokens <= 0:
             raise ValueError("max_output_tokens must be positive")
@@ -220,6 +221,7 @@ class AgentCompletionService:
         self.model_id = model_id
         self.max_output_tokens = max_output_tokens
         self.trace_generated_errors = bool(trace_generated_errors)
+        self.system_prompt_override = system_prompt_override
         self.sessions = RecurrentSessionStore(max_sessions=max_sessions)
 
     def prepare_completion(
@@ -238,6 +240,15 @@ class AgentCompletionService:
         messages = request.get("messages")
         if not isinstance(messages, list):
             raise AgentProtocolError("messages must be an array")
+        if self.system_prompt_override is not None:
+            messages = [dict(message) for message in messages]
+            if messages and messages[0].get("role") == "system":
+                messages[0]["content"] = self.system_prompt_override
+            else:
+                messages.insert(0, {
+                    "role": "system",
+                    "content": self.system_prompt_override,
+                })
         prompt = serialize_pi_messages(messages)
         prompt_tokens = self.engine.encode(prompt)
         if not prompt_tokens:

@@ -17,7 +17,9 @@ def test_pi_model_config_is_bounded_state_affine_openai_chat():
     assert provider["compat"]["supportsUsageInStreaming"] is False
     assert provider["compat"]["sendSessionAffinityHeaders"] is True
     assert provider["compat"]["sessionAffinityFormat"] == "openrouter"
-    assert model["contextWindow"] == 4096
+    # Pi reserves 4096 context tokens before clamping max output. E97 needs a
+    # larger advertised window so bounded 4K transcripts retain output space.
+    assert model["contextWindow"] == 8192
     assert model["maxTokens"] == 512
     assert model["samplingParams"] == {"temperature": 0, "top_p": 1}
 

@@ -66,7 +66,7 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   "$EMENDER_PYTHON" scripts/serve_e97_agent_openai.py \
     --checkpoint "'$LOCAL_CHECKPOINT'" --args-json "'$LOCAL_ARGS'" \
     --host 127.0.0.1 --port "$port" --max-output-tokens 96 --max-sessions 2 \
-    --ingest-mode segment --trace-generated-errors \
+    --ingest-mode segment --v1-canonical-system --trace-generated-errors \
     > "'$RUN_ROOT'/shards/server-${SLURM_PROCID}.out" 2> "$server_log" &
   server_pid=$!
   cleanup() { kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true; }
@@ -82,7 +82,8 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   cd "$task"
   PI_CODING_AGENT_DIR="$config" PI_CODING_AGENT_SESSION_DIR="$sessions" \
     pi --mode json --provider emender-local --model e97-dense-agent \
-      --no-builtin-tools -e "'$SNAPSHOT'/configs/pi/e97-v1-tools.ts" \
+      --no-builtin-tools --no-skills --no-context-files \
+      -e "'$SNAPSHOT'/configs/pi/e97-v1-tools.ts" \
       --system-prompt "$system_prompt" --approve \
       "Calculate 608 * 57." \
       > "'$RUN_ROOT'/shards/pi-${SLURM_PROCID}.jsonl"

@@ -87,6 +87,23 @@ def test_session_store_hit_replay_rollback_commit_and_lru():
     assert len(store) == 2
 
 
+def test_system_override_removes_harness_runtime_suffix():
+    engine = FakeEngine(["Final: done" + RS])
+    service = AgentCompletionService(engine, system_prompt_override="canonical system")
+    service.prepare_completion(
+        {
+            "messages": [
+                {"role": "system", "content": "canonical system\nCurrent working directory: /tmp/task"},
+                {"role": "user", "content": "Do it."},
+            ]
+        },
+        session_id=None,
+    )
+    consumed = bytes(engine.advance_calls[0][1]).decode("utf-8")
+    assert consumed.startswith("System:\ncanonical system\n\nUser:")
+    assert "working directory" not in consumed
+
+
 def test_completion_round_trip_uses_cached_suffix_and_structured_tool_call():
     engine = FakeEngine([
         'Action: calculator\nArguments: {"expression":"2 + 3"}' + RS,

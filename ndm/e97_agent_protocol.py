@@ -7,6 +7,10 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 RS = "\x1e"
+DENSE_AGENT_V1_SYSTEM = (
+    'You are a precise tool-using agent. Respond with either "Action:" and one JSON '
+    '"Arguments:" object, or "Final:". Never invent tool results.'
+)
 ROLE_LABELS = {
     "system": "System",
     "user": "User",
