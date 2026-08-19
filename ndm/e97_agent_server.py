@@ -230,6 +230,7 @@ class AgentCompletionService:
         max_sessions: int = 8,
         trace_generated_errors: bool = False,
         system_prompt_override: str | None = None,
+        require_tool_call: bool = False,
     ):
         if max_output_tokens <= 0:
             raise ValueError("max_output_tokens must be positive")
@@ -238,6 +239,7 @@ class AgentCompletionService:
         self.max_output_tokens = max_output_tokens
         self.trace_generated_errors = bool(trace_generated_errors)
         self.system_prompt_override = system_prompt_override
+        self.require_tool_call = bool(require_tool_call)
         self.sessions = RecurrentSessionStore(max_sessions=max_sessions)
 
     def prepare_completion(
@@ -309,6 +311,8 @@ class AgentCompletionService:
         generated_text = self.engine.decode(generated_tokens)
         try:
             turn = parse_agent_turn(generated_text)
+            if self.require_tool_call and turn.kind != "tool_call":
+                raise AgentProtocolError("this agent protocol requires a structured tool call")
             validate_generated_tool(turn, request.get("tools"))
         except AgentProtocolError as exc:
             if not self.trace_generated_errors:

@@ -152,6 +152,18 @@ def test_completion_round_trip_uses_cached_suffix_and_structured_tool_call():
     assert service.commit(second) is True
 
 
+def test_v2_tool_only_mode_rejects_unstructured_final():
+    service = AgentCompletionService(
+        FakeEngine(["Final: unsupported" + RS]), require_tool_call=True
+    )
+    with pytest.raises(AgentProtocolError, match="requires a structured tool call"):
+        service.prepare_completion(
+            {"messages": [{"role": "user", "content": "Do it."}]},
+            session_id="tool-only",
+        )
+    assert len(service.sessions) == 0
+
+
 def test_generated_error_trace_is_explicit_opt_in():
     request = {"messages": [{"role": "user", "content": "Do it."}]}
     ordinary = AgentCompletionService(FakeEngine(["secret malformed output" + RS]))

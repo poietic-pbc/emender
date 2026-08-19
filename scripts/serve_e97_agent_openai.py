@@ -58,6 +58,7 @@ def main() -> None:
             DENSE_AGENT_V1_SYSTEM if args.v1_canonical_system else
             DENSE_AGENT_V2_SYSTEM if args.v2_canonical_system else None
         ),
+        require_tool_call=args.v2_canonical_system,
     )
     print(
         f"serving model={args.model_id} checkpoint={loaded.checkpoint_path} "
