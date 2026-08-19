@@ -329,6 +329,33 @@ def validate_sft_parent_optimizer_transition(
         raise RuntimeError("SFT parent optimizer state is not mature eval-state ScheduleFree")
 
 
+def validate_sft_pack_transition(
+    generation: str | Path, manifest: Mapping, expected_identity: SFTSamplerIdentity,
+    expected_parent: Mapping, *, diloco_k: int | None,
+) -> SFTSamplerIdentity:
+    """Validate an exact-optimizer fork whose only sampler change is pack authority."""
+    required_parent = {"manifest_sha256", "step", "accepted_tokens", "generation"}
+    if set(expected_parent) != required_parent:
+        raise RuntimeError("SFT pack transition parent authority fields mismatch")
+    if (Path(generation).resolve() != Path(str(expected_parent["generation"])).resolve()
+            or int(manifest.get("step", -1)) != int(expected_parent["step"])
+            or int(manifest.get("accepted_tokens", -1)) != int(expected_parent["accepted_tokens"])):
+        raise RuntimeError("SFT pack transition parent generation/clock mismatch")
+    persisted = manifest.get("sampler", {})
+    previous = SFTSamplerIdentity.from_metadata(persisted.get("identity", {}))
+    old = previous.to_metadata(); new = expected_identity.to_metadata()
+    old_pack = old.pop("pack_manifest_sha256"); new_pack = new.pop("pack_manifest_sha256")
+    if old != new or old_pack == new_pack:
+        raise RuntimeError("explicit SFT pack transition may change only pack manifest")
+    cursor = int(persisted.get("absolute_rank_sample_index", -1))
+    if diloco_k is None or diloco_k <= 0 or cursor < 0 or cursor % diloco_k:
+        raise RuntimeError("SFT pack transition requires a complete K-aligned cursor")
+    groups = manifest.get("optimizer_groups")
+    if not isinstance(groups, list) or not groups:
+        raise RuntimeError("SFT pack transition requires optimizer group authority")
+    return previous
+
+
 def validate_sft_sampler_manifest(
     manifest: Mapping,
     *,
@@ -382,6 +409,7 @@ def load_node_sharded_checkpoint(
     expected_sft_parent: Mapping | None = None,
     allow_sft_parent_optimizer_transition: bool = False,
     allow_sft_world_size_transition: bool = False,
+    allow_sft_pack_transition: bool = False,
     allow_legacy_sampler_transition: bool = False,
     allow_counter_sampler_transition: bool = False,
     diloco_k: int | None = None,
@@ -401,6 +429,13 @@ def load_node_sharded_checkpoint(
                 generation, manifest, expected_sft_parent)
             sampler_status = "sft-parent-optimizer-transition"
             manifest["sft_restore_clocks"] = (0, 0, 0)
+        elif allow_sft_pack_transition:
+            previous_identity = validate_sft_pack_transition(
+                generation, manifest, expected_sft_identity, expected_sft_parent,
+                diloco_k=diloco_k)
+            manifest["previous_sft_identity"] = previous_identity.to_metadata()
+            manifest["sft_restore_clocks"] = (0, 0, 0)
+            sampler_status = "sft-pack-transition"
         else:
             sft_clocks, sampler_status, previous_identity = (
                 validate_sft_sampler_manifest(

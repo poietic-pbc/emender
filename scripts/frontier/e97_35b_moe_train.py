@@ -122,6 +122,10 @@ def parse_args():
         "--sft-transition-data-world-size", action="store_true",
         help="Explicitly continue a K-aligned SFT checkpoint with only its fixed "
              "data-world size changed; all token/target/cursor clocks are retained.")
+    parser.add_argument(
+        "--sft-transition-pack-manifest", action="store_true",
+        help="Explicitly fork a K-aligned SFT checkpoint to a new pack manifest, "
+             "preserving exact model/optimizer state while resetting sampler clocks.")
     parser.add_argument("--sft-validation-batches", type=int, default=0)
     parser.add_argument(
         "--sft-reset-state-between-records", action="store_true",
@@ -844,6 +848,11 @@ def main() -> None:
             sft_identity is not None and args.resume_root is None
             and (args.sft_resume_parent_optimizer
                  or args.sft_parent_optimizer_split is not None))
+        if args.sft_transition_pack_manifest and (
+                args.resume_root is None or parent_optimizer_transition
+                or args.sft_transition_data_world_size):
+            raise RuntimeError(
+                "SFT pack transition requires an explicit resume root and no other sampler transition")
         if parent_optimizer_transition:
             restore_root = Path(sft_parent["generation"])
         if restore_root is not None:
@@ -854,6 +863,7 @@ def main() -> None:
                 expected_sft_parent=sft_parent,
                 allow_sft_parent_optimizer_transition=parent_optimizer_transition,
                 allow_sft_world_size_transition=args.sft_transition_data_world_size,
+                allow_sft_pack_transition=args.sft_transition_pack_manifest,
                 allow_legacy_sampler_transition=args.sampler_transition_from_legacy,
                 allow_counter_sampler_transition=args.sampler_transition_from_counter,
                 diloco_k=args.diloco_k)
@@ -917,6 +927,27 @@ def main() -> None:
                     "boundary_cursor": sft_cursor,
                     "previous_sampler_identity": manifest["previous_sft_identity"],
                     "new_sampler_identity": sft_identity.to_metadata(),
+                    "optimizer_state": "preserved-exact",
+                }
+            elif restore_status == "sft-pack-transition":
+                sampler_transition = {
+                    "status": "sft-pack-manifest-transition",
+                    "boundary_step": starting_step,
+                    "boundary_accepted_tokens": accepted_tokens,
+                    "boundary_cursor": 0,
+                    "previous_sampler_identity": manifest["previous_sft_identity"],
+                    "new_sampler_identity": sft_identity.to_metadata(),
+                    "objective_state_policy": (
+                        "reset-at-record-boundaries-v1"
+                        if _sft_transition_has_policy(
+                            manifest.get("sampler_transition"), "objective_state_policy",
+                            "reset-at-record-boundaries-v1") else "continuous-pack-v1"),
+                    "optimizer_sync_policy": (
+                        "corresponding-lane-gradient-sum-v1"
+                        if _sft_transition_has_policy(
+                            manifest.get("sampler_transition"), "optimizer_sync_policy",
+                            "corresponding-lane-gradient-sum-v1") else "diloco-model-average-v1"),
+                    "previous_sampler_transition": manifest.get("sampler_transition"),
                     "optimizer_state": "preserved-exact",
                 }
             else:

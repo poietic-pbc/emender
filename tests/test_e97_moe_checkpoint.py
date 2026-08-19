@@ -18,6 +18,7 @@ from ndm.e97_moe_checkpoint import (
     _replicated_owner,
     _resolve_complete_generation,
     validate_moe_sampler_manifest,
+    validate_sft_pack_transition,
     validate_sft_parent_optimizer_transition,
     validate_sft_sampler_manifest,
 )
@@ -103,6 +104,36 @@ def test_sft_parent_optimizer_transition_requires_exact_mature_authority(tmp_pat
         validate_sft_parent_optimizer_transition(generation, broken, parent)
     with pytest.raises(RuntimeError, match="generation mismatch"):
         validate_sft_parent_optimizer_transition(tmp_path / "wrong", manifest, parent)
+
+
+def test_sft_pack_transition_changes_only_pack_and_resets_lineage(tmp_path):
+    generation = tmp_path / "parent"; generation.mkdir()
+    parent = {"manifest_sha256": "a" * 64, "step": 100,
+              "accepted_tokens": 1000, "generation": str(generation.resolve())}
+    previous = SFTSamplerIdentity(
+        authority_manifest_sha256="b" * 64, pack_manifest_sha256="c" * 64,
+        sampler_key=42, data_world_size=64, context_size=4096)
+    expected = SFTSamplerIdentity(
+        authority_manifest_sha256="b" * 64, pack_manifest_sha256="d" * 64,
+        sampler_key=42, data_world_size=64, context_size=4096)
+    manifest = {"step": 100, "accepted_tokens": 1000,
+                "optimizer_groups": [{"k": 10}],
+                "sampler": sft_checkpoint_metadata(
+                    previous, parent=parent, total_tokens=100,
+                    assistant_target_tokens=70, absolute_rank_sample_index=128)}
+    assert validate_sft_pack_transition(
+        generation, manifest, expected, parent, diloco_k=8) == previous
+    with pytest.raises(RuntimeError, match="only pack manifest"):
+        validate_sft_pack_transition(
+            generation, manifest,
+            SFTSamplerIdentity(authority_manifest_sha256="e" * 64,
+                pack_manifest_sha256="d" * 64, sampler_key=42,
+                data_world_size=64, context_size=4096),
+            parent, diloco_k=8)
+    manifest["sampler"]["absolute_rank_sample_index"] = 129
+    with pytest.raises(RuntimeError, match="K-aligned"):
+        validate_sft_pack_transition(
+            generation, manifest, expected, parent, diloco_k=8)
 
 
 def test_sft_world_size_transition_is_explicit_and_k_aligned():
