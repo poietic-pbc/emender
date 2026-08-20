@@ -144,6 +144,7 @@ def main() -> None:
     argument_parser.add_argument("--curriculum", choices=("mixed", "direct", "discovery"), default="mixed")
     argument_parser.add_argument("--compact-observations", action="store_true")
     argument_parser.add_argument("--kinds", default="json,count,search,read")
+    argument_parser.add_argument("--discovery-period", type=int, default=5)
     args = argument_parser.parse_args()
     args.output_root.mkdir(parents=True, exist_ok=False)
     encoding = tiktoken.get_encoding(ENCODING)
@@ -160,14 +161,16 @@ def main() -> None:
         for index in range(args.records):
             kind = kinds[index % len(kinds)]
             identity = f"agent-cli-{kind}-{index:08d}"
-            discover = args.curriculum == "discovery" or (args.curriculum == "mixed" and index % 5 == 0)
+            if args.discovery_period < 1:
+                raise ValueError("--discovery-period must be positive")
+            discover = args.curriculum == "discovery" or (args.curriculum == "mixed" and index % args.discovery_period == 0)
             user, turns, task = trace(
                 kind,
                 index,
                 random.Random(args.seed + index),
                 discover,
                 compact=args.compact_observations,
-                subcommand_help=args.curriculum == "discovery",
+                subcommand_help=discover,
             )
             system = DENSE_AGENT_CLI_DIRECT_SYSTEM if args.curriculum == "direct" else SYSTEM
             messages = [("system", system), ("user", user), *turns]
@@ -208,6 +211,7 @@ def main() -> None:
         "compact_observations": args.compact_observations,
         "seed": args.seed,
         "kinds": list(kinds),
+        "discovery_period": args.discovery_period,
         "counts": counts,
         "outputs": {name: entry(path) for name, path in paths.items()},
     }
