@@ -182,7 +182,10 @@ def main() -> None:
     argument_parser.add_argument("--compact-observations", action="store_true")
     argument_parser.add_argument("--kinds", default="json,count,search,read")
     argument_parser.add_argument("--discovery-period", type=int, default=5)
+    argument_parser.add_argument("--target-stage", choices=("all", "discover-command", "discover-options"), default="all")
     args = argument_parser.parse_args()
+    if args.target_stage != "all" and args.curriculum != "discovery":
+        raise ValueError("transition target stages require --curriculum discovery")
     args.output_root.mkdir(parents=True, exist_ok=False)
     encoding = tiktoken.get_encoding(ENCODING)
     paths = {name: args.output_root / filename for name, filename in (
@@ -216,11 +219,16 @@ def main() -> None:
             system = DENSE_AGENT_CLI_DIRECT_SYSTEM if args.curriculum == "direct" else SYSTEM
             messages = [("system", system), ("user", user), *turns]
             pieces: list[tuple[str, bool]] = []
+            assistant_index = 0
+            target_index = {"discover-command": 1, "discover-options": 2}.get(args.target_stage)
             for position, (role, text) in enumerate(messages):
                 if position:
                     pieces.append(("\n\n", False))
                 label = {"system": "System", "user": "User", "assistant": "Assistant", "tool": "Tool"}[role]
-                pieces.extend([(f"{label}:\n", False), (text, role == "assistant")])
+                is_target = role == "assistant" and (target_index is None or assistant_index == target_index)
+                pieces.extend([(f"{label}:\n", False), (text, is_target)])
+                if role == "assistant":
+                    assistant_index += 1
             complete = "".join(text for text, _ in pieces)
             if "\x1e" in complete:
                 raise RuntimeError("CLI trajectories must not contain RS")
@@ -253,6 +261,7 @@ def main() -> None:
         "seed": args.seed,
         "kinds": list(kinds),
         "discovery_period": args.discovery_period,
+        "target_stage": args.target_stage,
         "counts": counts,
         "outputs": {name: entry(path) for name, path in paths.items()},
     }
