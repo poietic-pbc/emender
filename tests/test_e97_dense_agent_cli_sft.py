@@ -1,5 +1,7 @@
 import json
 import random
+import subprocess
+import sys
 
 from scripts.build_e97_dense_agent_cli_sft import cli_observation, trace
 
@@ -44,3 +46,15 @@ def test_discovery_curriculum_uses_subcommand_help_before_execution():
     assert calls[0] == {"argv": ["repo", "--help"]}
     assert calls[1] == {"argv": ["repo", "count", "--help"]}
     assert calls[2]["argv"][:2] == ["repo", "count"]
+
+
+def test_mixed_curriculum_makes_discovery_condition_observable(tmp_path):
+    output = tmp_path / "authority"
+    subprocess.run([
+        sys.executable, "scripts/build_e97_dense_agent_cli_sft.py",
+        "--output-root", str(output), "--records", "8", "--curriculum", "mixed",
+        "--discovery-period", "2", "--compact-observations",
+    ], check=True, capture_output=True, text=True)
+    rows = [json.loads(line) for line in (output / "records.jsonl").read_text().splitlines()]
+    assert all(row["user"].startswith("Inspect repo --help") for row in rows if row["task"]["discover"])
+    assert all(not row["user"].startswith("Inspect repo --help") for row in rows if not row["task"]["discover"])

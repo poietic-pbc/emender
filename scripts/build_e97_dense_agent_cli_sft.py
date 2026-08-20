@@ -174,6 +174,8 @@ def main() -> None:
                 compact=args.compact_observations,
                 subcommand_help=discover,
             )
+            if discover:
+                user = "Inspect repo --help and the relevant subcommand help before answering. " + user
             system = DENSE_AGENT_CLI_DIRECT_SYSTEM if args.curriculum == "direct" else SYSTEM
             messages = [("system", system), ("user", user), *turns]
             pieces: list[tuple[str, bool]] = []
