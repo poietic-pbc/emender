@@ -20,6 +20,8 @@ set -euo pipefail
 : "${CHECKPOINT_SHA256:?}"
 LIMIT=${LIMIT:-0}
 TASK_MODE=${TASK_MODE:-all}
+SYSTEM_MODE=${SYSTEM_MODE:-discovery}
+if [[ "$SYSTEM_MODE" == direct ]]; then CLI_SYSTEM_FLAG=--cli-direct-canonical-system; else CLI_SYSTEM_FLAG=--cli-canonical-system; fi
 EXPECTED_TASKS=${EXPECTED_TASKS:-337}
 AUTHORITY_ROOT=${AUTHORITY_ROOT:-/lustre/orion/bif148/proj-shared/emender/sft/dense-agent-cli-v1}
 CLI_IMAGE=${CLI_IMAGE:-/lustre/orion/bif148/proj-shared/emender/agent_sandbox/images/e97-cli-sandbox-296eb1e5.sif}
@@ -67,7 +69,7 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   "$EMENDER_PYTHON" scripts/serve_e97_agent_openai.py \
     --checkpoint "'$LOCAL_CHECKPOINT'" --args-json "'$LOCAL_ARGS'" \
     --host 127.0.0.1 --port "$port" --max-output-tokens 96 --max-sessions 2 \
-    --ingest-mode tokenwise --cli-canonical-system --trace-generated-errors \
+    --ingest-mode tokenwise "'$CLI_SYSTEM_FLAG'" --trace-generated-errors \
     > "'$RUN_ROOT'/shards/server-${SLURM_PROCID}.out" 2> "$server_log" &
   server_pid=$!
   cleanup() { kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true; }
@@ -80,7 +82,7 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   done
   test "$ready" = 1
   "$EMENDER_PYTHON" scripts/eval_e97_dense_agent_pi_cli.py \
-    --authority-root "'$AUTHORITY_ROOT'" --rank "$SLURM_PROCID" --world-size 8 --limit "'$LIMIT'" --task-mode "'$TASK_MODE'" \
+    --authority-root "'$AUTHORITY_ROOT'" --rank "$SLURM_PROCID" --world-size 8 --limit "'$LIMIT'" --task-mode "'$TASK_MODE'" --system-mode "'$SYSTEM_MODE'" \
     --pi-config-dir "$config" --extension "'$SNAPSHOT'/configs/pi/e97-cli-tools.ts" \
     --output-root "'$RUN_ROOT'/shards" --timeout-seconds 240
   grep -q "completion cache=miss" "$server_log"

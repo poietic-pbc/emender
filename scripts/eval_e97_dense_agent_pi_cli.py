@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from ndm.e97_agent_protocol import DENSE_AGENT_CLI_SYSTEM
+from ndm.e97_agent_protocol import DENSE_AGENT_CLI_DIRECT_SYSTEM, DENSE_AGENT_CLI_SYSTEM
 
 
 def load_tasks(authority: Path) -> list[dict[str, Any]]:
@@ -92,6 +92,7 @@ def main() -> None:
     parser.add_argument("--world-size", type=int, required=True)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--task-mode", choices=("all", "direct", "discovery"), default="all")
+    parser.add_argument("--system-mode", choices=("direct", "discovery"), default="discovery")
     parser.add_argument("--pi-config-dir", type=Path, required=True)
     parser.add_argument("--extension", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
@@ -111,7 +112,8 @@ def main() -> None:
         sandbox = make_sandbox(shard / "sandboxes", task)
         environment = dict(os.environ)
         environment.update({"PI_CODING_AGENT_DIR": str(args.pi_config_dir), "PI_CODING_AGENT_SESSION_DIR": str(shard / "sessions" / task["id"]), "PI_OFFLINE": "1"})
-        command = ["pi", "--mode", "json", "--provider", "emender-local", "--model", "e97-dense-agent", "--no-session", "--no-builtin-tools", "--no-skills", "--no-context-files", "-e", str(args.extension), "--system-prompt", DENSE_AGENT_CLI_SYSTEM, "--approve", task["user"]]
+        system_prompt = DENSE_AGENT_CLI_DIRECT_SYSTEM if args.system_mode == "direct" else DENSE_AGENT_CLI_SYSTEM
+        command = ["pi", "--mode", "json", "--provider", "emender-local", "--model", "e97-dense-agent", "--no-session", "--no-builtin-tools", "--no-skills", "--no-context-files", "-e", str(args.extension), "--system-prompt", system_prompt, "--approve", task["user"]]
         try:
             completed = subprocess.run(command, cwd=sandbox, env=environment, text=True, capture_output=True, timeout=args.timeout_seconds, check=False)
             stdout, stderr, rc = completed.stdout, completed.stderr, completed.returncode

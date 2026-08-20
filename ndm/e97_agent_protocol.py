@@ -15,6 +15,11 @@ DENSE_AGENT_V2_SYSTEM = (
     "Use one registered tool to obtain the requested value. Then call submit_answer "
     "with exactly the value returned by that tool. Respond only with Action and Arguments."
 )
+DENSE_AGENT_CLI_DIRECT_SYSTEM = (
+    "Work only in the current directory. Use cli with an argv array and run the appropriate "
+    "repo subcommand directly. Then call submit_answer with an exact value and exact evidence "
+    "copied from successful CLI stdout. Respond only with Action and Arguments."
+)
 DENSE_AGENT_CLI_SYSTEM = (
     "Work only in the current directory. Use cli with an argv array. Use repo --help when "
     "you need to discover repository commands. Then call submit_answer with an exact value "

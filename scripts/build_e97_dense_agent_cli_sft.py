@@ -12,7 +12,7 @@ from pathlib import Path
 import tiktoken
 
 from ndm.data.masked_sft_dataset import AUTHORITY_SCHEMA, RECORD_INDEX, sha256
-from ndm.e97_agent_protocol import DENSE_AGENT_CLI_SYSTEM
+from ndm.e97_agent_protocol import DENSE_AGENT_CLI_DIRECT_SYSTEM, DENSE_AGENT_CLI_SYSTEM
 try:
     from scripts.e97_repo_cli import parser as repo_parser
 except ModuleNotFoundError:  # Direct `python scripts/...` execution.
@@ -165,7 +165,8 @@ def main() -> None:
                 compact=args.compact_observations,
                 subcommand_help=args.curriculum == "discovery",
             )
-            messages = [("system", SYSTEM), ("user", user), *turns]
+            system = DENSE_AGENT_CLI_DIRECT_SYSTEM if args.curriculum == "direct" else SYSTEM
+            messages = [("system", system), ("user", user), *turns]
             pieces: list[tuple[str, bool]] = []
             for position, (role, text) in enumerate(messages):
                 if position:
