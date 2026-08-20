@@ -30,6 +30,10 @@ VALIDATION_BATCHES=${VALIDATION_BATCHES:-2}
 FINAL_CHECKPOINT_DELAY_SECONDS=${FINAL_CHECKPOINT_DELAY_SECONDS:-0}
 SFT_SAMPLER_KEY=${SFT_SAMPLER_KEY:-42}
 SFT_CROSS_NODE_GRADIENT_SYNC=${SFT_CROSS_NODE_GRADIENT_SYNC:-0}
+SFT_TRANSITION_CROSS_NODE_GRADIENT_SYNC=${SFT_TRANSITION_CROSS_NODE_GRADIENT_SYNC:-0}
+SFT_RESET_STATE_BETWEEN_RECORDS=${SFT_RESET_STATE_BETWEEN_RECORDS:-0}
+SFT_TRANSITION_RECORD_RESET=${SFT_TRANSITION_RECORD_RESET:-0}
+SFT_TRANSITION_PACK_MANIFEST=${SFT_TRANSITION_PACK_MANIFEST:-0}
 WEIGHT_DECAY=${WEIGHT_DECAY:-0.0}
 AUTHORITY_ROOT=${AUTHORITY_ROOT:-/lustre/orion/bif148/proj-shared/emender/sft/tulu3-v1/authority}
 AUTHORITY_MANIFEST_SHA256=${AUTHORITY_MANIFEST_SHA256:-e2461a28e7699637e282564589aeea35a150dc9e6e3cd62ffd6a2b5c0a2f47d8}
@@ -44,7 +48,10 @@ REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
 [[ "$RUN_ROOT" == /* && "$EXPECTED_NODES" =~ ^(1|8|16)$ \
    && "$MAX_STEPS" =~ ^[1-9][0-9]*$ && "$DILOCO_K" =~ ^[1-9][0-9]*$ \
    && "$CONTEXT_SIZE" == 4096 && "$BATCH_SIZE" == 1 \
-   && "$SAVE_EVERY" =~ ^[0-9]+$ && "$SFT_CROSS_NODE_GRADIENT_SYNC" =~ ^[01]$ ]] || { echo "invalid masked-SFT controls" >&2; exit 64; }
+   && "$SAVE_EVERY" =~ ^[0-9]+$ && "$SFT_CROSS_NODE_GRADIENT_SYNC" =~ ^[01]$ \
+   && "$SFT_TRANSITION_CROSS_NODE_GRADIENT_SYNC" =~ ^[01]$ \
+   && "$SFT_RESET_STATE_BETWEEN_RECORDS" =~ ^[01]$ && "$SFT_TRANSITION_RECORD_RESET" =~ ^[01]$ \
+   && "$SFT_TRANSITION_PACK_MANIFEST" =~ ^[01]$ ]] || { echo "invalid masked-SFT controls" >&2; exit 64; }
 (( SFT_CROSS_NODE_GRADIENT_SYNC == 0 || EXPECTED_NODES > 1 )) || { echo "cross-node gradient sync requires multiple nodes" >&2; exit 64; }
 (( SAVE_EVERY == 0 || SAVE_EVERY % DILOCO_K == 0 )) || exit 64
 record=$(scontrol show job "$SLURM_JOB_ID" -o)
@@ -80,6 +87,10 @@ printf '%s\n' \
   "context_size=$CONTEXT_SIZE" "batch_size=$BATCH_SIZE" "max_steps=$MAX_STEPS" \
   "diloco_k=$DILOCO_K" "lr=$LR" "weight_decay=$WEIGHT_DECAY" "sampler_key=$SFT_SAMPLER_KEY" \
   "sft_cross_node_gradient_sync=$SFT_CROSS_NODE_GRADIENT_SYNC" \
+  "sft_transition_cross_node_gradient_sync=$SFT_TRANSITION_CROSS_NODE_GRADIENT_SYNC" \
+  "sft_reset_state_between_records=$SFT_RESET_STATE_BETWEEN_RECORDS" \
+  "sft_transition_record_reset=$SFT_TRANSITION_RECORD_RESET" \
+  "sft_transition_pack_manifest=$SFT_TRANSITION_PACK_MANIFEST" \
   > "$RUN_ROOT/identity/recipe-${SLURM_JOB_ID}.txt"
 
 JOB_SEED="/tmp/emender-e97-sft-${SLURM_JOB_ID}.pt"
@@ -102,6 +113,7 @@ export TIKTOKEN_CACHE_DIR=/lustre/orion/bif148/proj-shared/tiktoken_cache EMENDE
 export SNAPSHOT JOB_SEED JOB_SEED_ARGS RESUME_ROOT RUN_ROOT MAX_STEPS DILOCO_K LR CONTEXT_SIZE BATCH_SIZE
 export AUTHORITY_ROOT AUTHORITY_MANIFEST_SHA256 PACK_ROOT PACK_MANIFEST_SHA256 PARENT_ROOT PARENT_MANIFEST_SHA256
 export SFT_SAMPLER_KEY SAVE_EVERY VALIDATION_BATCHES FINAL_CHECKPOINT_DELAY_SECONDS SFT_CROSS_NODE_GRADIENT_SYNC WEIGHT_DECAY
+export SFT_TRANSITION_CROSS_NODE_GRADIENT_SYNC SFT_RESET_STATE_BETWEEN_RECORDS SFT_TRANSITION_RECORD_RESET SFT_TRANSITION_PACK_MANIFEST
 set +e
 srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   set -euo pipefail
@@ -111,6 +123,10 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   export TRITON_CACHE_DIR="/tmp/e97-masked-sft-${SLURM_JOB_ID}-${SLURM_PROCID}"; rm -rf "$TRITON_CACHE_DIR"
   resume=(); [[ -z "$RESUME_ROOT" ]] || resume=(--resume-root "$RESUME_ROOT")
   gradient_sync=(); [[ "$SFT_CROSS_NODE_GRADIENT_SYNC" == 0 ]] || gradient_sync=(--sft-cross-node-gradient-sync)
+  gradient_transition=(); [[ "$SFT_TRANSITION_CROSS_NODE_GRADIENT_SYNC" == 0 ]] || gradient_transition=(--sft-transition-cross-node-gradient-sync)
+  record_reset=(); [[ "$SFT_RESET_STATE_BETWEEN_RECORDS" == 0 ]] || record_reset=(--sft-reset-state-between-records)
+  record_transition=(); [[ "$SFT_TRANSITION_RECORD_RESET" == 0 ]] || record_transition=(--sft-transition-record-reset)
+  pack_transition=(); [[ "$SFT_TRANSITION_PACK_MANIFEST" == 0 ]] || pack_transition=(--sft-transition-pack-manifest)
   "$EMENDER_PYTHON" scripts/frontier/e97_35b_moe_train.py \
     --seed-checkpoint "$JOB_SEED" --seed-args-json "$JOB_SEED_ARGS" \
     --max-steps "$MAX_STEPS" --batch-size "$BATCH_SIZE" --chunk-size "$CONTEXT_SIZE" \
@@ -125,7 +141,9 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
     --sft-parent-manifest-sha256 "$PARENT_MANIFEST_SHA256" \
     --sft-validation-batches "$VALIDATION_BATCHES" \
     --final-checkpoint-delay-seconds "$FINAL_CHECKPOINT_DELAY_SECONDS" \
-    "${gradient_sync[@]}" "${resume[@]}" --log-jsonl "$RUN_ROOT/logs/training.jsonl"
+    "${gradient_sync[@]}" "${gradient_transition[@]}" "${record_reset[@]}" \
+    "${record_transition[@]}" "${pack_transition[@]}" "${resume[@]}" \
+    --log-jsonl "$RUN_ROOT/logs/training.jsonl"
 '
 rc=$?
 set -e
