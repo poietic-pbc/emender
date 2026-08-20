@@ -30,7 +30,6 @@ def main() -> None:
     parser.add_argument("--cwd", type=Path, required=True)
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--max-output-bytes", type=int, default=DEFAULT_MAX_OUTPUT)
-    parser.add_argument("--max-address-space", default="2G")
     parser.add_argument("argv", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
@@ -48,12 +47,12 @@ def main() -> None:
         raise SystemExit("sandbox image authority mismatch")
 
     command = [
-        "apptainer", "exec", "--containall", "--cleanenv", "--net", "--network", "none",
+        "apptainer", "--silent", "exec", "--containall", "--cleanenv", "--net", "--network", "none",
         "--no-privs", "--drop-caps", "all",
         "--no-mount", "bind-paths,home,cwd,tmp,hostfs,proc,sys",
         "--bind", f"{cwd}:/work:rw", "--cwd", "/work", str(image),
         "/usr/bin/prlimit", "--core=0", "--cpu=60", "--fsize=1048576", "--nofile=256",
-        f"--as={args.max_address_space}", "--", *argv,
+        "--", *argv,
     ]
     environment = {
         "PATH": "/usr/bin:/bin",
