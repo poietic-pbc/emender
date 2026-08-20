@@ -163,7 +163,9 @@ def main() -> None:
             identity = f"agent-cli-{kind}-{index:08d}"
             if args.discovery_period < 1:
                 raise ValueError("--discovery-period must be positive")
-            discover = args.curriculum == "discovery" or (args.curriculum == "mixed" and index % args.discovery_period == 0)
+            discover = args.curriculum == "discovery" or (
+                args.curriculum == "mixed" and (index // len(kinds)) % args.discovery_period == 0
+            )
             user, turns, task = trace(
                 kind,
                 index,
