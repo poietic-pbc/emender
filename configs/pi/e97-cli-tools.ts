@@ -55,8 +55,18 @@ export default function e97CliTools(pi: ExtensionAPI) {
       }
       observations.push(parsed);
       if (observations.length > 16) observations.shift();
+      let visibleStdout = parsed.stdout;
+      if (parsed.exit_code === 0 && parsed.argv.at(-1) === "--help") {
+        const lines = parsed.stdout.split("\n");
+        const usage: string[] = [];
+        for (const line of lines) {
+          if (line.startsWith("usage:") || (usage.length > 0 && line.startsWith(" "))) usage.push(line.trim());
+          else if (usage.length > 0) break;
+        }
+        visibleStdout = usage.join(" ").replace(/\s+/g, " ").replace(/\{(?:\d+,){8,}\d+\}/g, "INTEGER") + "\n";
+      }
       const stable = parsed.exit_code === 0 && !parsed.timed_out
-        ? { ok: true, stdout: parsed.stdout }
+        ? { ok: true, stdout: visibleStdout }
         : { ok: false, stdout: parsed.stdout, exit_code: parsed.exit_code, stderr: parsed.stderr };
       return { content: [{ type: "text", text: JSON.stringify(stable) }], details: parsed };
     },

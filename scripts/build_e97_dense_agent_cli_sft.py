@@ -30,11 +30,25 @@ def action(name: str, arguments: dict[str, object]) -> tuple[str, str]:
     return "assistant", f"Action: {name}\nArguments: {json.dumps(arguments, separators=(',', ':'))}"
 
 
+def help_summary(stdout: str) -> str:
+    usage_lines: list[str] = []
+    for line in stdout.splitlines():
+        if line.startswith("usage:") or (usage_lines and line.startswith(" ")):
+            usage_lines.append(line.strip())
+        elif usage_lines:
+            break
+    summary = " ".join(" ".join(usage_lines).split())
+    import re
+    summary = re.sub(r"\{(?:\d+,){8,}\d+\}", "INTEGER", summary)
+    return summary + "\n"
+
+
 def cli_observation(
     argv: list[str], stdout: str, *, exit_code: int = 0, stderr: str = "", compact: bool = False
 ) -> str:
     if compact:
-        value = {"ok": exit_code == 0, "stdout": stdout}
+        visible_stdout = help_summary(stdout) if argv[-1:] == ["--help"] and exit_code == 0 else stdout
+        value = {"ok": exit_code == 0, "stdout": visible_stdout}
         if exit_code != 0:
             value.update({"exit_code": exit_code, "stderr": stderr})
         return json.dumps(value, separators=(",", ":"))

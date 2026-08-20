@@ -3,7 +3,7 @@ import random
 import subprocess
 import sys
 
-from scripts.build_e97_dense_agent_cli_sft import cli_observation, trace
+from scripts.build_e97_dense_agent_cli_sft import cli_observation, help_summary, trace
 
 
 def test_cli_trajectories_are_typed_grounded_and_rs_free():
@@ -35,8 +35,8 @@ def test_cli_observation_has_stable_model_visible_fields_only():
         "argv", "cwd", "exit_code", "stdout", "stderr",
         "stdout_truncated", "stderr_truncated", "timed_out",
     }
-    compact = json.loads(cli_observation(["repo", "--help"], "help\n", compact=True))
-    assert compact == {"ok": True, "stdout": "help\n"}
+    compact = json.loads(cli_observation(["repo", "--help"], "usage: repo [-h]\n\nhelp\n", compact=True))
+    assert compact == {"ok": True, "stdout": "usage: repo [-h]\n"}
     assert "duration_ms" not in value
 
 
@@ -46,6 +46,11 @@ def test_discovery_curriculum_uses_subcommand_help_before_execution():
     assert calls[0] == {"argv": ["repo", "--help"]}
     assert calls[1] == {"argv": ["repo", "count", "--help"]}
     assert calls[2]["argv"][:2] == ["repo", "count"]
+
+
+def test_help_summary_keeps_usage_and_removes_enumerated_integer_ranges():
+    summary = help_summary("usage: repo search [-h]\n  [--max-results {1,2,3,4,5,6,7,8,9,10}]\n\noptions:\n")
+    assert summary == "usage: repo search [-h] [--max-results INTEGER]\n"
 
 
 def test_mixed_curriculum_makes_discovery_condition_observable(tmp_path):
