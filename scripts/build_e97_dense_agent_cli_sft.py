@@ -143,6 +143,7 @@ def main() -> None:
     argument_parser.add_argument("--seed", type=int, default=9704)
     argument_parser.add_argument("--curriculum", choices=("mixed", "direct", "discovery"), default="mixed")
     argument_parser.add_argument("--compact-observations", action="store_true")
+    argument_parser.add_argument("--kinds", default="json,count,search,read")
     args = argument_parser.parse_args()
     args.output_root.mkdir(parents=True, exist_ok=False)
     encoding = tiktoken.get_encoding(ENCODING)
@@ -150,11 +151,14 @@ def main() -> None:
         ("tokens", "tokens.uint32.bin"), ("mask", "assistant_mask.uint8.bin"),
         ("index", "records.idx"), ("metadata", "records.jsonl"),
     )}
+    kinds = tuple(part.strip() for part in args.kinds.split(",") if part.strip())
+    if not kinds or any(kind not in {"json", "count", "search", "read"} for kind in kinds):
+        raise ValueError("--kinds must contain only json,count,search,read")
     counts = {"records": 0, "tokens": 0, "assistant_target_tokens": 0, "train_records": 0, "validation_records": 0, "discovery_records": 0}
     offset = 0
     with paths["tokens"].open("wb") as token_file, paths["mask"].open("wb") as mask_file, paths["index"].open("wb") as index_file, paths["metadata"].open("w") as metadata_file:
         for index in range(args.records):
-            kind = ("json", "count", "search", "read")[index % 4]
+            kind = kinds[index % len(kinds)]
             identity = f"agent-cli-{kind}-{index:08d}"
             discover = args.curriculum == "discovery" or (args.curriculum == "mixed" and index % 5 == 0)
             user, turns, task = trace(
@@ -203,6 +207,7 @@ def main() -> None:
         "curriculum": args.curriculum,
         "compact_observations": args.compact_observations,
         "seed": args.seed,
+        "kinds": list(kinds),
         "counts": counts,
         "outputs": {name: entry(path) for name, path in paths.items()},
     }
