@@ -10,7 +10,7 @@ Progress:
 - M1 complete: canonical tokenwise FP32 recurrent caching qualified on the real checkpoint in job 5307227; see `docs/validation/e97-dense-recurrent-cache-jobs5307047-5307175-5307227.md`.
 - M2 complete: the real Pi CLI performed a structured tool roundtrip with a recurrent-cache miss then hit on all eight ranks in job 5308186; see `docs/validation/e97-dense-pi-roundtrip-jobs5307403-5307492-5307670-5307866-5308186.md`.
 - M3 complete: after removing intra-conversation RS and simplifying typed tool contracts, the warm-32 v3 checkpoint passed 285/291 strict held-out tasks and grounded 291/291 actual tool observations through real Pi in job 5310895; see `docs/validation/e97-dense-agent-rs-free-grounding-jobs5308554-5310895.md`.
-- M4 is now active: preserve the bounded promotion authority, correct calculator-argument transcription, and build a separate read-only repository-task panel before enabling any mutation.
+- M4 is now active: preserve the bounded promotion authority and train a discoverable CLI agent inside the qualified cwd-only Apptainer boundary. Job 5312544 hid all Frontier host paths except one disposable writable cwd, disabled network and host environment access, and passed on all eight ranks; see `docs/validation/e97-cli-apptainer-cwd-isolation-job5312544.md`.
 
 ## 1. Objective
 
