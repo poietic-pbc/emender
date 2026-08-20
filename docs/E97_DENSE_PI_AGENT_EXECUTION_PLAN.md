@@ -9,7 +9,8 @@ Progress:
 - M0 complete: v1 baseline preserved in `docs/validation/e97-dense-agent-v1-baseline-job5306907.md`.
 - M1 complete: canonical tokenwise FP32 recurrent caching qualified on the real checkpoint in job 5307227; see `docs/validation/e97-dense-recurrent-cache-jobs5307047-5307175-5307227.md`.
 - M2 complete: the real Pi CLI performed a structured tool roundtrip with a recurrent-cache miss then hit on all eight ranks in job 5308186; see `docs/validation/e97-dense-pi-roundtrip-jobs5307403-5307492-5307670-5307866-5308186.md`.
-- M3 is the current implementation milestone: run and score all 308 excluded v1 tasks end to end through Pi.
+- M3 complete: after removing intra-conversation RS and simplifying typed tool contracts, the warm-32 v3 checkpoint passed 285/291 strict held-out tasks and grounded 291/291 actual tool observations through real Pi in job 5310895; see `docs/validation/e97-dense-agent-rs-free-grounding-jobs5308554-5310895.md`.
+- M4 is now active: preserve the bounded promotion authority, correct calculator-argument transcription, and build a separate read-only repository-task panel before enabling any mutation.
 
 ## 1. Objective
 
@@ -262,10 +263,10 @@ If a targeted v2 arm passes, stop broad synthetic expansion and move directly to
 
 ## 10. Immediate work order
 
-M0-M2 are complete. The active order is now:
+M0-M3 are complete. The active order is now:
 
-1. Run all 308 excluded v1 tasks through real Pi sessions without teacher-forced actions or observations.
-2. Aggregate protocol, executed-tool, argument, observation, stopping, loop, strict-final, and semantic-final metrics by task family.
-3. Preserve representative Pi session traces and cache diagnostics.
-4. Use the resulting failure taxonomy to finalize dense-agent v2 task/observation design.
-5. Do not begin v2 SFT until the Pi execution traces separate protocol failures from grounding failures.
+1. Preserve the RS-free v3 warm-32 checkpoint and job 5310895 as bounded promotion authorities.
+2. Treat the five changed calculator operands as argument-transcription failures; grounded finalization itself passed 291/291.
+3. Add a small correction/verification path for operational arguments without weakening provenance checks.
+4. Build and preregister a separate read-only repository-task panel in disposable task roots.
+5. Keep edit and write disabled until that panel meets its accuracy and safety gates.
