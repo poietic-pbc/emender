@@ -29,6 +29,8 @@ SAVE_EVERY=${SAVE_EVERY:-0}
 VALIDATION_BATCHES=${VALIDATION_BATCHES:-2}
 FINAL_CHECKPOINT_DELAY_SECONDS=${FINAL_CHECKPOINT_DELAY_SECONDS:-0}
 SFT_SAMPLER_KEY=${SFT_SAMPLER_KEY:-42}
+SFT_CROSS_NODE_GRADIENT_SYNC=${SFT_CROSS_NODE_GRADIENT_SYNC:-0}
+WEIGHT_DECAY=${WEIGHT_DECAY:-0.0}
 AUTHORITY_ROOT=${AUTHORITY_ROOT:-/lustre/orion/bif148/proj-shared/emender/sft/tulu3-v1/authority}
 AUTHORITY_MANIFEST_SHA256=${AUTHORITY_MANIFEST_SHA256:-e2461a28e7699637e282564589aeea35a150dc9e6e3cd62ffd6a2b5c0a2f47d8}
 PACK_ROOT=${PACK_ROOT:-/lustre/orion/bif148/proj-shared/emender/sft/tulu3-v1/packs-4096-v1}
@@ -42,7 +44,8 @@ REPO=${REPO:-${SLURM_SUBMIT_DIR:-$PWD}}
 [[ "$RUN_ROOT" == /* && "$EXPECTED_NODES" =~ ^(1|8|16)$ \
    && "$MAX_STEPS" =~ ^[1-9][0-9]*$ && "$DILOCO_K" =~ ^[1-9][0-9]*$ \
    && "$CONTEXT_SIZE" == 4096 && "$BATCH_SIZE" == 1 \
-   && "$SAVE_EVERY" =~ ^[0-9]+$ ]] || { echo "invalid masked-SFT controls" >&2; exit 64; }
+   && "$SAVE_EVERY" =~ ^[0-9]+$ && "$SFT_CROSS_NODE_GRADIENT_SYNC" =~ ^[01]$ ]] || { echo "invalid masked-SFT controls" >&2; exit 64; }
+(( SFT_CROSS_NODE_GRADIENT_SYNC == 0 || EXPECTED_NODES > 1 )) || { echo "cross-node gradient sync requires multiple nodes" >&2; exit 64; }
 (( SAVE_EVERY == 0 || SAVE_EVERY % DILOCO_K == 0 )) || exit 64
 record=$(scontrol show job "$SLURM_JOB_ID" -o)
 [[ "$record" == *"NumNodes=$EXPECTED_NODES"* \
@@ -75,7 +78,8 @@ printf '%s\n' \
   "schema=emender-e97-masked-sft-run-v1" "parent_manifest_sha256=$PARENT_MANIFEST_SHA256" \
   "authority_manifest_sha256=$AUTHORITY_MANIFEST_SHA256" "pack_manifest_sha256=$PACK_MANIFEST_SHA256" \
   "context_size=$CONTEXT_SIZE" "batch_size=$BATCH_SIZE" "max_steps=$MAX_STEPS" \
-  "diloco_k=$DILOCO_K" "lr=$LR" "sampler_key=$SFT_SAMPLER_KEY" \
+  "diloco_k=$DILOCO_K" "lr=$LR" "weight_decay=$WEIGHT_DECAY" "sampler_key=$SFT_SAMPLER_KEY" \
+  "sft_cross_node_gradient_sync=$SFT_CROSS_NODE_GRADIENT_SYNC" \
   > "$RUN_ROOT/identity/recipe-${SLURM_JOB_ID}.txt"
 
 JOB_SEED="/tmp/emender-e97-sft-${SLURM_JOB_ID}.pt"
@@ -97,7 +101,7 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True PYTORCH_CUDA_ALLOC_CONF=expan
 export TIKTOKEN_CACHE_DIR=/lustre/orion/bif148/proj-shared/tiktoken_cache EMENDER_SOURCE_COMMIT=$SOURCE_COMMIT
 export SNAPSHOT JOB_SEED JOB_SEED_ARGS RESUME_ROOT RUN_ROOT MAX_STEPS DILOCO_K LR CONTEXT_SIZE BATCH_SIZE
 export AUTHORITY_ROOT AUTHORITY_MANIFEST_SHA256 PACK_ROOT PACK_MANIFEST_SHA256 PARENT_ROOT PARENT_MANIFEST_SHA256
-export SFT_SAMPLER_KEY SAVE_EVERY VALIDATION_BATCHES FINAL_CHECKPOINT_DELAY_SECONDS
+export SFT_SAMPLER_KEY SAVE_EVERY VALIDATION_BATCHES FINAL_CHECKPOINT_DELAY_SECONDS SFT_CROSS_NODE_GRADIENT_SYNC WEIGHT_DECAY
 set +e
 srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   set -euo pipefail
@@ -106,12 +110,13 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   export RANK=$SLURM_PROCID LOCAL_RANK=$SLURM_LOCALID
   export TRITON_CACHE_DIR="/tmp/e97-masked-sft-${SLURM_JOB_ID}-${SLURM_PROCID}"; rm -rf "$TRITON_CACHE_DIR"
   resume=(); [[ -z "$RESUME_ROOT" ]] || resume=(--resume-root "$RESUME_ROOT")
+  gradient_sync=(); [[ "$SFT_CROSS_NODE_GRADIENT_SYNC" == 0 ]] || gradient_sync=(--sft-cross-node-gradient-sync)
   "$EMENDER_PYTHON" scripts/frontier/e97_35b_moe_train.py \
     --seed-checkpoint "$JOB_SEED" --seed-args-json "$JOB_SEED_ARGS" \
     --max-steps "$MAX_STEPS" --batch-size "$BATCH_SIZE" --chunk-size "$CONTEXT_SIZE" \
     --gradient-checkpointing --loss-chunk-size 2048 --checkpoint-loss-chunks \
     --checkpoint-interval 16 --projection-chunk-size 2048 --moe-token-chunk-size 4096 \
-    --lr "$LR" --weight-decay 0.0 --diloco-k "$DILOCO_K" --expert-backend rocblas \
+    --lr "$LR" --weight-decay "$WEIGHT_DECAY" --diloco-k "$DILOCO_K" --expert-backend rocblas \
     --empty-cache-interval 1 --offload-schedulefree-state \
     --checkpoint-root "$RUN_ROOT/checkpoints" --save-every "$SAVE_EVERY" --keep-checkpoints 2 \
     --sft-authority-root "$AUTHORITY_ROOT" --sft-authority-manifest-sha256 "$AUTHORITY_MANIFEST_SHA256" \
@@ -120,7 +125,7 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
     --sft-parent-manifest-sha256 "$PARENT_MANIFEST_SHA256" \
     --sft-validation-batches "$VALIDATION_BATCHES" \
     --final-checkpoint-delay-seconds "$FINAL_CHECKPOINT_DELAY_SECONDS" \
-    "${resume[@]}" --log-jsonl "$RUN_ROOT/logs/training.jsonl"
+    "${gradient_sync[@]}" "${resume[@]}" --log-jsonl "$RUN_ROOT/logs/training.jsonl"
 '
 rc=$?
 set -e
