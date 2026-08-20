@@ -1,6 +1,6 @@
 # E97 MoE RS-Free Agent Experiment
 
-Status: active attended experiment  
+Status: active attended experiment; serving qualified, parent and update-8 canaries complete, cumulative update-32 continuation queued as job 5318746
 Decision authority: real Pi behavioral rollouts, not loss  
 Dense control: direct-CLI champion `fca9b06c521fb9407cd7bed2d7049f36e9a93948d6cd98899b6ad9b9e4fc6b01`
 
@@ -78,6 +78,10 @@ Stop and diagnose before resubmission if:
 - training improves likelihood while real-Pi behavior remains flat or worsens;
 - grounding or sandbox invariants regress;
 - scheduler partition/QoS evidence is absent or incorrect.
+
+## Current evidence
+
+Jobs `5317391`, `5317429`, and `5317694` qualified serving, completed eight synchronized updates, and evaluated the first checkpoint. Both parent and update-8 scored 0/4 because they emitted no valid action. See `docs/validation/e97-moe-rs-free-agent-jobs5317391-5317429-5317694.md`. Job `5318746` is the gated continuation to cumulative update 32.
 
 ## Promotion rule
 
