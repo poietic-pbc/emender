@@ -12,17 +12,14 @@ from pathlib import Path
 import tiktoken
 
 from ndm.data.masked_sft_dataset import AUTHORITY_SCHEMA, RECORD_INDEX, sha256
+from ndm.e97_agent_protocol import DENSE_AGENT_CLI_SYSTEM
 try:
     from scripts.e97_repo_cli import parser as repo_parser
 except ModuleNotFoundError:  # Direct `python scripts/...` execution.
     from e97_repo_cli import parser as repo_parser
 
 ENCODING = "p50k_base"
-SYSTEM = (
-    "Work only in the current directory. Use cli with an argv array. Use repo --help when "
-    "you need to discover repository commands. Then call submit_answer with an exact value "
-    "and exact evidence copied from successful CLI stdout. Respond only with Action and Arguments."
-)
+SYSTEM = DENSE_AGENT_CLI_SYSTEM
 
 
 def split(identity: str) -> int:
