@@ -3,7 +3,7 @@ import random
 from pathlib import Path
 
 from scripts.build_e97_dense_agent_cli_sft import trace
-from scripts.eval_e97_dense_agent_pi_cli import load_tasks, make_sandbox, score
+from scripts.eval_e97_dense_agent_pi_cli import balanced_prefix, load_tasks, make_sandbox, score
 
 
 def authority(tmp_path: Path) -> Path:
@@ -20,6 +20,14 @@ def test_cli_validation_authority_loads_mechanical_tasks(tmp_path: Path):
     assert len(tasks) == 4
     assert {task["kind"] for task in tasks} == {"json", "count", "search", "read"}
     assert all(task["fixtures"] and task["argv"] and task["expected"] for task in tasks)
+
+
+def test_balanced_prefix_covers_kind_and_discovery_strata(tmp_path: Path):
+    tasks = load_tasks(authority(tmp_path))
+    selected = balanced_prefix(tasks * 2, 8)
+    assert {(task["kind"], task["discover"]) for task in selected} == {
+        ("json", True), ("count", False), ("search", False), ("read", False)
+    }
 
 
 def test_cli_sandbox_materializes_only_task_fixtures(tmp_path: Path):

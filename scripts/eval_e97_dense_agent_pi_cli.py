@@ -21,6 +21,28 @@ def load_tasks(authority: Path) -> list[dict[str, Any]]:
     return tasks
 
 
+def balanced_prefix(tasks: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """Select a deterministic round-robin prefix across kind and discovery strata."""
+    strata: dict[tuple[str, bool], list[dict[str, Any]]] = {}
+    for task in tasks:
+        strata.setdefault((task["kind"], bool(task["discover"])), []).append(task)
+    keys = sorted(strata)
+    selected: list[dict[str, Any]] = []
+    position = 0
+    while len(selected) < limit:
+        added = False
+        for key in keys:
+            rows = strata[key]
+            if position < len(rows):
+                selected.append(rows[position]); added = True
+                if len(selected) == limit:
+                    break
+        if not added:
+            break
+        position += 1
+    return selected
+
+
 def make_sandbox(root: Path, task: dict[str, Any]) -> Path:
     sandbox = root / task["id"]
     sandbox.mkdir(parents=True, exist_ok=False)
@@ -75,7 +97,7 @@ def main() -> None:
     parser.add_argument("--timeout-seconds", type=int, default=240)
     args = parser.parse_args()
     tasks = load_tasks(args.authority_root)
-    if args.limit: tasks = tasks[:args.limit]
+    if args.limit: tasks = balanced_prefix(tasks, args.limit)
     tasks = [task for position, task in enumerate(tasks) if position % args.world_size == args.rank]
     shard = args.output_root / f"rank-{args.rank:02d}"
     for child in ("sandboxes", "traces", "results"): (shard / child).mkdir(parents=True, exist_ok=False)
