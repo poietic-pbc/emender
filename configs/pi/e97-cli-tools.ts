@@ -65,9 +65,28 @@ export default function e97CliTools(pi: ExtensionAPI) {
         }
         visibleStdout = usage.join(" ").replace(/\s+/g, " ").replace(/\{(?:\d+,){8,}\d+\}/g, "INTEGER") + "\n";
       }
-      const stable = parsed.exit_code === 0 && !parsed.timed_out
-        ? { ok: true, stdout: visibleStdout }
-        : { ok: false, stdout: parsed.stdout, exit_code: parsed.exit_code, stderr: parsed.stderr };
+      let stable: Record<string, unknown>;
+      if (parsed.exit_code !== 0 || parsed.timed_out) {
+        stable = {
+          ok: false, phase: "RECOVER", exit_code: parsed.exit_code, stderr: parsed.stderr,
+          instruction: "correct argv and do not repeat an identical failed command",
+        };
+      } else if (parsed.argv.at(-1) === "--help") {
+        const topLevel = parsed.argv.length === 2 && parsed.argv[0] === "repo";
+        stable = {
+          ok: true,
+          phase: topLevel ? "DISCOVER_COMMAND" : "DISCOVER_OPTIONS",
+          usage: visibleStdout.trimEnd(),
+          instruction: topLevel
+            ? "choose the relevant subcommand and inspect its help; do not repeat this command"
+            : "construct and execute argv using these options; do not repeat help",
+        };
+      } else {
+        stable = {
+          ok: true, phase: "INTERPRET", stdout: parsed.stdout,
+          instruction: "extract an exact value and evidence, then submit",
+        };
+      }
       return { content: [{ type: "text", text: JSON.stringify(stable) }], details: parsed };
     },
   });

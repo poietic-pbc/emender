@@ -47,10 +47,33 @@ def cli_observation(
     argv: list[str], stdout: str, *, exit_code: int = 0, stderr: str = "", compact: bool = False
 ) -> str:
     if compact:
-        visible_stdout = help_summary(stdout) if argv[-1:] == ["--help"] and exit_code == 0 else stdout
-        value = {"ok": exit_code == 0, "stdout": visible_stdout}
         if exit_code != 0:
-            value.update({"exit_code": exit_code, "stderr": stderr})
+            value = {
+                "ok": False,
+                "phase": "RECOVER",
+                "exit_code": exit_code,
+                "stderr": stderr,
+                "instruction": "correct argv and do not repeat an identical failed command",
+            }
+        elif argv[-1:] == ["--help"]:
+            top_level = argv == ["repo", "--help"]
+            value = {
+                "ok": True,
+                "phase": "DISCOVER_COMMAND" if top_level else "DISCOVER_OPTIONS",
+                "usage": help_summary(stdout).rstrip("\n"),
+                "instruction": (
+                    "choose the relevant subcommand and inspect its help; do not repeat this command"
+                    if top_level else
+                    "construct and execute argv using these options; do not repeat help"
+                ),
+            }
+        else:
+            value = {
+                "ok": True,
+                "phase": "INTERPRET",
+                "stdout": stdout,
+                "instruction": "extract an exact value and evidence, then submit",
+            }
         return json.dumps(value, separators=(",", ":"))
     return json.dumps({
         "argv": argv,

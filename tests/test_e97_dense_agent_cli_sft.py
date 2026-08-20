@@ -36,7 +36,12 @@ def test_cli_observation_has_stable_model_visible_fields_only():
         "stdout_truncated", "stderr_truncated", "timed_out",
     }
     compact = json.loads(cli_observation(["repo", "--help"], "usage: repo [-h]\n\nhelp\n", compact=True))
-    assert compact == {"ok": True, "stdout": "usage: repo [-h]\n"}
+    assert compact == {
+        "ok": True,
+        "phase": "DISCOVER_COMMAND",
+        "usage": "usage: repo [-h]",
+        "instruction": "choose the relevant subcommand and inspect its help; do not repeat this command",
+    }
     assert "duration_ms" not in value
 
 
@@ -46,6 +51,15 @@ def test_discovery_curriculum_uses_subcommand_help_before_execution():
     assert calls[0] == {"argv": ["repo", "--help"]}
     assert calls[1] == {"argv": ["repo", "count", "--help"]}
     assert calls[2]["argv"][:2] == ["repo", "count"]
+
+
+def test_phase_observations_cover_options_interpretation_and_recovery():
+    options = json.loads(cli_observation(["repo", "json", "--help"], "usage: repo json --path PATH --pointer POINTER\n", compact=True))
+    assert options["phase"] == "DISCOVER_OPTIONS"
+    result = json.loads(cli_observation(["repo", "count"], '{"count":2}\n', compact=True))
+    assert result["phase"] == "INTERPRET"
+    failure = json.loads(cli_observation(["repo", "bad"], "", exit_code=2, stderr="bad\n", compact=True))
+    assert failure["phase"] == "RECOVER"
 
 
 def test_help_summary_keeps_usage_and_removes_enumerated_integer_ranges():
