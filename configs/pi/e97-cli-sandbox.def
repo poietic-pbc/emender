@@ -1,0 +1,25 @@
+Bootstrap: docker
+From: python:3.12-slim-bookworm
+
+%files
+    scripts/e97_repo_cli.py /usr/local/bin/repo
+
+%post
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates coreutils diffutils file findutils git grep jq less patch \
+        ripgrep sed util-linux
+    rm -rf /var/lib/apt/lists/*
+    chmod 0755 /usr/local/bin/repo
+
+%environment
+    export PATH=/usr/local/bin:/usr/bin:/bin
+    export LANG=C.UTF-8
+    export LC_ALL=C.UTF-8
+    export PYTHONDONTWRITEBYTECODE=1
+    export PYTHONUNBUFFERED=1
+
+%labels
+    org.opencontainers.image.title e97-cli-sandbox
+    org.opencontainers.image.description "Cwd-only discoverable CLI image for bounded E97 agents"
+    org.opencontainers.image.source https://github.com/spinozans/emender
