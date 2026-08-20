@@ -33,4 +33,14 @@ def test_cli_observation_has_stable_model_visible_fields_only():
         "argv", "cwd", "exit_code", "stdout", "stderr",
         "stdout_truncated", "stderr_truncated", "timed_out",
     }
+    compact = json.loads(cli_observation(["repo", "--help"], "help\n", compact=True))
+    assert compact == {"ok": True, "stdout": "help\n"}
     assert "duration_ms" not in value
+
+
+def test_discovery_curriculum_uses_subcommand_help_before_execution():
+    _, turns, _ = trace("count", 12, random.Random(9716), True, compact=True, subcommand_help=True)
+    calls = [json.loads(text.partition("\nArguments: ")[2]) for role, text in turns if role == "assistant" and text.startswith("Action: cli")]
+    assert calls[0] == {"argv": ["repo", "--help"]}
+    assert calls[1] == {"argv": ["repo", "count", "--help"]}
+    assert calls[2]["argv"][:2] == ["repo", "count"]

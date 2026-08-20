@@ -19,6 +19,7 @@ set -euo pipefail
 : "${CHECKPOINT:?}"
 : "${CHECKPOINT_SHA256:?}"
 LIMIT=${LIMIT:-0}
+TASK_MODE=${TASK_MODE:-all}
 EXPECTED_TASKS=${EXPECTED_TASKS:-337}
 AUTHORITY_ROOT=${AUTHORITY_ROOT:-/lustre/orion/bif148/proj-shared/emender/sft/dense-agent-cli-v1}
 CLI_IMAGE=${CLI_IMAGE:-/lustre/orion/bif148/proj-shared/emender/agent_sandbox/images/e97-cli-sandbox-296eb1e5.sif}
@@ -79,7 +80,7 @@ srun --label --kill-on-bad-exit=1 --wait=120 bash -lc '
   done
   test "$ready" = 1
   "$EMENDER_PYTHON" scripts/eval_e97_dense_agent_pi_cli.py \
-    --authority-root "'$AUTHORITY_ROOT'" --rank "$SLURM_PROCID" --world-size 8 --limit "'$LIMIT'" \
+    --authority-root "'$AUTHORITY_ROOT'" --rank "$SLURM_PROCID" --world-size 8 --limit "'$LIMIT'" --task-mode "'$TASK_MODE'" \
     --pi-config-dir "$config" --extension "'$SNAPSHOT'/configs/pi/e97-cli-tools.ts" \
     --output-root "'$RUN_ROOT'/shards" --timeout-seconds 240
   grep -q "completion cache=miss" "$server_log"

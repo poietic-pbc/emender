@@ -55,12 +55,9 @@ export default function e97CliTools(pi: ExtensionAPI) {
       }
       observations.push(parsed);
       if (observations.length > 16) observations.shift();
-      const stable = {
-        argv: parsed.argv, cwd: parsed.cwd, exit_code: parsed.exit_code,
-        stdout: parsed.stdout, stderr: parsed.stderr,
-        stdout_truncated: parsed.stdout_truncated, stderr_truncated: parsed.stderr_truncated,
-        timed_out: parsed.timed_out,
-      };
+      const stable = parsed.exit_code === 0 && !parsed.timed_out
+        ? { ok: true, stdout: parsed.stdout }
+        : { ok: false, stdout: parsed.stdout, exit_code: parsed.exit_code, stderr: parsed.stderr };
       return { content: [{ type: "text", text: JSON.stringify(stable) }], details: parsed };
     },
   });

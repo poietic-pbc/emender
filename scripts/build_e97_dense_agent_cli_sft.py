@@ -30,7 +30,14 @@ def action(name: str, arguments: dict[str, object]) -> tuple[str, str]:
     return "assistant", f"Action: {name}\nArguments: {json.dumps(arguments, separators=(',', ':'))}"
 
 
-def cli_observation(argv: list[str], stdout: str, *, exit_code: int = 0, stderr: str = "") -> str:
+def cli_observation(
+    argv: list[str], stdout: str, *, exit_code: int = 0, stderr: str = "", compact: bool = False
+) -> str:
+    if compact:
+        value = {"ok": exit_code == 0, "stdout": stdout}
+        if exit_code != 0:
+            value.update({"exit_code": exit_code, "stderr": stderr})
+        return json.dumps(value, separators=(",", ":"))
     return json.dumps({
         "argv": argv,
         "cwd": ".",
@@ -47,7 +54,15 @@ def repo_stdout(value: object) -> str:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=False, sort_keys=True) + "\n"
 
 
-def trace(kind: str, index: int, rng: random.Random, discover: bool):
+def trace(
+    kind: str,
+    index: int,
+    rng: random.Random,
+    discover: bool,
+    *,
+    compact: bool = False,
+    subcommand_help: bool = False,
+):
     fixtures: list[dict[str, str]] = []
     if kind == "json":
         tokenizer = rng.choice(["p50k_base", "cl100k_base", "gpt2", "o200k_base"])
@@ -99,10 +114,19 @@ def trace(kind: str, index: int, rng: random.Random, discover: bool):
     if discover:
         help_argv = ["repo", "--help"]
         help_stdout = repo_parser().format_help()
-        turns.extend([action("cli", {"argv": help_argv}), ("tool", cli_observation(help_argv, help_stdout))])
+        turns.extend([action("cli", {"argv": help_argv}), ("tool", cli_observation(help_argv, help_stdout, compact=compact))])
+        if subcommand_help:
+            root_parser = repo_parser()
+            subparsers = next(action for action in root_parser._actions if hasattr(action, "choices") and action.choices)
+            command_help_argv = ["repo", kind, "--help"]
+            command_help_stdout = subparsers.choices[kind].format_help()
+            turns.extend([
+                action("cli", {"argv": command_help_argv}),
+                ("tool", cli_observation(command_help_argv, command_help_stdout, compact=compact)),
+            ])
     turns.extend([
         action("cli", {"argv": argv}),
-        ("tool", cli_observation(argv, stdout)),
+        ("tool", cli_observation(argv, stdout, compact=compact)),
         action("submit_answer", {"value": answer, "evidence": evidence}),
     ])
     return user, turns, {"fixtures": fixtures, "expected": answer, "evidence": evidence, "argv": argv, "discover": discover}
@@ -117,6 +141,8 @@ def main() -> None:
     argument_parser.add_argument("--output-root", type=Path, required=True)
     argument_parser.add_argument("--records", type=int, default=30_000)
     argument_parser.add_argument("--seed", type=int, default=9704)
+    argument_parser.add_argument("--curriculum", choices=("mixed", "direct", "discovery"), default="mixed")
+    argument_parser.add_argument("--compact-observations", action="store_true")
     args = argument_parser.parse_args()
     args.output_root.mkdir(parents=True, exist_ok=False)
     encoding = tiktoken.get_encoding(ENCODING)
@@ -130,8 +156,15 @@ def main() -> None:
         for index in range(args.records):
             kind = ("json", "count", "search", "read")[index % 4]
             identity = f"agent-cli-{kind}-{index:08d}"
-            discover = index % 5 == 0
-            user, turns, task = trace(kind, index, random.Random(args.seed + index), discover)
+            discover = args.curriculum == "discovery" or (args.curriculum == "mixed" and index % 5 == 0)
+            user, turns, task = trace(
+                kind,
+                index,
+                random.Random(args.seed + index),
+                discover,
+                compact=args.compact_observations,
+                subcommand_help=args.curriculum == "discovery",
+            )
             messages = [("system", SYSTEM), ("user", user), *turns]
             pieces: list[tuple[str, bool]] = []
             for position, (role, text) in enumerate(messages):
@@ -161,7 +194,17 @@ def main() -> None:
             token_file.write(struct.pack(f"<{len(tokens)}I", *tokens)); mask_file.write(bytes(masks)); index_file.write(RECORD_INDEX.pack(offset, len(tokens), sum(masks), validation))
             metadata_file.write(json.dumps({"id": identity, "source": f"emender-agent-cli-{kind}-v1", "split": validation, "tokens": len(tokens), "targets": sum(masks), "user": user, "task": task}, sort_keys=True) + "\n")
             offset += len(tokens); counts["records"] += 1; counts["tokens"] += len(tokens); counts["assistant_target_tokens"] += sum(masks); counts["validation_records" if validation else "train_records"] += 1; counts["discovery_records"] += int(discover)
-    manifest = {"schema": AUTHORITY_SCHEMA, "status": "complete", "purpose": "dense-e97-discoverable-cwd-cli-agent-v1", "serialization": "RS-free CLI argv and grounded submit_answer", "seed": args.seed, "counts": counts, "outputs": {name: entry(path) for name, path in paths.items()}}
+    manifest = {
+        "schema": AUTHORITY_SCHEMA,
+        "status": "complete",
+        "purpose": f"dense-e97-cwd-cli-agent-{args.curriculum}-v2",
+        "serialization": "RS-free CLI argv, compact typed observations, and grounded submit_answer" if args.compact_observations else "RS-free CLI argv and grounded submit_answer",
+        "curriculum": args.curriculum,
+        "compact_observations": args.compact_observations,
+        "seed": args.seed,
+        "counts": counts,
+        "outputs": {name: entry(path) for name, path in paths.items()},
+    }
     manifest_path = args.output_root / "manifest.json"; manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     print(json.dumps({"manifest_sha256": sha256(manifest_path), **manifest}, sort_keys=True))
 

@@ -91,12 +91,17 @@ def main() -> None:
     parser.add_argument("--rank", type=int, required=True)
     parser.add_argument("--world-size", type=int, required=True)
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--task-mode", choices=("all", "direct", "discovery"), default="all")
     parser.add_argument("--pi-config-dir", type=Path, required=True)
     parser.add_argument("--extension", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--timeout-seconds", type=int, default=240)
     args = parser.parse_args()
     tasks = load_tasks(args.authority_root)
+    if args.task_mode == "direct":
+        tasks = [task for task in tasks if not task["discover"]]
+    elif args.task_mode == "discovery":
+        tasks = [task for task in tasks if task["discover"]]
     if args.limit: tasks = balanced_prefix(tasks, args.limit)
     tasks = [task for position, task in enumerate(tasks) if position % args.world_size == args.rank]
     shard = args.output_root / f"rank-{args.rank:02d}"
