@@ -28,6 +28,7 @@ case "$MODE" in
     STEPS="${STEPS:-2}"
     DILOCO_K="${DILOCO_K:-1}"
     SAVE_EVERY="${SAVE_EVERY:-2}"
+    LOG_EVERY="${LOG_EVERY:-1}"
     ;;
   1b)
     [[ "${CONFIRM_1B:-0}" == 1 ]] || {
@@ -40,12 +41,13 @@ case "$MODE" in
     # old 4*2048*250=2,048,000; this launch 32*2048*32=2,097,152.
     DILOCO_K="${DILOCO_K:-32}"
     SAVE_EVERY="${SAVE_EVERY:-256}"
+    LOG_EVERY="${LOG_EVERY:-4}"
     ;;
   *)
     echo "MODE must be smoke or 1b" >&2; exit 64;;
 esac
 
-for value_name in BATCH_SIZE CHUNK_SIZE GRAD_ACCUM STEPS DILOCO_K SAVE_EVERY; do
+for value_name in BATCH_SIZE CHUNK_SIZE GRAD_ACCUM STEPS DILOCO_K SAVE_EVERY LOG_EVERY; do
   value="${!value_name}"
   [[ "$value" =~ ^[1-9][0-9]*$ ]] || {
     echo "$value_name must be a positive integer, got $value" >&2; exit 64;
@@ -128,7 +130,7 @@ TRAIN_ARGS=(
   --steps "$STEPS"
   --save_every "$SAVE_EVERY"
   --keep_checkpoints 3
-  --log_every 4
+  --log_every "$LOG_EVERY"
   --output "$OUTPUT"
 )
 
@@ -169,9 +171,17 @@ elif [[ "$DRY_RUN" != 0 ]]; then
   echo "DRY_RUN must be 0 or 1" >&2; exit 64
 fi
 
-pid="$(scripts/launch_detached_run.sh \
+# Do not wrap launch_detached_run.sh in command substitution: an asynchronous
+# descendant can retain the substitution pipe and make this launcher wait for
+# the entire training run. A regular redirected invocation returns immediately.
+launcher_out="$LOGDIR/launcher.out"
+scripts/launch_detached_run.sh \
   --name "$NAME" --gpus 8 --logdir "$LOGDIR" -- \
-  "${ENV_ARGS[@]}" "${TRAIN_ARGS[@]}")"
+  "${ENV_ARGS[@]}" "${TRAIN_ARGS[@]}" >"$launcher_out"
+pid="$(tr -d '[:space:]' <"$launcher_out")"
+[[ "$pid" =~ ^[0-9]+$ ]] || {
+  echo "detached launcher returned an invalid pid: $pid" >&2; exit 70;
+}
 printf 'pid=%s\nlogdir=%s\nlog=%s\nstop=%q\n' \
   "$pid" "$LOGDIR" "$LOGDIR/run.log" \
   "scripts/request_graceful_stop.sh $LOGDIR"
