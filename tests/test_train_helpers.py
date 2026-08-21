@@ -43,6 +43,7 @@ def _tiny_e97_args(**overrides):
         "dropout": 0.0,
         "checkpoint_interval": 16,
         "gradient_checkpointing": False,
+        "gradient_checkpoint_group_size": 1,
         "projection_chunk_size": 0,
         "loss_chunk_size": 0,
         "mlp_ratio": 0.0,
@@ -98,7 +99,16 @@ def test_training_helpers_build_tiny_e97_without_cli_side_effects():
     assert args.level == "E97"
     assert args.use_triton == 0
     assert model.get_num_params() > 0
+    assert model.gradient_checkpoint_group_size == 1
     assert optimizer.param_groups[0]["base_lr"] == args.lr
+
+
+def test_training_helpers_apply_grouped_activation_checkpoint_size():
+    args = _tiny_e97_args(
+        gradient_checkpointing=True, gradient_checkpoint_group_size=2)
+    model = train.build_training_model(args)
+    assert model.gradient_checkpointing is True
+    assert model.gradient_checkpoint_group_size == 2
 
 
 def test_e97_bf16_fused_runtime_contract_rejects_eager_fallback_configs():

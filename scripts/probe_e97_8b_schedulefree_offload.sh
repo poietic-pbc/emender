@@ -10,10 +10,22 @@ GPU="${GPU:-0}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 BATCH_SIZE="${BATCH_SIZE:-1}"
 CHUNK_SIZE="${CHUNK_SIZE:-64}"
+STEPS="${STEPS:-1}"
+LOG_EVERY="${LOG_EVERY:-1}"
+PROBE_MEMORY="${PROBE_MEMORY:-1}"
 CHECKPOINT_INTERVAL="${CHECKPOINT_INTERVAL:-64}"
+GRADIENT_CHECKPOINT_GROUP_SIZE="${GRADIENT_CHECKPOINT_GROUP_SIZE:-2}"
 PROJECTION_CHUNK_SIZE="${PROJECTION_CHUNK_SIZE:-512}"
 LOSS_CHUNK_SIZE="${LOSS_CHUNK_SIZE:-256}"
 OUTPUT="${OUTPUT:-/tmp/emender-e97-8b-schedulefree-offload-probe-${CHUNK_SIZE}}"
+
+probe_args=()
+if [[ "$PROBE_MEMORY" == "1" ]]; then
+  probe_args+=(--probe_memory)
+elif [[ "$PROBE_MEMORY" != "0" ]]; then
+  echo "PROBE_MEMORY must be 0 or 1" >&2
+  exit 2
+fi
 
 exec env \
   CUDA_VISIBLE_DEVICES="$GPU" \
@@ -34,16 +46,18 @@ exec env \
     --mlp_multiple 64 \
     --batch_size "$BATCH_SIZE" \
     --chunk_size "$CHUNK_SIZE" \
-    --steps 1 \
+    --steps "$STEPS" \
+    --log_every "$LOG_EVERY" \
     --optimizer schedulefree \
     --offload_schedulefree_state \
     --bf16 \
     --use_triton 1 \
     --gradient_checkpointing \
+    --gradient_checkpoint_group_size "$GRADIENT_CHECKPOINT_GROUP_SIZE" \
     --checkpoint_interval "$CHECKPOINT_INTERVAL" \
     --projection_chunk_size "$PROJECTION_CHUNK_SIZE" \
     --loss_chunk_size "$LOSS_CHUNK_SIZE" \
     --grad_clip 1.0 \
-    --probe_memory \
     --output "$OUTPUT" \
+    "${probe_args[@]}" \
     "$@"

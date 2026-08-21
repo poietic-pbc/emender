@@ -327,15 +327,16 @@ footprint. Capacity and throughput evidence belongs in
 [`validation/e97-8b-schedulefree-cpu-offload.md`](validation/e97-8b-schedulefree-cpu-offload.md).
 
 With the complete optimized-path contract pinned (`gate_activation=silu`,
-Triton split-edit recurrence, nonlinear state), the exact graph processes a
-batch of 12 at context 2,048 in 28.192 seconds on one RTX 6000 Ada: 5.734
-seconds forward, 18.453 seconds backward, and 4.005 seconds for the streamed
-Schedule-Free update. This is 871.7 tokens/s/GPU at a 39,787.6 MiB peak;
-batches 4 and 8 reach 581.3 and 763.6 tokens/s/GPU. Eight ideal independent
-learners project to approximately 6,974 tokens/s before operational overhead.
-The provisional 600-token/s/GPU gate is cleared, while the preferred 1,200
-target is not. Sustained multi-step, NUMA, geometry, and quality gates remain
-mandatory before any long seed.
+Triton split-edit recurrence, nonlinear state), and two complete layers per
+activation-checkpoint group, the exact graph processes a batch of 16 at context
+2,048 in 31.800 seconds on one RTX 6000 Ada: 6.471 seconds forward, 21.341
+seconds backward, and 3.988 seconds for the streamed Schedule-Free update.
+This is 1,030.4 tokens/s/GPU at a 41,162.4 MiB peak. It exceeds one eighth of
+the historical 1.3B E97 rate (approximately 956--963 tokens/s/GPU) and projects
+to about 8,243 tokens/s across eight ideal independent learners. The
+provisional 600-token/s/GPU gate and explicit one-eighth target are cleared,
+while the preferred 1,200 target is not. Sustained multi-step, NUMA, geometry,
+and quality gates remain mandatory before any long seed.
 
 Earlier 13--46 tokens/s measurements are rejected: the probe inherited the
 `sigmoid` gate default, which silently bypassed the optimized recurrence even

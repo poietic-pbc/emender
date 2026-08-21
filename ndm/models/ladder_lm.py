@@ -28,6 +28,14 @@ except ImportError:
     FUSED_NORM_AVAILABLE = False
     RMSNorm = nn.RMSNorm  # Fallback to PyTorch
 
+
+def _module_rms_norm(module, x):
+    """Use the imported Triton RMSNorm only where its CUDA pointer ABI is valid."""
+    if x.is_cuda or not FUSED_NORM_AVAILABLE:
+        return module(x)
+    return F.rms_norm(
+        x, (x.shape[-1],), weight=module.weight, eps=module.eps)
+
 from .stock_elman import StockElman
 from .counter_baseline import ReLURNNLayer, LSTMLayer
 from .mamba_gated_elman import MambaGatedElman
@@ -1058,11 +1066,11 @@ class MixerMLPWrapper(nn.Module):
         out = self.mixer(x, hidden, **kwargs)
         if self.state_summary_dim > 0:
             mix_out, h_final, summary = out
-            normed = self.norm_2(x + mix_out)
+            normed = _module_rms_norm(self.norm_2, x + mix_out)
             mlp_in = torch.cat([normed, summary.to(normed.dtype)], dim=-1)
         else:
             mix_out, h_final = out
-            mlp_in = self.norm_2(x + mix_out)
+            mlp_in = _module_rms_norm(self.norm_2, x + mix_out)
         mlp_out = self.mlp(mlp_in)
         return mix_out + mlp_out, h_final
 
@@ -1124,6 +1132,7 @@ class LadderLM(nn.Module):
         k_slow=None,  # For E90 Dual-Rate: slow state dimension
         checkpoint_interval=16,  # For E88: steps between state checkpoints (larger = less memory)
         gradient_checkpointing=False,  # Recompute layer forward during backward (saves ~16GB at 25 layers)
+        gradient_checkpoint_group_size=1,  # Checkpoint this many complete layers per saved boundary
         projection_chunk_size=0,  # For E88: chunk size for projection recomputation (0=disabled, saves ~5GB/layer at T=32K)
         loss_chunk_size=0,  # Chunk T dimension when computing lm_head + cross_entropy (0=disabled, saves T*V*2 bytes at long T)
         use_triton=False,  # For E88: use Triton fwd+bwd kernels instead of CUDA register-owned (portable across NVIDIA/AMD ROCm)
@@ -1157,6 +1166,9 @@ class LadderLM(nn.Module):
         self.use_conv = use_conv
         self.d_conv = d_conv
         self.gradient_checkpointing = gradient_checkpointing
+        self.gradient_checkpoint_group_size = int(gradient_checkpoint_group_size)
+        if self.gradient_checkpoint_group_size <= 0:
+            raise ValueError("gradient_checkpoint_group_size must be positive")
         self.loss_chunk_size = loss_chunk_size
         self.use_chunked_e97 = use_chunked_e97
         self.e97_chunk_size = e97_chunk_size
@@ -1293,7 +1305,7 @@ class LadderLM(nn.Module):
                 local_finals = []
                 local_auxiliaries = []
                 for ln, layer, hidden in zip(_norms, _layers, hidden_inputs):
-                    if self.fused_add_norm:
+                    if self.fused_add_norm and local_x.is_cuda:
                         local_x, local_residual = rms_norm_fn(
                             local_x, ln.weight, None, residual=local_residual,
                             prenorm=True,
@@ -1303,7 +1315,8 @@ class LadderLM(nn.Module):
                         local_residual = (
                             local_x + local_residual
                             if local_residual is not None else local_x)
-                        local_x = ln(local_residual.to(dtype=ln.weight.dtype))
+                        local_x = _module_rms_norm(
+                            ln, local_residual.to(dtype=ln.weight.dtype))
                         if self.residual_in_fp32:
                             local_residual = local_residual.float()
                     local_x, local_final = layer(local_x, hidden)
@@ -1407,7 +1420,7 @@ class LadderLM(nn.Module):
             layer_iterator = enumerate(zip(self.layer_norms, self.layers))
 
         for i, (ln, layer) in layer_iterator:
-            if self.fused_add_norm:
+            if self.fused_add_norm and x.is_cuda:
                 # Fused add + RMSNorm (like Mamba)
                 x, residual = rms_norm_fn(
                     x,
@@ -1421,7 +1434,8 @@ class LadderLM(nn.Module):
             else:
                 # Non-fused fallback
                 residual = (x + residual) if residual is not None else x
-                x = ln(residual.to(dtype=ln.weight.dtype))
+                x = _module_rms_norm(
+                    ln, residual.to(dtype=ln.weight.dtype))
                 if self.residual_in_fp32:
                     residual = residual.to(torch.float32)
 
@@ -1481,7 +1495,7 @@ class LadderLM(nn.Module):
                 checkpointed_auxiliary_losses)
 
         # Final fused add + norm
-        if self.fused_add_norm:
+        if self.fused_add_norm and x.is_cuda:
             # prenorm=False returns just the normalized output (not a tuple)
             x = rms_norm_fn(
                 x,
@@ -1493,7 +1507,8 @@ class LadderLM(nn.Module):
                 eps=self.norm.eps,
             )
         else:
-            x = self.norm((x + residual).to(dtype=self.norm.weight.dtype))
+            x = _module_rms_norm(
+                self.norm, (x + residual).to(dtype=self.norm.weight.dtype))
         if return_loss:
             # Mask padding and/or non-assistant targets before either dense or
             # chunked CE. ``loss_mask`` is aligned to target=x[:, 1:], not input.

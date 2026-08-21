@@ -264,6 +264,9 @@ def parse_args():
                         help='E88 state checkpoint interval (larger=less memory, more recompute)')
     parser.add_argument('--gradient_checkpointing', action='store_true',
                         help='Recompute layer forward during backward (saves ~16GB, enables larger batch/seq)')
+    parser.add_argument('--gradient_checkpoint_group_size', type=int, default=1,
+                        help='Number of complete recurrent+MLP layers per activation-checkpoint '
+                             'boundary (default 1; larger values retain fewer full-sequence boundaries)')
     parser.add_argument('--loss_chunk_size', type=int, default=0,
                         help='Chunk T dim when computing lm_head + cross_entropy (saves T*V*2 bytes at long T)')
     parser.add_argument('--projection_chunk_size', type=int, default=0,
@@ -1557,6 +1560,8 @@ def build_training_model(args, *, vocab_size=None, r_h_mode=None):
             dropout=getattr(args, 'dropout', 0.0),
             checkpoint_interval=getattr(args, 'checkpoint_interval', 16),
             gradient_checkpointing=bool(getattr(args, 'gradient_checkpointing', False)),
+            gradient_checkpoint_group_size=getattr(
+                args, 'gradient_checkpoint_group_size', 1),
             projection_chunk_size=getattr(args, 'projection_chunk_size', 0),
             loss_chunk_size=getattr(args, 'loss_chunk_size', 0),
             use_triton=bool(getattr(args, 'use_triton', 0)),
@@ -3102,6 +3107,7 @@ def train(args):
             dropout=args.dropout,
             checkpoint_interval=args.checkpoint_interval,
             gradient_checkpointing=args.gradient_checkpointing,
+            gradient_checkpoint_group_size=args.gradient_checkpoint_group_size,
             projection_chunk_size=args.projection_chunk_size,
             loss_chunk_size=args.loss_chunk_size,
             use_triton=bool(args.use_triton),

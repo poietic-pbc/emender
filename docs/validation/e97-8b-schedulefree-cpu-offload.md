@@ -40,8 +40,14 @@ allocation, queue, membership, or production recovery behavior changed.
   - releases completed gradients;
   - preserves Schedule-Free train/eval basis transforms;
   - restores checkpoint state without PyTorch's normal whole-state GPU cast.
+- `ndm/models/ladder_lm.py`
+  - groups complete recurrent+MLP layers behind sparse activation-checkpoint
+    boundaries while preserving explicit recurrent-state and router outputs;
+  - uses the imported fused RMSNorm only for CUDA tensors and the PyTorch RMSNorm
+    operation for CPU helper/evidence paths.
 - `train.py`
-  - exposes `--offload_schedulefree_state` and bucket/pinning controls;
+  - exposes `--offload_schedulefree_state`, bucket/pinning controls, and
+    `--gradient_checkpoint_group_size`;
   - reports logical transfer volume and optimizer-update duration;
   - uses direct CPU-FP32 to GPU-BF16 model conversion, avoiding a transient
     whole-model FP32 GPU copy;
@@ -95,54 +101,63 @@ configuration would instead select eager recurrence.
 
 ```bash
 DATA=/tmp/emender-sf-offload-e2e/data.txt \
-GPU=0 BATCH_SIZE=4 CHUNK_SIZE=2048 \
+GPU=0 BATCH_SIZE=16 CHUNK_SIZE=2048 \
 CHECKPOINT_INTERVAL=64 \
+GRADIENT_CHECKPOINT_GROUP_SIZE=2 \
 PROJECTION_CHUNK_SIZE=512 \
-LOSS_CHUNK_SIZE=256 \
-OUTPUT=/tmp/emender-e97-8b-offload-fused-b4-2048 \
+LOSS_CHUNK_SIZE=128 \
+OUTPUT=/tmp/emender-e97-8b-offload-group2-b16-2048 \
 scripts/probe_e97_8b_schedulefree_offload.sh
 ```
 
 The runtime identified the executed implementation as
 `e97-sequential-split-edit-triton`, `state=tanh`, and `eager_fallback=False`.
-Batch 4, 8, and 12 each completed a forward, backward, and GPU-executed
-streamed Schedule-Free update:
+Batch 4, 8, and 12 used one saved activation-checkpoint boundary per layer.
+The final batch-16 arm used exact two-layer checkpoint groups, reducing saved
+full-sequence boundaries while limiting simultaneous backward replay:
 
-| Measurement | Batch 4 | Batch 8 | Batch 12 |
-|---|---:|---:|---:|
-| Tokens/update | 8,192 | 16,384 | 24,576 |
-| Forward | 2.883 s | 4.708 s | 5.734 s |
-| Backward | 7.249 s | 12.763 s | 18.453 s |
-| Optimizer | 3.960 s | 3.986 s | 4.005 s |
-| Total | 14.092 s | 21.457 s | 28.192 s |
-| Throughput/GPU | 581.3 tok/s | 763.6 tok/s | 871.7 tok/s |
-| Compute-only throughput | 808.5 tok/s | 937.8 tok/s | 1,016.1 tok/s |
-| After forward | 23,195.6 MiB | 31,169.4 MiB | 39,149.4 MiB |
-| After backward | 30,377.0 MiB | 30,374.8 MiB | 30,374.8 MiB |
-| Peak allocated HBM | 31,626.6 MiB | 33,357.5 MiB | 39,787.6 MiB |
+| Measurement | Batch 4 | Batch 8 | Batch 12 | Batch 16, group 2 |
+|---|---:|---:|---:|---:|
+| Tokens/update | 8,192 | 16,384 | 24,576 | 32,768 |
+| Forward | 2.883 s | 4.708 s | 5.734 s | 6.471 s |
+| Backward | 7.249 s | 12.763 s | 18.453 s | 21.341 s |
+| Optimizer | 3.960 s | 3.986 s | 4.005 s | 3.988 s |
+| Total | 14.092 s | 21.457 s | 28.192 s | 31.800 s |
+| Throughput/GPU | 581.3 tok/s | 763.6 tok/s | 871.7 tok/s | 1,030.4 tok/s |
+| Compute-only throughput | 808.5 tok/s | 937.8 tok/s | 1,016.1 tok/s | 1,178.2 tok/s |
+| After forward | 23,195.6 MiB | 31,169.4 MiB | 39,149.4 MiB | 36,170.0 MiB |
+| After backward | 30,377.0 MiB | 30,374.8 MiB | 30,374.8 MiB | 30,374.9 MiB |
+| Peak allocated HBM | 31,626.6 MiB | 33,357.5 MiB | 39,787.6 MiB | 41,162.4 MiB |
 
 The model baseline is 15,213.6 MiB and pinned optimizer state is 29.580 GiB.
-Thus batch 12 retains about 8.9 GiB of physical HBM headroom. Batch 16 with the
-same projection/loss chunks reached the loss computation but failed closed on
-a 786 MiB allocation with only 198.69 MiB free; the recurrence itself did not
-fail. A second batch-16 attempt with projection chunks reduced from 512 to 256
-and loss chunks reduced from 256 to 64 also reached cross-entropy, then failed
-a 198 MiB allocation with 16.69 MiB free. The additional projection checkpoint
-boundaries increased retained pressure, so this is negative rather than passing
-capacity evidence. Batch 14 with the proven 512 projection chunk and a smaller
-128-token loss chunk likewise reached cross-entropy, then failed a 344 MiB
-allocation with 244.69 MiB free. Batch 12 is therefore the qualified capacity
-boundary for these 48 GB devices. Eight independent
-learners would retain about 236.64 GiB of optimizer state in a host with
-approximately 1 TiB RAM; capacity is sufficient, while NUMA-local placement
-remains required for sustained throughput.
+Eight independent learners would retain about 236.64 GiB of optimizer state in
+a host with approximately 1 TiB RAM; capacity is sufficient, while NUMA-local
+placement remains required for sustained throughput.
 
-Batch 12 clears the provisional 600 tokens/s/GPU gate and projects to about
-6,974 tokens/s across eight independent learners. An idealized 160B-token pass
-at that rate is approximately 266 days, before checkpoint, data, startup,
-failure, and evaluation overhead. The preferred 1,200 tokens/s/GPU target is
-not yet met. This single-update capacity result therefore warrants sustained
-and factorial measurements; it does not by itself authorize a long seed.
+The checkpoint grouping result also explains the earlier capacity boundary.
+With one boundary per layer, batch 14 and 16 reached cross-entropy but failed
+344 MiB and 786 MiB allocations. Reducing projection chunks increased retained
+checkpoint pressure and did not help. A five-layer checkpoint group reduced
+batch-16 post-forward residency to 29,258 MiB, but replaying five complete
+layers together failed a 720 MiB backward allocation. Two-layer groups balance
+both sides: batch 16 completes at a 41,162.4 MiB peak.
+
+Batch 16 clears both the provisional 600 tokens/s/GPU gate and the explicit
+one-eighth-of-historical-E97 target: the 1.3B run sustained approximately
+7,650--7,700 tokens/s/GPU, whose one-eighth threshold is 956--963 tokens/s/GPU.
+Eight ideal independent learners project to approximately 8,243 tokens/s; an
+idealized 160B-token pass is approximately 225 days before checkpoint, data,
+startup, failure, and evaluation overhead. The preferred 1,200 tokens/s/GPU
+end-to-end target is not yet met.
+
+A normal three-step continuation (not `--probe_memory`) then processed 98,304
+tokens at per-step rates of 1,028, 1,013, and 981 tokens/s/GPU, approximately
+1,007 tokens/s/GPU over the three log windows. Offloaded optimizer updates were
+4.003, 4.000, and 3.993 seconds. Every observed step remained above the upper
+963-token/s edge of the one-eighth threshold. The run atomically published a
+resolvable 44.370 GiB `latest.pt` at step 3 / 98,304 tokens, including the offloaded
+optimizer state. This short sustained result still does not by itself authorize
+a long seed.
 
 ### Rejected eager-path diagnostic and guard correction
 
@@ -203,13 +218,14 @@ python -m pytest -q \
   tests/test_schedulefree_cpu_offload.py \
   tests/test_checkpoint_finalization.py \
   tests/test_diloco_merge.py \
-  tests/test_train_helpers.py
+  tests/test_train_helpers.py \
+  tests/test_e97_moe.py
 ```
 
-Result: **50 passed**. The tests cover reference Schedule-Free trajectory parity,
+Result: **63 passed**. The tests cover reference Schedule-Free trajectory parity,
 BF16 CUDA pinned state, state preinitialization, checkpoint reload without a
-GPU state cast, bounded-bucket DiLoCo consensus, and same-step checkpoint
-retention.
+GPU state cast, bounded-bucket DiLoCo consensus, same-step checkpoint
+retention, grouped-checkpoint auxiliary graphs, and CPU-safe RMSNorm fallback.
 
 ## Remaining gates
 
