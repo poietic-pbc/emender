@@ -50,11 +50,15 @@ Public E97 releases:
   <https://huggingface.co/spinozans/emender-e97-1.3b/tree/tokens-150793748480>
 - Narrow 40/40 direct-CLI agent policy:
   <https://huggingface.co/spinozans/emender-e97-1.3b-cli-agent>
+- Matched GDN2-MLP 1.3B control, final 152.280B-token authority:
+  <https://huggingface.co/spinozans/gdn2-mlp-1.3b>
 
 The CLI checkpoint is protocol-specific and is not a general instruction or
 coding assistant. Release identities, hashes, export semantics, and validation
 are recorded in
-[`docs/validation/e97-huggingface-dense-base-and-cli-agent-release.md`](docs/validation/e97-huggingface-dense-base-and-cli-agent-release.md).
+[`docs/validation/e97-huggingface-dense-base-and-cli-agent-release.md`](docs/validation/e97-huggingface-dense-base-and-cli-agent-release.md)
+and
+[`docs/validation/gdn2-huggingface-152b-control-release.md`](docs/validation/gdn2-huggingface-152b-control-release.md).
 
 ## v0.2 Release
 
