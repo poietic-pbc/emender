@@ -42,6 +42,20 @@ python scripts/generate_e97.py \
   --max-new-tokens 64
 ```
 
+Public E97 releases:
+
+- Dense 1.3B base, default 513B-token authority:
+  <https://huggingface.co/spinozans/emender-e97-1.3b>
+- Historical 150.794B-token base revision:
+  <https://huggingface.co/spinozans/emender-e97-1.3b/tree/tokens-150793748480>
+- Narrow 40/40 direct-CLI agent policy:
+  <https://huggingface.co/spinozans/emender-e97-1.3b-cli-agent>
+
+The CLI checkpoint is protocol-specific and is not a general instruction or
+coding assistant. Release identities, hashes, export semantics, and validation
+are recorded in
+[`docs/validation/e97-huggingface-dense-base-and-cli-agent-release.md`](docs/validation/e97-huggingface-dense-base-and-cli-agent-release.md).
+
 ## v0.2 Release
 
 The v0.2 public-release hub is
