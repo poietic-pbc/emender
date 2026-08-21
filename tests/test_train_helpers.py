@@ -70,6 +70,17 @@ def _tiny_e97_args(**overrides):
     return Namespace(**values)
 
 
+def _build_tiny_cpu_model(args, monkeypatch):
+    # mamba_ssm's imported RMSNorm module is Triton-only even when the model is
+    # intentionally built on CPU. Force LadderLM's documented PyTorch fallback
+    # so these import-safe helper tests do not depend on accelerator visibility.
+    from ndm.models import ladder_lm
+
+    monkeypatch.setattr(ladder_lm, "RMSNorm", torch.nn.RMSNorm)
+    monkeypatch.setattr(ladder_lm, "FUSED_NORM_AVAILABLE", False)
+    return train.build_training_model(args)
+
+
 def _fixed_batches(batch):
     lengths = torch.full((batch.shape[0],), batch.shape[1], dtype=torch.long)
     doc_end = torch.zeros(batch.shape[0], dtype=torch.bool)
@@ -90,10 +101,59 @@ def test_training_helpers_build_tiny_e97_without_cli_side_effects():
     assert optimizer.param_groups[0]["base_lr"] == args.lr
 
 
-def test_train_one_optimizer_step_runs_real_tiny_e97_path():
+def test_e97_bf16_fused_runtime_contract_rejects_eager_fallback_configs():
+    valid = _tiny_e97_args(
+        bf16=True, use_triton=1, use_gate=1, gate_activation="silu",
+        use_write_gate=0, e88_value_residual=0)
+    assert train.e97_fused_runtime_contract_failures(valid) == []
+
+    expected = {
+        "use_triton": {"use_triton": 0},
+        "use_gate": {"use_gate": 0},
+        "gate_activation_silu": {"gate_activation": "sigmoid"},
+        "no_write_gate": {"use_write_gate": 1},
+        "no_value_residual": {"e88_value_residual": 1},
+    }
+    for clause, overrides in expected.items():
+        values = {
+            "bf16": True, "use_triton": 1, "use_gate": 1,
+            "gate_activation": "silu", "use_write_gate": 0,
+            "e88_value_residual": 0,
+        }
+        values.update(overrides)
+        args = _tiny_e97_args(**values)
+        assert train.e97_fused_runtime_contract_failures(args) == [clause]
+
+    assert train.e97_fused_runtime_contract_failures(
+        _tiny_e97_args(bf16=False, gate_activation="sigmoid")) == []
+
+
+def test_training_optimizer_selects_cpu_offloaded_schedulefree():
+    from ndm.schedulefree_offload import CPUOffloadAdamWScheduleFree
+
+    args = _tiny_e97_args(
+        optimizer="schedulefree", offload_schedulefree_state=True,
+        schedulefree_offload_pin_memory=0,
+        schedulefree_offload_release_gradients=1)
+    model = train.build_training_model(args)
+    optimizer = train.build_training_optimizer(model, args)
+
+    assert isinstance(optimizer, CPUOffloadAdamWScheduleFree)
+    assert optimizer.pin_memory is False
+    assert optimizer.param_groups[0]["base_lr"] == args.lr
+
+
+def test_training_args_reject_offload_with_adamw():
+    args = _tiny_e97_args(
+        optimizer="adamw", offload_schedulefree_state=True)
+    with pytest.raises(ValueError, match="requires --optimizer schedulefree"):
+        train.normalize_training_args(args)
+
+
+def test_train_one_optimizer_step_runs_real_tiny_e97_path(monkeypatch):
     torch.manual_seed(1234)
     args = _tiny_e97_args()
-    model = train.build_training_model(args)
+    model = _build_tiny_cpu_model(args, monkeypatch)
     optimizer = train.build_training_optimizer(model, args)
     before = [p.detach().clone() for p in model.parameters() if p.requires_grad]
     batch = torch.randint(0, 256, (args.batch_size, args.chunk_size + 1), dtype=torch.long)
@@ -113,10 +173,10 @@ def test_train_one_optimizer_step_runs_real_tiny_e97_path():
     assert any(not torch.equal(a, b) for a, b in zip(before, after))
 
 
-def test_train_one_optimizer_step_reports_phase_timestamps_in_execution_order():
+def test_train_one_optimizer_step_reports_phase_timestamps_in_execution_order(monkeypatch):
     torch.manual_seed(1234)
     args = _tiny_e97_args()
-    model = train.build_training_model(args)
+    model = _build_tiny_cpu_model(args, monkeypatch)
     optimizer = train.build_training_optimizer(model, args)
     batch = torch.randint(0, 256, (args.batch_size, args.chunk_size + 1), dtype=torch.long)
     phases = []
@@ -151,6 +211,7 @@ def test_training_dataset_seed_includes_resume_step_and_global_rank(monkeypatch)
         args, rank=17, dist_enabled=True, start_step=2_322_520)
     assert captured["seed"] == 2_322_579
     assert captured["sampler_identity"] is None
+    assert captured["total_accepted_tokens"] is None
 
 
 def _counter_sampler_args(**overrides):

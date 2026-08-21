@@ -77,3 +77,19 @@ def test_save_checkpoint_atomically_updates_latest_and_keeps_newest(tmp_path):
         second.name,
         third.name,
     ]
+
+
+def test_same_step_final_save_keeps_latest_target_with_retention_one(tmp_path):
+    model = torch.nn.Linear(2, 2)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+
+    periodic = train.save_checkpoint(
+        model, optimizer, 2, 5.5010, tmp_path, keep_n=1, total_tokens=20)
+    final = train.save_checkpoint(
+        model, optimizer, 2, 5.5308, tmp_path, keep_n=1, total_tokens=20)
+
+    latest = tmp_path / "latest.pt"
+    assert not periodic.exists()
+    assert final.exists()
+    assert latest.is_symlink()
+    assert latest.resolve(strict=True) == final

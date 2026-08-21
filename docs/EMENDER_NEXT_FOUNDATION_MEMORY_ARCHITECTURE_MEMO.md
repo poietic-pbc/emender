@@ -283,16 +283,66 @@ This configuration is not an immutable recipe. It is a center point for paramete
 If the 3–4B family demonstrates better state use and behavioral scaling, expand toward:
 
 ```text
-residual width:       3,584–4,096
-layers:               24–32
-heads/layer:          96–128
-state side length:    64
+residual width:       4,096–4,608
+layers:               25–32
+heads/layer:          64–128
+state side length:    32, 48, or 64
 state banks:          1–2
 ```
 
 An 8B model is a safer scale for broad usefulness than 3–4B, but only if it can receive sufficient high-quality tokens. A rough 20-token/parameter lower-bound implies approximately 160B tokens for 8B parameters. A several-week single-node run should be selected only after measured sustained throughput establishes the reachable token budget.
 
 An undertrained 8B model with the old projection bottleneck is not preferable to a well-trained 4B redesign.
+
+### Instantiated square-readout E97 controls
+
+The current E97 graph does not require a new lane architecture to avoid the
+old readout bottleneck. Constraining `H × n = d` makes its existing `o_proj` a
+learned square global mixer rather than a compressive `Hn → d` map. Meta-device
+instantiation gives the following controlled 8B family:
+
+| Residual width | Layers | Heads × state side | Parameters | Persistent state values |
+|---:|---:|---:|---:|---:|
+| 4,096 | 32 | 128 × 32 | ≈8.007631B | 4,194,304 |
+| 4,608 | 25 | 96 × 48 | 7,940,197,056 | 5,529,600 |
+| 4,096 | 32 | 64 × 64 | ≈7.999238B | 8,388,608 |
+
+The `d=4,608`, `L=25`, `H=96`, `n=48`, SwiGLU-ratio-2.5 graph is the primary
+systems/probe shape. It preserves approximately the current E97 head-layer
+count while substantially increasing residual width and persistent state. The
+`128 × 32` arm controls for proven many-small-head behavior, while `64 × 64`
+tests whether more persistent state is worth fewer independent heads. These are
+controlled research arms, not authorization for a long seed.
+
+### One-GPU training representation
+
+A 7.94B BF16 graph has about 14.79 GiB of parameters and the same amount of
+gradients. Schedule-Free adds BF16 `z` and `exp_avg_sq`, another 29.58 GiB,
+which cannot remain in a 48 GiB GPU alongside activations. The selected path
+keeps both optimizer tensors in pinned CPU memory and streams bounded buckets
+to the GPU for the update; it does not drop Schedule-Free, introduce FP32
+master weights, or execute Adam arithmetic on the CPU. Gradient checkpointing,
+projection recomputation, and loss chunking bound the remaining activation
+footprint. Capacity and throughput evidence belongs in
+[`validation/e97-8b-schedulefree-cpu-offload.md`](validation/e97-8b-schedulefree-cpu-offload.md).
+
+With the complete optimized-path contract pinned (`gate_activation=silu`,
+Triton split-edit recurrence, nonlinear state), the exact graph processes a
+batch of 12 at context 2,048 in 28.192 seconds on one RTX 6000 Ada: 5.734
+seconds forward, 18.453 seconds backward, and 4.005 seconds for the streamed
+Schedule-Free update. This is 871.7 tokens/s/GPU at a 39,787.6 MiB peak;
+batches 4 and 8 reach 581.3 and 763.6 tokens/s/GPU. Eight ideal independent
+learners project to approximately 6,974 tokens/s before operational overhead.
+The provisional 600-token/s/GPU gate is cleared, while the preferred 1,200
+target is not. Sustained multi-step, NUMA, geometry, and quality gates remain
+mandatory before any long seed.
+
+Earlier 13--46 tokens/s measurements are rejected: the probe inherited the
+`sigmoid` gate default, which silently bypassed the optimized recurrence even
+with `use_triton=1`, and the former guard falsely claimed no eager fallback.
+The probe now pins SiLU and training fails closed on the full fused-path
+predicate. This configuration error, rather than CPU offload, caused the
+40--100x anomaly.
 
 ## HETU experimental ladder
 

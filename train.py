@@ -81,6 +81,7 @@ from ndm.models.min_rnn_baseline import MinGRULM, MinLSTMLM
 from ndm.models.cuda_gru import CudaGRULM
 from ndm.models.cuda_lstm import CudaLSTMLM
 from ndm.models.e88_fused import E88FusedLM
+from ndm.schedulefree_offload import CPUOffloadAdamWScheduleFree
 
 # Pin Triton autotune config selection BEFORE any fused kernel runs (kill the
 # init-wedge / autotune storm that deadlocks fresh inits under box contention,
@@ -330,6 +331,21 @@ def parse_args():
                         choices=['adamw', 'schedulefree'],
                         help='Optimizer: adamw (warmup + cosine-decay LR schedule) or '
                              'schedulefree (built-in warmup via --warmup_steps; NO decay)')
+    parser.add_argument('--offload_schedulefree_state', action='store_true',
+                        help='Keep Schedule-Free z and second moments in pinned CPU RAM, '
+                             'staging bounded tensors to the parameter device for updates. '
+                             'Requires --optimizer schedulefree.')
+    parser.add_argument('--schedulefree_offload_pin_memory', type=int, choices=[0, 1],
+                        default=1,
+                        help='Pin CPU-offloaded Schedule-Free state for PCIe DMA (default 1).')
+    parser.add_argument('--schedulefree_offload_release_gradients', type=int,
+                        choices=[0, 1], default=1,
+                        help='Release each gradient after its streamed optimizer update to '
+                             'bound HBM (default 1).')
+    parser.add_argument('--schedulefree_offload_bucket_numel', type=int,
+                        default=67_108_864,
+                        help='Maximum elements in each reusable GPU state-staging bucket '
+                             '(default 67,108,864; 128 MiB per BF16 state tensor).')
     parser.add_argument('--min_lr_frac', type=float, default=0.1,
                         help='AdamW cosine-decay floor as a fraction of --lr (the LR '
                              'decays from lr to min_lr_frac*lr over --steps). 0.1 = decay '
@@ -526,6 +542,10 @@ def parse_args():
     # Memory probing
     parser.add_argument('--probe_memory', action='store_true',
                         help='Run 1 fwd+bwd step, print peak GPU memory in MB, then exit')
+    parser.add_argument('--probe_optimizer_steps', type=int, default=1,
+                        help='With --probe_memory, run this many optimizer updates. '
+                             'Updates after the first use synthetic gradients to measure '
+                             'steady-state offload cost without another fwd/bwd (default 1).')
 
     return parser.parse_args()
 
@@ -1113,6 +1133,24 @@ def tokens_per_global_optimizer_step(world_size, batch_size, chunk_size, grad_ac
     return world_size * batch_size * chunk_size * grad_accum
 
 
+def e97_fused_runtime_contract_failures(args):
+    """Return configuration clauses that would route BF16 E97 to eager recurrence."""
+    e97_family = (
+        str(getattr(args, 'level', '')) in ('E97', '97', 'E97-M2')
+        or bool(getattr(args, 'e88_raw_write', 0))
+    )
+    if not e97_family or not bool(getattr(args, 'bf16', False)):
+        return []
+    contract = {
+        'use_triton': int(getattr(args, 'use_triton', 0)) == 1,
+        'use_gate': bool(getattr(args, 'use_gate', 0)),
+        'gate_activation_silu': getattr(args, 'gate_activation', None) == 'silu',
+        'no_write_gate': not bool(getattr(args, 'use_write_gate', 0)),
+        'no_value_residual': not bool(getattr(args, 'e88_value_residual', 0)),
+    }
+    return [name for name, satisfied in contract.items() if not satisfied]
+
+
 def advance_total_tokens(total_tokens, world_size, batch_size, chunk_size, grad_accum):
     """Advance the in-memory clock after one successfully completed optimizer step."""
     current = _validated_total_tokens(total_tokens, 'current')
@@ -1301,8 +1339,15 @@ def save_checkpoint(model, optimizer, step, loss, output_dir, keep_n=5, outer_st
 
     ckpts = sorted(glob.glob(str(output_dir / 'checkpoint_step_*.pt')),
                    key=_checkpoint_sort_key)
-    for old_ckpt in ckpts[:-keep_n]:
-        os.remove(old_ckpt)
+    # A periodic and final save can legitimately share one training step but
+    # have different loss strings.  Numeric-step sorting alone is then tied and
+    # used to delete the checkpoint that ``latest.pt`` was just advanced to.
+    # Always retain the checkpoint published by this call and evict older peers
+    # around it.  ``latest.pt`` must never become a broken symlink.
+    retain = max(1, int(keep_n))
+    others = [path for path in ckpts if Path(path) != ckpt_path]
+    while len(others) + 1 > retain:
+        os.remove(others.pop(0))
 
     return ckpt_path
 
@@ -1394,6 +1439,17 @@ def heldout_eval_mode_label(args):
 def normalize_training_args(args, *, announce=False):
     """Apply train.py's import-safe argument normalization in-place."""
     args.level = parse_level(args.level)
+    if (bool(getattr(args, 'offload_schedulefree_state', False))
+            and getattr(args, 'optimizer', 'schedulefree') != 'schedulefree'):
+        raise ValueError(
+            "--offload_schedulefree_state requires --optimizer schedulefree")
+    if (bool(getattr(args, 'offload_schedulefree_state', False))
+            and bool(getattr(args, 'diloco', False))
+            and getattr(args, 'diloco_outer_optimizer', 'avg') != 'avg'):
+        raise ValueError(
+            "CPU-offloaded Schedule-Free currently requires "
+            "--diloco_outer_optimizer avg; momentum/sfsgd need an additional "
+            "offloaded-z translation path")
     if getattr(args, 'use_triton', None) is None:
         _e97_family = str(args.level) in ('E97', '97', 'E97-M2')
         _needs_triton_fused = _e97_family or bool(getattr(args, 'e88_raw_write', 0))
@@ -1546,15 +1602,32 @@ def build_training_optimizer(core_model, args, *, announce=False):
         param_groups = core_model.parameters()
 
     if args.optimizer == 'schedulefree':
-        optimizer = schedulefree.AdamWScheduleFree(
-            param_groups,
-            lr=args.lr,
-            weight_decay=args.weight_decay,
-            betas=(0.9, 0.95),
-            warmup_steps=getattr(args, 'warmup_steps', 0),
-        )
-        if announce:
-            print(f"Using schedule-free AdamW (lr={args.lr}, warmup_steps={args.warmup_steps})")
+        if bool(getattr(args, 'offload_schedulefree_state', False)):
+            optimizer = CPUOffloadAdamWScheduleFree(
+                param_groups,
+                lr=args.lr,
+                weight_decay=args.weight_decay,
+                betas=(0.9, 0.95),
+                warmup_steps=getattr(args, 'warmup_steps', 0),
+                pin_memory=bool(getattr(args, 'schedulefree_offload_pin_memory', 1)),
+                release_gradients=bool(getattr(
+                    args, 'schedulefree_offload_release_gradients', 1)),
+                bucket_numel=int(getattr(
+                    args, 'schedulefree_offload_bucket_numel', 67_108_864)),
+            )
+            if announce:
+                print(f"Using schedule-free AdamW with pinned-CPU z/second-moment "
+                      f"offload (lr={args.lr}, warmup_steps={args.warmup_steps})")
+        else:
+            optimizer = schedulefree.AdamWScheduleFree(
+                param_groups,
+                lr=args.lr,
+                weight_decay=args.weight_decay,
+                betas=(0.9, 0.95),
+                warmup_steps=getattr(args, 'warmup_steps', 0),
+            )
+            if announce:
+                print(f"Using schedule-free AdamW (lr={args.lr}, warmup_steps={args.warmup_steps})")
     else:
         optimizer = AdamW(
             param_groups,
@@ -1601,7 +1674,8 @@ def build_training_dataset(args, *, rank=0, dist_enabled=False, start_step=0,
             seed=data_seed,
             tokenizer_name=args.tokenizer,
             sampler_identity=sampler_identity,
-            total_accepted_tokens=total_accepted_tokens,
+            total_accepted_tokens=(
+                total_accepted_tokens if sampler_identity is not None else None),
             accepted_tokens_per_sample=args.chunk_size,
         )
     return DocumentStreamDataset(
@@ -2179,12 +2253,12 @@ def _maybe_inject_diloco_collective_rank_exit(*, label, bucket_index,
 
 
 def _diloco_allreduce_average_flat(flat, world_size, args, label, step=None,
-                                   merge_index=None):
+                                   merge_index=None, bucket_index_base=0):
     topology = str(getattr(args, 'diloco_merge_topology', 'global') or 'global').lower()
     bucket_numel = int(getattr(args, 'diloco_merge_bucket_numel', 0) or 0)
     if bucket_numel <= 0 or bucket_numel >= flat.numel():
-        _diloco_merge_log(args, step, merge_index, label, 0, int(flat.numel()),
-                          flat.dtype, 'enter')
+        _diloco_merge_log(args, step, merge_index, label, bucket_index_base,
+                          int(flat.numel()), flat.dtype, 'enter')
         t0 = time.time()
         if topology == 'hierarchical':
             _diloco_hierarchical_sum_average_flat(flat, world_size, args)
@@ -2193,11 +2267,11 @@ def _diloco_allreduce_average_flat(flat, world_size, args, label, step=None,
             flat.div_(world_size)
         else:
             raise ValueError(f"unknown DiLoCo merge topology: {topology}")
-        _diloco_merge_log(args, step, merge_index, label, 0, int(flat.numel()),
-                          flat.dtype, 'exit', time.time() - t0)
+        _diloco_merge_log(args, step, merge_index, label, bucket_index_base,
+                          int(flat.numel()), flat.dtype, 'exit', time.time() - t0)
         return
 
-    bucket_index = 0
+    bucket_index = bucket_index_base
     for start in range(0, flat.numel(), bucket_numel):
         chunk = flat.narrow(0, start, min(bucket_numel, flat.numel() - start))
         _diloco_merge_log(args, step, merge_index, label, bucket_index,
@@ -2215,6 +2289,62 @@ def _diloco_allreduce_average_flat(flat, world_size, args, label, step=None,
         _diloco_merge_log(args, step, merge_index, label, bucket_index,
                           int(chunk.numel()), chunk.dtype, 'exit',
                           time.time() - t0)
+        bucket_index += 1
+
+
+@torch.no_grad()
+def _diloco_allreduce_average_tensor_list_(
+        tensors, world_size, args, label, *, staging_device, step=None,
+        merge_index=None):
+    """Average a tensor list through one bounded reusable staging buffer.
+
+    This path is required when tensors live in CPU-offloaded optimizer state:
+    NCCL cannot reduce them directly, and flattening the full state would
+    recreate an optimizer-sized HBM allocation.  It is also suitable for GPU
+    tensors when a bounded merge footprint is required.
+    """
+    tensors = list(tensors)
+    if not tensors:
+        return
+    dtype = tensors[0].dtype
+    if any(tensor.dtype != dtype for tensor in tensors):
+        raise ValueError(f"{label} DiLoCo tensor list must have one dtype")
+    if any(not tensor.is_contiguous() for tensor in tensors):
+        raise ValueError(f"{label} DiLoCo tensor list must be contiguous")
+    total_numel = sum(int(tensor.numel()) for tensor in tensors)
+    configured = int(getattr(args, 'diloco_merge_bucket_numel', 0) or 0)
+    # CPU-offloaded z must never use a full-model staging allocation.  Match the
+    # production 64M-element merge bound when no explicit bound was supplied.
+    bucket_numel = configured if configured > 0 else 67_108_864
+    bucket_numel = max(1, min(bucket_numel, total_numel))
+    staging = torch.empty(bucket_numel, dtype=dtype, device=staging_device)
+
+    tensor_index = 0
+    tensor_offset = 0
+    bucket_index = 0
+    while tensor_index < len(tensors):
+        filled = 0
+        destinations = []
+        while filled < bucket_numel and tensor_index < len(tensors):
+            tensor = tensors[tensor_index]
+            available = int(tensor.numel()) - tensor_offset
+            count = min(bucket_numel - filled, available)
+            source = tensor.view(-1).narrow(0, tensor_offset, count)
+            staging.narrow(0, filled, count).copy_(source, non_blocking=False)
+            destinations.append((tensor, tensor_offset, filled, count))
+            filled += count
+            tensor_offset += count
+            if tensor_offset == tensor.numel():
+                tensor_index += 1
+                tensor_offset = 0
+
+        active = staging.narrow(0, 0, filled)
+        _diloco_allreduce_average_flat(
+            active, world_size, args, label, step=step,
+            merge_index=merge_index, bucket_index_base=bucket_index)
+        for tensor, destination_offset, source_offset, count in destinations:
+            tensor.view(-1).narrow(0, destination_offset, count).copy_(
+                staging.narrow(0, source_offset, count), non_blocking=False)
         bucket_index += 1
 
 
@@ -2293,25 +2423,41 @@ def diloco_merge(core_model, optimizer, args, world_size, outer_state,
             if not group_params:
                 continue
 
-            flat_x = torch._utils._flatten_dense_tensors([p.data for p in group_params])
-            _diloco_allreduce_average_flat(flat_x, world_size, args, 'sf_x',
-                                           step=step, merge_index=merge_index)
-            for p, merged in zip(
-                    group_params,
-                    torch._utils._unflatten_dense_tensors(flat_x, [p.data for p in group_params])):
-                p.data.copy_(merged)
+            if getattr(optimizer, 'state_storage', None) == 'pinned-cpu':
+                _diloco_allreduce_average_tensor_list_(
+                    [p.data for p in group_params], world_size, args, 'sf_x',
+                    staging_device=group_params[0].device,
+                    step=step, merge_index=merge_index)
+            else:
+                flat_x = torch._utils._flatten_dense_tensors(
+                    [p.data for p in group_params])
+                _diloco_allreduce_average_flat(
+                    flat_x, world_size, args, 'sf_x',
+                    step=step, merge_index=merge_index)
+                for p, merged in zip(
+                        group_params,
+                        torch._utils._unflatten_dense_tensors(
+                            flat_x, [p.data for p in group_params])):
+                    p.data.copy_(merged)
 
             z_params = [p for p in group_params if 'z' in optimizer.state.get(p, {})]
             if z_params:
-                flat_z = torch._utils._flatten_dense_tensors(
-                    [optimizer.state[p]['z'] for p in z_params])
-                _diloco_allreduce_average_flat(flat_z, world_size, args, 'sf_z',
-                                               step=step, merge_index=merge_index)
-                for p, merged_z in zip(
-                        z_params,
-                        torch._utils._unflatten_dense_tensors(
-                            flat_z, [optimizer.state[p]['z'] for p in z_params])):
-                    optimizer.state[p]['z'].copy_(merged_z)
+                z_tensors = [optimizer.state[p]['z'] for p in z_params]
+                if any(z.device != z_params[index].device
+                       for index, z in enumerate(z_tensors)):
+                    _diloco_allreduce_average_tensor_list_(
+                        z_tensors, world_size, args, 'sf_z',
+                        staging_device=z_params[0].device,
+                        step=step, merge_index=merge_index)
+                else:
+                    flat_z = torch._utils._flatten_dense_tensors(z_tensors)
+                    _diloco_allreduce_average_flat(
+                        flat_z, world_size, args, 'sf_z',
+                        step=step, merge_index=merge_index)
+                    for p, merged_z in zip(
+                            z_params,
+                            torch._utils._unflatten_dense_tensors(flat_z, z_tensors)):
+                        optimizer.state[p]['z'].copy_(merged_z)
 
             if outer_optimizer == 'sfsgd' and export_basis == 'y':
                 flat_y = export_y_by_group[id(group)]
@@ -2604,21 +2750,27 @@ def train(args):
                   f"model_variant={args._model_variant} head_rank={rank}/{world_size}",
                   flush=True)
 
-    # Per-rank FUSED guard (preflight-100b). For the E97 split-edit / raw-write
-    # families under bf16 the fused fwd+bwd lives ONLY in the Triton kernel; the
-    # eager T-scan is 40-260x slower. use_triton is auto-resolved to 1 above for
-    # this family. Once use_triton==1 the forward hard-imports the Triton kernel
-    # (ndm.triton.e88_triton_optimized) inside the `elif self.use_triton` branch —
-    # an import/availability failure RAISES rather than silently dropping to eager,
-    # so use_triton==1 + a completed run is proof the fused path executed on this
-    # rank. Assert it loudly per rank so the no-eager guarantee is visible for all.
+    # Per-rank FUSED guard (preflight-100b). For E97 split-edit/raw-write BF16,
+    # ``use_triton=1`` alone is NOT sufficient: E88FLAHybrid selects its optimized
+    # recurrence only when the output gate is SiLU and the unsupported ablations
+    # below are absent. A sigmoid gate silently selects the eager T-scan even with
+    # use_triton=1 (observed 40-260x slowdown). Fail closed on the complete runtime
+    # predicate instead of printing a false no-eager claim.
     _e97_family = str(args.level) in ('E97', '97', 'E97-M2') or bool(getattr(args, 'e88_raw_write', 0))
     if _e97_family and getattr(args, 'bf16', False):
-        assert args.use_triton == 1, (
-            f"[fused-guard] rank {rank}: E97/raw-write under bf16 MUST use the fused "
-            f"Triton kernel (no eager), but use_triton={args.use_triton}")
+        _failed_fused_contract = e97_fused_runtime_contract_failures(args)
+        if _failed_fused_contract:
+            raise RuntimeError(
+                f"[fused-guard] rank {rank}: E97/raw-write BF16 would leave the "
+                f"optimized Triton path; failed={_failed_fused_contract} "
+                f"(use_triton={getattr(args, 'use_triton', None)}, "
+                f"use_gate={getattr(args, 'use_gate', None)}, "
+                f"gate_activation={getattr(args, 'gate_activation', None)}, "
+                f"use_write_gate={getattr(args, 'use_write_gate', None)}, "
+                f"e88_value_residual={getattr(args, 'e88_value_residual', None)})")
         print(f"[fused-guard] rank {rank}/{world_size}: level={args.level} bf16 "
-              f"use_triton=1 -> fused split-edit Triton kernel, NO eager fallback", flush=True)
+              f"gate=silu use_triton=1 -> optimized split-edit Triton kernel, "
+              f"NO eager fallback", flush=True)
     if str(args.level).lower() in ('gdn2', 'gdn2-mlp'):
         from ndm.models.external_gdn2 import probe_gdn2_external_dependencies
 
@@ -3020,9 +3172,12 @@ def train(args):
               f"mode={args.heldout_eval_mode}, tensor={args.heldout_tensor}, "
               f"csv={heldout_curve_path}", flush=True)
 
-    model = model.to(device)
+    # Convert dtype while moving each parameter so large BF16 models never
+    # transiently materialize a complete FP32 copy in HBM before conversion.
     if args.bf16:
-        model = model.bfloat16()
+        model = model.to(device=device, dtype=torch.bfloat16)
+    else:
+        model = model.to(device)
 
     if args.compile and hasattr(torch, 'compile'):
         print(f"Compiling model (mode={args.compile_mode})...")
@@ -3247,6 +3402,12 @@ def train(args):
     model.train()
     if args.optimizer == 'schedulefree':
         optimizer.train()
+    if (getattr(optimizer, 'state_storage', None) == 'pinned-cpu'
+            and not loaded_optimizer_state):
+        init_stats = optimizer.initialize_state_()
+        print(f"[sf-offload] initialized "
+              f"{init_stats['state_bytes'] / (1024 ** 3):.3f} GiB pinned CPU state "
+              f"in {init_stats['seconds']:.3f}s", flush=True)
 
     # DiLoCo outer-optimizer state. avg is explicitly stateless. momentum keeps
     # the P1/P2 geometry-fixed anchor/moment buffers. sfsgd is a separate manual
@@ -3309,14 +3470,50 @@ def train(args):
     if args.probe_memory:
         torch.cuda.reset_peak_memory_stats(device)
         torch.cuda.synchronize(device)
+        print(f"PROBE_BASELINE_MEMORY_MB: "
+              f"{torch.cuda.memory_allocated(device) / (1024 * 1024):.1f}")
         chunks, _, _ = get_training_batch()
+        probe_phase_started = time.perf_counter()
         loss, _ = compute_training_loss(chunks)
+        torch.cuda.synchronize(device)
+        print(f"PROBE_FORWARD_SECONDS: "
+              f"{time.perf_counter() - probe_phase_started:.3f}")
+        print(f"PROBE_AFTER_FORWARD_MEMORY_MB: "
+              f"{torch.cuda.memory_allocated(device) / (1024 * 1024):.1f}")
+        probe_phase_started = time.perf_counter()
         loss.backward()
+        torch.cuda.synchronize(device)
+        print(f"PROBE_BACKWARD_SECONDS: "
+              f"{time.perf_counter() - probe_phase_started:.3f}")
+        print(f"PROBE_AFTER_BACKWARD_MEMORY_MB: "
+              f"{torch.cuda.memory_allocated(device) / (1024 * 1024):.1f}")
         optimizer.step()
+        if int(getattr(args, 'probe_optimizer_steps', 1)) < 1:
+            raise ValueError("--probe_optimizer_steps must be positive")
+        if getattr(optimizer, 'state_storage', None) == 'pinned-cpu':
+            print(f"PROBE_SF_OFFLOAD_STEP_SECONDS_1: "
+                  f"{optimizer.last_step_stats.get('seconds', 0.0):.3f}")
+        for probe_update in range(2, int(args.probe_optimizer_steps) + 1):
+            for parameter in model.parameters():
+                if parameter.requires_grad:
+                    parameter.grad = torch.full_like(parameter, 1.0e-4)
+            optimizer.step()
+            if getattr(optimizer, 'state_storage', None) == 'pinned-cpu':
+                print(f"PROBE_SF_OFFLOAD_STEP_SECONDS_{probe_update}: "
+                      f"{optimizer.last_step_stats.get('seconds', 0.0):.3f}")
         optimizer.zero_grad()
         torch.cuda.synchronize(device)
         peak_mb = torch.cuda.max_memory_allocated(device) / (1024 * 1024)
         print(f"PROBE_PEAK_MEMORY_MB: {peak_mb:.1f}")
+        if getattr(optimizer, 'state_storage', None) == 'pinned-cpu':
+            stats = optimizer.last_step_stats
+            print(f"PROBE_SF_OFFLOAD_STATE_GIB: "
+                  f"{optimizer.offloaded_state_bytes() / (1024 ** 3):.3f}")
+            print(f"PROBE_SF_OFFLOAD_H2D_GIB: "
+                  f"{stats.get('h2d_bytes', 0) / (1024 ** 3):.3f}")
+            print(f"PROBE_SF_OFFLOAD_D2H_GIB: "
+                  f"{stats.get('d2h_bytes', 0) / (1024 ** 3):.3f}")
+            print(f"PROBE_SF_OFFLOAD_STEP_SECONDS: {stats.get('seconds', 0.0):.3f}")
         sys.exit(0)
 
     # Training state
@@ -3585,6 +3782,13 @@ def train(args):
                           f"grad {grad_norm:.2f} | tok/s {tokens_per_sec:.0f} | "
                           f"global_tok/s {global_tps:.0f} | "
                           f"elapsed_h {elapsed_total_h:.3f} | time {wall_time}")
+                    if getattr(optimizer, 'state_storage', None) == 'pinned-cpu':
+                        offload_stats = optimizer.last_step_stats
+                        print(f"  [sf-offload] update_s="
+                              f"{offload_stats.get('seconds', 0.0):.3f} "
+                              f"h2d_gib={offload_stats.get('h2d_bytes', 0) / (1024 ** 3):.3f} "
+                              f"d2h_gib={offload_stats.get('d2h_bytes', 0) / (1024 ** 3):.3f}",
+                              flush=True)
 
                 # Track for last-100 average (each entry covers log_every steps)
                 last_100_losses.append(avg_loss)
