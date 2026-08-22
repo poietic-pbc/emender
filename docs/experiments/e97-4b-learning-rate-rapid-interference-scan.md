@@ -143,6 +143,22 @@ are assigned to different physical GPUs. This longer horizon tests whether the
 near-tie resolves as Schedule-Free averaging matures and measures the observed
 cross-run noise directly.
 
+The confirmation rung completed with all eight candidates valid:
+
+| LR | replicate A | replicate B | mean |
+|---:|---:|---:|---:|
+| 0.000220 | 5.420989 | 5.406856 | 5.413922 |
+| 0.000280 | 5.332322 | 5.341311 | 5.336817 |
+| **0.000330** | **5.232133** | **5.268278** | **5.250206** |
+| 0.000400 | 5.436789 | 5.295978 | 5.366383 |
+
+Both `3.3e-4` replicates beat every replicate of the other three rates. Its
+0.086611 mean advantage over `2.8e-4` exceeds its 0.036145 replicate spread.
+The confirmation therefore selects `3.3e-4` for the world-eight production
+gate. Narrower world-one CMA refinement is deferred because restoring the real
+DiLoCo/data-world interaction now has greater decision value than optimizing
+the single-island proxy further.
+
 ## Phase B: CMA-ES refinement
 
 Phase A is a deterministic bracket, not itself CMA-ES. A refinement is run only
