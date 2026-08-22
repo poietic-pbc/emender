@@ -175,13 +175,19 @@ from the initialization transient.
 ## Production gate
 
 The selected candidate starts fresh under the normal eight-way fixed-world
-DiLoCo launcher and runs through step 256 (134,217,728 aggregate tokens):
+DiLoCo launcher with a 1B-token target. Step 256 (134,217,728 aggregate tokens)
+is an observational stop/go gate, not a planned throwaway termination:
 
 * DiLoCo `K=32`, outer optimizer `avg`;
 * identical seed and world-eight counter-sampler stream;
 * merge-boundary checkpointing and interruptible final consensus publication;
-* compare matched-token trajectory and a fixed held-out evaluation before
-  extending to 1B tokens.
+* compare its matched-token trajectory with the completed `4.743e-4` control at
+  step 256; continue without interruption when healthy and better, otherwise
+  request the normal final consensus checkpoint and stop.
+
+Launching the full target initially avoids an unnecessary checkpoint/restart
+pause while preserving exactly the same safety decision: the periodic step-256
+checkpoint is an exact-resume boundary if operator review requires a pause.
 
 The production gate retains the applicable safety intent of gap-matrix R07
 (atomic checkpoint/latest publication) and R12 (exact inner-state resume).
