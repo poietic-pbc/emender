@@ -117,6 +117,32 @@ Absolute losses from this world-one scan must not be compared directly with
 the earlier world-eight trajectories because the counter-sampler world changes
 the data stream. Rankings inside each paired population are the evidence.
 
+The lower bracket also completed with every arm valid:
+
+| rank | LR | steps 72-96 mean |
+|---:|---:|---:|
+| 1 | 0.000400 | 6.151371 |
+| 2 | 0.000330 | 6.154643 |
+| 3 | 0.000280 | 6.158914 |
+| 4 | 0.000220 | 6.183414 |
+| 5 | 0.000365 | 6.207643 |
+| 6 | 0.000170 | 6.310014 |
+| 7 | 0.000130 | 6.351286 |
+| 8 | 0.000100 | 6.501300 |
+
+This finds a broad stable basin around `2.2e-4` through `4.0e-4`, not a
+CMA-resolvable point optimum. The repeated `4.0e-4` anchor changed from
+6.113814 to 6.151371 across populations (0.037557), while the top four lower
+bracket arms span only 0.032043. Optimizing inside that spread with one
+replicate would optimize execution noise.
+
+A confirmation rung therefore precedes CMA: two same-seed, same-stream
+replicates at each of `[2.2, 2.8, 3.3, 4.0]e-4`, trained from scratch for 256
+steps. Primary confirmation fitness is mean loss at steps 224-256. Replicates
+are assigned to different physical GPUs. This longer horizon tests whether the
+near-tie resolves as Schedule-Free averaging matures and measures the observed
+cross-run noise directly.
+
 ## Phase B: CMA-ES refinement
 
 Phase A is a deterministic bracket, not itself CMA-ES. A refinement is run only

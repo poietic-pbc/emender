@@ -30,14 +30,14 @@ STEP_RE = re.compile(
     r"^step\s+(\d+) \| loss ([0-9.eE+-]+) \| lr ([0-9.eE+-]+) "
     r"\| grad ([0-9.eE+-]+) \| tok/s ([0-9.eE+-]+) "
     r"\| global_tok/s ([0-9.eE+-]+)")
-FITNESS_STEPS = tuple(range(72, 97, 4))
+DEFAULT_FITNESS_STEPS = tuple(range(72, 97, 4))
 
 
 def utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 
 
-def command_for(root: Path, name: str, lr: float) -> list[str]:
+def command_for(root: Path, name: str, lr: float, *, steps: int = 96) -> list[str]:
     candidate_output = root / "candidates" / name / "runs"
     return [
         sys.executable, "scripts/numa_local_rank_exec.py", "--", "train.py",
@@ -61,7 +61,7 @@ def command_for(root: Path, name: str, lr: float) -> list[str]:
         "--sampler_tokenizer_sha256",
         "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069",
         "--sampler_key", "42", "--sampler_data_world_size", "1",
-        "--steps", "96", "--save_every", "999999", "--keep_checkpoints", "1",
+        "--steps", str(steps), "--save_every", "999999", "--keep_checkpoints", "1",
         "--log_every", "4", "--output", str(candidate_output),
     ]
 
@@ -73,7 +73,8 @@ def mean_at(trajectory: dict[int, dict[str, float]], steps: tuple[int, ...]) -> 
 
 
 def parse_candidate(name: str, lr: float, gpu: int, command: list[str],
-                    logfile: Path, returncode: int) -> dict:
+                    logfile: Path, returncode: int, *, final_step: int = 96,
+                    fitness_steps: tuple[int, ...] = DEFAULT_FITNESS_STEPS) -> dict:
     trajectory: dict[int, dict[str, float]] = {}
     text = logfile.read_text(encoding="utf-8", errors="replace")
     for line in text.splitlines():
@@ -94,10 +95,11 @@ def parse_candidate(name: str, lr: float, gpu: int, command: list[str],
         if marker in text
     ]
     fused_guard = "NO eager fallback" in text
-    fitness = mean_at(trajectory, FITNESS_STEPS)
+    fitness = mean_at(trajectory, fitness_steps)
     complete = (
         returncode == 0 and fitness is not None and fused_guard
-        and not failure_markers and "Training complete! Final step: 96" in text
+        and not failure_markers
+        and f"Training complete! Final step: {final_step}" in text
     )
     status = "complete" if complete else "failed"
     windows = {
@@ -112,7 +114,7 @@ def parse_candidate(name: str, lr: float, gpu: int, command: list[str],
         "numa_node": 0 if gpu <= 3 else 1,
         "status": status,
         "fitness": fitness if complete else None,
-        "fitness_steps": list(FITNESS_STEPS),
+        "fitness_steps": list(fitness_steps),
         "windows": windows,
         "max_reported_grad_norm": (
             max(row["grad_norm"] for row in trajectory.values())
@@ -127,7 +129,8 @@ def parse_candidate(name: str, lr: float, gpu: int, command: list[str],
     }
 
 
-def write_results(root: Path, manifest: dict, results: list[dict]) -> None:
+def write_results(root: Path, manifest: dict, results: list[dict],
+                  fitness_steps: tuple[int, ...]) -> None:
     complete = [row for row in results if row["fitness"] is not None]
     complete.sort(key=lambda row: row["fitness"])
     rank = {row["name"]: index + 1 for index, row in enumerate(complete)}
@@ -136,8 +139,11 @@ def write_results(root: Path, manifest: dict, results: list[dict]) -> None:
     payload = {
         **manifest,
         "completed_at": utc_now(),
-        "fitness_definition": "mean reported training loss at steps 72,76,...,96",
-        "fitness_steps": list(FITNESS_STEPS),
+        "fitness_definition": (
+            f"mean reported training loss at steps {fitness_steps[0]} through "
+            f"{fitness_steps[-1]} every four steps"
+        ),
+        "fitness_steps": list(fitness_steps),
         "winner": complete[0]["name"] if complete else None,
         "candidates": sorted(results, key=lambda row: (row["rank"] is None, row["rank"] or 999)),
     }
@@ -177,7 +183,14 @@ def main() -> int:
     parser.add_argument(
         "--candidate", action="append", type=_candidate_spec,
         help="override default population with repeated NAME=LR entries")
+    parser.add_argument("--steps", type=int, default=96)
+    parser.add_argument("--fitness-start", type=int, default=72)
     args = parser.parse_args()
+    if args.steps <= 0 or args.steps % 4 or args.fitness_start <= 0:
+        raise SystemExit("steps must be positive/divisible by four and fitness-start positive")
+    if args.fitness_start > args.steps or args.fitness_start % 4:
+        raise SystemExit("fitness-start must be divisible by four and no greater than steps")
+    fitness_steps = tuple(range(args.fitness_start, args.steps + 1, 4))
     candidates = args.candidate or CANDIDATES
     if len(candidates) != 8:
         raise SystemExit(f"scan requires exactly eight candidates; got {len(candidates)}")
@@ -202,7 +215,8 @@ def main() -> int:
         "protocol": "docs/experiments/e97-4b-learning-rate-rapid-interference-scan.md",
         "shape": "d3840-L18-H60-n64-mlp2.5",
         "total_parameters": 4_045_972_080,
-        "steps": 96,
+        "steps": args.steps,
+        "fitness_steps": list(fitness_steps),
         "seed": 42,
         "physical_gpus": physical_gpus,
         "candidate_learning_rates": [
@@ -231,7 +245,7 @@ def main() -> int:
             candidate_dir = root / "candidates" / name
             candidate_dir.mkdir(parents=True, exist_ok=False)
             logfile = candidate_dir / "run.log"
-            command = command_for(root, name, lr)
+            command = command_for(root, name, lr, steps=args.steps)
             env = os.environ.copy()
             env.update({
                 "CUDA_VISIBLE_DEVICES": str(gpu),
@@ -289,10 +303,11 @@ def main() -> int:
     results = [
         parse_candidate(
             child["name"], child["lr"], child["gpu"], child["command"],
-            child["logfile"], child["process"].returncode)
+            child["logfile"], child["process"].returncode,
+            final_step=args.steps, fitness_steps=fitness_steps)
         for child in children
     ]
-    write_results(root, manifest, results)
+    write_results(root, manifest, results, fitness_steps)
     complete = [row for row in results if row["fitness"] is not None]
     if complete:
         winner = min(complete, key=lambda row: row["fitness"])

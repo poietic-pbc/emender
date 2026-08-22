@@ -23,7 +23,17 @@ case "$PROFILE" in
       --candidate lr0400=0.000400
     )
     ;;
-  *) echo "PROFILE must be initial or lower" >&2; exit 64;;
+  confirm)
+    DEFAULT_ROOT=/mnt/nvme1n1/erikg/diloco_8gpu/e97_4b_lr_interference_scan_confirm
+    CANDIDATE_ARGS=(
+      --steps 256 --fitness-start 224
+      --candidate lr0220a=0.000220 --candidate lr0220b=0.000220
+      --candidate lr0280a=0.000280 --candidate lr0280b=0.000280
+      --candidate lr0330a=0.000330 --candidate lr0330b=0.000330
+      --candidate lr0400a=0.000400 --candidate lr0400b=0.000400
+    )
+    ;;
+  *) echo "PROFILE must be initial, lower, or confirm" >&2; exit 64;;
 esac
 ROOT="${ROOT:-$DEFAULT_ROOT}"
 LOGDIR="${ROOT}.launcher"
