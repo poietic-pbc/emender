@@ -18,6 +18,7 @@ BATCH_SIZE="${BATCH_SIZE:-32}"
 CHUNK_SIZE="${CHUNK_SIZE:-2048}"
 GRAD_ACCUM="${GRAD_ACCUM:-1}"
 LR="${LR:-0.00047431158698290157}"
+SEED="${SEED:-42}"
 DATA="${DATA:-/home/erikg/elman/data/pile.txt}"
 TOKENIZER="${TOKENIZER:-p50k_base}"
 RESUME="${RESUME:-}"
@@ -53,6 +54,9 @@ for value_name in BATCH_SIZE CHUNK_SIZE GRAD_ACCUM STEPS DILOCO_K SAVE_EVERY LOG
     echo "$value_name must be a positive integer, got $value" >&2; exit 64;
   }
 done
+[[ "$SEED" =~ ^[0-9]+$ ]] || {
+  echo "SEED must be a non-negative integer, got $SEED" >&2; exit 64;
+}
 (( SAVE_EVERY % DILOCO_K == 0 )) || {
   echo "SAVE_EVERY must be a multiple of DILOCO_K" >&2; exit 64;
 }
@@ -117,6 +121,7 @@ TRAIN_ARGS=(
   --projection_chunk_size 512
   --loss_chunk_size 128
   --grad_clip 1.0
+  --seed "$SEED"
   --compile_warmup_steps 1
   --data "$DATA"
   --tokenizer "$TOKENIZER"
@@ -156,6 +161,7 @@ target_or_smoke_tokens=$actual_tokens
 diloco_k=$DILOCO_K
 save_every=$SAVE_EVERY
 lr=$LR
+seed=$SEED
 shape=d3840-L18-H60-n64-mlp2.5
 source_commit=$(git rev-parse HEAD)
 interrupt_command=scripts/request_graceful_stop.sh $LOGDIR
