@@ -158,10 +158,32 @@ def write_results(root: Path, manifest: dict, results: list[dict]) -> None:
             ])
 
 
+def _candidate_spec(value: str) -> tuple[str, float]:
+    try:
+        name, raw_lr = value.split("=", 1)
+        lr = float(raw_lr)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("candidate must be NAME=LR") from exc
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", name):
+        raise argparse.ArgumentTypeError(f"invalid candidate name: {name!r}")
+    if not math.isfinite(lr) or lr <= 0:
+        raise argparse.ArgumentTypeError(f"learning rate must be positive and finite: {raw_lr!r}")
+    return name, lr
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument(
+        "--candidate", action="append", type=_candidate_spec,
+        help="override default population with repeated NAME=LR entries")
     args = parser.parse_args()
+    candidates = args.candidate or CANDIDATES
+    if len(candidates) != 8:
+        raise SystemExit(f"scan requires exactly eight candidates; got {len(candidates)}")
+    names = [name for name, _lr in candidates]
+    if len(set(names)) != len(names):
+        raise SystemExit(f"candidate names must be unique: {names!r}")
     root = args.root.resolve()
     if root.exists() and any(root.iterdir()):
         raise SystemExit(f"refusing nonempty scan root: {root}")
@@ -183,6 +205,9 @@ def main() -> int:
         "steps": 96,
         "seed": 42,
         "physical_gpus": physical_gpus,
+        "candidate_learning_rates": [
+            {"name": name, "learning_rate": lr} for name, lr in candidates
+        ],
     }
     (root / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -202,7 +227,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, forward)
 
     try:
-        for (name, lr), gpu in zip(CANDIDATES, physical_gpus, strict=True):
+        for (name, lr), gpu in zip(candidates, physical_gpus, strict=True):
             candidate_dir = root / "candidates" / name
             candidate_dir.mkdir(parents=True, exist_ok=False)
             logfile = candidate_dir / "run.log"
@@ -275,7 +300,7 @@ def main() -> int:
               f"fitness={winner['fitness']:.6f}", flush=True)
     else:
         print("[scan] no complete candidates", flush=True)
-    return 0 if len(complete) == len(CANDIDATES) else 1
+    return 0 if len(complete) == len(candidates) else 1
 
 
 if __name__ == "__main__":

@@ -89,13 +89,41 @@ Candidate final checkpoints are not model releases. After metrics and commands
 are durably recorded, loser checkpoint payloads may be pruned; logs, args, and
 the aggregate receipt remain evidence.
 
+## Phase A result and lower-bound reposition
+
+Phase A executed from commit `170bf6c7`; all eight arms completed and passed
+the fused guard. Fitness was:
+
+| rank | LR | steps 72-96 mean |
+|---:|---:|---:|
+| 1 | 0.0004000 | 6.113814 |
+| 2 | 0.00047431158698290157 | 6.685557 |
+| 3 | 0.0006300 | 7.132157 |
+| 4 | 0.0005500 | 7.166186 |
+| 5 | 0.0007200 | 7.306214 |
+| 6 | 0.0008200 | 7.410514 |
+| 7 | 0.0009200 | 7.628100 |
+| 8 | 0.0010070 | 7.708186 |
+
+The winner hit the lower configured boundary by a material margin. Following
+the same boundary-reposition rule used by the earlier per-architecture CMA
+protocol, CMA refinement is deferred: fitting covariance around a clipped
+boundary winner would be invalid. A second deterministic population moves the
+range downward while retaining `4.0e-4` as the overlap anchor:
+
+`[1.0, 1.3, 1.7, 2.2, 2.8, 3.3, 3.65, 4.0]e-4`.
+
+Absolute losses from this world-one scan must not be compared directly with
+the earlier world-eight trajectories because the counter-sampler world changes
+the data stream. Rankings inside each paired population are the evidence.
+
 ## Phase B: CMA-ES refinement
 
 Phase A is a deterministic bracket, not itself CMA-ES. A refinement is run only
-if Phase A has a stable interior region. CMA-ES operates in bounded log-LR
-space around the best three Phase-A arms, population eight, using the same
-96-step fitness. The bracket anchors prevent a one-dimensional stochastic
-population from omitting the known-good and known-bad controls.
+once boundary repositioning finds a stable interior region. CMA-ES operates in
+bounded log-LR space around the best three bracket arms, population eight,
+using the same 96-step fitness. The bracket anchors prevent a one-dimensional
+stochastic population from omitting the known-good and known-bad controls.
 
 Warmup is not mixed into Phase A. If the best no-warmup arm lies at the upper
 stable boundary, a separate two-dimensional refinement may search log-LR and
