@@ -194,6 +194,37 @@ The production gate retains the applicable safety intent of gap-matrix R07
 No elastic, native-dataplane, changing-world, or asynchronous conformance is
 claimed.
 
+### Production-gate result: short-horizon selection rejected
+
+The `3.3e-4` world-eight run initially led the completed `4.743e-4` control:
+at step 32 its loss was 7.1884 versus 7.9252, and its mean through step 32 was
+lower by 1.4089. That advantage decayed monotonically with horizon.
+
+At step 256:
+
+* checkpoint loss was 5.1274 versus control 4.9885;
+* paired mean over steps 228-256 was 5.1708 versus 5.1133 (`+0.0575` worse).
+
+Because the first crossover was modest relative to individual-window noise,
+the attended run continued to the predeclared adjudication at step 512. There:
+
+* checkpoint loss was 4.7352 versus control 4.5626 (`+0.1726` worse);
+* paired mean over steps 452-512 was `+0.1438` worse;
+* paired mean over all steps 260-512 was `+0.1169` worse.
+
+The widening deficit rejected `3.3e-4` for sustained eight-way DiLoCo. A
+graceful stop was requested and completed at step 517 / 271,056,896 tokens.
+Final merge 17 took 16.265 seconds; rank zero atomically published a resolvable
+24,276,093,247-byte checkpoint and `latest.pt` (R07 safety evidence).
+
+Verdict: the 96-step and even replicated 256-step world-one screens measure a
+real early-optimization effect but do not select the sustained world-eight LR.
+The completed `4.7431158698290157e-4` control remains the best validated rate.
+Any further selection search must use production-like world-eight candidates
+for at least 512 steps; that cost is not honestly described as a rapid scan.
+CMA refinement of the short-horizon proxy is therefore cancelled rather than
+used to overstate precision.
+
 ## Stop and retention policy
 
 The scan driver owns all candidate subprocesses. SIGINT or SIGTERM is forwarded
