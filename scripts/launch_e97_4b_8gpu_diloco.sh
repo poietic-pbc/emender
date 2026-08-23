@@ -5,6 +5,8 @@
 #   MODE=smoke  -> 2 steps with K=1 (collective/checkpoint qualification only)
 # Full pilot:
 #   MODE=1b CONFIRM_1B=1 [sampler identity...] scripts/launch_e97_4b_8gpu_diloco.sh
+# Effectively unbounded exact resume:
+#   MODE=continuous CONFIRM_CONTINUOUS=1 RESUME=... [sampler identity...] scripts/launch_e97_4b_8gpu_diloco.sh
 # Graceful early stop:
 #   scripts/request_graceful_stop.sh LOGDIR
 set -euo pipefail
@@ -44,8 +46,22 @@ case "$MODE" in
     SAVE_EVERY="${SAVE_EVERY:-256}"
     LOG_EVERY="${LOG_EVERY:-4}"
     ;;
+  continuous)
+    [[ "${CONFIRM_CONTINUOUS:-0}" == 1 ]] || {
+      echo "MODE=continuous requires CONFIRM_CONTINUOUS=1" >&2; exit 64;
+    }
+    [[ -n "$RESUME" && -e "$RESUME" ]] || {
+      echo "MODE=continuous requires RESUME naming a readable checkpoint" >&2; exit 66;
+    }
+    # An operationally unbounded ceiling (~524T aggregate tokens). The attended
+    # graceful-stop path, rather than this ceiling, owns normal termination.
+    STEPS="${STEPS:-1000000000}"
+    DILOCO_K="${DILOCO_K:-32}"
+    SAVE_EVERY="${SAVE_EVERY:-256}"
+    LOG_EVERY="${LOG_EVERY:-4}"
+    ;;
   *)
-    echo "MODE must be smoke or 1b" >&2; exit 64;;
+    echo "MODE must be smoke, 1b, or continuous" >&2; exit 64;;
 esac
 
 for value_name in BATCH_SIZE CHUNK_SIZE GRAD_ACCUM STEPS DILOCO_K SAVE_EVERY LOG_EVERY; do
@@ -79,8 +95,8 @@ if [[ -n "${SAMPLER_SCHEMA:-}" ]]; then
     --sampler_key "$SAMPLER_KEY"
     --sampler_data_world_size "$WORLD_SIZE"
   )
-elif [[ "$MODE" == 1b && "${ALLOW_LEGACY_SAMPLER:-0}" != 1 ]]; then
-  echo "MODE=1b requires a frozen counter sampler identity; set SAMPLER_SCHEMA and hashes." >&2
+elif [[ "$MODE" != smoke && "${ALLOW_LEGACY_SAMPLER:-0}" != 1 ]]; then
+  echo "MODE=$MODE requires a frozen counter sampler identity; set SAMPLER_SCHEMA and hashes." >&2
   echo "Set ALLOW_LEGACY_SAMPLER=1 only for a deliberately non-reproducible pilot." >&2
   exit 64
 fi
