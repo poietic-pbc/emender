@@ -94,26 +94,29 @@ claimed (ADR-003 fixed-world authority; NDP02 is retired/incompatible here).
 2. Submit `MODE=rung CONFIRM_RUNG=1` for exactly four nodes / 32 ranks / 20
    minutes. Require private rank-local Triton caches, finite training, one K128
    consensus, safe HBM, and a reloadable step-256 checkpoint. Do not promote it.
-3. Only after that rung passes, submit `MODE=bootstrap CONFIRM_BOOTSTRAP=1` for
-   exactly 256 nodes / 2,048 ranks / 20 minutes under `batch/debug`.
-4. Require eight fused guards, finite loss/gradients, <=2.15 effective seconds
-   per update, measured peak HBM, two successful K128 consensuses, one atomic
-   ~24 GB checkpoint, and reloadable sampler/optimizer metadata.
-5. Promote the step-256 checkpoint only after terminal `Partition` and `QOS`
+3. Use two-node probes to select batch size while preserving DiLoCo work:
+   B2/K64/save128/target128, then B4/K32/save64/target64, a bounded
+   B6/K21/save42/target42 interpolation, and B8/K16/save32/target32 only as an
+   HBM boundary probe. The power-of-two arms process 256 local samples; B6
+   processes 252 (126 per merge, within 1.6% of the 128-sample authority).
+   Every arm performs two merges, keeps LR unchanged, and uses a separate
+   non-promotable run identity. Select from finite loss, peak reserved HBM,
+   merge/checkpoint time, and sustained tokens/s/GCD.
+4. Commit the selected production B/K/step/checkpoint geometry.
+5. Submit `MODE=bootstrap CONFIRM_BOOTSTRAP=1` for exactly 256 nodes / 2,048
+   ranks / 20 minutes under `batch/debug`.
+6. Require eight fused guards, finite loss/gradients, measured peak HBM, two
+   successful selected-K consensuses, one atomic ~24 GB checkpoint, and
+   reloadable sampler/optimizer metadata. Throughput must project inside the
+   reviewed production allocation envelope.
+7. Promote the bootstrap checkpoint only after terminal `Partition` and `QOS`
    evidence, exact accepted-token accounting, and checkpoint integrity review.
-6. Use two-node probes to select batch size while preserving DiLoCo work:
-   B2/K64/save128/target128, then B4/K32/save64/target64, and B8/K16/save32/
-   target32 only if B4 retains safe HBM. Each arm processes 256 local samples,
-   performs two merges, keeps LR unchanged, and uses a separate non-promotable
-   run identity. Select from finite loss, peak reserved HBM, merge/checkpoint
-   time, and sustained tokens/s/GCD; target approximately 2,000 tokens/s/GCD.
-7. Commit the selected production B/K/step/checkpoint geometry, then add and
-   locally qualify bounded same-allocation restart and node-local checkpoint
-   staging before production authorization.
-8. Submit one attended `MODE=production CONFIRM_PRODUCTION=1 CONFIRM_RESUME=1`
+8. Add and locally qualify bounded same-allocation restart and node-local
+   checkpoint staging before production authorization.
+9. Submit one attended `MODE=production CONFIRM_PRODUCTION=1 CONFIRM_RESUME=1`
    epoch under `Partition=batch`, `QOS=normal` for the stable 256-node run id.
-9. Inspect actual accounting, throughput, loss, and checkpoint authority before
-   sizing any continuation. No automatic scheduler resubmission or chain.
+10. Inspect actual accounting, throughput, loss, and checkpoint authority before
+    sizing any continuation. No automatic scheduler resubmission or chain.
 
 ## Current limitation
 
@@ -136,6 +139,12 @@ K128 merges, periodic-checkpoint reuse, and terminal exit zero. Removing outer
 layer-group checkpointing improved ordinary throughput from about 720 to
 840--860 tokens/s/GCD while peak allocated remained 38,738 MiB and peak reserved
 rose modestly to about 42,682 MiB. This is memory-safe but still below the
-throughput target, so the two-node B2/B4/conditional-B8 sweep above gates the
-replacement 256-node bootstrap. Repository readiness is not Frontier execution
-evidence.
+throughput target. B2 job 5337664 completed at roughly 1,200--1,250
+tokens/s/GCD with 41,526 MiB reserved. B4 job 5337831 completed at roughly
+1,420--1,505 tokens/s/GCD with 49,002 MiB reserved, although its two merges took
+20.7--23.3 seconds. B8 job 5337929 failed before its first optimizer update:
+58.96 GiB was allocated and 3.92 GiB reserved-but-unallocated, leaving no room
+for a 100--198 MiB request. B8 is rejected even if allocator tuning could make
+it barely fit. One B6 interpolation probe is justified to find the safe
+throughput maximum before the replacement 256-node bootstrap. Repository
+readiness is not Frontier execution evidence.

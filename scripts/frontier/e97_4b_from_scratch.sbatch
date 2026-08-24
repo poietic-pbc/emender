@@ -124,7 +124,7 @@ elif [[ "$RUN_MODE" == rung ]]; then
   }
   TARGET_STEPS=$BOOTSTRAP_STEPS
   LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=300
-elif [[ "$RUN_MODE" =~ ^probe_b(2|4|8)$ ]]; then
+elif [[ "$RUN_MODE" =~ ^probe_b(2|4|6|8)$ ]]; then
   [[ "$EXPECTED_NODES" == 2 && "$EXPECTED_WORLD_SIZE" == 16 ]] || {
     echo "batch probes are fixed at 2 nodes / 16 ranks" >&2; exit 64;
   }
@@ -146,7 +146,7 @@ elif [[ "$RUN_MODE" == production ]]; then
   LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=${TRAIN_MINUTES:-$PRODUCTION_TRAIN_MINUTES}
   FINAL_MARGIN_SECONDS=600
 else
-  echo "RUN_MODE must be smoke, rung, probe_b2, probe_b4, probe_b8, bootstrap, or production" >&2; exit 64
+  echo "RUN_MODE must be smoke, rung, probe_b2, probe_b4, probe_b6, probe_b8, bootstrap, or production" >&2; exit 64
 fi
 (( SAVE_EVERY % DILOCO_K == 0 )) || { echo "checkpoint cadence is not K-aligned" >&2; exit 64; }
 
