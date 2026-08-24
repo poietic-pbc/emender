@@ -17,17 +17,20 @@ def test_frontier_4b_config_preserves_shape_budget_and_local_merge_work():
     assert cfg["production_tasks_per_node"] == 8
     assert cfg["production_walltime"] == "06:00:00"
     assert cfg["production_train_minutes"] == 345
+    assert cfg["debug_continuation_walltime"] == "02:00:00"
+    assert cfg["debug_continuation_train_minutes"] == 105
     assert cfg["bootstrap_smoke_walltime"] == "00:20:00"
-    assert cfg["bootstrap_smoke_steps"] == 256
+    assert cfg["bootstrap_smoke_steps"] == 50
     train = cfg["training"]
-    assert train["batch_size_per_rank"] == 1
-    assert train["global_tokens_per_step"] == 256 * 8 * 1 * 2048
-    # K128/B1 is slightly more conservative than the proven 256-node
-    # E97-1.3B K40/B4 authority (128 versus 160 local samples per merge).
-    assert train["batch_size_per_rank"] * train["diloco_k"] == 128
+    assert train["batch_size_per_rank"] == 5
+    assert train["global_tokens_per_step"] == 256 * 8 * 5 * 2048
+    # The attended B5 decision accepts 125 rather than 128 local samples per
+    # merge to retain nearly all B6 throughput with more live-memory margin.
+    assert train["batch_size_per_rank"] * train["diloco_k"] == 125
     assert train["save_every"] == 2 * train["diloco_k"]
     assert cfg["target_steps"] * train["global_tokens_per_step"] >= cfg["target_tokens"]
-    assert cfg["target_tokens"] == 20 * cfg["target_parameters"]
+    assert (cfg["target_steps"] - 1) * train["global_tokens_per_step"] < cfg["target_tokens"]
+    assert cfg["target_tokens"] == 100_000_000_000
 
 
 def test_frontier_4b_payload_is_fixed_world_counter_sampled_and_fail_stop():
@@ -44,6 +47,8 @@ def test_frontier_4b_payload_is_fixed_world_counter_sampled_and_fail_stop():
     assert 'SAVE_EVERY=$((2 * DILOCO_K))' in text
     assert "bootstrap authority is fixed at 256 nodes / 2048 ranks" in text
     assert "production authority is fixed at 256 nodes / 2048 ranks" in text
+    assert "debug continuation authority is fixed at 256 nodes / 2048 ranks" in text
+    assert 'identity_source="$RUN_DIR/identity/source.sha256"' in text
     assert "EXPECTED_CORPUS_SHA" in text
     assert "sha256sum \"$DATA\"" not in text
     assert 'TRITON_CACHE_DIR=/tmp/e97-4b-${SLURM_JOB_ID}-${SLURM_PROCID}' in text
@@ -68,9 +73,13 @@ def test_frontier_4b_submitter_is_immutable_attended_and_records_both_queue_fiel
     assert 'NODES=2; QOS=debug; TIME_LIMIT=00:20:00' in text
     assert 'CONFIRM_BOOTSTRAP:-0' in text
     assert 'CONFIRM_PRODUCTION:-0' in text
+    assert 'CONFIRM_DEBUG_CONTINUATION:-0' in text
     assert 'NODES=4; QOS=debug; TIME_LIMIT=00:20:00' in text
     assert 'NODES=256; QOS=debug; TIME_LIMIT=00:20:00' in text
-    assert 'NODES=256; QOS=normal; TIME_LIMIT=06:00:00' in text
+    assert 'NODES=256; QOS=debug; TIME_LIMIT=02:00:00; TRAIN_MINUTES=105' in text
+    assert 'NODES=256; QOS=normal; TIME_LIMIT=04:00:00; TRAIN_MINUTES=225' in text
+    assert 'NODES=256; QOS=normal; TIME_LIMIT=06:00:00; TRAIN_MINUTES=345' in text
+    assert 'NODES=256; QOS=normal; TIME_LIMIT=08:00:00; TRAIN_MINUTES=465' in text
     assert 'CONFIRM_RESUME:-0' in text
     assert 'SOURCE_SHA=$(git rev-parse HEAD)' in text
     assert 'ORIGIN_MAIN_SHA=$(git rev-parse origin/main)' in text
@@ -86,3 +95,6 @@ def test_frontier_4b_collector_records_terminal_partition_and_qos():
     assert "${EXPECTED_PARTITION}\\|${EXPECTED_QOS}" in text
     assert 'checkpoint-${PAYLOAD_JOB_ID}.sha256' in text
     assert 'readlink -f "$latest"' in text
+    assert 'checkpoint-${PAYLOAD_JOB_ID}.reload.json' in text
+    assert "mmap=True" in text
+    assert "checkpoint token clock mismatch" in text

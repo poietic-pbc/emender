@@ -61,6 +61,12 @@ grep -F "|$EXPECTED_PARTITION|$EXPECTED_QOS|" \
     echo "live scheduler Partition/QOS mismatch" >&2; exit 64;
   }
 
+identity_source="$RUN_DIR/identity/source.sha256"
+if [[ -e "$identity_source" ]]; then
+  [[ $(<"$identity_source") == "$SOURCE_SHA" ]] || { echo "run source identity drift" >&2; exit 65; }
+else
+  printf '%s\n' "$SOURCE_SHA" > "$identity_source"
+fi
 identity_config="$RUN_DIR/identity/config.sha256"
 if [[ -e "$identity_config" ]]; then
   [[ $(<"$identity_config") == "$CONFIG_SHA" ]] || { echo "run config identity drift" >&2; exit 65; }
@@ -82,13 +88,14 @@ print(v['data']['tokenizer_sha256']); print(v['data']['corpus_sha256'])
 print(v['training']['learning_rate']); print(v['target_steps'])
 print(v['training']['batch_size_per_rank']); print(v['training']['diloco_k'])
 print(v['training']['save_every']); print(v['bootstrap_smoke_steps'])
-print(v['production_train_minutes'])
+print(v['production_train_minutes']); print(v['debug_continuation_train_minutes'])
 PY
 )
 DATA=${cfg[0]}; EXPECTED_DATA_BYTES=${cfg[1]}; TOKENIZER_SHA256=${cfg[2]}
 EXPECTED_CORPUS_SHA=${cfg[3]}; LR=${cfg[4]}; TARGET_STEPS=${cfg[5]}
 BATCH_SIZE=${cfg[6]}; DILOCO_K=${cfg[7]}; SAVE_EVERY=${cfg[8]}
 BOOTSTRAP_STEPS=${cfg[9]}; PRODUCTION_TRAIN_MINUTES=${cfg[10]}
+DEBUG_CONTINUATION_TRAIN_MINUTES=${cfg[11]}
 [[ -r "$DATA" && $(stat -c %s "$DATA") == "$EXPECTED_DATA_BYTES" ]] || {
   echo "reviewed corpus path/size mismatch" >&2; exit 66;
 }
@@ -139,14 +146,26 @@ elif [[ "$RUN_MODE" == bootstrap ]]; then
   }
   TARGET_STEPS=$BOOTSTRAP_STEPS
   LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=300
-elif [[ "$RUN_MODE" == production ]]; then
+elif [[ "$RUN_MODE" == debug_continuation ]]; then
+  [[ "$EXPECTED_NODES" == 256 && "$EXPECTED_WORLD_SIZE" == 2048 ]] || {
+    echo "debug continuation authority is fixed at 256 nodes / 2048 ranks" >&2; exit 64;
+  }
+  [[ -L "$RUN_DIR/train/latest.pt" && -r "$RUN_DIR/train/latest.pt" ]] || {
+    echo "debug continuation requires readable latest.pt" >&2; exit 65;
+  }
+  LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=${TRAIN_MINUTES:-$DEBUG_CONTINUATION_TRAIN_MINUTES}
+  FINAL_MARGIN_SECONDS=600
+elif [[ "$RUN_MODE" =~ ^production(_4h|_6h|_8h)?$ ]]; then
   [[ "$EXPECTED_NODES" == 256 && "$EXPECTED_WORLD_SIZE" == 2048 ]] || {
     echo "production authority is fixed at 256 nodes / 2048 ranks" >&2; exit 64;
+  }
+  [[ -L "$RUN_DIR/train/latest.pt" && -r "$RUN_DIR/train/latest.pt" ]] || {
+    echo "production requires readable latest.pt" >&2; exit 65;
   }
   LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=${TRAIN_MINUTES:-$PRODUCTION_TRAIN_MINUTES}
   FINAL_MARGIN_SECONDS=600
 else
-  echo "RUN_MODE must be smoke, rung, probe_b2, probe_b4, probe_b5, probe_b6, probe_b8, bootstrap, or production" >&2; exit 64
+  echo "invalid RUN_MODE" >&2; exit 64
 fi
 (( SAVE_EVERY % DILOCO_K == 0 )) || { echo "checkpoint cadence is not K-aligned" >&2; exit 64; }
 

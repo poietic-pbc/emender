@@ -1,7 +1,7 @@
 # E97 4B Frontier from-scratch preflight
 
-Status: source/config/launcher prepared; live Frontier canary and production
-submission not yet claimed.
+Status: B5/K25 selected and committed for an attended productive 256-node
+bootstrap; no 2,048-rank checkpoint or production continuation is yet claimed.
 
 ## Immutable training identity
 
@@ -12,38 +12,35 @@ submission not yet claimed.
 * Production fixed world: 256 nodes x 8 GCDs = 2,048 ranks. Every rank uses a
   private node-local Triton cache keyed by job and global rank; job 5337283
   proved that a shared home-directory Triton cache races and fails at this scale.
-* Batch one per rank, context 2,048: 4,194,304 aggregate accepted tokens per
+* Batch five per rank, context 2,048: 20,971,520 aggregate accepted tokens per
   optimizer step.
-* Target: 19,293 optimizer steps / 80,920,707,072 accepted tokens, just above
-  20 tokens per parameter.
-* DiLoCo `avg`, K=128 at the unchanged validated LR. This gives 128 local
-  samples and 536,870,912 global accepted tokens per merge. It is slightly more
-  conservative than the proven 256-node E97 1.3B K40/B4 authority (160 local
-  samples and 671,088,640 global tokens per merge).
-* Checkpoint every 256 steps (two merges), retain three, plus final/pre-signal
-  publication. The exact bootstrap measures checkpoint cost; cadence may be
-  relaxed to 512 only through reviewed evidence if a 24 GB publication takes
-  more than 60 seconds.
+* Operational target: 4,769 optimizer steps / 100,013,178,880 accepted tokens,
+  just above the requested approximately 100B budget (24.7 tokens/parameter).
+* DiLoCo `avg`, K=25 at the unchanged validated LR. This intentionally changes
+  cadence from 128 to 125 local samples per merge (2.34%) and yields 524,288,000
+  global accepted tokens per merge. The operator explicitly accepted this
+  throughput-driven deviation after the controlled B2/B4/B5/B6/B8 sweep.
+* Checkpoint every 50 steps (two merges), retain three, plus final/pre-signal
+  publication. The exact bootstrap measures checkpoint cost before continuation.
 
-The minimum 256-node batch exposes 19,293 sequential optimizer updates to the
-Chinchilla target. DiLoCo worker count does not trigger conventional global-
-batch LR scaling: the inner Schedule-Free LR remains
-`0.00047431158698290157`.
+DiLoCo worker count does not trigger conventional global-batch LR scaling: the
+inner Schedule-Free LR remains `0.00047431158698290157`.
 
 ## Budget model
 
-After failed job 5337283, the scheduler-derived balance on 2026-08-24 is about
-3,170.14 node-hours. The revised maximum envelope is 1.33 node-hours for a
-four-node 20-minute cache/model rung, 85.33 for an exact 256-node 20-minute
-bootstrap, and 3,072 for two 256-node six-hour normal allocations: 3,158.67
-node-hours, leaving about 11.47 before small collectors. Production uses 345
-productive minutes per job with a ten-minute final-checkpoint margin. The
-bootstrap gate remains <=2.15 effective seconds per update.
+After failed job 5337283, the scheduler-derived balance on 2026-08-24 was
+about 3,170.14 node-hours; the subsequent small qualification jobs consumed
+only a few additional node-hours. An exact 256-node 20-minute bootstrap costs
+85.33 node-hours, a two-hour debug continuation costs 512, and a six-hour
+normal continuation costs 1,536. The attended plan is bootstrap -> inspect ->
+two-hour debug resume -> inspect -> a measured four-, six-, or eight-hour
+normal resume, stopping at the configured 100B token ceiling. No job is chained
+or automatically resubmitted after failure.
 
 The 20-minute 256-node bootstrap is useful training, not a throwaway canary: if
-and only if its exact-source fixed-world gates pass, its step-256 /
-1,073,741,824-token checkpoint becomes the genesis training authority and
-counts toward the 20 accepted tokens/parameter target. The four-node rung has a
+and only if its exact-source fixed-world gates pass, its step-50 /
+1,048,576,000-token checkpoint becomes the genesis training authority and
+counts toward the 100B target. The four-node rung has a
 different sampler world and is qualification-only; its checkpoint is never
 promoted into the production lineage.
 
@@ -56,7 +53,7 @@ with expected size 1,000,000,725,401 bytes. Its reviewed physical SHA-256 is
 the payload materializes that committed authority instead of re-reading 1 TB
 inside the allocation. Counter sampler v1 binds that digest, p50k digest
 `94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069`,
-key 42, context 2,048, and the fixed world of 256.
+key 42, context 2,048, and the fixed world of 2,048 ranks.
 
 The exact 256-node bootstrap starts from random initialization only when stable
 `train/latest.pt` is absent. No earlier trained seed is used. The immutable
@@ -68,25 +65,21 @@ token cursor before model/optimizer mutation. World-size drift fails closed.
 ## Scheduler and safety contract
 
 The submitter requires clean `HEAD == main == origin/main`, creates an immutable
-checkout, sources `activate_emender_frontier.sh`, and submits explicit
+checkout, pins one stable source/config identity across the run, sources
+`activate_emender_frontier.sh`, and submits explicit
 `Partition=batch` and QoS (`debug` smoke, `normal` production). It retains
 `squeue` output naming both fields while queued/running. A durable afterany
 collector retains terminal `sacct` fields `Partition` and `QOS` separately.
 
 The bootstrap payload is one fixed-world fail-stop `srun`,
 `--kill-on-bad-exit`, no requeue, with batch-signal forwarding into the normal
-final consensus and atomic checkpoint path. Production additionally requires a
-bounded same-allocation fresh-communicator restart path before authorization;
-the bootstrap does not claim that gate. This retains applicable gap-matrix
-safety intent:
-
-* R07: atomic checkpoint and `latest.pt` publication;
-* R12: exact model/inner optimizer/token-cursor restore;
-* R14: bounded job/child lifetime and retained scheduler evidence;
-* R15: fixed-world weighted accounting.
-
-No elastic, native-dataplane, changing-world, or asynchronous conformance is
-claimed (ADR-003 fixed-world authority; NDP02 is retired/incompatible here).
+final consensus and atomic checkpoint path. Each submitted job has one execution
+epoch. A later human-reviewed job constructs a fresh process group and resumes
+only atomic `latest.pt`; it never preserves or shrinks a failed communicator.
+This retains ADR-003 gap-matrix safety intent for R07, R12, R14/NDP13, R16, and
+NDP15 checkpoint atomicity. R02--R06/R08--R11, NDP02 and other native/elastic
+clauses, and all V21S01--V21S17/ISP01--ISP07 requirements are explicitly retired
+or unclaimed for this fixed-world production path.
 
 ## Required live ladder
 
@@ -112,12 +105,14 @@ claimed (ADR-003 fixed-world authority; NDP02 is retired/incompatible here).
    reviewed production allocation envelope.
 7. Promote the bootstrap checkpoint only after terminal `Partition` and `QOS`
    evidence, exact accepted-token accounting, and checkpoint integrity review.
-8. Add and locally qualify bounded same-allocation restart and node-local
-   checkpoint staging before production authorization.
-9. Submit one attended `MODE=production CONFIRM_PRODUCTION=1 CONFIRM_RESUME=1`
-   epoch under `Partition=batch`, `QOS=normal` for the stable 256-node run id.
+8. Submit one attended `MODE=debug_continuation
+   CONFIRM_DEBUG_CONTINUATION=1 CONFIRM_RESUME=1` two-hour epoch under
+   `Partition=batch`, `QOS=debug`; this is the fresh-process-group restart gate.
+9. Inspect it, then choose an attended `production_4h`, `production_6h`, or
+   `production_8h` normal-QoS epoch from measured accepted-token throughput and
+   remaining allocation.
 10. Inspect actual accounting, throughput, loss, and checkpoint authority before
-    sizing any continuation. No automatic scheduler resubmission or chain.
+    every continuation. No automatic scheduler resubmission or chain.
 
 ## Current limitation
 
@@ -147,8 +142,11 @@ tokens/s/GCD with 41,526 MiB reserved. B4 job 5337831 completed at roughly
 58.96 GiB was allocated and 3.92 GiB reserved-but-unallocated, leaving no room
 for a 100--198 MiB request. B8 is rejected even if allocator tuning could make
 it barely fit. B6 job 5337975 completed cleanly at roughly 1,690--1,775
-tokens/s/GCD, but 52,380 MiB allocated / 58,208 MiB reserved leaves only about
-5.8 GiB physical headroom before the larger 256-node communicator topology;
-B6 is therefore not production-safe as measured. One final B5 interpolation
-probe is justified to target at least 8--10 GiB headroom while improving on B4
-throughput. Repository readiness is not Frontier execution evidence.
+tokens/s/GCD with 52,380 MiB allocated / 58,208 MiB reserved. B5 job 5338084
+completed cleanly at 1,711 tokens/s/GCD mean ordinary throughput, two merges in
+12.3 and 6.7 seconds, 47,721 MiB allocated / 57,562 MiB reserved, and a valid
+step-50 checkpoint. B5 was selected because it is only 1.9% slower than B6 in
+ordinary updates, used about 4.5 GiB less live allocation, and had higher
+observed merge-inclusive throughput. Its 7.77 GiB reserve-based headroom still
+requires the exact 2,048-rank bootstrap; repository readiness is not Frontier
+execution evidence.

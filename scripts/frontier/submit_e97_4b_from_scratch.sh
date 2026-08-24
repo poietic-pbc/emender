@@ -33,12 +33,27 @@ case "$MODE" in
     NODES=256; QOS=debug; TIME_LIMIT=00:20:00
     RUN_ID=${RUN_ID:-e97-4b-fresh-w2048-r2}
     ;;
-  production)
-    [[ ${CONFIRM_PRODUCTION:-0} == 1 ]] || { echo "production requires CONFIRM_PRODUCTION=1" >&2; exit 64; }
-    NODES=256; QOS=normal; TIME_LIMIT=06:00:00
+  debug_continuation)
+    [[ ${CONFIRM_DEBUG_CONTINUATION:-0} == 1 ]] || { echo "debug continuation requires CONFIRM_DEBUG_CONTINUATION=1" >&2; exit 64; }
+    NODES=256; QOS=debug; TIME_LIMIT=02:00:00; TRAIN_MINUTES=105
     RUN_ID=${RUN_ID:-e97-4b-fresh-w2048-r2}
     ;;
-  *) echo "MODE must be smoke, rung, probe_b2, probe_b4, probe_b5, probe_b6, probe_b8, bootstrap, or production" >&2; exit 64;;
+  production|production_6h)
+    [[ ${CONFIRM_PRODUCTION:-0} == 1 ]] || { echo "production requires CONFIRM_PRODUCTION=1" >&2; exit 64; }
+    NODES=256; QOS=normal; TIME_LIMIT=06:00:00; TRAIN_MINUTES=345
+    RUN_ID=${RUN_ID:-e97-4b-fresh-w2048-r2}
+    ;;
+  production_4h)
+    [[ ${CONFIRM_PRODUCTION:-0} == 1 ]] || { echo "production requires CONFIRM_PRODUCTION=1" >&2; exit 64; }
+    NODES=256; QOS=normal; TIME_LIMIT=04:00:00; TRAIN_MINUTES=225
+    RUN_ID=${RUN_ID:-e97-4b-fresh-w2048-r2}
+    ;;
+  production_8h)
+    [[ ${CONFIRM_PRODUCTION:-0} == 1 ]] || { echo "production requires CONFIRM_PRODUCTION=1" >&2; exit 64; }
+    NODES=256; QOS=normal; TIME_LIMIT=08:00:00; TRAIN_MINUTES=465
+    RUN_ID=${RUN_ID:-e97-4b-fresh-w2048-r2}
+    ;;
+  *) echo "invalid MODE" >&2; exit 64;;
 esac
 PARTITION=batch
 WORLD_SIZE=$((NODES * 8))
@@ -62,8 +77,8 @@ mkdir -p "$BASE"/{authority,payloads,runs} "$RUN_DIR"/{identity,logs,terminal}
 CORPUS_RECEIPT="$BASE/authority/commapile-mainmix-v0.1-sha256.json"
 asset_hashes=$(sha256sum "$CONFIG_REL" "$PAYLOAD_REL" "$COLLECTOR_REL" train.py \
   scripts/frontier/activate_emender_frontier.sh scripts/frontier/frontier_runtime_env.sh)
-payload_digest=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
-  "$SOURCE_SHA" "$MODE" "$NODES" "$PARTITION" "$QOS" "$asset_hashes" \
+payload_digest=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+  "$SOURCE_SHA" "$MODE" "$NODES" "$PARTITION" "$QOS" "$TIME_LIMIT" "${TRAIN_MINUTES:-0}" "$asset_hashes" \
   | sha256sum | awk '{print $1}')
 payload_root="$BASE/payloads/$payload_digest"
 repo_exact="$payload_root/repo"
@@ -86,7 +101,7 @@ payload_id=$(sbatch --parsable --no-requeue --signal=B:TERM@300 \
   -A bif148 -p "$PARTITION" -q "$QOS" -J "e97-4b-${MODE}" -N"$NODES" -t "$TIME_LIMIT" \
   --ntasks-per-node=8 --cpus-per-task=7 --gpus-per-task=1 --gpu-bind=closest \
   --output="$RUN_DIR/logs/sbatch-%j.out" --error="$RUN_DIR/logs/sbatch-%j.err" \
-  --export=ALL,REPO="$repo_exact",RUN_ID="$RUN_ID",RUN_DIR="$RUN_DIR",RUN_MODE="$MODE",CONFIG="$repo_exact/$CONFIG_REL",CORPUS_RECEIPT="$CORPUS_RECEIPT",EXPECTED_NODES="$NODES",EXPECTED_WORLD_SIZE="$WORLD_SIZE",EXPECTED_PARTITION="$PARTITION",EXPECTED_QOS="$QOS",EXPECTED_TIME_LIMIT="$TIME_LIMIT" \
+  --export=ALL,REPO="$repo_exact",RUN_ID="$RUN_ID",RUN_DIR="$RUN_DIR",RUN_MODE="$MODE",TRAIN_MINUTES="${TRAIN_MINUTES:-0}",CONFIG="$repo_exact/$CONFIG_REL",CORPUS_RECEIPT="$CORPUS_RECEIPT",EXPECTED_NODES="$NODES",EXPECTED_WORLD_SIZE="$WORLD_SIZE",EXPECTED_PARTITION="$PARTITION",EXPECTED_QOS="$QOS",EXPECTED_TIME_LIMIT="$TIME_LIMIT" \
   "$repo_exact/$PAYLOAD_REL")
 
 queued="$RUN_DIR/identity/squeue-${payload_id}-queued.txt"
@@ -102,7 +117,7 @@ grep -F "|$PARTITION|$QOS|" "$queued" >/dev/null || {
 collector_id=$(sbatch --parsable --no-requeue -A bif148 -p batch -q normal -N1 -t 00:10:00 \
   --dependency="afterany:$payload_id" -J e97-4b-collector \
   --output="$RUN_DIR/logs/collector-%j.out" --error="$RUN_DIR/logs/collector-%j.err" \
-  --export=ALL,PAYLOAD_JOB_ID="$payload_id",RUN_DIR="$RUN_DIR",EXPECTED_PARTITION="$PARTITION",EXPECTED_QOS="$QOS" \
+  --export=ALL,PAYLOAD_JOB_ID="$payload_id",RUN_DIR="$RUN_DIR",REPO="$repo_exact",EXPECTED_WORLD_SIZE="$WORLD_SIZE",EXPECTED_PARTITION="$PARTITION",EXPECTED_QOS="$QOS" \
   "$repo_exact/$COLLECTOR_REL")
 
 record="$RUN_DIR/identity/submission-${payload_id}.json"
