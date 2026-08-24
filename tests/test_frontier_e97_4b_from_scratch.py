@@ -15,8 +15,10 @@ def test_frontier_4b_config_preserves_shape_budget_and_local_merge_work():
     assert cfg["target_parameters"] == 4_045_972_080
     assert cfg["production_nodes"] == 256
     assert cfg["production_tasks_per_node"] == 8
-    assert cfg["production_walltime"] == "06:05:00"
-    assert cfg["bootstrap_smoke_steps"] == 512
+    assert cfg["production_walltime"] == "06:00:00"
+    assert cfg["production_train_minutes"] == 345
+    assert cfg["bootstrap_smoke_walltime"] == "00:20:00"
+    assert cfg["bootstrap_smoke_steps"] == 256
     train = cfg["training"]
     assert train["batch_size_per_rank"] == 1
     assert train["global_tokens_per_step"] == 256 * 8 * 1 * 2048
@@ -35,10 +37,13 @@ def test_frontier_4b_payload_is_fixed_world_counter_sampled_and_fail_stop():
     assert "--sampler_data_world_size \"$EXPECTED_WORLD_SIZE\"" in text
     assert "--kill-on-bad-exit=1" in text
     assert "--offload_schedulefree_state" not in text
+    assert "rung authority is fixed at 4 nodes / 32 ranks" in text
     assert "bootstrap authority is fixed at 256 nodes / 2048 ranks" in text
     assert "production authority is fixed at 256 nodes / 2048 ranks" in text
     assert "EXPECTED_CORPUS_SHA" in text
     assert "sha256sum \"$DATA\"" not in text
+    assert 'TRITON_CACHE_DIR=/tmp/e97-4b-${SLURM_JOB_ID}-${SLURM_PROCID}' in text
+    assert 'rm -rf "$TRITON_CACHE_DIR"' in text
     assert "--gradient_checkpoint_group_size 2" in text
     assert "--diloco_outer_optimizer avg" in text
     assert "--no-requeue" in text
@@ -48,10 +53,12 @@ def test_frontier_4b_payload_is_fixed_world_counter_sampled_and_fail_stop():
 
 def test_frontier_4b_submitter_is_immutable_attended_and_records_both_queue_fields():
     text = SUBMIT.read_text()
+    assert 'CONFIRM_RUNG:-0' in text
     assert 'CONFIRM_BOOTSTRAP:-0' in text
     assert 'CONFIRM_PRODUCTION:-0' in text
-    assert 'NODES=256; QOS=debug; TIME_LIMIT=00:30:00' in text
-    assert 'NODES=256; QOS=normal; TIME_LIMIT=06:05:00' in text
+    assert 'NODES=4; QOS=debug; TIME_LIMIT=00:20:00' in text
+    assert 'NODES=256; QOS=debug; TIME_LIMIT=00:20:00' in text
+    assert 'NODES=256; QOS=normal; TIME_LIMIT=06:00:00' in text
     assert 'CONFIRM_RESUME:-0' in text
     assert 'SOURCE_SHA=$(git rev-parse HEAD)' in text
     assert 'ORIGIN_MAIN_SHA=$(git rev-parse origin/main)' in text

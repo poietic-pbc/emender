@@ -9,7 +9,9 @@ submission not yet claimed.
   4,045,972,080 parameters.
 * BF16 fused E97, Schedule-Free AdamW, LR
   `0.00047431158698290157`, weight decay 0.01, clip 1.0.
-* Production fixed world: 256 nodes x 8 GCDs = 2,048 ranks.
+* Production fixed world: 256 nodes x 8 GCDs = 2,048 ranks. Every rank uses a
+  private node-local Triton cache keyed by job and global rank; job 5337283
+  proved that a shared home-directory Triton cache races and fails at this scale.
 * Batch one per rank, context 2,048: 4,194,304 aggregate accepted tokens per
   optimizer step.
 * Target: 19,293 optimizer steps / 80,920,707,072 accepted tokens, just above
@@ -30,20 +32,20 @@ batch LR scaling: the inner Schedule-Free LR remains
 
 ## Budget model
 
-The scheduler-derived balance on 2026-08-24 was 3,220.56 node-hours. One exact
-256-node 30-minute bootstrap costs at most 128 node-hours. Two 256-node 6:05
-normal allocations cost at most 3,114.67 node-hours, so the complete maximum
-envelope is 3,242.67 and is not authorized as a blind fixed pair. Instead the
-first production epoch is attended and the continuation wall time is sized
-from actual bootstrap/epoch accounting. The nominal two-epoch envelope uses
-about 350 productive minutes per job and requires an effective cadence no worse
-than about 2.18 seconds per update; the bootstrap gate is <=2.15 seconds per
-update.
+After failed job 5337283, the scheduler-derived balance on 2026-08-24 is about
+3,170.14 node-hours. The revised maximum envelope is 1.33 node-hours for a
+four-node 20-minute cache/model rung, 85.33 for an exact 256-node 20-minute
+bootstrap, and 3,072 for two 256-node six-hour normal allocations: 3,158.67
+node-hours, leaving about 11.47 before small collectors. Production uses 345
+productive minutes per job with a ten-minute final-checkpoint margin. The
+bootstrap gate remains <=2.15 effective seconds per update.
 
-The 30-minute bootstrap is useful training, not a throwaway canary: if and only
-if its exact-source fixed-world gates pass, its 512-step / 2,147,483,648-token
-checkpoint becomes the genesis training authority and counts toward the 20
-accepted tokens/parameter target.
+The 20-minute 256-node bootstrap is useful training, not a throwaway canary: if
+and only if its exact-source fixed-world gates pass, its step-256 /
+1,073,741,824-token checkpoint becomes the genesis training authority and
+counts toward the 20 accepted tokens/parameter target. The four-node rung has a
+different sampler world and is qualification-only; its checkpoint is never
+promoted into the production lineage.
 
 ## Data and restart authority
 
@@ -89,21 +91,28 @@ claimed (ADR-003 fixed-world authority; NDP02 is retired/incompatible here).
 ## Required live ladder
 
 1. Pull the immutable origin commit on Frontier.
-2. Submit `MODE=bootstrap CONFIRM_BOOTSTRAP=1` for exactly 256 nodes / 2,048
-   ranks / 30 minutes under `Partition=batch`, `QOS=debug`.
-3. Require eight fused guards, finite loss/gradients, <=2.15 effective seconds
-   per update, measured peak HBM, four successful K128 consensuses, two atomic
-   ~24 GB checkpoints, and reloadable sampler/optimizer metadata.
-4. Promote the step-512 checkpoint only after terminal `Partition` and `QOS`
+2. Submit `MODE=rung CONFIRM_RUNG=1` for exactly four nodes / 32 ranks / 20
+   minutes. Require private rank-local Triton caches, finite training, one K128
+   consensus, safe HBM, and a reloadable step-256 checkpoint. Do not promote it.
+3. Only after that rung passes, submit `MODE=bootstrap CONFIRM_BOOTSTRAP=1` for
+   exactly 256 nodes / 2,048 ranks / 20 minutes under `batch/debug`.
+4. Require eight fused guards, finite loss/gradients, <=2.15 effective seconds
+   per update, measured peak HBM, two successful K128 consensuses, one atomic
+   ~24 GB checkpoint, and reloadable sampler/optimizer metadata.
+5. Promote the step-256 checkpoint only after terminal `Partition` and `QOS`
    evidence, exact accepted-token accounting, and checkpoint integrity review.
-5. Add and locally qualify bounded same-allocation restart and node-local
+6. Add and locally qualify bounded same-allocation restart and node-local
    checkpoint staging before production authorization.
-6. Submit one attended `MODE=production CONFIRM_PRODUCTION=1 CONFIRM_RESUME=1`
+7. Submit one attended `MODE=production CONFIRM_PRODUCTION=1 CONFIRM_RESUME=1`
    epoch under `Partition=batch`, `QOS=normal` for the stable 256-node run id.
-7. Inspect actual accounting, throughput, loss, and checkpoint authority before
+8. Inspect actual accounting, throughput, loss, and checkpoint authority before
    sizing any continuation. No automatic scheduler resubmission or chain.
 
 ## Current limitation
 
-No live 4B Frontier bootstrap has passed yet. Repository readiness is not
-Frontier execution evidence.
+Job 5337283 reached initialization and fused warmup but failed before the first
+optimizer update because 2,048 ranks concurrently mutated the shared
+`~/.triton/cache` temporary directory. It published no checkpoint and commits
+no tokens. The rank-private cache repair must pass the four-node rung before a
+replacement 256-node bootstrap. Repository readiness is not Frontier execution
+evidence.

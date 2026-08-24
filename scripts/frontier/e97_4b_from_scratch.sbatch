@@ -118,6 +118,12 @@ CORPUS_SHA=$EXPECTED_CORPUS_SHA
 if [[ "$RUN_MODE" == smoke ]]; then
   TARGET_STEPS=${SMOKE_STEPS:-4}; DILOCO_K=${SMOKE_DILOCO_K:-4}; SAVE_EVERY=$DILOCO_K
   LOG_EVERY=1; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=300
+elif [[ "$RUN_MODE" == rung ]]; then
+  [[ "$EXPECTED_NODES" == 4 && "$EXPECTED_WORLD_SIZE" == 32 ]] || {
+    echo "rung authority is fixed at 4 nodes / 32 ranks" >&2; exit 64;
+  }
+  TARGET_STEPS=$BOOTSTRAP_STEPS
+  LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=300
 elif [[ "$RUN_MODE" == bootstrap ]]; then
   [[ "$EXPECTED_NODES" == 256 && "$EXPECTED_WORLD_SIZE" == 2048 ]] || {
     echo "bootstrap authority is fixed at 256 nodes / 2048 ranks" >&2; exit 64;
@@ -129,9 +135,9 @@ elif [[ "$RUN_MODE" == production ]]; then
     echo "production authority is fixed at 256 nodes / 2048 ranks" >&2; exit 64;
   }
   LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=${TRAIN_MINUTES:-$PRODUCTION_TRAIN_MINUTES}
-  FINAL_MARGIN_SECONDS=900
+  FINAL_MARGIN_SECONDS=600
 else
-  echo "RUN_MODE must be smoke, bootstrap, or production" >&2; exit 64
+  echo "RUN_MODE must be smoke, rung, bootstrap, or production" >&2; exit 64
 fi
 (( SAVE_EVERY % DILOCO_K == 0 )) || { echo "checkpoint cadence is not K-aligned" >&2; exit 64; }
 
@@ -191,7 +197,7 @@ setsid srun --exact --kill-on-bad-exit=1 --wait=60 \
   -N"$EXPECTED_NODES" -n"$EXPECTED_WORLD_SIZE" --ntasks-per-node=8 \
   --cpus-per-task=7 --gpus-per-task=1 --gpu-bind=closest \
   --export=ALL,MASTER_ADDR="$MASTER_ADDR",MASTER_PORT="$MASTER_PORT" \
-  bash -lc 'source "$REPO/scripts/frontier/frontier_runtime_env.sh"; frontier_activate_emender_conda_env; frontier_assert_emender_conda_env; frontier_require_requested_rccl_net_plugin "4B child rank ${SLURM_PROCID}" >/dev/null; export RANK=$SLURM_PROCID WORLD_SIZE=$SLURM_NTASKS LOCAL_RANK=0; exec "$PYTHON_BIN" -u train.py "$@"' \
+  bash -lc 'source "$REPO/scripts/frontier/frontier_runtime_env.sh"; frontier_activate_emender_conda_env; frontier_assert_emender_conda_env; frontier_require_requested_rccl_net_plugin "4B child rank ${SLURM_PROCID}" >/dev/null; export RANK=$SLURM_PROCID WORLD_SIZE=$SLURM_NTASKS LOCAL_RANK=0; export TRITON_CACHE_DIR=/tmp/e97-4b-${SLURM_JOB_ID}-${SLURM_PROCID}; rm -rf "$TRITON_CACHE_DIR"; mkdir -p "$TRITON_CACHE_DIR"; exec "$PYTHON_BIN" -u train.py "$@"' \
   bash "${ARGS[@]}" > "$RUN_DIR/logs/train-${SLURM_JOB_ID}.out" \
   2> "$RUN_DIR/logs/train-${SLURM_JOB_ID}.err" &
 CHILD_PID=$!

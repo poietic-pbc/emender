@@ -17,17 +17,22 @@ case "$MODE" in
     NODES=${NODES:-1}; QOS=debug; TIME_LIMIT=02:00:00
     RUN_ID=${RUN_ID:-e97-4b-smoke-$(date -u +%Y%m%dT%H%M%SZ)}
     ;;
+  rung)
+    [[ ${CONFIRM_RUNG:-0} == 1 ]] || { echo "rung requires CONFIRM_RUNG=1" >&2; exit 64; }
+    NODES=4; QOS=debug; TIME_LIMIT=00:20:00
+    RUN_ID=${RUN_ID:-e97-4b-rung-4n-$(date -u +%Y%m%dT%H%M%SZ)}
+    ;;
   bootstrap)
     [[ ${CONFIRM_BOOTSTRAP:-0} == 1 ]] || { echo "bootstrap requires CONFIRM_BOOTSTRAP=1" >&2; exit 64; }
-    NODES=256; QOS=debug; TIME_LIMIT=00:30:00
-    RUN_ID=${RUN_ID:-e97-4b-fresh-w2048}
+    NODES=256; QOS=debug; TIME_LIMIT=00:20:00
+    RUN_ID=${RUN_ID:-e97-4b-fresh-w2048-r2}
     ;;
   production)
     [[ ${CONFIRM_PRODUCTION:-0} == 1 ]] || { echo "production requires CONFIRM_PRODUCTION=1" >&2; exit 64; }
-    NODES=256; QOS=normal; TIME_LIMIT=06:05:00
-    RUN_ID=${RUN_ID:-e97-4b-fresh-w2048}
+    NODES=256; QOS=normal; TIME_LIMIT=06:00:00
+    RUN_ID=${RUN_ID:-e97-4b-fresh-w2048-r2}
     ;;
-  *) echo "MODE must be smoke, bootstrap, or production" >&2; exit 64;;
+  *) echo "MODE must be smoke, rung, bootstrap, or production" >&2; exit 64;;
 esac
 PARTITION=batch
 WORLD_SIZE=$((NODES * 8))
