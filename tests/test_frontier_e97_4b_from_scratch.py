@@ -19,7 +19,7 @@ def test_frontier_4b_config_preserves_shape_budget_and_local_merge_work():
     assert cfg["production_train_minutes"] == 345
     assert cfg["debug_continuation_walltime"] == "02:00:00"
     assert cfg["debug_continuation_train_minutes"] == 105
-    assert cfg["bootstrap_smoke_walltime"] == "00:20:00"
+    assert cfg["bootstrap_smoke_walltime"] == "00:30:00"
     assert cfg["bootstrap_smoke_steps"] == 50
     train = cfg["training"]
     assert train["batch_size_per_rank"] == 5
@@ -53,6 +53,10 @@ def test_frontier_4b_payload_is_fixed_world_counter_sampled_and_fail_stop():
     assert "sha256sum \"$DATA\"" not in text
     assert 'TRITON_CACHE_DIR=/tmp/e97-4b-${SLURM_JOB_ID}-${SLURM_PROCID}' in text
     assert 'rm -rf "$TRITON_CACHE_DIR"' in text
+    assert '--walltime_check_every 8' in text
+    assert 'requesting graceful final checkpoint' in text
+    assert '.final_checkpoint_request' in text
+    assert 'kill -TERM -- "-$CHILD_PID"' not in text
     cfg = json.loads(CONFIG.read_text())
     assert cfg["training"]["gradient_checkpointing"] is False
     assert "--gradient_checkpointing" not in text
@@ -75,7 +79,8 @@ def test_frontier_4b_submitter_is_immutable_attended_and_records_both_queue_fiel
     assert 'CONFIRM_PRODUCTION:-0' in text
     assert 'CONFIRM_DEBUG_CONTINUATION:-0' in text
     assert 'NODES=4; QOS=debug; TIME_LIMIT=00:20:00' in text
-    assert 'NODES=256; QOS=debug; TIME_LIMIT=00:20:00' in text
+    assert 'NODES=256; QOS=debug; TIME_LIMIT=00:30:00' in text
+    assert 'e97-4b-fresh-w2048-r3' in text
     assert 'NODES=256; QOS=debug; TIME_LIMIT=02:00:00; TRAIN_MINUTES=105' in text
     assert 'NODES=256; QOS=normal; TIME_LIMIT=04:00:00; TRAIN_MINUTES=225' in text
     assert 'NODES=256; QOS=normal; TIME_LIMIT=06:00:00; TRAIN_MINUTES=345' in text

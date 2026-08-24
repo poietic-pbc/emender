@@ -184,7 +184,7 @@ ARGS=(
  --optimizer schedulefree --seed 42 --lr "$LR" --weight_decay 0.01 --warmup_steps 0
  --steps "$TARGET_STEPS" --timer_after_compile_warmup --compile_warmup_steps 1
  --log_every "$LOG_EVERY" --save_every "$SAVE_EVERY" --keep_checkpoints 3
- --walltime_final_checkpoint_margin_seconds "$FINAL_MARGIN_SECONDS" --walltime_check_every 40
+ --walltime_final_checkpoint_margin_seconds "$FINAL_MARGIN_SECONDS" --walltime_check_every 8
  --distributed_health_check_every 40
  --diloco --diloco_k "$DILOCO_K" --diloco_outer_optimizer avg
  --diloco_outer_lr 1.0 --diloco_outer_beta 0.0 --diloco_export_basis x --diloco_island_size 1
@@ -214,10 +214,14 @@ CHILD_PID=""
 STOP_REQUESTED=0
 forward_stop() {
   STOP_REQUESTED=1
-  echo "[e97-4b] batch signal received; forwarding TERM to child process group" >&2
-  if [[ -n "$CHILD_PID" ]] && kill -0 "$CHILD_PID" 2>/dev/null; then
-    kill -TERM -- "-$CHILD_PID" 2>/dev/null || kill -TERM "$CHILD_PID" 2>/dev/null || true
-  fi
+  # Signalling srun cancels every task before train.py can merge and publish.
+  # Instead publish the same atomic shared stop request that train.py polls at
+  # collective-safe boundaries. Slurm retains the hard allocation deadline.
+  local request="$RUN_DIR/train/.final_checkpoint_request"
+  local tmp="${request}.batch-${SLURM_JOB_ID}.tmp"
+  echo "[e97-4b] batch signal received; requesting graceful final checkpoint" >&2
+  printf '{"reason":"batch_signal","step":-1,"time":%s}\n' "$(date +%s)" > "$tmp"
+  mv -f "$tmp" "$request"
 }
 trap forward_stop TERM HUP INT
 set +e

@@ -30,28 +30,28 @@ case "$MODE" in
     ;;
   bootstrap)
     [[ ${CONFIRM_BOOTSTRAP:-0} == 1 ]] || { echo "bootstrap requires CONFIRM_BOOTSTRAP=1" >&2; exit 64; }
-    NODES=256; QOS=debug; TIME_LIMIT=00:20:00
-    RUN_ID=${RUN_ID:-e97-4b-fresh-w2048-r2}
+    NODES=256; QOS=debug; TIME_LIMIT=00:30:00
+    RUN_ID=${RUN_ID:-e97-4b-fresh-w2048-r3}
     ;;
   debug_continuation)
     [[ ${CONFIRM_DEBUG_CONTINUATION:-0} == 1 ]] || { echo "debug continuation requires CONFIRM_DEBUG_CONTINUATION=1" >&2; exit 64; }
     NODES=256; QOS=debug; TIME_LIMIT=02:00:00; TRAIN_MINUTES=105
-    RUN_ID=${RUN_ID:-e97-4b-fresh-w2048-r2}
+    RUN_ID=${RUN_ID:-e97-4b-fresh-w2048-r3}
     ;;
   production|production_6h)
     [[ ${CONFIRM_PRODUCTION:-0} == 1 ]] || { echo "production requires CONFIRM_PRODUCTION=1" >&2; exit 64; }
     NODES=256; QOS=normal; TIME_LIMIT=06:00:00; TRAIN_MINUTES=345
-    RUN_ID=${RUN_ID:-e97-4b-fresh-w2048-r2}
+    RUN_ID=${RUN_ID:-e97-4b-fresh-w2048-r3}
     ;;
   production_4h)
     [[ ${CONFIRM_PRODUCTION:-0} == 1 ]] || { echo "production requires CONFIRM_PRODUCTION=1" >&2; exit 64; }
     NODES=256; QOS=normal; TIME_LIMIT=04:00:00; TRAIN_MINUTES=225
-    RUN_ID=${RUN_ID:-e97-4b-fresh-w2048-r2}
+    RUN_ID=${RUN_ID:-e97-4b-fresh-w2048-r3}
     ;;
   production_8h)
     [[ ${CONFIRM_PRODUCTION:-0} == 1 ]] || { echo "production requires CONFIRM_PRODUCTION=1" >&2; exit 64; }
     NODES=256; QOS=normal; TIME_LIMIT=08:00:00; TRAIN_MINUTES=465
-    RUN_ID=${RUN_ID:-e97-4b-fresh-w2048-r2}
+    RUN_ID=${RUN_ID:-e97-4b-fresh-w2048-r3}
     ;;
   *) echo "invalid MODE" >&2; exit 64;;
 esac

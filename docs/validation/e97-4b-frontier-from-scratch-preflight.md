@@ -30,14 +30,14 @@ inner Schedule-Free LR remains `0.00047431158698290157`.
 
 After failed job 5337283, the scheduler-derived balance on 2026-08-24 was
 about 3,170.14 node-hours; the subsequent small qualification jobs consumed
-only a few additional node-hours. An exact 256-node 20-minute bootstrap costs
-85.33 node-hours, a two-hour debug continuation costs 512, and a six-hour
+only a few additional node-hours. The diagnosed 256-node 30-minute replacement
+bootstrap costs 128 node-hours, a two-hour debug continuation costs 512, and a six-hour
 normal continuation costs 1,536. The attended plan is bootstrap -> inspect ->
 two-hour debug resume -> inspect -> a measured four-, six-, or eight-hour
 normal resume, stopping at the configured 100B token ceiling. No job is chained
 or automatically resubmitted after failure.
 
-The 20-minute 256-node bootstrap is useful training, not a throwaway canary: if
+The 30-minute 256-node bootstrap is useful training, not a throwaway canary: if
 and only if its exact-source fixed-world gates pass, its step-50 /
 1,048,576,000-token checkpoint becomes the genesis training authority and
 counts toward the 100B target. The four-node rung has a
@@ -98,7 +98,7 @@ or unclaimed for this fixed-world production path.
    merge/checkpoint time, and sustained tokens/s/GCD.
 4. Commit the selected production B/K/step/checkpoint geometry.
 5. Submit `MODE=bootstrap CONFIRM_BOOTSTRAP=1` for exactly 256 nodes / 2,048
-   ranks / 20 minutes under `batch/debug`.
+   ranks / 30 minutes under `batch/debug`.
 6. Require eight fused guards, finite loss/gradients, measured peak HBM, two
    successful selected-K consensuses, one atomic ~24 GB checkpoint, and
    reloadable sampler/optimizer metadata. Throughput must project inside the
@@ -148,5 +148,16 @@ completed cleanly at 1,711 tokens/s/GCD mean ordinary throughput, two merges in
 step-50 checkpoint. B5 was selected because it is only 1.9% slower than B6 in
 ordinary updates, used about 4.5 GiB less live allocation, and had higher
 observed merge-inclusive throughput. Its 7.77 GiB reserve-based headroom still
-requires the exact 2,048-rank bootstrap; repository readiness is not Frontier
-execution evidence.
+requires the exact 2,048-rank bootstrap.
+
+First exact-world attempt 5338307 used `Partition=batch`, `QOS=debug` and proved
+28 finite B5 updates plus one 2,048-rank K25 merge in 63.7 seconds, with ordinary
+throughput reaching 1,767 tokens/s/GCD. It failed at the scheduler five-minute
+warning after 14m50s: the batch trap forwarded TERM to `srun`, which cancelled
+all ranks before finalization. No checkpoint was published, so its implied
+587,202,560 processed tokens are not committed. The failed `r2` directory is
+retained as evidence. The repair uses a new immutable `r3` lineage, requests 30
+minutes so step 50 can complete before the warning, polls the internal walltime
+controller every eight steps, and translates a batch signal into an atomic
+`.final_checkpoint_request` rather than signalling `srun`. Repository readiness
+is not replacement execution evidence.
