@@ -78,54 +78,60 @@ readarray -t cfg < <("$PYTHON_BIN" - "$CONFIG" <<'PY'
 import json,sys
 v=json.load(open(sys.argv[1],encoding='utf-8'))
 print(v['data']['path']); print(v['data']['expected_bytes'])
-print(v['data']['tokenizer_sha256']); print(v['training']['learning_rate'])
-print(v['target_steps']); print(v['training']['batch_size_per_rank'])
-print(v['training']['diloco_k']); print(v['training']['save_every'])
+print(v['data']['tokenizer_sha256']); print(v['data']['corpus_sha256'])
+print(v['training']['learning_rate']); print(v['target_steps'])
+print(v['training']['batch_size_per_rank']); print(v['training']['diloco_k'])
+print(v['training']['save_every']); print(v['bootstrap_smoke_steps'])
+print(v['production_train_minutes'])
 PY
 )
 DATA=${cfg[0]}; EXPECTED_DATA_BYTES=${cfg[1]}; TOKENIZER_SHA256=${cfg[2]}
-LR=${cfg[3]}; TARGET_STEPS=${cfg[4]}; BATCH_SIZE=${cfg[5]}
-DILOCO_K=${cfg[6]}; SAVE_EVERY=${cfg[7]}
+EXPECTED_CORPUS_SHA=${cfg[3]}; LR=${cfg[4]}; TARGET_STEPS=${cfg[5]}
+BATCH_SIZE=${cfg[6]}; DILOCO_K=${cfg[7]}; SAVE_EVERY=${cfg[8]}
+BOOTSTRAP_STEPS=${cfg[9]}; PRODUCTION_TRAIN_MINUTES=${cfg[10]}
 [[ -r "$DATA" && $(stat -c %s "$DATA") == "$EXPECTED_DATA_BYTES" ]] || {
   echo "reviewed corpus path/size mismatch" >&2; exit 66;
 }
 
-# The counter sampler requires a true corpus content digest. Compute it once in
-# the allocation and atomically cache a receipt; later attended epochs reuse it.
+# The physical 1 TB object already has a reviewed SHA-256 authority. Materialize
+# that immutable identity without spending the bootstrap allocation rehashing it.
 CORPUS_RECEIPT=${CORPUS_RECEIPT:-$RUN_DIR/authority/corpus-sha256.json}
 mkdir -p "$(dirname "$CORPUS_RECEIPT")"
-if [[ ! -e "$CORPUS_RECEIPT" ]]; then
-  echo "[data-authority] hashing $EXPECTED_DATA_BYTES corpus bytes"
-  corpus_sha=$(sha256sum "$DATA" | awk '{print $1}')
-  "$PYTHON_BIN" - "$CORPUS_RECEIPT" "$DATA" "$EXPECTED_DATA_BYTES" "$corpus_sha" <<'PY'
+"$PYTHON_BIN" - "$CORPUS_RECEIPT" "$DATA" "$EXPECTED_DATA_BYTES" "$EXPECTED_CORPUS_SHA" <<'PY'
 import json,os,sys,tempfile,time
 path,data,size,digest=sys.argv[1:]
 if len(digest)!=64 or any(c not in '0123456789abcdef' for c in digest): raise SystemExit(66)
-v={'schema':'emender-corpus-sha256-v1','path':data,'bytes':int(size),'sha256':digest,'created_unix':time.time()}
-fd,tmp=tempfile.mkstemp(prefix='.corpus.',suffix='.tmp',dir=os.path.dirname(path),text=True)
-with os.fdopen(fd,'w') as f:
- json.dump(v,f,sort_keys=True); f.write('\n'); f.flush(); os.fsync(f.fileno())
-os.replace(tmp,path)
+expected={'schema':'emender-corpus-sha256-v1','path':data,'bytes':int(size),'sha256':digest}
+if os.path.exists(path):
+ v=json.load(open(path,encoding='utf-8'))
+ if any(v.get(k)!=value for k,value in expected.items()): raise SystemExit(66)
+else:
+ v={**expected,'created_unix':time.time(),'authority':'committed-reviewed-physical-sha256'}
+ fd,tmp=tempfile.mkstemp(prefix='.corpus.',suffix='.tmp',dir=os.path.dirname(path),text=True)
+ with os.fdopen(fd,'w') as f:
+  json.dump(v,f,sort_keys=True); f.write('\n'); f.flush(); os.fsync(f.fileno())
+ os.replace(tmp,path)
+print(digest)
 PY
-fi
-CORPUS_SHA=$("$PYTHON_BIN" - "$CORPUS_RECEIPT" "$DATA" "$EXPECTED_DATA_BYTES" <<'PY'
-import json,sys
-v=json.load(open(sys.argv[1])); assert v['schema']=='emender-corpus-sha256-v1'
-assert v['path']==sys.argv[2] and v['bytes']==int(sys.argv[3]); d=v['sha256']
-assert len(d)==64 and all(c in '0123456789abcdef' for c in d); print(d)
-PY
-)
+CORPUS_SHA=$EXPECTED_CORPUS_SHA
 
 if [[ "$RUN_MODE" == smoke ]]; then
   TARGET_STEPS=${SMOKE_STEPS:-4}; DILOCO_K=${SMOKE_DILOCO_K:-4}; SAVE_EVERY=$DILOCO_K
-  LOG_EVERY=1; TRAIN_MINUTES=0
-elif [[ "$RUN_MODE" == production ]]; then
-  [[ "$EXPECTED_NODES" == 32 && "$EXPECTED_WORLD_SIZE" == 256 ]] || {
-    echo "production authority is fixed at 32 nodes / 256 ranks" >&2; exit 64;
+  LOG_EVERY=1; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=300
+elif [[ "$RUN_MODE" == bootstrap ]]; then
+  [[ "$EXPECTED_NODES" == 256 && "$EXPECTED_WORLD_SIZE" == 2048 ]] || {
+    echo "bootstrap authority is fixed at 256 nodes / 2048 ranks" >&2; exit 64;
   }
-  LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=${TRAIN_MINUTES:-360}
+  TARGET_STEPS=$BOOTSTRAP_STEPS
+  LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=300
+elif [[ "$RUN_MODE" == production ]]; then
+  [[ "$EXPECTED_NODES" == 256 && "$EXPECTED_WORLD_SIZE" == 2048 ]] || {
+    echo "production authority is fixed at 256 nodes / 2048 ranks" >&2; exit 64;
+  }
+  LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=${TRAIN_MINUTES:-$PRODUCTION_TRAIN_MINUTES}
+  FINAL_MARGIN_SECONDS=900
 else
-  echo "RUN_MODE must be smoke or production" >&2; exit 64
+  echo "RUN_MODE must be smoke, bootstrap, or production" >&2; exit 64
 fi
 (( SAVE_EVERY % DILOCO_K == 0 )) || { echo "checkpoint cadence is not K-aligned" >&2; exit 64; }
 
@@ -144,7 +150,7 @@ ARGS=(
  --optimizer schedulefree --seed 42 --lr "$LR" --weight_decay 0.01 --warmup_steps 0
  --steps "$TARGET_STEPS" --timer_after_compile_warmup --compile_warmup_steps 1
  --log_every "$LOG_EVERY" --save_every "$SAVE_EVERY" --keep_checkpoints 3
- --walltime_final_checkpoint_margin_seconds 900 --walltime_check_every 40
+ --walltime_final_checkpoint_margin_seconds "$FINAL_MARGIN_SECONDS" --walltime_check_every 40
  --distributed_health_check_every 40
  --diloco --diloco_k "$DILOCO_K" --diloco_outer_optimizer avg
  --diloco_outer_lr 1.0 --diloco_outer_beta 0.0 --diloco_export_basis x --diloco_island_size 1

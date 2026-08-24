@@ -23,4 +23,13 @@ grep -E "^${PAYLOAD_JOB_ID}\|${EXPECTED_PARTITION}\|${EXPECTED_QOS}\|" "$out" >/
   echo "terminal accounting lacks exact Partition/QOS evidence" >&2; exit 66;
 }
 sha256sum "$out" > "$out.sha256"
+latest="$RUN_DIR/train/latest.pt"
+if [[ -L "$latest" && -r "$latest" ]]; then
+  checkpoint=$(readlink -f "$latest")
+  checkpoint_record="$RUN_DIR/terminal/checkpoint-${PAYLOAD_JOB_ID}.sha256"
+  sha256sum "$checkpoint" > "$checkpoint_record.tmp"
+  mv "$checkpoint_record.tmp" "$checkpoint_record"
+  stat -c 'path=%n bytes=%s mtime=%Y' "$checkpoint" \
+    > "$RUN_DIR/terminal/checkpoint-${PAYLOAD_JOB_ID}.stat"
+fi
 cat "$out"

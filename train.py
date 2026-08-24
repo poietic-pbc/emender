@@ -2428,7 +2428,13 @@ def diloco_merge(core_model, optimizer, args, world_size, outer_state,
             if not group_params:
                 continue
 
-            if getattr(optimizer, 'state_storage', None) == 'pinned-cpu':
+            bounded_staging = int(
+                getattr(args, 'diloco_merge_bucket_numel', 0) or 0) > 0
+            if (getattr(optimizer, 'state_storage', None) == 'pinned-cpu'
+                    or bounded_staging):
+                # A configured bucket is a peak-memory contract, not merely a
+                # collective chunk size. Avoid first flattening the complete x
+                # state (7.5 GiB for E97 4B) before slicing it into buckets.
                 _diloco_allreduce_average_tensor_list_(
                     [p.data for p in group_params], world_size, args, 'sf_x',
                     staging_device=group_params[0].device,
@@ -2448,8 +2454,9 @@ def diloco_merge(core_model, optimizer, args, world_size, outer_state,
             z_params = [p for p in group_params if 'z' in optimizer.state.get(p, {})]
             if z_params:
                 z_tensors = [optimizer.state[p]['z'] for p in z_params]
-                if any(z.device != z_params[index].device
-                       for index, z in enumerate(z_tensors)):
+                if (bounded_staging
+                        or any(z.device != z_params[index].device
+                               for index, z in enumerate(z_tensors))):
                     _diloco_allreduce_average_tensor_list_(
                         z_tensors, world_size, args, 'sf_z',
                         staging_device=z_params[0].device,

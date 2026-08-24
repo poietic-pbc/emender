@@ -17,13 +17,17 @@ case "$MODE" in
     NODES=${NODES:-1}; QOS=debug; TIME_LIMIT=02:00:00
     RUN_ID=${RUN_ID:-e97-4b-smoke-$(date -u +%Y%m%dT%H%M%SZ)}
     ;;
+  bootstrap)
+    [[ ${CONFIRM_BOOTSTRAP:-0} == 1 ]] || { echo "bootstrap requires CONFIRM_BOOTSTRAP=1" >&2; exit 64; }
+    NODES=256; QOS=debug; TIME_LIMIT=00:30:00
+    RUN_ID=${RUN_ID:-e97-4b-fresh-w2048}
+    ;;
   production)
     [[ ${CONFIRM_PRODUCTION:-0} == 1 ]] || { echo "production requires CONFIRM_PRODUCTION=1" >&2; exit 64; }
-    NODES=${NODES:-32}; QOS=normal; TIME_LIMIT=07:00:00
-    [[ "$NODES" == 32 ]] || { echo "production is fixed at 32 nodes" >&2; exit 64; }
-    RUN_ID=${RUN_ID:-e97-4b-fresh-w256}
+    NODES=256; QOS=normal; TIME_LIMIT=06:05:00
+    RUN_ID=${RUN_ID:-e97-4b-fresh-w2048}
     ;;
-  *) echo "MODE must be smoke or production" >&2; exit 64;;
+  *) echo "MODE must be smoke, bootstrap, or production" >&2; exit 64;;
 esac
 PARTITION=batch
 WORLD_SIZE=$((NODES * 8))

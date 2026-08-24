@@ -3,13 +3,15 @@
   "account": "bif148",
   "partition": "batch",
   "production_qos": "normal",
-  "production_nodes": 32,
+  "production_nodes": 256,
   "production_tasks_per_node": 8,
-  "production_walltime": "07:00:00",
-  "production_train_minutes": 360,
+  "production_walltime": "06:05:00",
+  "production_train_minutes": 350,
+  "bootstrap_smoke_walltime": "00:30:00",
+  "bootstrap_smoke_steps": 512,
   "target_parameters": 4045972080,
   "target_tokens": 80919441600,
-  "target_steps": 38586,
+  "target_steps": 19293,
   "model": {
     "level": "E97",
     "dim": 3840,
@@ -21,9 +23,9 @@
     "gate_activation": "silu"
   },
   "training": {
-    "batch_size_per_rank": 4,
+    "batch_size_per_rank": 1,
     "context_size": 2048,
-    "global_tokens_per_step": 2097152,
+    "global_tokens_per_step": 4194304,
     "optimizer": "schedulefree",
     "learning_rate": 0.00047431158698290157,
     "weight_decay": 0.01,
@@ -31,8 +33,8 @@
     "gradient_checkpoint_group_size": 2,
     "projection_chunk_size": 512,
     "loss_chunk_size": 128,
-    "diloco_k": 256,
-    "save_every": 1024,
+    "diloco_k": 128,
+    "save_every": 256,
     "keep_checkpoints": 3,
     "diloco_outer_optimizer": "avg",
     "diloco_merge_topology": "hierarchical",
@@ -46,7 +48,8 @@
     "tokenizer_sha256": "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069",
     "sampler_schema": "emender-byte-window-counter-v1",
     "sampler_key": 42,
-    "corpus_sha256_authority": "computed_once_in_batch_and_atomically_cached"
+    "corpus_sha256": "44f4c33471e0d49686453d81850380532bdc4a09e15c71b78eb8ec2d71bbcaa9",
+    "corpus_sha256_authority": "docs/s3-audit/delete-transferred-spinozans/commapile_mainmix_v0.1_1tb.txt.manifest.json"
   },
   "claims": {
     "fixed_world_only": true,
