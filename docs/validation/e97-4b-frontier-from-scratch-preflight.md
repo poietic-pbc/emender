@@ -101,11 +101,18 @@ claimed (ADR-003 fixed-world authority; NDP02 is retired/incompatible here).
    ~24 GB checkpoint, and reloadable sampler/optimizer metadata.
 5. Promote the step-256 checkpoint only after terminal `Partition` and `QOS`
    evidence, exact accepted-token accounting, and checkpoint integrity review.
-6. Add and locally qualify bounded same-allocation restart and node-local
-   checkpoint staging before production authorization.
-7. Submit one attended `MODE=production CONFIRM_PRODUCTION=1 CONFIRM_RESUME=1`
+6. Use two-node probes to select batch size while preserving DiLoCo work:
+   B2/K64/save128/target128, then B4/K32/save64/target64, and B8/K16/save32/
+   target32 only if B4 retains safe HBM. Each arm processes 256 local samples,
+   performs two merges, keeps LR unchanged, and uses a separate non-promotable
+   run identity. Select from finite loss, peak reserved HBM, merge/checkpoint
+   time, and sustained tokens/s/GCD; target approximately 2,000 tokens/s/GCD.
+7. Commit the selected production B/K/step/checkpoint geometry, then add and
+   locally qualify bounded same-allocation restart and node-local checkpoint
+   staging before production authorization.
+8. Submit one attended `MODE=production CONFIRM_PRODUCTION=1 CONFIRM_RESUME=1`
    epoch under `Partition=batch`, `QOS=normal` for the stable 256-node run id.
-8. Inspect actual accounting, throughput, loss, and checkpoint authority before
+9. Inspect actual accounting, throughput, loss, and checkpoint authority before
    sizing any continuation. No automatic scheduler resubmission or chain.
 
 ## Current limitation
@@ -123,10 +130,12 @@ It nevertheless exited 137: after the periodic checkpoint completed, generic
 finalization redundantly began serializing the same state a second time and the
 five-minute scheduler warning killed that duplicate temporary write. The
 checkpoint is qualification-only and the rung is not a clean pass. Source now
-reuses a completed same-step periodic checkpoint during finalization. The rung
-also disproved the required <=2.15-second cadence while leaving over 22 GiB HBM
-headroom, so the replacement removes redundant outer layer-group activation
-checkpointing while retaining the recurrent kernel checkpoint interval and
-projection/loss chunking. That changed payload requires one clean four-node
-memory/performance rerun before a replacement 256-node bootstrap. Repository
-readiness is not Frontier execution evidence.
+reuses a completed same-step periodic checkpoint during finalization. Clean
+replacement rung 5337548 completed 256 updates, two approximately six-second
+K128 merges, periodic-checkpoint reuse, and terminal exit zero. Removing outer
+layer-group checkpointing improved ordinary throughput from about 720 to
+840--860 tokens/s/GCD while peak allocated remained 38,738 MiB and peak reserved
+rose modestly to about 42,682 MiB. This is memory-safe but still below the
+throughput target, so the two-node B2/B4/conditional-B8 sweep above gates the
+replacement 256-node bootstrap. Repository readiness is not Frontier execution
+evidence.

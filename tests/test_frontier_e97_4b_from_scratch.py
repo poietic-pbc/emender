@@ -38,6 +38,10 @@ def test_frontier_4b_payload_is_fixed_world_counter_sampled_and_fail_stop():
     assert "--kill-on-bad-exit=1" in text
     assert "--offload_schedulefree_state" not in text
     assert "rung authority is fixed at 4 nodes / 32 ranks" in text
+    assert "batch probes are fixed at 2 nodes / 16 ranks" in text
+    assert 'BATCH_SIZE=${RUN_MODE#probe_b}' in text
+    assert 'DILOCO_K=$((128 / BATCH_SIZE))' in text
+    assert 'SAVE_EVERY=$((2 * DILOCO_K))' in text
     assert "bootstrap authority is fixed at 256 nodes / 2048 ranks" in text
     assert "production authority is fixed at 256 nodes / 2048 ranks" in text
     assert "EXPECTED_CORPUS_SHA" in text
@@ -59,6 +63,9 @@ def test_frontier_4b_payload_is_fixed_world_counter_sampled_and_fail_stop():
 def test_frontier_4b_submitter_is_immutable_attended_and_records_both_queue_fields():
     text = SUBMIT.read_text()
     assert 'CONFIRM_RUNG:-0' in text
+    assert 'CONFIRM_BATCH_PROBE:-0' in text
+    assert 'probe_b2|probe_b4|probe_b8)' in text
+    assert 'NODES=2; QOS=debug; TIME_LIMIT=00:20:00' in text
     assert 'CONFIRM_BOOTSTRAP:-0' in text
     assert 'CONFIRM_PRODUCTION:-0' in text
     assert 'NODES=4; QOS=debug; TIME_LIMIT=00:20:00' in text
