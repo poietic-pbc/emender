@@ -3565,6 +3565,10 @@ def train(args):
 
     stopped_nonfinite = False
     stop_training = False
+    # Rank zero records a completed periodic publication so finalization can
+    # reuse it instead of serializing the same 24 GB state twice at a target
+    # step. Non-head ranks never consult this value.
+    last_periodic_checkpoint_step = None
 
     # Prefetch data function
     import threading
@@ -3920,6 +3924,7 @@ def train(args):
                         ),
                     }, diloco_bootstrap_metadata),
                 )
+                last_periodic_checkpoint_step = step
                 print(f"  >>> saved checkpoint: {ckpt_path.name} "
                       f"step={step} total_tokens={total_tokens}")
                 if args.optimizer == 'schedulefree':
@@ -4004,6 +4009,13 @@ def train(args):
         pass
     elif stopped_nonfinite:
         print("Skipping final checkpoint because training stopped on non-finite loss/gradient.")
+    elif last_periodic_checkpoint_step == step:
+        # The periodic save completed atomically at this exact consensus step.
+        # Re-serializing model+optimizer state here wastes minutes and can race
+        # the scheduler warning, as observed in Frontier job 5337432.
+        print(f"[final-checkpoint] REUSE periodic checkpoint at step={step} "
+              f"latest={output_dir / 'latest.pt'} total_tokens={total_tokens} "
+              f"model_variant={args._model_variant}", flush=True)
     else:
         if args.optimizer == 'schedulefree':
             optimizer.eval()  # Get averaged params for final checkpoint

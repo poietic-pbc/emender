@@ -166,7 +166,7 @@ ARGS=(
  --level E97 --params 4b --dim 3840 --depth 18 --n_heads 60 --n_state 64
  --expansion 1.0 --use_gate 1 --gate_activation silu --linear_state 0
  --use_write_gate 0 --e88_value_residual 0 --mlp_ratio 2.5 --mlp_multiple 64 --use_triton 1
- --gradient_checkpointing --gradient_checkpoint_group_size 2 --checkpoint_interval 16
+ --checkpoint_interval 16
  --projection_chunk_size 512 --loss_chunk_size 128 --grad_accum 1 --grad_clip 1.0
  --output "$RUN_DIR" --exact_output_dir "$RUN_DIR/train"
 )

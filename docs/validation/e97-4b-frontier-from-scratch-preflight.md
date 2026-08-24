@@ -113,6 +113,20 @@ claimed (ADR-003 fixed-world authority; NDP02 is retired/incompatible here).
 Job 5337283 reached initialization and fused warmup but failed before the first
 optimizer update because 2,048 ranks concurrently mutated the shared
 `~/.triton/cache` temporary directory. It published no checkpoint and commits
-no tokens. The rank-private cache repair must pass the four-node rung before a
-replacement 256-node bootstrap. Repository readiness is not Frontier execution
-evidence.
+no tokens. Four-node repair rung 5337432 then proved rank-private caches, 256
+finite updates, two K128 merges (5.3 and 6.2 seconds), about 2.84 seconds per ordinary update,
+38,738 MiB peak allocated / 41,386 MiB reserved HBM, and one atomic
+24,276,098,175-byte step-256
+checkpoint with SHA-256
+`a24f91b1ef2fc553decc517382b849d2362dee780f0a76e74289d183f6bcb9e0`.
+It nevertheless exited 137: after the periodic checkpoint completed, generic
+finalization redundantly began serializing the same state a second time and the
+five-minute scheduler warning killed that duplicate temporary write. The
+checkpoint is qualification-only and the rung is not a clean pass. Source now
+reuses a completed same-step periodic checkpoint during finalization. The rung
+also disproved the required <=2.15-second cadence while leaving over 22 GiB HBM
+headroom, so the replacement removes redundant outer layer-group activation
+checkpointing while retaining the recurrent kernel checkpoint interval and
+projection/loss chunking. That changed payload requires one clean four-node
+memory/performance rerun before a replacement 256-node bootstrap. Repository
+readiness is not Frontier execution evidence.

@@ -44,11 +44,16 @@ def test_frontier_4b_payload_is_fixed_world_counter_sampled_and_fail_stop():
     assert "sha256sum \"$DATA\"" not in text
     assert 'TRITON_CACHE_DIR=/tmp/e97-4b-${SLURM_JOB_ID}-${SLURM_PROCID}' in text
     assert 'rm -rf "$TRITON_CACHE_DIR"' in text
-    assert "--gradient_checkpoint_group_size 2" in text
+    cfg = json.loads(CONFIG.read_text())
+    assert cfg["training"]["gradient_checkpointing"] is False
+    assert "--gradient_checkpointing" not in text
     assert "--diloco_outer_optimizer avg" in text
     assert "--no-requeue" in text
     assert "squeue-${SLURM_JOB_ID}-running.txt" in text
     assert "|$EXPECTED_PARTITION|$EXPECTED_QOS|" in text
+    train_text = (ROOT / "train.py").read_text()
+    assert "last_periodic_checkpoint_step == step" in train_text
+    assert "[final-checkpoint] REUSE periodic checkpoint" in train_text
 
 
 def test_frontier_4b_submitter_is_immutable_attended_and_records_both_queue_fields():
