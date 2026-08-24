@@ -22,7 +22,7 @@ case "$MODE" in
     NODES=4; QOS=debug; TIME_LIMIT=00:20:00
     RUN_ID=${RUN_ID:-e97-4b-rung-4n-$(date -u +%Y%m%dT%H%M%SZ)}
     ;;
-  probe_b2|probe_b4|probe_b6|probe_b8)
+  probe_b2|probe_b4|probe_b5|probe_b6|probe_b8)
     [[ ${CONFIRM_BATCH_PROBE:-0} == 1 ]] || { echo "batch probe requires CONFIRM_BATCH_PROBE=1" >&2; exit 64; }
     NODES=2; QOS=debug; TIME_LIMIT=00:20:00
     batch=${MODE#probe_b}
@@ -38,7 +38,7 @@ case "$MODE" in
     NODES=256; QOS=normal; TIME_LIMIT=06:00:00
     RUN_ID=${RUN_ID:-e97-4b-fresh-w2048-r2}
     ;;
-  *) echo "MODE must be smoke, rung, probe_b2, probe_b4, probe_b6, probe_b8, bootstrap, or production" >&2; exit 64;;
+  *) echo "MODE must be smoke, rung, probe_b2, probe_b4, probe_b5, probe_b6, probe_b8, bootstrap, or production" >&2; exit 64;;
 esac
 PARTITION=batch
 WORLD_SIZE=$((NODES * 8))

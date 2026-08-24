@@ -64,7 +64,7 @@ def test_frontier_4b_submitter_is_immutable_attended_and_records_both_queue_fiel
     text = SUBMIT.read_text()
     assert 'CONFIRM_RUNG:-0' in text
     assert 'CONFIRM_BATCH_PROBE:-0' in text
-    assert 'probe_b2|probe_b4|probe_b6|probe_b8)' in text
+    assert 'probe_b2|probe_b4|probe_b5|probe_b6|probe_b8)' in text
     assert 'NODES=2; QOS=debug; TIME_LIMIT=00:20:00' in text
     assert 'CONFIRM_BOOTSTRAP:-0' in text
     assert 'CONFIRM_PRODUCTION:-0' in text

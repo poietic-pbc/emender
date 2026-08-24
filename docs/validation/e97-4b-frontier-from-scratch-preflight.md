@@ -95,10 +95,11 @@ claimed (ADR-003 fixed-world authority; NDP02 is retired/incompatible here).
    minutes. Require private rank-local Triton caches, finite training, one K128
    consensus, safe HBM, and a reloadable step-256 checkpoint. Do not promote it.
 3. Use two-node probes to select batch size while preserving DiLoCo work:
-   B2/K64/save128/target128, then B4/K32/save64/target64, a bounded
-   B6/K21/save42/target42 interpolation, and B8/K16/save32/target32 only as an
-   HBM boundary probe. The power-of-two arms process 256 local samples; B6
-   processes 252 (126 per merge, within 1.6% of the 128-sample authority).
+   B2/K64/save128/target128, then B4/K32/save64/target64, bounded
+   B5/K25/save50/target50 and B6/K21/save42/target42 interpolations, and
+   B8/K16/save32/target32 only as an HBM boundary probe. The power-of-two arms
+   process 256 local samples; B5 processes 250 and B6 processes 252 (125/126
+   per merge, within 2.4% of the 128-sample authority).
    Every arm performs two merges, keeps LR unchanged, and uses a separate
    non-promotable run identity. Select from finite loss, peak reserved HBM,
    merge/checkpoint time, and sustained tokens/s/GCD.
@@ -145,6 +146,9 @@ tokens/s/GCD with 41,526 MiB reserved. B4 job 5337831 completed at roughly
 20.7--23.3 seconds. B8 job 5337929 failed before its first optimizer update:
 58.96 GiB was allocated and 3.92 GiB reserved-but-unallocated, leaving no room
 for a 100--198 MiB request. B8 is rejected even if allocator tuning could make
-it barely fit. One B6 interpolation probe is justified to find the safe
-throughput maximum before the replacement 256-node bootstrap. Repository
-readiness is not Frontier execution evidence.
+it barely fit. B6 job 5337975 completed cleanly at roughly 1,690--1,775
+tokens/s/GCD, but 52,380 MiB allocated / 58,208 MiB reserved leaves only about
+5.8 GiB physical headroom before the larger 256-node communicator topology;
+B6 is therefore not production-safe as measured. One final B5 interpolation
+probe is justified to target at least 8--10 GiB headroom while improving on B4
+throughput. Repository readiness is not Frontier execution evidence.
