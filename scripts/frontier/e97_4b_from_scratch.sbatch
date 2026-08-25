@@ -140,6 +140,14 @@ elif [[ "$RUN_MODE" =~ ^probe_b(2|4|5|6|8)$ ]]; then
   SAVE_EVERY=$((2 * DILOCO_K))
   TARGET_STEPS=$SAVE_EVERY
   LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=300
+elif [[ "$RUN_MODE" == matched_clock_32n ]]; then
+  [[ "$EXPECTED_NODES" == 32 && "$EXPECTED_WORLD_SIZE" == 256 ]] || {
+    echo "matched-clock qualification is fixed at 32 nodes / 256 ranks" >&2; exit 64;
+  }
+  [[ "$BATCH_SIZE" == 1 && "$DILOCO_K" == 32 && "$SAVE_EVERY" == 256 && "$TARGET_STEPS" == 2048 ]] || {
+    echo "matched-clock config must be B1/K32/save256/2048 steps" >&2; exit 64;
+  }
+  LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=300
 elif [[ "$RUN_MODE" == bootstrap ]]; then
   [[ "$EXPECTED_NODES" == 256 && "$EXPECTED_WORLD_SIZE" == 2048 ]] || {
     echo "bootstrap authority is fixed at 256 nodes / 2048 ranks" >&2; exit 64;

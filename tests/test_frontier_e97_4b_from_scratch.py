@@ -4,6 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "configs/frontier/e97_4b_from_scratch.json"
+MATCHED_CLOCK_CONFIG = ROOT / "configs/frontier/e97_4b_matched_clock_32n.json"
 PAYLOAD = ROOT / "scripts/frontier/e97_4b_from_scratch.sbatch"
 SUBMIT = ROOT / "scripts/frontier/submit_e97_4b_from_scratch.sh"
 COLLECTOR = ROOT / "scripts/frontier/e97_4b_from_scratch_collector.sh"
@@ -33,6 +34,22 @@ def test_frontier_4b_config_preserves_shape_budget_and_local_merge_work():
     assert cfg["target_tokens"] == 100_000_000_000
 
 
+def test_frontier_4b_matched_clock_config_matches_lambda_aggregate_clock():
+    cfg = json.loads(MATCHED_CLOCK_CONFIG.read_text())
+    train = cfg["training"]
+    assert cfg["schema"] == "emender-e97-4b-frontier-matched-clock-32n-v1"
+    assert cfg["production_nodes"] == 32
+    assert cfg["production_tasks_per_node"] == 8
+    assert train["batch_size_per_rank"] == 1
+    assert train["global_tokens_per_step"] == 8 * 32 * 1 * 2048 == 8 * 32 * 2048
+    assert train["diloco_k"] == 32
+    assert train["global_tokens_per_step"] * train["diloco_k"] == 16_777_216
+    assert train["save_every"] == 256
+    assert cfg["target_steps"] == 2048
+    assert cfg["target_tokens"] == cfg["target_steps"] * train["global_tokens_per_step"]
+    assert cfg["claims"]["qualification_only"] is True
+
+
 def test_frontier_4b_payload_is_fixed_world_counter_sampled_and_fail_stop():
     text = PAYLOAD.read_text()
     assert "source scripts/frontier/activate_emender_frontier.sh" in text
@@ -45,6 +62,8 @@ def test_frontier_4b_payload_is_fixed_world_counter_sampled_and_fail_stop():
     assert 'BATCH_SIZE=${RUN_MODE#probe_b}' in text
     assert 'DILOCO_K=$((128 / BATCH_SIZE))' in text
     assert 'SAVE_EVERY=$((2 * DILOCO_K))' in text
+    assert "matched-clock qualification is fixed at 32 nodes / 256 ranks" in text
+    assert "matched-clock config must be B1/K32/save256/2048 steps" in text
     assert "bootstrap authority is fixed at 256 nodes / 2048 ranks" in text
     assert "production authority is fixed at 256 nodes / 2048 ranks" in text
     assert "debug continuation authority is fixed at 256 nodes / 2048 ranks" in text
@@ -75,6 +94,9 @@ def test_frontier_4b_submitter_is_immutable_attended_and_records_both_queue_fiel
     assert 'CONFIRM_BATCH_PROBE:-0' in text
     assert 'probe_b2|probe_b4|probe_b5|probe_b6|probe_b8)' in text
     assert 'NODES=2; QOS=debug; TIME_LIMIT=00:20:00' in text
+    assert 'CONFIRM_MATCHED_CLOCK:-0' in text
+    assert 'NODES=32; QOS=debug; TIME_LIMIT=02:00:00' in text
+    assert 'configs/frontier/e97_4b_matched_clock_32n.json' in text
     assert 'CONFIRM_BOOTSTRAP:-0' in text
     assert 'CONFIRM_PRODUCTION:-0' in text
     assert 'CONFIRM_DEBUG_CONTINUATION:-0' in text
@@ -103,3 +125,4 @@ def test_frontier_4b_collector_records_terminal_partition_and_qos():
     assert 'checkpoint-${PAYLOAD_JOB_ID}.reload.json' in text
     assert "mmap=True" in text
     assert "checkpoint token clock mismatch" in text
+    assert 'CONFIG=${CONFIG:-$REPO/configs/frontier/e97_4b_from_scratch.json}' in text

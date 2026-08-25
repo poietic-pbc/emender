@@ -13,6 +13,8 @@ set -euo pipefail
 : "${EXPECTED_QOS:?expected QoS is required}"
 : "${REPO:?immutable submitted checkout is required}"
 : "${EXPECTED_WORLD_SIZE:?expected world size is required}"
+CONFIG=${CONFIG:-$REPO/configs/frontier/e97_4b_from_scratch.json}
+[[ "$CONFIG" == "$REPO"/* && -r "$CONFIG" ]] || { echo "collector config must be readable immutable source" >&2; exit 66; }
 mkdir -p "$RUN_DIR/terminal"
 out="$RUN_DIR/terminal/payload-${PAYLOAD_JOB_ID}.sacct"
 for _ in $(seq 1 30); do
@@ -35,7 +37,7 @@ if [[ -L "$latest" && -r "$latest" ]]; then
     > "$RUN_DIR/terminal/checkpoint-${PAYLOAD_JOB_ID}.stat"
   source "$REPO/scripts/frontier/activate_emender_frontier.sh"
   : "${EMENDER_PYTHON:?canonical activation did not set EMENDER_PYTHON}"
-  "$EMENDER_PYTHON" - "$checkpoint" "$REPO/configs/frontier/e97_4b_from_scratch.json" \
+  "$EMENDER_PYTHON" - "$checkpoint" "$CONFIG" \
     "$EXPECTED_WORLD_SIZE" "$RUN_DIR/terminal/checkpoint-${PAYLOAD_JOB_ID}.reload.json" <<'PY'
 import json, os, sys, tempfile
 import torch

@@ -28,6 +28,12 @@ case "$MODE" in
     batch=${MODE#probe_b}
     RUN_ID=${RUN_ID:-e97-4b-probe-b${batch}-2n-$(date -u +%Y%m%dT%H%M%SZ)}
     ;;
+  matched_clock_32n)
+    [[ ${CONFIRM_MATCHED_CLOCK:-0} == 1 ]] || { echo "matched-clock test requires CONFIRM_MATCHED_CLOCK=1" >&2; exit 64; }
+    NODES=32; QOS=debug; TIME_LIMIT=02:00:00
+    CONFIG_REL=configs/frontier/e97_4b_matched_clock_32n.json
+    RUN_ID=${RUN_ID:-e97-4b-matched-clock-w256-b1k32-$(date -u +%Y%m%dT%H%M%SZ)}
+    ;;
   bootstrap)
     [[ ${CONFIRM_BOOTSTRAP:-0} == 1 ]] || { echo "bootstrap requires CONFIRM_BOOTSTRAP=1" >&2; exit 64; }
     NODES=256; QOS=debug; TIME_LIMIT=00:30:00
@@ -117,7 +123,7 @@ grep -F "|$PARTITION|$QOS|" "$queued" >/dev/null || {
 collector_id=$(sbatch --parsable --no-requeue -A bif148 -p batch -q normal -N1 -t 00:10:00 \
   --dependency="afterany:$payload_id" -J e97-4b-collector \
   --output="$RUN_DIR/logs/collector-%j.out" --error="$RUN_DIR/logs/collector-%j.err" \
-  --export=ALL,PAYLOAD_JOB_ID="$payload_id",RUN_DIR="$RUN_DIR",REPO="$repo_exact",EXPECTED_WORLD_SIZE="$WORLD_SIZE",EXPECTED_PARTITION="$PARTITION",EXPECTED_QOS="$QOS" \
+  --export=ALL,PAYLOAD_JOB_ID="$payload_id",RUN_DIR="$RUN_DIR",REPO="$repo_exact",CONFIG="$repo_exact/$CONFIG_REL",EXPECTED_WORLD_SIZE="$WORLD_SIZE",EXPECTED_PARTITION="$PARTITION",EXPECTED_QOS="$QOS" \
   "$repo_exact/$COLLECTOR_REL")
 
 record="$RUN_DIR/identity/submission-${payload_id}.json"
