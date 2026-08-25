@@ -1,7 +1,8 @@
 # E97 4B Frontier from-scratch preflight
 
-Status: B5/K25 selected and committed for an attended productive 256-node
-bootstrap; no 2,048-rank checkpoint or production continuation is yet claimed.
+Status: historical preflight. The B5/K25 exact-world bootstrap passed, but the
+from-scratch strategy was stopped for extreme large-batch token inefficiency.
+See [`e97-4b-frontier-from-scratch-verdict.md`](e97-4b-frontier-from-scratch-verdict.md).
 
 ## Immutable training identity
 
