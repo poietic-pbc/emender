@@ -8,6 +8,7 @@ source scripts/frontier/activate_emender_frontier.sh
 : "${EMENDER_PYTHON:?canonical activation did not set EMENDER_PYTHON}"
 
 MODE=${MODE:-smoke}
+SEED_MODE=0
 BASE=${E97_4B_FRONTIER_BASE:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-4b-from-scratch}
 CONFIG_REL=configs/frontier/e97_4b_from_scratch.json
 PAYLOAD_REL=scripts/frontier/e97_4b_from_scratch.sbatch
@@ -30,11 +31,19 @@ case "$MODE" in
     ;;
   seed_import_32n_canary)
     [[ ${CONFIRM_SEED_IMPORT:-0} == 1 ]] || { echo "seed-import canary requires CONFIRM_SEED_IMPORT=1" >&2; exit 64; }
-    NODES=32; QOS=debug; TIME_LIMIT=01:00:00
+    NODES=32; QOS=debug; TIME_LIMIT=01:00:00; SEED_MODE=1
     CONFIG_REL=configs/frontier/e97_4b_seed_import_32n.json
     RUN_ID=${RUN_ID:-e97-4b-seed-import-w256-b1k32-r1}
     SEED_CHECKPOINT=${SEED_CHECKPOINT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-4b-imported-seeds/hf-8bf6f0e9241a3eb869676fdf6b92578ced8a6f00/checkpoints/step_012800_tokens_6710886400/checkpoint_step_012800_loss_2.8143.pt}
     SEED_SHA256=81fcc932e93df59a478e43b31afc5f0b310f58b8a5deab91a73e5be1a4925ed9
+    ;;
+  seed_continuation_32n_debug)
+    [[ ${CONFIRM_SEED_CONTINUATION:-0} == 1 ]] || { echo "seed continuation requires CONFIRM_SEED_CONTINUATION=1" >&2; exit 64; }
+    NODES=32; QOS=debug; TIME_LIMIT=02:00:00; SEED_MODE=1
+    CONFIG_REL=configs/frontier/e97_4b_seed_continuation_32n.json
+    RUN_ID=${RUN_ID:-e97-4b-seed-cont-w256-b1k32-r2}
+    SEED_CHECKPOINT=${SEED_CHECKPOINT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-4b-from-scratch/runs/e97-4b-seed-import-w256-b1k32-r1/train/checkpoint_step_013312_loss_2.7593.pt}
+    SEED_SHA256=fa7b53f8ea31ca177aac0bba6b1fd174a970d8d8db68314c96333efd80a50ade
     ;;
   matched_clock_32n)
     [[ ${CONFIRM_MATCHED_CLOCK:-0} == 1 ]] || { echo "matched-clock test requires CONFIRM_MATCHED_CLOCK=1" >&2; exit 64; }
@@ -80,7 +89,7 @@ ORIGIN_MAIN_SHA=$(git rev-parse origin/main)
 [[ "$SOURCE_SHA" == "$LOCAL_MAIN_SHA" && "$SOURCE_SHA" == "$ORIGIN_MAIN_SHA" ]] || {
   echo "submission requires HEAD == main == origin/main" >&2; exit 64;
 }
-if [[ "$MODE" == seed_import_32n_canary ]]; then
+if (( SEED_MODE == 1 )); then
   [[ -f "$SEED_CHECKPOINT" ]] || { echo "missing imported seed checkpoint" >&2; exit 66; }
   observed_seed_sha=$(sha256sum "$SEED_CHECKPOINT" | awk '{print $1}')
   [[ "$observed_seed_sha" == "$SEED_SHA256" ]] || { echo "imported seed SHA-256 mismatch" >&2; exit 66; }
@@ -103,7 +112,7 @@ if [[ -e "$RUN_DIR/train/latest.pt" || -L "$RUN_DIR/train/latest.pt" ]]; then
 fi
 
 mkdir -p "$BASE"/{authority,payloads,runs} "$RUN_DIR"/{identity,logs,terminal}
-if [[ "$MODE" == seed_import_32n_canary ]]; then
+if (( SEED_MODE == 1 )); then
   printf '%s  %s\n' "$SEED_SHA256" "$SEED_CHECKPOINT" > "$RUN_DIR/identity/imported-seed.sha256"
 fi
 CORPUS_RECEIPT="$BASE/authority/commapile-mainmix-v0.1-sha256.json"

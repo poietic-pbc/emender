@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "configs/frontier/e97_4b_from_scratch.json"
 MATCHED_CLOCK_CONFIG = ROOT / "configs/frontier/e97_4b_matched_clock_32n.json"
 SEED_IMPORT_CONFIG = ROOT / "configs/frontier/e97_4b_seed_import_32n.json"
+SEED_CONTINUATION_CONFIG = ROOT / "configs/frontier/e97_4b_seed_continuation_32n.json"
 PAYLOAD = ROOT / "scripts/frontier/e97_4b_from_scratch.sbatch"
 SUBMIT = ROOT / "scripts/frontier/submit_e97_4b_from_scratch.sh"
 COLLECTOR = ROOT / "scripts/frontier/e97_4b_from_scratch_collector.sh"
@@ -67,6 +68,20 @@ def test_frontier_4b_seed_import_config_binds_checkpoint_and_phase_clock():
     assert train["save_every"] == 256
 
 
+def test_frontier_4b_seed_continuation_preserves_world_and_adds_2048_updates():
+    cfg = json.loads(SEED_CONTINUATION_CONFIG.read_text())
+    train = cfg["training"]
+    parent = cfg["parent"]
+    assert cfg["production_nodes"] == 32
+    assert parent["step"] == 13312
+    assert parent["sha256"] == "fa7b53f8ea31ca177aac0bba6b1fd174a970d8d8db68314c96333efd80a50ade"
+    assert cfg["target_steps"] == parent["step"] + 2048 == 15360
+    assert cfg["target_tokens"] == parent["total_tokens"] + 2048 * train["global_tokens_per_step"]
+    assert train["batch_size_per_rank"] == 1
+    assert train["diloco_k"] == 32
+    assert cfg["claims"]["same_world_exact_continuation_from_parent"] is True
+
+
 def test_frontier_4b_payload_is_fixed_world_counter_sampled_and_fail_stop():
     text = PAYLOAD.read_text()
     assert "source scripts/frontier/activate_emender_frontier.sh" in text
@@ -80,6 +95,8 @@ def test_frontier_4b_payload_is_fixed_world_counter_sampled_and_fail_stop():
     assert 'DILOCO_K=$((128 / BATCH_SIZE))' in text
     assert 'SAVE_EVERY=$((2 * DILOCO_K))' in text
     assert "seed-import canary is fixed at 32 nodes / 256 ranks" in text
+    assert "seed continuation is fixed at 32 nodes / 256 ranks" in text
+    assert "seed continuation config must be B1/K32/save256/counter-v2/step15360" in text
     assert "seed-import canary requires an exact 512-step counter-v2 phase" in text
     assert "--sampler_transition_from_counter" in text
     assert "matched-clock qualification is fixed at 32 nodes / 256 ranks" in text
@@ -115,6 +132,8 @@ def test_frontier_4b_submitter_is_immutable_attended_and_records_both_queue_fiel
     assert 'probe_b2|probe_b4|probe_b5|probe_b6|probe_b8)' in text
     assert 'NODES=2; QOS=debug; TIME_LIMIT=00:20:00' in text
     assert 'CONFIRM_SEED_IMPORT:-0' in text
+    assert 'CONFIRM_SEED_CONTINUATION:-0' in text
+    assert 'configs/frontier/e97_4b_seed_continuation_32n.json' in text
     assert 'configs/frontier/e97_4b_seed_import_32n.json' in text
     assert 'imported seed SHA-256 mismatch' in text
     assert 'CONFIRM_MATCHED_CLOCK:-0' in text

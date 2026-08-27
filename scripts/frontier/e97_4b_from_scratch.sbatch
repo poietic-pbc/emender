@@ -162,6 +162,19 @@ elif [[ "$RUN_MODE" == seed_import_32n_canary ]]; then
     echo "seed-import canary requires a readable imported seed latest.pt" >&2; exit 65;
   }
   LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=300
+elif [[ "$RUN_MODE" == seed_continuation_32n_debug ]]; then
+  [[ "$EXPECTED_NODES" == 32 && "$EXPECTED_WORLD_SIZE" == 256 ]] || {
+    echo "seed continuation is fixed at 32 nodes / 256 ranks" >&2; exit 64;
+  }
+  [[ "$BATCH_SIZE" == 1 && "$DILOCO_K" == 32 && "$SAVE_EVERY" == 256 && \
+     "$SAMPLER_SCHEMA" == emender-byte-window-counter-v2 && \
+     "$TARGET_STEPS" == 15360 ]] || {
+    echo "seed continuation config must be B1/K32/save256/counter-v2/step15360" >&2; exit 64;
+  }
+  [[ -L "$RUN_DIR/train/latest.pt" && -r "$RUN_DIR/train/latest.pt" ]] || {
+    echo "seed continuation requires a readable parent latest.pt" >&2; exit 65;
+  }
+  LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=300
 elif [[ "$RUN_MODE" == matched_clock_32n ]]; then
   [[ "$EXPECTED_NODES" == 32 && "$EXPECTED_WORLD_SIZE" == 256 ]] || {
     echo "matched-clock qualification is fixed at 32 nodes / 256 ranks" >&2; exit 64;
