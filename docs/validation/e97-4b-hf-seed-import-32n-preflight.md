@@ -1,7 +1,8 @@
 # E97 4B Hugging Face seed import: 32-node canary preflight
 
-**Status:** attended one-hour debug-QoS canary authorized. No continuation is
-authorized by this preflight.
+**Status:** submitted as payload `5354034` with collector `5354035`. No
+continuation is authorized by this preflight. Immutable execution source:
+`51032a4cf4b1f3e78a3da4c5e084134f556b5dd0`.
 
 ## Immutable seed
 
