@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "configs/frontier/e97_4b_from_scratch.json"
 MATCHED_CLOCK_CONFIG = ROOT / "configs/frontier/e97_4b_matched_clock_32n.json"
+SEED_IMPORT_CONFIG = ROOT / "configs/frontier/e97_4b_seed_import_32n.json"
 PAYLOAD = ROOT / "scripts/frontier/e97_4b_from_scratch.sbatch"
 SUBMIT = ROOT / "scripts/frontier/submit_e97_4b_from_scratch.sh"
 COLLECTOR = ROOT / "scripts/frontier/e97_4b_from_scratch_collector.sh"
@@ -50,10 +51,26 @@ def test_frontier_4b_matched_clock_config_matches_lambda_aggregate_clock():
     assert cfg["claims"]["qualification_only"] is True
 
 
+def test_frontier_4b_seed_import_config_binds_checkpoint_and_phase_clock():
+    cfg = json.loads(SEED_IMPORT_CONFIG.read_text())
+    train = cfg["training"]
+    seed = cfg["seed"]
+    assert seed["sha256"] == "81fcc932e93df59a478e43b31afc5f0b310f58b8a5deab91a73e5be1a4925ed9"
+    assert seed["source_step"] == 12800
+    assert seed["source_total_tokens"] == 6_710_886_400
+    assert cfg["data"]["sampler_schema"] == "emender-byte-window-counter-v2"
+    assert cfg["data"]["sampler_stream_origin_accepted_tokens"] == seed["source_total_tokens"]
+    assert cfg["target_steps"] == seed["source_step"] + 512
+    assert cfg["target_tokens"] == seed["source_total_tokens"] + 512 * train["global_tokens_per_step"]
+    assert train["batch_size_per_rank"] == 1
+    assert train["diloco_k"] == 32
+    assert train["save_every"] == 256
+
+
 def test_frontier_4b_payload_is_fixed_world_counter_sampled_and_fail_stop():
     text = PAYLOAD.read_text()
     assert "source scripts/frontier/activate_emender_frontier.sh" in text
-    assert "--sampler_schema emender-byte-window-counter-v1" in text
+    assert '--sampler_schema "$SAMPLER_SCHEMA"' in text
     assert "--sampler_data_world_size \"$EXPECTED_WORLD_SIZE\"" in text
     assert "--kill-on-bad-exit=1" in text
     assert "--offload_schedulefree_state" not in text
@@ -62,6 +79,9 @@ def test_frontier_4b_payload_is_fixed_world_counter_sampled_and_fail_stop():
     assert 'BATCH_SIZE=${RUN_MODE#probe_b}' in text
     assert 'DILOCO_K=$((128 / BATCH_SIZE))' in text
     assert 'SAVE_EVERY=$((2 * DILOCO_K))' in text
+    assert "seed-import canary is fixed at 32 nodes / 256 ranks" in text
+    assert "seed-import canary requires an exact 512-step counter-v2 phase" in text
+    assert "--sampler_transition_from_counter" in text
     assert "matched-clock qualification is fixed at 32 nodes / 256 ranks" in text
     assert "matched-clock config must be B1/K32/save256/2048 steps" in text
     assert "bootstrap authority is fixed at 256 nodes / 2048 ranks" in text
@@ -94,6 +114,9 @@ def test_frontier_4b_submitter_is_immutable_attended_and_records_both_queue_fiel
     assert 'CONFIRM_BATCH_PROBE:-0' in text
     assert 'probe_b2|probe_b4|probe_b5|probe_b6|probe_b8)' in text
     assert 'NODES=2; QOS=debug; TIME_LIMIT=00:20:00' in text
+    assert 'CONFIRM_SEED_IMPORT:-0' in text
+    assert 'configs/frontier/e97_4b_seed_import_32n.json' in text
+    assert 'imported seed SHA-256 mismatch' in text
     assert 'CONFIRM_MATCHED_CLOCK:-0' in text
     assert 'NODES=32; QOS=debug; TIME_LIMIT=02:00:00' in text
     assert 'configs/frontier/e97_4b_matched_clock_32n.json' in text
@@ -125,4 +148,6 @@ def test_frontier_4b_collector_records_terminal_partition_and_qos():
     assert 'checkpoint-${PAYLOAD_JOB_ID}.reload.json' in text
     assert "mmap=True" in text
     assert "checkpoint token clock mismatch" in text
+    assert "checkpoint step disagrees with phase-relative sampler clock" in text
+    assert "missing or invalid sampler transition provenance" in text
     assert 'CONFIG=${CONFIG:-$REPO/configs/frontier/e97_4b_from_scratch.json}' in text

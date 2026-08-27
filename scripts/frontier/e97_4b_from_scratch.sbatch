@@ -89,13 +89,19 @@ print(v['training']['learning_rate']); print(v['target_steps'])
 print(v['training']['batch_size_per_rank']); print(v['training']['diloco_k'])
 print(v['training']['save_every']); print(v['bootstrap_smoke_steps'])
 print(v['production_train_minutes']); print(v['debug_continuation_train_minutes'])
+print(v['data']['sampler_schema']); print(v['data']['sampler_key'])
+print(v['data'].get('sampler_stream_origin_accepted_tokens', 0))
+print(v.get('seed', {}).get('source_step', 0))
+print(v.get('seed', {}).get('source_total_tokens', 0))
 PY
 )
 DATA=${cfg[0]}; EXPECTED_DATA_BYTES=${cfg[1]}; TOKENIZER_SHA256=${cfg[2]}
 EXPECTED_CORPUS_SHA=${cfg[3]}; LR=${cfg[4]}; TARGET_STEPS=${cfg[5]}
 BATCH_SIZE=${cfg[6]}; DILOCO_K=${cfg[7]}; SAVE_EVERY=${cfg[8]}
 BOOTSTRAP_STEPS=${cfg[9]}; PRODUCTION_TRAIN_MINUTES=${cfg[10]}
-DEBUG_CONTINUATION_TRAIN_MINUTES=${cfg[11]}
+DEBUG_CONTINUATION_TRAIN_MINUTES=${cfg[11]}; SAMPLER_SCHEMA=${cfg[12]}
+SAMPLER_KEY=${cfg[13]}; SAMPLER_STREAM_ORIGIN=${cfg[14]}
+SEED_SOURCE_STEP=${cfg[15]}; SEED_SOURCE_TOKENS=${cfg[16]}
 [[ -r "$DATA" && $(stat -c %s "$DATA") == "$EXPECTED_DATA_BYTES" ]] || {
   echo "reviewed corpus path/size mismatch" >&2; exit 66;
 }
@@ -139,6 +145,22 @@ elif [[ "$RUN_MODE" =~ ^probe_b(2|4|5|6|8)$ ]]; then
   DILOCO_K=$((128 / BATCH_SIZE))
   SAVE_EVERY=$((2 * DILOCO_K))
   TARGET_STEPS=$SAVE_EVERY
+  LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=300
+elif [[ "$RUN_MODE" == seed_import_32n_canary ]]; then
+  [[ "$EXPECTED_NODES" == 32 && "$EXPECTED_WORLD_SIZE" == 256 ]] || {
+    echo "seed-import canary is fixed at 32 nodes / 256 ranks" >&2; exit 64;
+  }
+  [[ "$BATCH_SIZE" == 1 && "$DILOCO_K" == 32 && "$SAVE_EVERY" == 256 ]] || {
+    echo "seed-import canary config must be B1/K32/save256" >&2; exit 64;
+  }
+  [[ "$SAMPLER_SCHEMA" == emender-byte-window-counter-v2 && \
+     "$SAMPLER_STREAM_ORIGIN" == "$SEED_SOURCE_TOKENS" && \
+     "$TARGET_STEPS" == $((SEED_SOURCE_STEP + 512)) ]] || {
+    echo "seed-import canary requires an exact 512-step counter-v2 phase" >&2; exit 64;
+  }
+  [[ -L "$RUN_DIR/train/latest.pt" && -r "$RUN_DIR/train/latest.pt" ]] || {
+    echo "seed-import canary requires a readable imported seed latest.pt" >&2; exit 65;
+  }
   LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=300
 elif [[ "$RUN_MODE" == matched_clock_32n ]]; then
   [[ "$EXPECTED_NODES" == 32 && "$EXPECTED_WORLD_SIZE" == 256 ]] || {
@@ -186,8 +208,8 @@ export NCCL_NET_PLUGIN=librccl-net.so NDM_DISTRIBUTED_INIT_TIMEOUT_SECONDS=240
 
 ARGS=(
  --data "$DATA" --tokenizer p50k_base --bf16 --batch_size "$BATCH_SIZE" --chunk_size 2048
- --sampler_schema emender-byte-window-counter-v1 --sampler_corpus_sha256 "$CORPUS_SHA"
- --sampler_tokenizer_sha256 "$TOKENIZER_SHA256" --sampler_key 42
+ --sampler_schema "$SAMPLER_SCHEMA" --sampler_corpus_sha256 "$CORPUS_SHA"
+ --sampler_tokenizer_sha256 "$TOKENIZER_SHA256" --sampler_key "$SAMPLER_KEY"
  --sampler_data_world_size "$EXPECTED_WORLD_SIZE"
  --optimizer schedulefree --seed 42 --lr "$LR" --weight_decay 0.01 --warmup_steps 0
  --steps "$TARGET_STEPS" --timer_after_compile_warmup --compile_warmup_steps 1
@@ -206,6 +228,9 @@ ARGS=(
  --projection_chunk_size 512 --loss_chunk_size 128 --grad_accum 1 --grad_clip 1.0
  --output "$RUN_DIR" --exact_output_dir "$RUN_DIR/train"
 )
+(( SAMPLER_STREAM_ORIGIN == 0 )) || \
+  ARGS+=(--sampler_stream_origin_accepted_tokens "$SAMPLER_STREAM_ORIGIN")
+[[ "$RUN_MODE" != seed_import_32n_canary ]] || ARGS+=(--sampler_transition_from_counter)
 (( TRAIN_MINUTES == 0 )) || ARGS+=(--train_minutes "$TRAIN_MINUTES")
 if [[ -L "$RUN_DIR/train/latest.pt" && -r "$RUN_DIR/train/latest.pt" ]]; then
   ARGS+=(--resume "$RUN_DIR/train/latest.pt")

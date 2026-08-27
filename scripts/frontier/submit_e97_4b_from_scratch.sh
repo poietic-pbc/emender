@@ -28,6 +28,14 @@ case "$MODE" in
     batch=${MODE#probe_b}
     RUN_ID=${RUN_ID:-e97-4b-probe-b${batch}-2n-$(date -u +%Y%m%dT%H%M%SZ)}
     ;;
+  seed_import_32n_canary)
+    [[ ${CONFIRM_SEED_IMPORT:-0} == 1 ]] || { echo "seed-import canary requires CONFIRM_SEED_IMPORT=1" >&2; exit 64; }
+    NODES=32; QOS=debug; TIME_LIMIT=01:00:00
+    CONFIG_REL=configs/frontier/e97_4b_seed_import_32n.json
+    RUN_ID=${RUN_ID:-e97-4b-seed-import-w256-b1k32-r1}
+    SEED_CHECKPOINT=${SEED_CHECKPOINT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-4b-imported-seeds/hf-8bf6f0e9241a3eb869676fdf6b92578ced8a6f00/checkpoints/step_012800_tokens_6710886400/checkpoint_step_012800_loss_2.8143.pt}
+    SEED_SHA256=81fcc932e93df59a478e43b31afc5f0b310f58b8a5deab91a73e5be1a4925ed9
+    ;;
   matched_clock_32n)
     [[ ${CONFIRM_MATCHED_CLOCK:-0} == 1 ]] || { echo "matched-clock test requires CONFIRM_MATCHED_CLOCK=1" >&2; exit 64; }
     NODES=32; QOS=debug; TIME_LIMIT=02:00:00
@@ -72,6 +80,21 @@ ORIGIN_MAIN_SHA=$(git rev-parse origin/main)
 [[ "$SOURCE_SHA" == "$LOCAL_MAIN_SHA" && "$SOURCE_SHA" == "$ORIGIN_MAIN_SHA" ]] || {
   echo "submission requires HEAD == main == origin/main" >&2; exit 64;
 }
+if [[ "$MODE" == seed_import_32n_canary ]]; then
+  [[ -f "$SEED_CHECKPOINT" ]] || { echo "missing imported seed checkpoint" >&2; exit 66; }
+  observed_seed_sha=$(sha256sum "$SEED_CHECKPOINT" | awk '{print $1}')
+  [[ "$observed_seed_sha" == "$SEED_SHA256" ]] || { echo "imported seed SHA-256 mismatch" >&2; exit 66; }
+  mkdir -p "$RUN_DIR/train"
+  if [[ -e "$RUN_DIR/train/latest.pt" || -L "$RUN_DIR/train/latest.pt" ]]; then
+    [[ -L "$RUN_DIR/train/latest.pt" && $(readlink -f "$RUN_DIR/train/latest.pt") == "$SEED_CHECKPOINT" ]] || {
+      echo "seed-import run already has a different latest authority" >&2; exit 65;
+    }
+  else
+    seed_link_tmp="$RUN_DIR/train/.latest.seed-import.$$.tmp"
+    ln -s "$SEED_CHECKPOINT" "$seed_link_tmp"
+    mv -f "$seed_link_tmp" "$RUN_DIR/train/latest.pt"
+  fi
+fi
 if [[ -e "$RUN_DIR/train/latest.pt" || -L "$RUN_DIR/train/latest.pt" ]]; then
   [[ -L "$RUN_DIR/train/latest.pt" && -r "$RUN_DIR/train/latest.pt" ]] || {
     echo "existing resume authority is not a readable symlink" >&2; exit 65;
@@ -80,6 +103,9 @@ if [[ -e "$RUN_DIR/train/latest.pt" || -L "$RUN_DIR/train/latest.pt" ]]; then
 fi
 
 mkdir -p "$BASE"/{authority,payloads,runs} "$RUN_DIR"/{identity,logs,terminal}
+if [[ "$MODE" == seed_import_32n_canary ]]; then
+  printf '%s  %s\n' "$SEED_SHA256" "$SEED_CHECKPOINT" > "$RUN_DIR/identity/imported-seed.sha256"
+fi
 CORPUS_RECEIPT="$BASE/authority/commapile-mainmix-v0.1-sha256.json"
 asset_hashes=$(sha256sum "$CONFIG_REL" "$PAYLOAD_REL" "$COLLECTOR_REL" train.py \
   scripts/frontier/activate_emender_frontier.sh scripts/frontier/frontier_runtime_env.sh)

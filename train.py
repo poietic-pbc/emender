@@ -533,6 +533,9 @@ def parse_args():
                         help='Declared fixed data world; must exactly match launched WORLD_SIZE.')
     parser.add_argument('--sampler_stream_origin_accepted_tokens', type=int, default=None,
                         help='Counter-v2 immutable accepted-token stream origin; v1 is zero.')
+    parser.add_argument('--sampler_transition_from_counter', action='store_true',
+                        help='Explicitly import a complete K-aligned counter checkpoint into a '
+                             'new counter-v2 phase whose stream origin equals its token clock.')
     parser.add_argument('--tbptt', action='store_true',
                         help='Enable TBPTT (carry hidden state across chunks)')
     parser.add_argument('--orth_reg', type=float, default=0.0,
@@ -1278,8 +1281,47 @@ def validate_dense_checkpoint_sampler(checkpoint, args, *, world_size,
             "silently relabelled")
     if persisted.get('schema') == LEGACY_SAMPLER_SCHEMA:
         raise ValueError("legacy sampler checkpoint cannot resume as counter sampler")
-    _identity, persisted_tokens, _cursor = restore_sampler_checkpoint_metadata(
-        persisted, expected_identity=expected)
+    try:
+        _identity, persisted_tokens, _cursor = restore_sampler_checkpoint_metadata(
+            persisted, expected_identity=expected)
+    except (TypeError, ValueError):
+        if not getattr(args, 'sampler_transition_from_counter', False):
+            raise
+        try:
+            previous_identity = CounterSamplerIdentity.from_metadata(
+                persisted['identity'])
+            _identity, persisted_tokens, _cursor = restore_sampler_checkpoint_metadata(
+                persisted, expected_identity=previous_identity)
+        except (KeyError, TypeError, ValueError) as previous_error:
+            raise ValueError(
+                f"invalid previous counter sampler authority: {previous_error}") from previous_error
+        step = checkpoint.get('step')
+        diloco_k = getattr(args, 'diloco_k', None)
+        if type(step) is not int or step < 0 or not diloco_k or step % diloco_k:
+            raise ValueError(
+                "counter sampler transition requires a complete K-aligned checkpoint")
+        if expected.schema != BOUNDARY_COUNTER_SAMPLER_SCHEMA:
+            raise ValueError(
+                "counter sampler transition requires boundary-relative counter-v2")
+        if expected.stream_origin_accepted_tokens != total_tokens:
+            raise ValueError(
+                "new counter-v2 stream origin must equal the checkpoint token boundary")
+        args._sampler_transition_metadata = {
+            'schema': 'emender-dense-counter-transition-v1',
+            'boundary_total_tokens': total_tokens,
+            'source_step': step,
+            'previous_identity': previous_identity.to_metadata(),
+            'new_identity': expected.to_metadata(),
+        }
+    else:
+        if getattr(args, 'sampler_transition_from_counter', False):
+            raise ValueError(
+                "counter sampler transition was requested but checkpoint identity already matches")
+        existing_transition = checkpoint_metadata.get('sampler_transition')
+        if existing_transition is not None:
+            if not isinstance(existing_transition, dict):
+                raise ValueError("checkpoint sampler transition metadata is invalid")
+            args._sampler_transition_metadata = dict(existing_transition)
     if persisted_tokens != total_tokens:
         raise ValueError("sampler accepted-token clock contradicts checkpoint total_tokens")
     return total_tokens
@@ -3918,6 +3960,8 @@ def train(args):
                         'sampler': dense_sampler_checkpoint_metadata(
                             args, world_size=world_size,
                             total_tokens=total_tokens),
+                        'sampler_transition': getattr(
+                            args, '_sampler_transition_metadata', None),
                         'walltime_remaining_s': (
                             final_ckpt.deadline - time.time()
                             if final_ckpt.deadline is not None else None
@@ -3995,6 +4039,7 @@ def train(args):
         'is_head': is_main,
         'sampler': dense_sampler_checkpoint_metadata(
             args, world_size=world_size, total_tokens=total_tokens),
+        'sampler_transition': getattr(args, '_sampler_transition_metadata', None),
         'walltime_deadline_source': final_ckpt.deadline_source,
         'walltime_remaining_s': (
             final_ckpt.deadline - time.time()

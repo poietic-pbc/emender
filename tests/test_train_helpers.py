@@ -376,6 +376,74 @@ def test_dense_sampler_mismatch_fails_before_model_mutation(tmp_path):
                for name, value in target.state_dict().items())
 
 
+def test_dense_counter_checkpoint_requires_explicit_v2_phase_transition():
+    source_args = _counter_sampler_args()
+    boundary = 4 * 2048 * 64
+    source_sampler = train.dense_sampler_checkpoint_metadata(
+        source_args, world_size=4, total_tokens=boundary)
+    checkpoint = {
+        "step": 32,
+        "total_tokens": boundary,
+        "checkpoint_metadata": {"total_tokens": boundary, "sampler": source_sampler},
+    }
+    target_args = _counter_sampler_args(
+        sampler_schema=train.BOUNDARY_COUNTER_SAMPLER_SCHEMA,
+        sampler_corpus_sha256="3" * 64,
+        sampler_data_world_size=8,
+        sampler_stream_origin_accepted_tokens=boundary,
+        sampler_transition_from_counter=True,
+        diloco_k=32,
+    )
+    assert train.validate_dense_checkpoint_sampler(
+        checkpoint, target_args, world_size=8, checkpoint_path="seed.pt") == boundary
+    transition = target_args._sampler_transition_metadata
+    assert transition["source_step"] == 32
+    assert transition["boundary_total_tokens"] == boundary
+    assert transition["previous_identity"]["data_world_size"] == 4
+    assert transition["new_identity"]["data_world_size"] == 8
+
+    unapproved = _counter_sampler_args(
+        sampler_schema=train.BOUNDARY_COUNTER_SAMPLER_SCHEMA,
+        sampler_corpus_sha256="3" * 64,
+        sampler_data_world_size=8,
+        sampler_stream_origin_accepted_tokens=boundary,
+        diloco_k=32,
+    )
+    with pytest.raises(ValueError, match="sampler identity mismatch"):
+        train.validate_dense_checkpoint_sampler(
+            checkpoint, unapproved, world_size=8, checkpoint_path="seed.pt")
+
+
+def test_dense_counter_transition_rejects_wrong_boundary_or_partial_k():
+    source_args = _counter_sampler_args()
+    boundary = 4 * 2048 * 64
+    checkpoint = {
+        "step": 31,
+        "total_tokens": boundary,
+        "checkpoint_metadata": {
+            "total_tokens": boundary,
+            "sampler": train.dense_sampler_checkpoint_metadata(
+                source_args, world_size=4, total_tokens=boundary),
+        },
+    }
+    target_args = _counter_sampler_args(
+        sampler_schema=train.BOUNDARY_COUNTER_SAMPLER_SCHEMA,
+        sampler_corpus_sha256="3" * 64,
+        sampler_data_world_size=8,
+        sampler_stream_origin_accepted_tokens=boundary,
+        sampler_transition_from_counter=True,
+        diloco_k=32,
+    )
+    with pytest.raises(ValueError, match="complete K-aligned"):
+        train.validate_dense_checkpoint_sampler(
+            checkpoint, target_args, world_size=8, checkpoint_path="seed.pt")
+    checkpoint["step"] = 32
+    target_args.sampler_stream_origin_accepted_tokens = boundary + 1
+    with pytest.raises(ValueError, match="stream origin must equal"):
+        train.validate_dense_checkpoint_sampler(
+            checkpoint, target_args, world_size=8, checkpoint_path="seed.pt")
+
+
 def test_counter_sampler_refuses_legacy_checkpoint_metadata():
     args = _counter_sampler_args()
     checkpoint = {"total_tokens": 0, "checkpoint_metadata": {"total_tokens": 0}}

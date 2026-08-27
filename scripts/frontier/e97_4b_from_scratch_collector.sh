@@ -49,18 +49,38 @@ metadata = value.get('checkpoint_metadata'); model = value.get('model_state_dict
 optimizer = value.get('optimizer_state_dict')
 if type(step) is not int or step <= 0: raise SystemExit('invalid checkpoint step')
 if type(total_tokens) is not int or total_tokens <= 0: raise SystemExit('invalid total_tokens')
-training = config['training']; expected_world = int(expected_world)
-per_step = expected_world * training['batch_size_per_rank'] * training['context_size']
-if total_tokens != step * per_step: raise SystemExit('checkpoint token clock mismatch')
+training = config['training']; data = config['data']; expected_world = int(expected_world)
 if step % training['diloco_k'] != 0: raise SystemExit('checkpoint is not K-aligned')
 if not isinstance(metadata, dict) or metadata.get('world_size') != expected_world:
     raise SystemExit('checkpoint world-size mismatch')
-sampler = metadata.get('sampler', {})
-identity = sampler.get('identity', {})
-if identity.get('data_world_size') != expected_world: raise SystemExit('sampler world mismatch')
+sampler = metadata.get('sampler', {}); identity = sampler.get('identity', {})
+expected_identity = {
+    'schema': data['sampler_schema'], 'corpus_sha256': data['corpus_sha256'],
+    'tokenizer_sha256': data['tokenizer_sha256'], 'sampler_key': data['sampler_key'],
+    'data_world_size': expected_world, 'context_size': training['context_size'],
+}
+origin = int(data.get('sampler_stream_origin_accepted_tokens', 0))
+if data['sampler_schema'] == 'emender-byte-window-counter-v2':
+    expected_identity['stream_origin_accepted_tokens'] = origin
+if identity != expected_identity: raise SystemExit('sampler identity mismatch')
 if sampler.get('total_accepted_tokens') != total_tokens: raise SystemExit('sampler token mismatch')
-if sampler.get('absolute_rank_sample_index') != step * training['batch_size_per_rank']:
-    raise SystemExit('sampler index mismatch')
+relative_tokens = total_tokens - origin
+per_rank_sample_tokens = expected_world * training['context_size']
+if relative_tokens < 0 or relative_tokens % per_rank_sample_tokens:
+    raise SystemExit('checkpoint token clock mismatch')
+cursor = relative_tokens // per_rank_sample_tokens
+if sampler.get('absolute_rank_sample_index') != cursor: raise SystemExit('sampler index mismatch')
+if cursor % training['batch_size_per_rank']:
+    raise SystemExit('sampler cursor is not optimizer-step aligned')
+source_step = int(config.get('seed', {}).get('source_step', 0))
+if step != source_step + cursor // training['batch_size_per_rank']:
+    raise SystemExit('checkpoint step disagrees with phase-relative sampler clock')
+if origin:
+    transition = metadata.get('sampler_transition', {})
+    if (transition.get('boundary_total_tokens') != origin
+            or transition.get('source_step') != source_step
+            or transition.get('new_identity') != expected_identity):
+        raise SystemExit('missing or invalid sampler transition provenance')
 if not isinstance(model, dict) or not model: raise SystemExit('missing model state')
 if not isinstance(optimizer, dict) or not optimizer.get('state') or not optimizer.get('param_groups'):
     raise SystemExit('missing optimizer state')
