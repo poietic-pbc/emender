@@ -175,6 +175,20 @@ elif [[ "$RUN_MODE" == seed_continuation_32n_debug ]]; then
     echo "seed continuation requires a readable parent latest.pt" >&2; exit 65;
   }
   LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=300
+elif [[ "$RUN_MODE" == seed_scale_64n_canary ]]; then
+  [[ "$EXPECTED_NODES" == 64 && "$EXPECTED_WORLD_SIZE" == 512 ]] || {
+    echo "seed-scale canary is fixed at 64 nodes / 512 ranks" >&2; exit 64;
+  }
+  [[ "$BATCH_SIZE" == 1 && "$DILOCO_K" == 32 && "$SAVE_EVERY" == 256 && \
+     "$SAMPLER_SCHEMA" == emender-byte-window-counter-v2 && \
+     "$SAMPLER_STREAM_ORIGIN" == "$SEED_SOURCE_TOKENS" && \
+     "$TARGET_STEPS" == $((SEED_SOURCE_STEP + 1024)) ]] || {
+    echo "seed-scale canary requires B1/K32 and an exact 1024-step counter-v2 phase" >&2; exit 64;
+  }
+  [[ -L "$RUN_DIR/train/latest.pt" && -r "$RUN_DIR/train/latest.pt" ]] || {
+    echo "seed-scale canary requires a readable parent latest.pt" >&2; exit 65;
+  }
+  LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=300
 elif [[ "$RUN_MODE" == matched_clock_32n ]]; then
   [[ "$EXPECTED_NODES" == 32 && "$EXPECTED_WORLD_SIZE" == 256 ]] || {
     echo "matched-clock qualification is fixed at 32 nodes / 256 ranks" >&2; exit 64;
@@ -243,7 +257,9 @@ ARGS=(
 )
 (( SAMPLER_STREAM_ORIGIN == 0 )) || \
   ARGS+=(--sampler_stream_origin_accepted_tokens "$SAMPLER_STREAM_ORIGIN")
-[[ "$RUN_MODE" != seed_import_32n_canary ]] || ARGS+=(--sampler_transition_from_counter)
+if [[ "$RUN_MODE" == seed_import_32n_canary || "$RUN_MODE" == seed_scale_64n_canary ]]; then
+  ARGS+=(--sampler_transition_from_counter)
+fi
 (( TRAIN_MINUTES == 0 )) || ARGS+=(--train_minutes "$TRAIN_MINUTES")
 if [[ -L "$RUN_DIR/train/latest.pt" && -r "$RUN_DIR/train/latest.pt" ]]; then
   ARGS+=(--resume "$RUN_DIR/train/latest.pt")

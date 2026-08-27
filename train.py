@@ -1312,6 +1312,7 @@ def validate_dense_checkpoint_sampler(checkpoint, args, *, world_size,
             'source_step': step,
             'previous_identity': previous_identity.to_metadata(),
             'new_identity': expected.to_metadata(),
+            'prior_transition': checkpoint_metadata.get('sampler_transition'),
         }
     else:
         if getattr(args, 'sampler_transition_from_counter', False):

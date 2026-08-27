@@ -45,6 +45,14 @@ case "$MODE" in
     SEED_CHECKPOINT=${SEED_CHECKPOINT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-4b-from-scratch/runs/e97-4b-seed-import-w256-b1k32-r1/train/checkpoint_step_013312_loss_2.7593.pt}
     SEED_SHA256=fa7b53f8ea31ca177aac0bba6b1fd174a970d8d8db68314c96333efd80a50ade
     ;;
+  seed_scale_64n_canary)
+    [[ ${CONFIRM_SEED_SCALE:-0} == 1 ]] || { echo "seed-scale canary requires CONFIRM_SEED_SCALE=1" >&2; exit 64; }
+    NODES=64; QOS=debug; TIME_LIMIT=01:00:00; SEED_MODE=1
+    CONFIG_REL=configs/frontier/e97_4b_seed_scale_64n.json
+    RUN_ID=${RUN_ID:-e97-4b-seed-scale-w512-b1k32-r3}
+    SEED_CHECKPOINT=${SEED_CHECKPOINT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-4b-from-scratch/runs/e97-4b-seed-cont-w256-b1k32-r2/train/checkpoint_step_015360_loss_2.8084.pt}
+    SEED_SHA256=9da49a274934135de4b5ac4f9265c0e6eff5ec7672fb7d9c3fb6388b0da18f16
+    ;;
   matched_clock_32n)
     [[ ${CONFIRM_MATCHED_CLOCK:-0} == 1 ]] || { echo "matched-clock test requires CONFIRM_MATCHED_CLOCK=1" >&2; exit 64; }
     NODES=32; QOS=debug; TIME_LIMIT=02:00:00

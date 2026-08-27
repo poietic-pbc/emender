@@ -401,6 +401,7 @@ def test_dense_counter_checkpoint_requires_explicit_v2_phase_transition():
     assert transition["boundary_total_tokens"] == boundary
     assert transition["previous_identity"]["data_world_size"] == 4
     assert transition["new_identity"]["data_world_size"] == 8
+    assert transition["prior_transition"] is None
 
     unapproved = _counter_sampler_args(
         sampler_schema=train.BOUNDARY_COUNTER_SAMPLER_SCHEMA,
