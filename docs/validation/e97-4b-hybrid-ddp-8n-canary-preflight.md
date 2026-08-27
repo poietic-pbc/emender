@@ -1,6 +1,7 @@
 # E97 4B Lambda-topology hybrid-DDP canary preflight
 
-**Status:** attended two-hour debug-QoS canary authorized. No longer run is
+**Status:** submitted as payload `5358779` with collector `5358780` from
+immutable source `25b0be049029d3a85f7c1130178c1011c3599765`. No longer run is
 authorized until this exact topology passes and is inspected.
 
 ## Scientific question
