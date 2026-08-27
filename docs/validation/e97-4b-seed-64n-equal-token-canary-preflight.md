@@ -1,6 +1,7 @@
 # E97 4B mature-seed 64-node equal-token canary preflight
 
-**Status:** attended one-hour debug-QoS scale canary authorized. No continuation
+**Status:** submitted as payload `5357795` with collector `5357796` from
+immutable source `f70dbbd2f04e511071f1b4dfb684385cd055e916`. No continuation
 is authorized by this preflight.
 
 ## Question
