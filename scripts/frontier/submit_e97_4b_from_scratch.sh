@@ -9,6 +9,7 @@ source scripts/frontier/activate_emender_frontier.sh
 
 MODE=${MODE:-smoke}
 SEED_MODE=0
+EXPECTED_TARGET_STEPS=0
 BASE=${E97_4B_FRONTIER_BASE:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-4b-from-scratch}
 CONFIG_REL=configs/frontier/e97_4b_from_scratch.json
 PAYLOAD_REL=scripts/frontier/e97_4b_from_scratch.sbatch
@@ -60,6 +61,27 @@ case "$MODE" in
     RUN_ID=${RUN_ID:-e97-4b-hybrid-ddp-8n-b4k32-r4}
     SEED_CHECKPOINT=${SEED_CHECKPOINT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-4b-from-scratch/runs/e97-4b-seed-scale-w512-b1k32-r3/train/checkpoint_step_016384_loss_2.6330.pt}
     SEED_SHA256=bb1a1350c37126793ad2de2b4477014c09f671a0c731184a4c5496f21cfcd8bd
+    ;;
+  hybrid_ddp_96n_debug)
+    [[ ${CONFIRM_96N_CAMPAIGN:-0} == 1 ]] || { echo "96-node campaign debug requires CONFIRM_96N_CAMPAIGN=1" >&2; exit 64; }
+    NODES=96; QOS=debug; TIME_LIMIT=02:00:00; SEED_MODE=1; EXPECTED_TARGET_STEPS=18176
+    CONFIG_REL=configs/frontier/e97_4b_hybrid_ddp_96n_campaign.json
+    RUN_ID=${RUN_ID:-e97-4b-hybrid-ddp-96n-campaign-r5-debug}
+    SEED_CHECKPOINT=${SEED_CHECKPOINT:-/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-4b-from-scratch/runs/e97-4b-hybrid-ddp-8n-b4k32-r4/train/checkpoint_step_017152_loss_2.6381.pt}
+    SEED_SHA256=cfb25848725912da577452e1a23fc91c541c6bb891145732d3b9c08f7ba9cfc9
+    ;;
+  hybrid_ddp_96n_production)
+    [[ ${CONFIRM_96N_CAMPAIGN:-0} == 1 ]] || { echo "96-node production requires CONFIRM_96N_CAMPAIGN=1" >&2; exit 64; }
+    [[ ${CAMPAIGN_PHASE:-} =~ ^[1-4]$ ]] || { echo "production requires CAMPAIGN_PHASE=1..4" >&2; exit 64; }
+    NODES=96; QOS=normal; TIME_LIMIT=06:00:00; SEED_MODE=1
+    CONFIG_REL=configs/frontier/e97_4b_hybrid_ddp_96n_campaign.json
+    case "$CAMPAIGN_PHASE" in
+      1) EXPECTED_TARGET_STEPS=21504;; 2) EXPECTED_TARGET_STEPS=24832;;
+      3) EXPECTED_TARGET_STEPS=28160;; 4) EXPECTED_TARGET_STEPS=31488;;
+    esac
+    RUN_ID=${RUN_ID:-e97-4b-hybrid-ddp-96n-campaign-r$((5 + CAMPAIGN_PHASE))-p${CAMPAIGN_PHASE}}
+    : "${SEED_CHECKPOINT:?production requires the inspected prior checkpoint path}"
+    : "${SEED_SHA256:?production requires the inspected prior checkpoint SHA-256}"
     ;;
   matched_clock_32n)
     [[ ${CONFIRM_MATCHED_CLOCK:-0} == 1 ]] || { echo "matched-clock test requires CONFIRM_MATCHED_CLOCK=1" >&2; exit 64; }
@@ -134,8 +156,8 @@ fi
 CORPUS_RECEIPT="$BASE/authority/commapile-mainmix-v0.1-sha256.json"
 asset_hashes=$(sha256sum "$CONFIG_REL" "$PAYLOAD_REL" "$COLLECTOR_REL" train.py \
   scripts/frontier/activate_emender_frontier.sh scripts/frontier/frontier_runtime_env.sh)
-payload_digest=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
-  "$SOURCE_SHA" "$MODE" "$NODES" "$PARTITION" "$QOS" "$TIME_LIMIT" "${TRAIN_MINUTES:-0}" "$asset_hashes" \
+payload_digest=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+  "$SOURCE_SHA" "$MODE" "$NODES" "$PARTITION" "$QOS" "$TIME_LIMIT" "${TRAIN_MINUTES:-0}" "$EXPECTED_TARGET_STEPS" "$asset_hashes" \
   | sha256sum | awk '{print $1}')
 payload_root="$BASE/payloads/$payload_digest"
 repo_exact="$payload_root/repo"
@@ -158,7 +180,7 @@ payload_id=$(sbatch --parsable --no-requeue --signal=B:TERM@300 \
   -A bif148 -p "$PARTITION" -q "$QOS" -J "e97-4b-${MODE}" -N"$NODES" -t "$TIME_LIMIT" \
   --ntasks-per-node=8 --cpus-per-task=7 --gpus-per-task=1 --gpu-bind=closest \
   --output="$RUN_DIR/logs/sbatch-%j.out" --error="$RUN_DIR/logs/sbatch-%j.err" \
-  --export=ALL,REPO="$repo_exact",RUN_ID="$RUN_ID",RUN_DIR="$RUN_DIR",RUN_MODE="$MODE",TRAIN_MINUTES="${TRAIN_MINUTES:-0}",CONFIG="$repo_exact/$CONFIG_REL",CORPUS_RECEIPT="$CORPUS_RECEIPT",EXPECTED_NODES="$NODES",EXPECTED_WORLD_SIZE="$WORLD_SIZE",EXPECTED_PARTITION="$PARTITION",EXPECTED_QOS="$QOS",EXPECTED_TIME_LIMIT="$TIME_LIMIT" \
+  --export=ALL,REPO="$repo_exact",RUN_ID="$RUN_ID",RUN_DIR="$RUN_DIR",RUN_MODE="$MODE",TRAIN_MINUTES="${TRAIN_MINUTES:-0}",CONFIG="$repo_exact/$CONFIG_REL",CORPUS_RECEIPT="$CORPUS_RECEIPT",EXPECTED_NODES="$NODES",EXPECTED_WORLD_SIZE="$WORLD_SIZE",EXPECTED_PARTITION="$PARTITION",EXPECTED_QOS="$QOS",EXPECTED_TIME_LIMIT="$TIME_LIMIT",EXPECTED_TARGET_STEPS="$EXPECTED_TARGET_STEPS" \
   "$repo_exact/$PAYLOAD_REL")
 
 queued="$RUN_DIR/identity/squeue-${payload_id}-queued.txt"
@@ -183,6 +205,7 @@ import json,os,sys,time
 v={'schema':'emender-e97-4b-frontier-submission-v1','payload_job_id':'$payload_id',
 'collector_job_id':'$collector_id','source_sha':'$SOURCE_SHA','payload_digest':'$payload_digest',
 'run_id':'$RUN_ID','run_dir':'$RUN_DIR','mode':'$MODE','nodes':$NODES,'world_size':$WORLD_SIZE,
+'target_steps':$EXPECTED_TARGET_STEPS,
 'partition':'$PARTITION','qos':'$QOS','time_limit':'$TIME_LIMIT','submitted_unheld':True,
 'fixed_world':True,'from_scratch_if_latest_absent':True,'submitted_unix':time.time()}
 p=sys.argv[1]+'.tmp'; open(p,'w').write(json.dumps(v,sort_keys=True)+'\n'); os.replace(p,sys.argv[1])

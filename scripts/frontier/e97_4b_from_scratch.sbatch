@@ -24,6 +24,7 @@ set -euo pipefail
 : "${EXPECTED_QOS:?expected QoS is required}"
 : "${EXPECTED_TIME_LIMIT:?expected time limit is required}"
 RUN_MODE=${RUN_MODE:-smoke}
+EXPECTED_TARGET_STEPS=${EXPECTED_TARGET_STEPS:-0}
 CONFIG=${CONFIG:-$REPO/configs/frontier/e97_4b_from_scratch.json}
 
 [[ "$RUN_DIR" == /* && "$RUN_ID" != */* ]] || { echo "invalid run identity" >&2; exit 64; }
@@ -205,6 +206,36 @@ elif [[ "$RUN_MODE" == hybrid_ddp_8n_canary ]]; then
     echo "hybrid-DDP canary requires a readable parent latest.pt" >&2; exit 65;
   }
   LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=300
+elif [[ "$RUN_MODE" == hybrid_ddp_96n_debug ]]; then
+  [[ "$EXPECTED_NODES" == 96 && "$EXPECTED_WORLD_SIZE" == 768 ]] || {
+    echo "96-node campaign debug is fixed at 96 nodes / 768 ranks" >&2; exit 64;
+  }
+  [[ "$BATCH_SIZE" == 4 && "$DILOCO_K" == 32 && "$DILOCO_ISLAND_SIZE" == 8 && \
+     "$SAVE_EVERY" == 256 && "$SAMPLER_SCHEMA" == emender-byte-window-counter-v2 && \
+     "$SAMPLER_STREAM_ORIGIN" == "$SEED_SOURCE_TOKENS" && \
+     "$EXPECTED_TARGET_STEPS" == 18176 ]] || {
+    echo "96-node debug requires B4/island8/K32 and target step 18176" >&2; exit 64;
+  }
+  TARGET_STEPS=$EXPECTED_TARGET_STEPS
+  [[ -L "$RUN_DIR/train/latest.pt" && -r "$RUN_DIR/train/latest.pt" ]] || {
+    echo "96-node debug requires a readable parent latest.pt" >&2; exit 65;
+  }
+  LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=300
+elif [[ "$RUN_MODE" == hybrid_ddp_96n_production ]]; then
+  [[ "$EXPECTED_NODES" == 96 && "$EXPECTED_WORLD_SIZE" == 768 ]] || {
+    echo "96-node production is fixed at 96 nodes / 768 ranks" >&2; exit 64;
+  }
+  [[ "$BATCH_SIZE" == 4 && "$DILOCO_K" == 32 && "$DILOCO_ISLAND_SIZE" == 8 && \
+     "$SAVE_EVERY" == 256 && "$SAMPLER_SCHEMA" == emender-byte-window-counter-v2 ]] || {
+    echo "96-node production requires B4/island8/K32/counter-v2" >&2; exit 64;
+  }
+  case "$EXPECTED_TARGET_STEPS" in 21504|24832|28160|31488) ;; *)
+    echo "invalid 96-node production campaign target" >&2; exit 64;; esac
+  TARGET_STEPS=$EXPECTED_TARGET_STEPS
+  [[ -L "$RUN_DIR/train/latest.pt" && -r "$RUN_DIR/train/latest.pt" ]] || {
+    echo "96-node production requires a readable inspected parent latest.pt" >&2; exit 65;
+  }
+  LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=600
 elif [[ "$RUN_MODE" == matched_clock_32n ]]; then
   [[ "$EXPECTED_NODES" == 32 && "$EXPECTED_WORLD_SIZE" == 256 ]] || {
     echo "matched-clock qualification is fixed at 32 nodes / 256 ranks" >&2; exit 64;
@@ -275,7 +306,7 @@ ARGS=(
 (( SAMPLER_STREAM_ORIGIN == 0 )) || \
   ARGS+=(--sampler_stream_origin_accepted_tokens "$SAMPLER_STREAM_ORIGIN")
 if [[ "$RUN_MODE" == seed_import_32n_canary || "$RUN_MODE" == seed_scale_64n_canary || \
-      "$RUN_MODE" == hybrid_ddp_8n_canary ]]; then
+      "$RUN_MODE" == hybrid_ddp_8n_canary || "$RUN_MODE" == hybrid_ddp_96n_debug ]]; then
   ARGS+=(--sampler_transition_from_counter)
 fi
 (( TRAIN_MINUTES == 0 )) || ARGS+=(--train_minutes "$TRAIN_MINUTES")
