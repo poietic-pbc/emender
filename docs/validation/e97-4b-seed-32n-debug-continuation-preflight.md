@@ -1,6 +1,7 @@
 # E97 4B imported-seed 32-node debug continuation preflight
 
-**Status:** attended two-hour debug-QoS continuation authorized. No later job is
+**Status:** submitted as payload `5354989` with collector `5354990` from
+immutable source `ae1fd2afbb509fa62343cd7b37364826ca343c52`. No later job is
 authorized by this preflight.
 
 ## Parent authority
