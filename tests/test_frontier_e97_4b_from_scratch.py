@@ -8,6 +8,7 @@ MATCHED_CLOCK_CONFIG = ROOT / "configs/frontier/e97_4b_matched_clock_32n.json"
 SEED_IMPORT_CONFIG = ROOT / "configs/frontier/e97_4b_seed_import_32n.json"
 SEED_CONTINUATION_CONFIG = ROOT / "configs/frontier/e97_4b_seed_continuation_32n.json"
 SEED_SCALE_CONFIG = ROOT / "configs/frontier/e97_4b_seed_scale_64n.json"
+HYBRID_DDP_CONFIG = ROOT / "configs/frontier/e97_4b_hybrid_ddp_8n.json"
 PAYLOAD = ROOT / "scripts/frontier/e97_4b_from_scratch.sbatch"
 SUBMIT = ROOT / "scripts/frontier/submit_e97_4b_from_scratch.sh"
 COLLECTOR = ROOT / "scripts/frontier/e97_4b_from_scratch_collector.sh"
@@ -98,6 +99,22 @@ def test_frontier_4b_seed_scale_64n_is_equal_token_cost_comparison():
     assert cfg["claims"]["equal_new_tokens_vs_32n_parent_block"] is True
 
 
+def test_frontier_4b_hybrid_ddp_matches_lambda_optimizer_topology():
+    cfg = json.loads(HYBRID_DDP_CONFIG.read_text())
+    train = cfg["training"]
+    parent = cfg["parent"]
+    assert cfg["production_nodes"] == 8
+    assert train["batch_size_per_rank"] == 4
+    assert train["diloco_island_size"] == 8
+    assert (cfg["production_nodes"] * 8) // train["diloco_island_size"] == 8
+    assert train["batch_size_per_rank"] * train["diloco_island_size"] == 32
+    assert train["global_tokens_per_step"] == 8 * 32 * 2048 == 524288
+    assert train["diloco_k"] == 32
+    assert cfg["target_steps"] == parent["step"] + 768
+    assert cfg["target_tokens"] == parent["total_tokens"] + 768 * train["global_tokens_per_step"]
+    assert cfg["claims"]["lambda_optimizer_topology_match"] is True
+
+
 def test_frontier_4b_payload_is_fixed_world_counter_sampled_and_fail_stop():
     text = PAYLOAD.read_text()
     assert "source scripts/frontier/activate_emender_frontier.sh" in text
@@ -117,6 +134,9 @@ def test_frontier_4b_payload_is_fixed_world_counter_sampled_and_fail_stop():
     assert "--sampler_transition_from_counter" in text
     assert "seed-scale canary is fixed at 64 nodes / 512 ranks" in text
     assert "seed-scale canary requires B1/K32 and an exact 1024-step counter-v2 phase" in text
+    assert "hybrid-DDP canary is fixed at 8 nodes / 64 ranks" in text
+    assert "hybrid-DDP canary requires 8 islands / B32 effective / K32 / 768 steps" in text
+    assert '--diloco_island_size "$DILOCO_ISLAND_SIZE"' in text
     assert "matched-clock qualification is fixed at 32 nodes / 256 ranks" in text
     assert "matched-clock config must be B1/K32/save256/2048 steps" in text
     assert "bootstrap authority is fixed at 256 nodes / 2048 ranks" in text
@@ -156,6 +176,8 @@ def test_frontier_4b_submitter_is_immutable_attended_and_records_both_queue_fiel
     assert 'imported seed SHA-256 mismatch' in text
     assert 'CONFIRM_SEED_SCALE:-0' in text
     assert 'configs/frontier/e97_4b_seed_scale_64n.json' in text
+    assert 'CONFIRM_HYBRID_DDP:-0' in text
+    assert 'configs/frontier/e97_4b_hybrid_ddp_8n.json' in text
     assert 'CONFIRM_MATCHED_CLOCK:-0' in text
     assert 'NODES=32; QOS=debug; TIME_LIMIT=02:00:00' in text
     assert 'configs/frontier/e97_4b_matched_clock_32n.json' in text

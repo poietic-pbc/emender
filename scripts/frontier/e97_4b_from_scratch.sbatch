@@ -93,6 +93,7 @@ print(v['data']['sampler_schema']); print(v['data']['sampler_key'])
 print(v['data'].get('sampler_stream_origin_accepted_tokens', 0))
 print(v.get('seed', {}).get('source_step', 0))
 print(v.get('seed', {}).get('source_total_tokens', 0))
+print(v['training'].get('diloco_island_size', 1))
 PY
 )
 DATA=${cfg[0]}; EXPECTED_DATA_BYTES=${cfg[1]}; TOKENIZER_SHA256=${cfg[2]}
@@ -102,6 +103,7 @@ BOOTSTRAP_STEPS=${cfg[9]}; PRODUCTION_TRAIN_MINUTES=${cfg[10]}
 DEBUG_CONTINUATION_TRAIN_MINUTES=${cfg[11]}; SAMPLER_SCHEMA=${cfg[12]}
 SAMPLER_KEY=${cfg[13]}; SAMPLER_STREAM_ORIGIN=${cfg[14]}
 SEED_SOURCE_STEP=${cfg[15]}; SEED_SOURCE_TOKENS=${cfg[16]}
+DILOCO_ISLAND_SIZE=${cfg[17]}
 [[ -r "$DATA" && $(stat -c %s "$DATA") == "$EXPECTED_DATA_BYTES" ]] || {
   echo "reviewed corpus path/size mismatch" >&2; exit 66;
 }
@@ -189,6 +191,20 @@ elif [[ "$RUN_MODE" == seed_scale_64n_canary ]]; then
     echo "seed-scale canary requires a readable parent latest.pt" >&2; exit 65;
   }
   LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=300
+elif [[ "$RUN_MODE" == hybrid_ddp_8n_canary ]]; then
+  [[ "$EXPECTED_NODES" == 8 && "$EXPECTED_WORLD_SIZE" == 64 ]] || {
+    echo "hybrid-DDP canary is fixed at 8 nodes / 64 ranks" >&2; exit 64;
+  }
+  [[ "$BATCH_SIZE" == 4 && "$DILOCO_K" == 32 && "$DILOCO_ISLAND_SIZE" == 8 && \
+     "$SAVE_EVERY" == 256 && "$SAMPLER_SCHEMA" == emender-byte-window-counter-v2 && \
+     "$SAMPLER_STREAM_ORIGIN" == "$SEED_SOURCE_TOKENS" && \
+     "$TARGET_STEPS" == $((SEED_SOURCE_STEP + 768)) ]] || {
+    echo "hybrid-DDP canary requires 8 islands / B32 effective / K32 / 768 steps" >&2; exit 64;
+  }
+  [[ -L "$RUN_DIR/train/latest.pt" && -r "$RUN_DIR/train/latest.pt" ]] || {
+    echo "hybrid-DDP canary requires a readable parent latest.pt" >&2; exit 65;
+  }
+  LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=300
 elif [[ "$RUN_MODE" == matched_clock_32n ]]; then
   [[ "$EXPECTED_NODES" == 32 && "$EXPECTED_WORLD_SIZE" == 256 ]] || {
     echo "matched-clock qualification is fixed at 32 nodes / 256 ranks" >&2; exit 64;
@@ -244,7 +260,8 @@ ARGS=(
  --walltime_final_checkpoint_margin_seconds "$FINAL_MARGIN_SECONDS" --walltime_check_every 8
  --distributed_health_check_every 40
  --diloco --diloco_k "$DILOCO_K" --diloco_outer_optimizer avg
- --diloco_outer_lr 1.0 --diloco_outer_beta 0.0 --diloco_export_basis x --diloco_island_size 1
+ --diloco_outer_lr 1.0 --diloco_outer_beta 0.0 --diloco_export_basis x
+ --diloco_island_size "$DILOCO_ISLAND_SIZE"
  --diloco_merge_topology hierarchical --diloco_merge_group_size 4
  --diloco_merge_group_create_barrier_every 8 --diloco_merge_completion_barrier 1
  --diloco_merge_bucket_numel 67108864
@@ -257,7 +274,8 @@ ARGS=(
 )
 (( SAMPLER_STREAM_ORIGIN == 0 )) || \
   ARGS+=(--sampler_stream_origin_accepted_tokens "$SAMPLER_STREAM_ORIGIN")
-if [[ "$RUN_MODE" == seed_import_32n_canary || "$RUN_MODE" == seed_scale_64n_canary ]]; then
+if [[ "$RUN_MODE" == seed_import_32n_canary || "$RUN_MODE" == seed_scale_64n_canary || \
+      "$RUN_MODE" == hybrid_ddp_8n_canary ]]; then
   ARGS+=(--sampler_transition_from_counter)
 fi
 (( TRAIN_MINUTES == 0 )) || ARGS+=(--train_minutes "$TRAIN_MINUTES")
