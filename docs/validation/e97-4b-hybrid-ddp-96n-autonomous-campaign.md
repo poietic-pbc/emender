@@ -1,7 +1,14 @@
 # E97 4B 96-node hybrid-DDP autonomous campaign
 
 **Status:** operator-authorized autonomous execution for the final four-day
-allocation window. The campaign must start with the bounded debug gate below.
+allocation window. The 96-node debug gate completed successfully as payload
+`5361411` / collector `5361412`. The first six-hour normal-QoS payload
+`5362809` remained pending on priority for twelve hours and was cancelled,
+without starting or consuming compute, together with collector `5362810` after
+explicit operator authorization. Production now uses thirteen two-hour
+normal-QoS epochs to improve backfill access without mutating the immutable
+queued payload or abusing debug QoS. The campaign began with the bounded debug
+gate below.
 If that gate has a hard systems, nonfinite, checkpoint, reload, or catastrophic
 learning failure, stop and report alternatives. If healthy, submit and inspect
 each of the four production epochs sequentially without waiting for another
@@ -45,6 +52,13 @@ same-world counter-v2 continuation after the debug transition.
 | p2 | normal / 06:00 | 21,504 -> 24,832 | 20,937,965,568 | 57,847,840,768 |
 | p3 | normal / 06:00 | 24,832 -> 28,160 | 20,937,965,568 | 78,785,806,336 |
 | p4 | normal / 06:00 | 28,160 -> 31,488 | 20,937,965,568 | 99,723,771,904 |
+
+The replacement short-production schedule divides the exact same remaining
+13,312 updates into thirteen normal-QoS epochs of 1,024 updates each. Targets
+are 19,200, 20,224, ..., 31,488; every epoch adds 6,442,450,944 tokens and is
+both K32- and save256-aligned. The two-hour limit preserves a roughly
+15-minute margin relative to the qualified 1h44m debug runtime. Each epoch is
+submitted only after its predecessor passes collector inspection.
 
 The operational target is approximately 100B, so 99.724B satisfies the
 campaign objective. Every target is K32- and save256-aligned.

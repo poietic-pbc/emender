@@ -221,7 +221,7 @@ elif [[ "$RUN_MODE" == hybrid_ddp_96n_debug ]]; then
     echo "96-node debug requires a readable parent latest.pt" >&2; exit 65;
   }
   LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=300
-elif [[ "$RUN_MODE" == hybrid_ddp_96n_production ]]; then
+elif [[ "$RUN_MODE" == hybrid_ddp_96n_production || "$RUN_MODE" == hybrid_ddp_96n_short_production ]]; then
   [[ "$EXPECTED_NODES" == 96 && "$EXPECTED_WORLD_SIZE" == 768 ]] || {
     echo "96-node production is fixed at 96 nodes / 768 ranks" >&2; exit 64;
   }
@@ -229,13 +229,22 @@ elif [[ "$RUN_MODE" == hybrid_ddp_96n_production ]]; then
      "$SAVE_EVERY" == 256 && "$SAMPLER_SCHEMA" == emender-byte-window-counter-v2 ]] || {
     echo "96-node production requires B4/island8/K32/counter-v2" >&2; exit 64;
   }
-  case "$EXPECTED_TARGET_STEPS" in 21504|24832|28160|31488) ;; *)
-    echo "invalid 96-node production campaign target" >&2; exit 64;; esac
+  if [[ "$RUN_MODE" == hybrid_ddp_96n_production ]]; then
+    case "$EXPECTED_TARGET_STEPS" in 21504|24832|28160|31488) ;; *)
+      echo "invalid 96-node production campaign target" >&2; exit 64;; esac
+    FINAL_MARGIN_SECONDS=600
+  else
+    (( EXPECTED_TARGET_STEPS >= 19200 && EXPECTED_TARGET_STEPS <= 31488 && \
+       (EXPECTED_TARGET_STEPS - 18176) % 1024 == 0 )) || {
+      echo "invalid 96-node short-production campaign target" >&2; exit 64;
+    }
+    FINAL_MARGIN_SECONDS=300
+  fi
   TARGET_STEPS=$EXPECTED_TARGET_STEPS
   [[ -L "$RUN_DIR/train/latest.pt" && -r "$RUN_DIR/train/latest.pt" ]] || {
     echo "96-node production requires a readable inspected parent latest.pt" >&2; exit 65;
   }
-  LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=600
+  LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0
 elif [[ "$RUN_MODE" == matched_clock_32n ]]; then
   [[ "$EXPECTED_NODES" == 32 && "$EXPECTED_WORLD_SIZE" == 256 ]] || {
     echo "matched-clock qualification is fixed at 32 nodes / 256 ranks" >&2; exit 64;

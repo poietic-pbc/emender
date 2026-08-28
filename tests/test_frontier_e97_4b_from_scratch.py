@@ -127,6 +127,9 @@ def test_frontier_4b_96n_campaign_reaches_approximately_100b():
     assert train["global_tokens_per_step"] == 96 * 8 * 4 * 2048
     assert campaign["debug_target_step"] == 18176
     assert campaign["production_target_steps"] == [21504, 24832, 28160, 31488]
+    assert campaign["short_production_walltime"] == "02:00:00"
+    assert campaign["short_production_target_steps"] == list(range(19200, 31489, 1024))
+    assert campaign["short_production_new_tokens_per_phase"] == 1024 * train["global_tokens_per_step"]
     assert campaign["debug_new_tokens"] == 1024 * train["global_tokens_per_step"]
     assert campaign["production_new_tokens_per_phase"] == 3328 * train["global_tokens_per_step"]
     assert campaign["final_total_tokens"] == cfg["target_tokens"] == 99_723_771_904
@@ -159,6 +162,7 @@ def test_frontier_4b_payload_is_fixed_world_counter_sampled_and_fail_stop():
     assert "96-node campaign debug is fixed at 96 nodes / 768 ranks" in text
     assert "96-node production is fixed at 96 nodes / 768 ranks" in text
     assert "invalid 96-node production campaign target" in text
+    assert "invalid 96-node short-production campaign target" in text
     assert "matched-clock qualification is fixed at 32 nodes / 256 ranks" in text
     assert "matched-clock config must be B1/K32/save256/2048 steps" in text
     assert "bootstrap authority is fixed at 256 nodes / 2048 ranks" in text
@@ -202,6 +206,9 @@ def test_frontier_4b_submitter_is_immutable_attended_and_records_both_queue_fiel
     assert 'configs/frontier/e97_4b_hybrid_ddp_8n.json' in text
     assert 'CONFIRM_96N_CAMPAIGN:-0' in text
     assert 'CAMPAIGN_PHASE=1..4' in text
+    assert 'CAMPAIGN_PHASE=1..13' in text
+    assert 'TIME_LIMIT=02:00:00' in text
+    assert 'EXPECTED_TARGET_STEPS=$((18176 + CAMPAIGN_PHASE * 1024))' in text
     assert 'configs/frontier/e97_4b_hybrid_ddp_96n_campaign.json' in text
     assert 'EXPECTED_TARGET_STEPS=18176' in text
     assert 'EXPECTED_TARGET_STEPS=21504' in text
