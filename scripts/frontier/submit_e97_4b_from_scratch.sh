@@ -83,15 +83,21 @@ case "$MODE" in
     : "${SEED_CHECKPOINT:?production requires the inspected prior checkpoint path}"
     : "${SEED_SHA256:?production requires the inspected prior checkpoint SHA-256}"
     ;;
-  hybrid_ddp_96n_short_production)
-    [[ ${CONFIRM_96N_CAMPAIGN:-0} == 1 ]] || { echo "96-node short production requires CONFIRM_96N_CAMPAIGN=1" >&2; exit 64; }
-    [[ ${CAMPAIGN_PHASE:-} =~ ^([1-9]|1[0-3])$ ]] || { echo "short production requires CAMPAIGN_PHASE=1..13" >&2; exit 64; }
-    NODES=96; QOS=normal; TIME_LIMIT=02:00:00; SEED_MODE=1
+  hybrid_ddp_96n_short_production|hybrid_ddp_96n_short_debug)
+    [[ ${CONFIRM_96N_CAMPAIGN:-0} == 1 ]] || { echo "96-node short campaign requires CONFIRM_96N_CAMPAIGN=1" >&2; exit 64; }
+    [[ ${CAMPAIGN_PHASE:-} =~ ^([1-9]|1[0-3])$ ]] || { echo "short campaign requires CAMPAIGN_PHASE=1..13" >&2; exit 64; }
+    NODES=96; TIME_LIMIT=02:00:00; SEED_MODE=1
+    if [[ "$MODE" == hybrid_ddp_96n_short_debug ]]; then
+      [[ ${CONFIRM_DEBUG_QOS_CAMPAIGN:-0} == 1 ]] || { echo "debug-QoS campaign override requires CONFIRM_DEBUG_QOS_CAMPAIGN=1" >&2; exit 64; }
+      QOS=debug
+    else
+      QOS=normal
+    fi
     CONFIG_REL=configs/frontier/e97_4b_hybrid_ddp_96n_campaign.json
     EXPECTED_TARGET_STEPS=$((18176 + CAMPAIGN_PHASE * 1024))
-    RUN_ID=${RUN_ID:-e97-4b-hybrid-ddp-96n-short-s$(printf '%02d' "$CAMPAIGN_PHASE")}
-    : "${SEED_CHECKPOINT:?short production requires the inspected prior checkpoint path}"
-    : "${SEED_SHA256:?short production requires the inspected prior checkpoint SHA-256}"
+    RUN_ID=${RUN_ID:-e97-4b-hybrid-ddp-96n-${QOS}-s$(printf '%02d' "$CAMPAIGN_PHASE")}
+    : "${SEED_CHECKPOINT:?short campaign requires the inspected prior checkpoint path}"
+    : "${SEED_SHA256:?short campaign requires the inspected prior checkpoint SHA-256}"
     ;;
   matched_clock_32n)
     [[ ${CONFIRM_MATCHED_CLOCK:-0} == 1 ]] || { echo "matched-clock test requires CONFIRM_MATCHED_CLOCK=1" >&2; exit 64; }

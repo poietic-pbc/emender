@@ -7,8 +7,14 @@ allocation window. The 96-node debug gate completed successfully as payload
 without starting or consuming compute, together with collector `5362810` after
 explicit operator authorization. Production now uses thirteen two-hour
 normal-QoS epochs to improve backfill access without mutating the immutable
-queued payload or abusing debug QoS. The campaign began with the bounded debug
-gate below.
+queued payload. Short normal phase 1 completed successfully as payload
+`5364644` / collector `5364645`, reaching step 19,200 / 22,414,360,576 tokens
+with final last-100 loss 2.5905 and a reloadable checkpoint. Short normal phase
+2 (`5366556` / `5366557`) then remained pending on priority and consumed no
+compute. The operator explicitly accepted the debug-QoS policy tradeoff and
+authorized cancellation plus repeated two-hour debug-QoS continuation to get
+a scientific answer before allocation expiry. The campaign began with the
+bounded debug gate below.
 If that gate has a hard systems, nonfinite, checkpoint, reload, or catastrophic
 learning failure, stop and report alternatives. If healthy, submit and inspect
 each of the four production epochs sequentially without waiting for another
@@ -54,7 +60,8 @@ same-world counter-v2 continuation after the debug transition.
 | p4 | normal / 06:00 | 28,160 -> 31,488 | 20,937,965,568 | 99,723,771,904 |
 
 The replacement short-production schedule divides the exact same remaining
-13,312 updates into thirteen normal-QoS epochs of 1,024 updates each. Targets
+13,312 updates into thirteen epochs of 1,024 updates each (phase 1 used normal QoS; phases 2--13 use the
+operator-authorized debug-QoS override). Targets
 are 19,200, 20,224, ..., 31,488; every epoch adds 6,442,450,944 tokens and is
 both K32- and save256-aligned. The two-hour limit preserves a roughly
 15-minute margin relative to the qualified 1h44m debug runtime. Each epoch is

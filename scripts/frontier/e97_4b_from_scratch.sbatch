@@ -221,7 +221,7 @@ elif [[ "$RUN_MODE" == hybrid_ddp_96n_debug ]]; then
     echo "96-node debug requires a readable parent latest.pt" >&2; exit 65;
   }
   LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=300
-elif [[ "$RUN_MODE" == hybrid_ddp_96n_production || "$RUN_MODE" == hybrid_ddp_96n_short_production ]]; then
+elif [[ "$RUN_MODE" == hybrid_ddp_96n_production || "$RUN_MODE" == hybrid_ddp_96n_short_production || "$RUN_MODE" == hybrid_ddp_96n_short_debug ]]; then
   [[ "$EXPECTED_NODES" == 96 && "$EXPECTED_WORLD_SIZE" == 768 ]] || {
     echo "96-node production is fixed at 96 nodes / 768 ranks" >&2; exit 64;
   }

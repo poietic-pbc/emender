@@ -128,6 +128,7 @@ def test_frontier_4b_96n_campaign_reaches_approximately_100b():
     assert campaign["debug_target_step"] == 18176
     assert campaign["production_target_steps"] == [21504, 24832, 28160, 31488]
     assert campaign["short_production_walltime"] == "02:00:00"
+    assert campaign["short_debug_qos_operator_override"] is True
     assert campaign["short_production_target_steps"] == list(range(19200, 31489, 1024))
     assert campaign["short_production_new_tokens_per_phase"] == 1024 * train["global_tokens_per_step"]
     assert campaign["debug_new_tokens"] == 1024 * train["global_tokens_per_step"]
@@ -207,6 +208,8 @@ def test_frontier_4b_submitter_is_immutable_attended_and_records_both_queue_fiel
     assert 'CONFIRM_96N_CAMPAIGN:-0' in text
     assert 'CAMPAIGN_PHASE=1..4' in text
     assert 'CAMPAIGN_PHASE=1..13' in text
+    assert 'CONFIRM_DEBUG_QOS_CAMPAIGN:-0' in text
+    assert 'QOS=debug' in text
     assert 'TIME_LIMIT=02:00:00' in text
     assert 'EXPECTED_TARGET_STEPS=$((18176 + CAMPAIGN_PHASE * 1024))' in text
     assert 'configs/frontier/e97_4b_hybrid_ddp_96n_campaign.json' in text
