@@ -4,7 +4,13 @@
 20,224 / 28,856,811,520 tokens. Pending 96-node phase 3 payload `5373274`
 and collector `5373275` were cancelled without running. The operator accepted
 the debug-QoS policy tradeoff to obtain a scientific answer before allocation
-expiry.
+expiry. After subsequent 96- and 256-node debug submissions remained pending,
+the operator made a final `256 nodes or bust` decision with a 48-hour deadline:
+one 256-node, eight-hour, normal-QoS payload will run all remaining 4,224
+updates from the accepted parent to step 24,448 / 99,723,771,904 tokens. This
+removes the extra canary queue cycle. The expected runtime is approximately
+seven hours; the eight-hour request retains final-checkpoint margin. The
+pending alternatives were cancelled before running and consumed no compute.
 
 ## Parent authority
 
@@ -36,9 +42,10 @@ Each optimizer update accepts 16,777,216 aggregate tokens. The remaining
 | c5 | 768 | 24,064 | 93,281,320,960 |
 | c6 | 384 | 24,448 | 99,723,771,904 |
 
-All targets are K32-aligned; full phases are also save256-aligned. The bounded
-c1 debug gate qualifies 2,048-rank merge time and stability before deciding
-between a measured 7--8h normal continuation and further debug epochs.
+All targets are K32-aligned; full phases are also save256-aligned. The phase table remains the exact token arithmetic and checkpoint schedule,
+but the final operator override executes c1--c6 continuously in one eight-hour
+normal-QoS allocation. Periodic save256 checkpoints retain recovery points at
+every listed full-phase boundary; the final target is K32-aligned.
 
 ## Gate
 
