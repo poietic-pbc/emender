@@ -10,6 +10,7 @@ SEED_CONTINUATION_CONFIG = ROOT / "configs/frontier/e97_4b_seed_continuation_32n
 SEED_SCALE_CONFIG = ROOT / "configs/frontier/e97_4b_seed_scale_64n.json"
 HYBRID_DDP_CONFIG = ROOT / "configs/frontier/e97_4b_hybrid_ddp_8n.json"
 HYBRID_96N_CONFIG = ROOT / "configs/frontier/e97_4b_hybrid_ddp_96n_campaign.json"
+HYBRID_256N_CONFIG = ROOT / "configs/frontier/e97_4b_hybrid_ddp_256n_campaign.json"
 PAYLOAD = ROOT / "scripts/frontier/e97_4b_from_scratch.sbatch"
 SUBMIT = ROOT / "scripts/frontier/submit_e97_4b_from_scratch.sh"
 COLLECTOR = ROOT / "scripts/frontier/e97_4b_from_scratch_collector.sh"
@@ -138,6 +139,29 @@ def test_frontier_4b_96n_campaign_reaches_approximately_100b():
     assert campaign["autonomous_continuation_authorized"] is True
 
 
+def test_frontier_4b_256n_campaign_reaches_approximately_100b():
+    cfg = json.loads(HYBRID_256N_CONFIG.read_text())
+    train = cfg["training"]
+    campaign = cfg["campaign"]
+    assert cfg["production_nodes"] == 256
+    assert cfg["production_qos"] == "debug"
+    assert cfg["production_walltime"] == "02:00:00"
+    assert train["diloco_island_size"] == 8
+    assert train["batch_size_per_rank"] == 4
+    assert train["global_tokens_per_step"] == 256 * 8 * 4 * 2048
+    assert campaign["target_steps"] == [20992, 21760, 22528, 23296, 24064, 24448]
+    expected_tokens = [
+        cfg["seed"]["source_total_tokens"]
+        + (step - cfg["seed"]["source_step"]) * train["global_tokens_per_step"]
+        for step in campaign["target_steps"]
+    ]
+    assert campaign["target_total_tokens"] == expected_tokens
+    assert expected_tokens[-1] == cfg["target_tokens"] == 99_723_771_904
+    assert campaign["full_phase_updates"] == 768
+    assert campaign["final_phase_updates"] == 384
+    assert campaign["autonomous_continuation_authorized"] is True
+
+
 def test_frontier_4b_payload_is_fixed_world_counter_sampled_and_fail_stop():
     text = PAYLOAD.read_text()
     assert "source scripts/frontier/activate_emender_frontier.sh" in text
@@ -164,6 +188,9 @@ def test_frontier_4b_payload_is_fixed_world_counter_sampled_and_fail_stop():
     assert "96-node production is fixed at 96 nodes / 768 ranks" in text
     assert "invalid 96-node production campaign target" in text
     assert "invalid 96-node short-production campaign target" in text
+    assert "256-node campaign is fixed at 256 nodes / 2048 ranks" in text
+    assert "invalid 256-node campaign target" in text
+    assert '( "$RUN_MODE" == hybrid_ddp_256n_debug && "$EXPECTED_TARGET_STEPS" == 20992 )' in text
     assert "matched-clock qualification is fixed at 32 nodes / 256 ranks" in text
     assert "matched-clock config must be B1/K32/save256/2048 steps" in text
     assert "bootstrap authority is fixed at 256 nodes / 2048 ranks" in text
@@ -216,6 +243,11 @@ def test_frontier_4b_submitter_is_immutable_attended_and_records_both_queue_fiel
     assert 'EXPECTED_TARGET_STEPS=18176' in text
     assert 'EXPECTED_TARGET_STEPS=21504' in text
     assert 'EXPECTED_TARGET_STEPS=31488' in text
+    assert 'CONFIRM_256N_CAMPAIGN:-0' in text
+    assert 'CAMPAIGN_PHASE=1..6' in text
+    assert 'configs/frontier/e97_4b_hybrid_ddp_256n_campaign.json' in text
+    assert 'EXPECTED_TARGET_STEPS=$((20224 + CAMPAIGN_PHASE * 768))' in text
+    assert 'EXPECTED_TARGET_STEPS=24448' in text
     assert 'CONFIRM_MATCHED_CLOCK:-0' in text
     assert 'NODES=32; QOS=debug; TIME_LIMIT=02:00:00' in text
     assert 'configs/frontier/e97_4b_matched_clock_32n.json' in text

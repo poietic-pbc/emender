@@ -99,6 +99,20 @@ case "$MODE" in
     : "${SEED_CHECKPOINT:?short campaign requires the inspected prior checkpoint path}"
     : "${SEED_SHA256:?short campaign requires the inspected prior checkpoint SHA-256}"
     ;;
+  hybrid_ddp_256n_debug)
+    [[ ${CONFIRM_256N_CAMPAIGN:-0} == 1 ]] || { echo "256-node campaign requires CONFIRM_256N_CAMPAIGN=1" >&2; exit 64; }
+    [[ ${CAMPAIGN_PHASE:-} =~ ^[1-6]$ ]] || { echo "256-node campaign requires CAMPAIGN_PHASE=1..6" >&2; exit 64; }
+    NODES=256; QOS=debug; TIME_LIMIT=02:00:00; SEED_MODE=1
+    CONFIG_REL=configs/frontier/e97_4b_hybrid_ddp_256n_campaign.json
+    if (( CAMPAIGN_PHASE <= 5 )); then
+      EXPECTED_TARGET_STEPS=$((20224 + CAMPAIGN_PHASE * 768))
+    else
+      EXPECTED_TARGET_STEPS=24448
+    fi
+    RUN_ID=${RUN_ID:-e97-4b-hybrid-ddp-256n-debug-c${CAMPAIGN_PHASE}}
+    : "${SEED_CHECKPOINT:?256-node campaign requires the inspected prior checkpoint path}"
+    : "${SEED_SHA256:?256-node campaign requires the inspected prior checkpoint SHA-256}"
+    ;;
   matched_clock_32n)
     [[ ${CONFIRM_MATCHED_CLOCK:-0} == 1 ]] || { echo "matched-clock test requires CONFIRM_MATCHED_CLOCK=1" >&2; exit 64; }
     NODES=32; QOS=debug; TIME_LIMIT=02:00:00

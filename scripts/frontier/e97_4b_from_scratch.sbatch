@@ -245,6 +245,21 @@ elif [[ "$RUN_MODE" == hybrid_ddp_96n_production || "$RUN_MODE" == hybrid_ddp_96
     echo "96-node production requires a readable inspected parent latest.pt" >&2; exit 65;
   }
   LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0
+elif [[ "$RUN_MODE" == hybrid_ddp_256n_debug ]]; then
+  [[ "$EXPECTED_NODES" == 256 && "$EXPECTED_WORLD_SIZE" == 2048 ]] || {
+    echo "256-node campaign is fixed at 256 nodes / 2048 ranks" >&2; exit 64;
+  }
+  [[ "$BATCH_SIZE" == 4 && "$DILOCO_K" == 32 && "$DILOCO_ISLAND_SIZE" == 8 && \
+     "$SAVE_EVERY" == 256 && "$SAMPLER_SCHEMA" == emender-byte-window-counter-v2 ]] || {
+    echo "256-node campaign requires B4/island8/K32/counter-v2" >&2; exit 64;
+  }
+  case "$EXPECTED_TARGET_STEPS" in 20992|21760|22528|23296|24064|24448) ;; *)
+    echo "invalid 256-node campaign target" >&2; exit 64;; esac
+  TARGET_STEPS=$EXPECTED_TARGET_STEPS
+  [[ -L "$RUN_DIR/train/latest.pt" && -r "$RUN_DIR/train/latest.pt" ]] || {
+    echo "256-node campaign requires a readable inspected parent latest.pt" >&2; exit 65;
+  }
+  LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0; FINAL_MARGIN_SECONDS=300
 elif [[ "$RUN_MODE" == matched_clock_32n ]]; then
   [[ "$EXPECTED_NODES" == 32 && "$EXPECTED_WORLD_SIZE" == 256 ]] || {
     echo "matched-clock qualification is fixed at 32 nodes / 256 ranks" >&2; exit 64;
@@ -315,7 +330,8 @@ ARGS=(
 (( SAMPLER_STREAM_ORIGIN == 0 )) || \
   ARGS+=(--sampler_stream_origin_accepted_tokens "$SAMPLER_STREAM_ORIGIN")
 if [[ "$RUN_MODE" == seed_import_32n_canary || "$RUN_MODE" == seed_scale_64n_canary || \
-      "$RUN_MODE" == hybrid_ddp_8n_canary || "$RUN_MODE" == hybrid_ddp_96n_debug ]]; then
+      "$RUN_MODE" == hybrid_ddp_8n_canary || "$RUN_MODE" == hybrid_ddp_96n_debug || \
+      ( "$RUN_MODE" == hybrid_ddp_256n_debug && "$EXPECTED_TARGET_STEPS" == 20992 ) ]]; then
   ARGS+=(--sampler_transition_from_counter)
 fi
 (( TRAIN_MINUTES == 0 )) || ARGS+=(--train_minutes "$TRAIN_MINUTES")
