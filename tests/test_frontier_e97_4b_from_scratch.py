@@ -175,6 +175,10 @@ def test_frontier_4b_256n_campaign_reaches_approximately_100b():
     assert campaign["final_normal_qos_operator_override"] is True
     assert campaign["final_normal_walltime"] == "08:00:00"
     assert campaign["final_normal_target_step"] == 24448
+    assert campaign["recovery_normal_walltime"] == "06:00:00"
+    assert campaign["recovery_source_step"] == 21760
+    assert campaign["recovery_source_total_tokens"] == 54_626_615_296
+    assert len(campaign["recovery_source_sha256"]) == 64
 
 
 def test_frontier_4b_payload_is_fixed_world_counter_sampled_and_fail_stop():
@@ -205,7 +209,8 @@ def test_frontier_4b_payload_is_fixed_world_counter_sampled_and_fail_stop():
     assert "invalid 96-node short-production campaign target" in text
     assert "256-node campaign is fixed at 256 nodes / 2048 ranks" in text
     assert "invalid 256-node campaign target" in text
-    assert "256-node final target must be 24448" in text
+    assert "256-node final/recovery target must be 24448" in text
+    assert '"$RUN_MODE" == hybrid_ddp_256n_recovery' in text
     assert '"$RUN_MODE" == hybrid_ddp_256n_final' in text
     assert '( "$RUN_MODE" == hybrid_ddp_256n_debug && "$EXPECTED_TARGET_STEPS" == 20992 )' in text
     assert "matched-clock qualification is fixed at 32 nodes / 256 ranks" in text
@@ -262,7 +267,9 @@ def test_frontier_4b_submitter_is_immutable_attended_and_records_both_queue_fiel
     assert 'EXPECTED_TARGET_STEPS=31488' in text
     assert 'CONFIRM_256N_CAMPAIGN:-0' in text
     assert 'CONFIRM_256N_FINAL:-0' in text
+    assert 'CONFIRM_256N_RECOVERY:-0' in text
     assert 'QOS=normal; TIME_LIMIT=08:00:00' in text
+    assert 'QOS=normal; TIME_LIMIT=06:00:00' in text
     assert 'CAMPAIGN_PHASE=1..6' in text
     assert 'configs/frontier/e97_4b_hybrid_ddp_256n_campaign.json' in text
     assert 'EXPECTED_TARGET_STEPS=$((20224 + CAMPAIGN_PHASE * 768))' in text

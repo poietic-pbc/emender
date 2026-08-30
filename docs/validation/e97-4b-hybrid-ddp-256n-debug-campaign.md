@@ -22,6 +22,19 @@ the unchanged 768-rank checkpoint. The corrected config supplies all 18 loader
 fields, and both pytest plus an exact extraction smoke validate the schema
 before the explicitly authorized replacement submission.
 
+Corrected payload `5381420` then trained healthily for 3h15m through stream
+step 22,012 and merge 55 before Slurm declared `NODE_FAIL` due explicitly to
+`frontier02966`. No model, optimizer, OOM, nonfinite, or distributed-training
+failure preceded the infrastructure loss. Collector `5381421` completed `0:0`
+and validated the latest durable 2,048-rank checkpoint at step 21,760 /
+54,626,615,296 tokens, loss 2.4504, SHA-256
+`245b8dfaa55a40ea67ad457809c3cbb0345f3cf779df277597d6e991bfbb20e2`.
+The operator explicitly authorized one same-world recovery from that authority.
+It must not repeat the counter transition. Remaining work is 2,688 updates /
+45,097,156,608 tokens; measured prior throughput projects approximately 4.4h
+training plus startup/finalization, so the recovery requests six hours on 256
+nodes at normal QoS.
+
 ## Parent authority
 
 - checkpoint: `e97-4b-hybrid-ddp-96n-debug-s02/train/checkpoint_step_020224_loss_2.7239.pt`;

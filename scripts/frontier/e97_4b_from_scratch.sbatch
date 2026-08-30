@@ -245,7 +245,7 @@ elif [[ "$RUN_MODE" == hybrid_ddp_96n_production || "$RUN_MODE" == hybrid_ddp_96
     echo "96-node production requires a readable inspected parent latest.pt" >&2; exit 65;
   }
   LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0
-elif [[ "$RUN_MODE" == hybrid_ddp_256n_debug || "$RUN_MODE" == hybrid_ddp_256n_final ]]; then
+elif [[ "$RUN_MODE" == hybrid_ddp_256n_debug || "$RUN_MODE" == hybrid_ddp_256n_final || "$RUN_MODE" == hybrid_ddp_256n_recovery ]]; then
   [[ "$EXPECTED_NODES" == 256 && "$EXPECTED_WORLD_SIZE" == 2048 ]] || {
     echo "256-node campaign is fixed at 256 nodes / 2048 ranks" >&2; exit 64;
   }
@@ -260,8 +260,8 @@ elif [[ "$RUN_MODE" == hybrid_ddp_256n_debug || "$RUN_MODE" == hybrid_ddp_256n_f
     echo "256-node campaign requires a readable inspected parent latest.pt" >&2; exit 65;
   }
   LOG_EVERY=${LOG_EVERY:-4}; TRAIN_MINUTES=0
-  if [[ "$RUN_MODE" == hybrid_ddp_256n_final ]]; then
-    [[ "$EXPECTED_TARGET_STEPS" == 24448 ]] || { echo "256-node final target must be 24448" >&2; exit 64; }
+  if [[ "$RUN_MODE" == hybrid_ddp_256n_final || "$RUN_MODE" == hybrid_ddp_256n_recovery ]]; then
+    [[ "$EXPECTED_TARGET_STEPS" == 24448 ]] || { echo "256-node final/recovery target must be 24448" >&2; exit 64; }
     FINAL_MARGIN_SECONDS=600
   else
     FINAL_MARGIN_SECONDS=300

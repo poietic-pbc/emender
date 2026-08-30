@@ -99,6 +99,14 @@ case "$MODE" in
     : "${SEED_CHECKPOINT:?short campaign requires the inspected prior checkpoint path}"
     : "${SEED_SHA256:?short campaign requires the inspected prior checkpoint SHA-256}"
     ;;
+  hybrid_ddp_256n_recovery)
+    [[ ${CONFIRM_256N_CAMPAIGN:-0} == 1 && ${CONFIRM_256N_RECOVERY:-0} == 1 ]] || { echo "256-node recovery requires both confirmation gates" >&2; exit 64; }
+    NODES=256; QOS=normal; TIME_LIMIT=06:00:00; SEED_MODE=1; EXPECTED_TARGET_STEPS=24448
+    CONFIG_REL=configs/frontier/e97_4b_hybrid_ddp_256n_campaign.json
+    RUN_ID=${RUN_ID:-e97-4b-hybrid-ddp-256n-recovery-r3}
+    : "${SEED_CHECKPOINT:?256-node recovery requires the inspected 2048-rank checkpoint path}"
+    : "${SEED_SHA256:?256-node recovery requires the inspected checkpoint SHA-256}"
+    ;;
   hybrid_ddp_256n_final)
     [[ ${CONFIRM_256N_CAMPAIGN:-0} == 1 && ${CONFIRM_256N_FINAL:-0} == 1 ]] || { echo "256-node final requires both confirmation gates" >&2; exit 64; }
     NODES=256; QOS=normal; TIME_LIMIT=08:00:00; SEED_MODE=1; EXPECTED_TARGET_STEPS=24448
