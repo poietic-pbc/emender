@@ -12,6 +12,16 @@ removes the extra canary queue cycle. The expected runtime is approximately
 seven hours; the eight-hour request retains final-checkpoint margin. The
 pending alternatives were cancelled before running and consumed no compute.
 
+The first final payload `5374260` entered its 256-node allocation but failed
+closed after eight seconds, before `srun`, because the new campaign config
+omitted legacy top-level keys read unconditionally by the shared payload:
+`bootstrap_smoke_steps` and `debug_continuation_train_minutes` (the
+`production_train_minutes` key was already present). It performed zero updates
+and left the accepted parent untouched; collector `5374261` correctly rejected
+the unchanged 768-rank checkpoint. The corrected config supplies all 18 loader
+fields, and both pytest plus an exact extraction smoke validate the schema
+before the explicitly authorized replacement submission.
+
 ## Parent authority
 
 - checkpoint: `e97-4b-hybrid-ddp-96n-debug-s02/train/checkpoint_step_020224_loss_2.7239.pt`;

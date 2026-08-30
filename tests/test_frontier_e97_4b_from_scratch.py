@@ -139,6 +139,18 @@ def test_frontier_4b_96n_campaign_reaches_approximately_100b():
     assert campaign["autonomous_continuation_authorized"] is True
 
 
+def test_frontier_4b_256n_config_satisfies_payload_loader_schema():
+    cfg = json.loads(HYBRID_256N_CONFIG.read_text())
+    # Keep this synchronized with the unconditional extraction in the sbatch
+    # payload; missing legacy mode fields must fail in pytest, not allocation.
+    assert isinstance(cfg["bootstrap_smoke_steps"], int)
+    assert isinstance(cfg["production_train_minutes"], int)
+    assert isinstance(cfg["debug_continuation_train_minutes"], int)
+    assert cfg["bootstrap_smoke_steps"] > 0
+    assert cfg["production_train_minutes"] == 0
+    assert cfg["debug_continuation_train_minutes"] == 0
+
+
 def test_frontier_4b_256n_campaign_reaches_approximately_100b():
     cfg = json.loads(HYBRID_256N_CONFIG.read_text())
     train = cfg["training"]
