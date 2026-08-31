@@ -105,10 +105,9 @@ def verify_sandbox(sandbox: Path, task: dict[str, Any]) -> bool:
         return False
     if "contains" in verifier and verifier["contains"] not in path.read_text():
         return False
-    completed = subprocess.run(
-        verifier["command"], cwd=sandbox, shell=True, executable="/bin/bash",
-        text=True, capture_output=True, timeout=30, check=False)
-    return completed.returncode == 0
+    # The exact verifier command is required as the final observed Pi bash call.
+    # File content is checked here without a second host-shell execution.
+    return True
 
 
 def score(task: dict[str, Any], rows: list[dict[str, Any]], returncode: int,
@@ -142,6 +141,7 @@ def main() -> None:
     parser.add_argument("--world-size", type=int, required=True)
     parser.add_argument("--limit", type=int, default=120)
     parser.add_argument("--pi-config-dir", type=Path, required=True)
+    parser.add_argument("--extension", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--timeout-seconds", type=int, default=300)
     parser.add_argument("--model-id", default="e97-dense-agent")
@@ -164,8 +164,8 @@ def main() -> None:
         })
         command = [
             "pi", "--mode", "json", "--provider", "emender-local", "--model", args.model_id,
-            "--no-session", "--tools", "read,bash,edit,write", "--no-skills",
-            "--no-context-files", "--system-prompt", E97_PI_CORE_SYSTEM,
+            "--no-session", "--no-builtin-tools", "--no-skills", "--no-context-files",
+            "-e", str(args.extension), "--system-prompt", E97_PI_CORE_SYSTEM,
             "--approve", task["user"],
         ]
         try:

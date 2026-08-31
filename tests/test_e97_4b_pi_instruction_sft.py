@@ -87,3 +87,19 @@ def test_frontier_launcher_has_required_scheduler_and_fail_stop_contracts():
     assert "LOCAL_RANK=0" in text
     assert "TRITON_CACHE_DIR=/tmp/e97-4b-pi-sft-${SLURM_JOB_ID}-${SLURM_PROCID}" in text
     assert "--kill-on-bad-exit=1" in text
+
+
+def test_real_pi_eval_uses_hash_pinned_sandbox_extension():
+    extension = open("configs/pi/e97-core-tools.ts").read()
+    assert 'name: "read"' in extension
+    assert 'name: "bash"' in extension
+    assert 'name: "edit"' in extension
+    assert 'name: "write"' in extension
+    assert 'runner, "--image", image, "--image-sha256", imageSha256' in extension
+    launcher = open("scripts/frontier/e97_4b_pi_core_eval_1n.sbatch").read()
+    assert "--no-requeue" in launcher
+    assert "|batch|debug|" in launcher
+    assert "LOCAL_RANK=0" in launcher
+    assert "--pi-core-canonical-system" in launcher
+    assert "configs/pi/e97-core-tools.ts" in launcher
+    assert "--kill-on-bad-exit=1" in launcher
