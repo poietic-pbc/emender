@@ -61,7 +61,6 @@ squeue -j "$SLURM_JOB_ID" -h -o '%i|%T|%N|%P|%q|%R' \
 grep -F "|${EXPECTED_PARTITION}|${EXPECTED_QOS}|" \
   "$RUN_ROOT/identity/squeue-${SLURM_JOB_ID}-running.txt" >/dev/null
 
-[[ $(git rev-parse HEAD) == "$SOURCE_COMMIT" ]] || exit 65
 git cat-file -e "${SOURCE_COMMIT}^{commit}"
 printf '%s\n' "$SOURCE_COMMIT" > "$RUN_ROOT/identity/source-commit.txt"
 printf '%s\n' "$SLURM_JOB_NODELIST" > "$RUN_ROOT/identity/nodelist-${SLURM_JOB_ID}.txt"

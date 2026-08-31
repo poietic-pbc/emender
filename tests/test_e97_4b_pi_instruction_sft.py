@@ -87,6 +87,8 @@ def test_frontier_launcher_has_required_scheduler_and_fail_stop_contracts():
     assert "LOCAL_RANK=0" in text
     assert "TRITON_CACHE_DIR=/tmp/e97-4b-pi-sft-${SLURM_JOB_ID}-${SLURM_PROCID}" in text
     assert "--kill-on-bad-exit=1" in text
+    assert 'git cat-file -e "${SOURCE_COMMIT}^{commit}"' in text
+    assert 'git rev-parse HEAD' not in text
 
 
 def test_real_pi_eval_uses_hash_pinned_sandbox_extension():
@@ -103,3 +105,4 @@ def test_real_pi_eval_uses_hash_pinned_sandbox_extension():
     assert "--pi-core-canonical-system" in launcher
     assert "configs/pi/e97-core-tools.ts" in launcher
     assert "--kill-on-bad-exit=1" in launcher
+    assert 'git rev-parse HEAD' not in launcher

@@ -103,6 +103,24 @@ Partition=batch
 NumTasks=8
 ```
 
+## First submission result and correction
+
+Job `5387623` entered `RUNNING` on `frontier08567` with the correct live
+`Partition=batch` and `QOS=debug`, then failed in 32 seconds with exit `65:0`
+before `srun`, model load, or GPU training. The launcher required the mutable
+working checkout's current `HEAD` to equal the already pinned submitted commit.
+The repository legitimately advanced while the job was queued, even though the
+launcher was prepared to execute `git archive "$SOURCE_COMMIT"`.
+
+The correction removes the mutable-HEAD equality check while retaining
+`git cat-file -e "${SOURCE_COMMIT}^{commit}"`, exact `git archive` execution,
+and the recorded source identity. A regression test requires both training and
+evaluation launchers to accept an older pinned commit from an advanced checkout.
+No model checkpoint or `latest.pt` was published by job `5387623`.
+
+Per the attended fail-stop policy, no replacement submission is made until this
+diagnosis and corrected immutable source receive operator review.
+
 ## Qualification acceptance
 
 The qualification passes when the terminal evidence establishes:

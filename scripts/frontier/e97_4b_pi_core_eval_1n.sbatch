@@ -35,7 +35,6 @@ printf '%s\n' "$record" > "$RUN_ROOT/identity/scontrol-${SLURM_JOB_ID}-running.t
 squeue -j "$SLURM_JOB_ID" -h -o '%i|%T|%N|%P|%q|%R' | tee "$RUN_ROOT/identity/squeue-${SLURM_JOB_ID}-running.txt"
 grep -F '|batch|debug|' "$RUN_ROOT/identity/squeue-${SLURM_JOB_ID}-running.txt" >/dev/null
 git cat-file -e "${SOURCE_COMMIT}^{commit}"
-[[ $(git rev-parse HEAD) == "$SOURCE_COMMIT" ]] || exit 65
 [[ $(sha256sum "$AUTHORITY_ROOT/manifest.json" | awk '{print $1}') == "$AUTHORITY_SHA256" ]] || exit 65
 [[ $(sha256sum "$CLI_IMAGE" | awk '{print $1}') == "$CLI_IMAGE_SHA256" ]] || exit 65
 
