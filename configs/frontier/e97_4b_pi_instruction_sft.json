@@ -1,0 +1,74 @@
+{
+  "schema": "emender-e97-4b-pi-instruction-sft-v1",
+  "parent": {
+    "path": "/lustre/orion/bif148/proj-shared/emender/frontier_runs/e97-4b-from-scratch/runs/e97-4b-hybrid-ddp-256n-recovery-r3/train/checkpoint_step_024448_loss_2.3981.pt",
+    "sha256": "3ace004251643acf2e7c7f720e8f29968ad0a483441553c0c885b87b3df84568",
+    "step": 24448,
+    "accepted_tokens": 99723771904,
+    "weight_mode": "schedulefree-train-y-recovered"
+  },
+  "model": {
+    "level": "E97",
+    "parameters": 4045972080,
+    "dim": 3840,
+    "depth": 18,
+    "n_heads": 60,
+    "n_state": 64,
+    "mlp_ratio": 2.5
+  },
+  "data": {
+    "pi_native_root": "/lustre/orion/bif148/proj-shared/emender/sft/pi-native-core-v1",
+    "pi_native_manifest_sha256": "c0d8a8934908da87a5624fb976f7872cc6b2ca3eb667892bb3a98126e08f9bae",
+    "authority_root": "/lustre/orion/bif148/proj-shared/emender/sft/e97-4b-pi-instruction-mix-v2",
+    "authority_manifest_sha256": "b0caebab3c25d4f700a7e723e8cca24f1213184c85af9286645ca8b731750ec4",
+    "pack_root": "/lustre/orion/bif148/proj-shared/emender/sft/e97-4b-pi-instruction-mix-v2/packs-4096-v1",
+    "pack_manifest_sha256": "eef729241438058f4866030fb397c98447ef7246e22ffa36bd10fba02ddebda7",
+    "pack_validation_sha256": "19c8a97dfb40c8109f4a7b2ed83e18434491d20a428c0920bd290d8b548ad11b",
+    "tokenizer": "p50k_base",
+    "context_size": 4096,
+    "sampler_schema": "emender-record-pack-counter-v1",
+    "sampler_key": 974003,
+    "assistant_target_mix": {
+      "pi_native_planned": 0.65,
+      "tulu3_replay_planned": 0.35,
+      "pi_native_retained_approx": 0.635,
+      "tulu3_replay_retained_approx": 0.365
+    },
+    "train_packs": 21043,
+    "validation_packs": 209,
+    "train_tokens": 80286679,
+    "train_assistant_target_tokens": 40546056
+  },
+  "training": {
+    "optimizer": "schedulefree-adamw",
+    "learning_rate": 1e-5,
+    "betas": [0.9, 0.95],
+    "weight_decay": 0.01,
+    "warmup_steps": 8,
+    "gradient_clip": 1.0,
+    "batch_size_per_rank": 1,
+    "gradient_checkpointing": true,
+    "gradient_checkpoint_group_size": 1,
+    "island_size": 8,
+    "diloco_k": 8,
+    "diloco_outer_optimizer": "avg",
+    "diloco_merge_bucket_numel": 67108864,
+    "save_every": 32,
+    "target_updates": 256
+  },
+  "frontier": {
+    "account": "bif148",
+    "partition": "batch",
+    "qos": "debug",
+    "qualification_nodes": 1,
+    "canary_nodes": 8,
+    "tasks_per_node": 8,
+    "walltime": "02:00:00",
+    "requeue": false
+  },
+  "huggingface": {
+    "repository": "spinozans/emender-e97-4b-pi-instruction-checkpoints",
+    "private": true,
+    "initial_commit": "aa0d0f52162996699fa21d31f37898528dbf6989"
+  }
+}
