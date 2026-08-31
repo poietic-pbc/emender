@@ -80,6 +80,31 @@ reload. A hard failure stops fresh submission. Rank-zero loss is supporting
 evidence only; fixed-panel evaluation remains required for scientific topology
 promotion.
 
+## Final outcome
+
+The explicitly authorized same-world recovery completed the campaign:
+
+- payload `5384001`: `batch/normal`, 256 nodes, `COMPLETED 0:0`, runtime
+  `04:42:09`, `Requeue=0`;
+- collector `5384002`: `batch/normal`, `COMPLETED 0:0`;
+- source commit `1453be9c941579bbaca74d231bc6a35636fa8e78`;
+- exact resume: step 21,760 / 54,626,615,296 tokens / world 2,048;
+- target: step 24,448 / 99,723,771,904 tokens;
+- exactly 84/84 K32 merges;
+- loss quartile means: 2.5123, 2.4712, 2.4341, 2.4126;
+- final last-100 loss: 2.3981; finite gradient range 0.77--1.34;
+- all 2,048 ranks reported 50,715 MiB allocated / 52,962 MiB reserved;
+- final checkpoint:
+  `checkpoint_step_024448_loss_2.3981.pt`;
+- SHA-256:
+  `3ace004251643acf2e7c7f720e8f29968ad0a483441553c0c885b87b3df84568`;
+- atomic `latest.pt`, world-2,048 identity, and independent mmap reload passed.
+
+This checkpoint is the final durable authority for the campaign. The run
+establishes sustained 256-node hybrid-DDP mechanics and a strong declining
+rank-zero training-loss trajectory. It does not replace the planned common
+fixed CommaPile panel for scientific topology comparison.
+
 This is ADR-003 fixed-world execution. Applicable safety intent is R07, R12,
 R14/NDP13, R16, and NDP15 checkpoint atomicity. Elastic, async-v2.1, ISP, and
 native-dataplane conformance remain explicitly unclaimed.
