@@ -100,6 +100,15 @@ The explicitly authorized same-world recovery completed the campaign:
   `3ace004251643acf2e7c7f720e8f29968ad0a483441553c0c885b87b3df84568`;
 - atomic `latest.pt`, world-2,048 identity, and independent mmap reload passed.
 
+The checkpoint and its trusted raw-pickle warning, metadata, original args,
+run manifest, scheduler evidence, SHA256SUMS, and reload receipt were uploaded
+to the private Hugging Face repository
+`spinozans/e97-4b-training-checkpoints` at immutable revision
+`53a41342277a7cc19e0242ea9b82c1c707133ee3`, with tag
+`step-024448-tokens-99723771904`. Remote metadata was downloaded back from the
+immutable revision and matched the staged source exactly; the Hub tree reports
+the 24.3 GB checkpoint at the expected path.
+
 This checkpoint is the final durable authority for the campaign. The run
 establishes sustained 256-node hybrid-DDP mechanics and a strong declining
 rank-zero training-loss trajectory. It does not replace the planned common
