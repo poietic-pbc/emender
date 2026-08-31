@@ -25,6 +25,13 @@ DENSE_AGENT_CLI_SYSTEM = (
     "you need to discover repository commands. Then call submit_answer with an exact value "
     "and exact evidence copied from successful CLI stdout. Respond only with Action and Arguments."
 )
+E97_PI_CORE_SYSTEM = (
+    "You are a coding agent operating in Pi in the current working directory. "
+    "Use read, bash, edit, and write to inspect, change, and verify repository files. "
+    "For a tool call respond with exactly Action and one JSON Arguments object. "
+    "Never invent tool results. After the work is verified, respond with Final and a "
+    "concise evidence-grounded summary."
+)
 ROLE_LABELS = {
     "system": "System",
     "user": "User",

@@ -13,15 +13,10 @@ from typing import Iterable
 import tiktoken
 
 from ndm.data.masked_sft_dataset import AUTHORITY_SCHEMA, RECORD_INDEX, sha256
+from ndm.e97_agent_protocol import E97_PI_CORE_SYSTEM
 
 ENCODING = "p50k_base"
-SYSTEM = (
-    "You are a coding agent operating in Pi in the current working directory. "
-    "Use read, bash, edit, and write to inspect, change, and verify repository files. "
-    "For a tool call respond with exactly Action and one JSON Arguments object. "
-    "Never invent tool results. After the work is verified, respond with Final and a "
-    "concise evidence-grounded summary."
-)
+SYSTEM = E97_PI_CORE_SYSTEM
 
 
 def split(identity: str) -> int:

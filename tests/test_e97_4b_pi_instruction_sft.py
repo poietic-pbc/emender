@@ -7,6 +7,7 @@ import tiktoken
 
 from ndm.data.masked_sft_dataset import RECORD_INDEX, sha256
 from scripts import build_e97_pi_instruction_sft as builder
+from scripts import eval_e97_4b_pi_core as evaluator
 from scripts import train_e97_4b_pi_sft as trainer
 
 
@@ -52,6 +53,19 @@ def test_build_and_mix_authorities_are_deterministic_and_target_weighted(tmp_pat
     for key in ("tokens", "mask", "index", "metadata"):
         entry = manifest["outputs"][key]
         assert sha256(mixed / __import__("pathlib").Path(entry["path"]).name) == entry["sha256"]
+
+
+def test_pi_evaluator_reconstructs_exact_recovery_contract(tmp_path):
+    user, turns, task = builder.trace("recover-test", 9, __import__("random").Random(4))
+    row = {"id": "pi-native-recover-test-00000009", "kind": "recover-test", "user": user, "task": task}
+    expected = evaluator.expected_calls(row)
+    assert [name for name, _ in expected] == ["bash", "read", "edit", "bash"]
+    sandbox = evaluator.make_sandbox(tmp_path, row)
+    # Applying the expected edit yields the mechanically checked terminal state.
+    _, edit_args = expected[2]
+    path = sandbox / edit_args["path"]
+    path.write_text(path.read_text().replace(edit_args["oldText"], edit_args["newText"]))
+    assert evaluator.verify_sandbox(sandbox, row)
 
 
 def test_checkpoint_recipe_is_k_aligned_and_bounded():
