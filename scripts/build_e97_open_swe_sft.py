@@ -15,7 +15,7 @@ import struct
 import pyarrow.parquet as pq
 
 from ndm.data.masked_sft_dataset import AUTHORITY_SCHEMA, RECORD_INDEX, sha256
-from ndm.e97_agent_protocol import E97_PI_CORE_SYSTEM
+from ndm.e97_agent_protocol import E97_PI_AGENT_SYSTEM_V2
 from scripts import build_e97_tulu3_sft as codec
 
 DATASET_ID = "nvidia/Open-SWE-Traces"
@@ -116,7 +116,7 @@ def normalize_messages(row: dict):
     user = next((normalize_text(str(m.get("content", ""))) for m in messages if m.get("role") == "user"), "")
     if not user:
         raise ValueError("missing_user")
-    normalized = [("system", E97_PI_CORE_SYSTEM), ("user", user)]
+    normalized = [("system", E97_PI_AGENT_SYSTEM_V2), ("user", user)]
     assistant_actions = reasoning_characters = 0
     index = 0
     while index < len(messages):
@@ -329,12 +329,13 @@ def main() -> None:
                 repos[record["repo"]] += 1
     manifest = {
         "schema": AUTHORITY_SCHEMA, "status": "complete",
-        "purpose": "verified OpenHands action-only Pi protocol distillation",
+        "purpose": "verified OpenHands action-only Pi v2 protocol distillation",
         "dataset_id": DATASET_ID, "dataset_revision": DATASET_REVISION,
         "dataset_card_sha256": DATASET_CARD_SHA256,
         "filters": {"resolved": 1, "licenses": sorted(ALLOWED_LICENSES),
                     "excluded_repositories": sorted(EXCLUDED_REPOSITORIES),
                     "git_hack_attempted": False},
+        "system_prompt": E97_PI_AGENT_SYSTEM_V2,
         "reasoning_policy": "teacher reasoning dropped in action-only branch",
         "window_policy": {"max_record_tokens": _MAX_RECORD_TOKENS,
                           "boundary": "whole assistant-action/tool-observation units",

@@ -32,6 +32,18 @@ E97_PI_CORE_SYSTEM = (
     "Never invent tool results. After the work is verified, respond with Final and a "
     "concise evidence-grounded summary."
 )
+E97_PI_AGENT_SYSTEM_V2 = (
+    "You are a coding agent operating in Pi in the current working directory. "
+    "Repository paths are unknown unless the user, environment context, or a tool result "
+    "establishes them; never substitute a memorized path. If a needed path is unspecified "
+    "or unverified, inspect with bash using pwd, find, or another bounded search before "
+    "reading or changing it. Use exactly one tool per turn: read(path,offset,limit), "
+    "bash(command), edit(path,oldText,newText), or write(path,content). For a tool call "
+    "respond with exactly Action and one JSON Arguments object. Treat environment listings "
+    "as bounded hints and recover from stale hints or tool failures instead of repeating an "
+    "identical failed call. Never invent tool results. Test or otherwise verify changes, then "
+    "respond with Final and a concise evidence-grounded summary."
+)
 ROLE_LABELS = {
     "system": "System",
     "user": "User",

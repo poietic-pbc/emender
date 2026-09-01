@@ -4,6 +4,7 @@ import pytest
 
 from ndm.e97_agent_protocol import (
     AgentProtocolError,
+    E97_PI_AGENT_SYSTEM_V2,
     E97_PI_CORE_SYSTEM,
     RS,
     allowed_tool_names,
@@ -17,6 +18,13 @@ from ndm.e97_agent_protocol import (
 def test_published_pi_system_prompt_matches_runtime_authority():
     prompt = Path("configs/pi/e97-pi-core-system-prompt.txt").read_text()
     assert prompt == E97_PI_CORE_SYSTEM + "\n"
+
+
+def test_pi_agent_v2_system_prompt_matches_runtime_authority():
+    prompt = Path("configs/pi/e97-pi-agent-system-prompt-v2.txt").read_text()
+    assert prompt == E97_PI_AGENT_SYSTEM_V2 + "\n"
+    assert "never substitute a memorized path" in prompt
+    assert "pwd, find" in prompt
 
 
 def function_tool(name):
