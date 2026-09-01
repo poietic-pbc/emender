@@ -15,6 +15,7 @@ RUN_ID=${RUN_ID:-e97-4b-pi-finalization-repair-$(date -u +%Y%m%dT%H%M%SZ)}
 BASE=${BASE:-/mnt/nvme1n1/erikg/diloco_8gpu/e97_4b_pi_instruction_local}
 RUN_ROOT=$BASE/runs/$RUN_ID
 STEPS=${STEPS:-64}; SAVE_EVERY=${SAVE_EVERY:-32}; DILOCO_K=${DILOCO_K:-8}
+KEEP_CHECKPOINTS=${KEEP_CHECKPOINTS:-3}; SAMPLER_KEY=${SAMPLER_KEY:-974103}
 LR=${LR:-5e-6}; WARMUP_STEPS=${WARMUP_STEPS:-8}
 [[ "$RUN_ROOT" == /* && ! -e "$RUN_ROOT" ]] || { echo "run root must be new and absolute" >&2; exit 64; }
 for path in "$PARENT_CHECKPOINT" "$SOURCE_ARGS" "$AUTHORITY_ROOT/manifest.json" "$PACK_ROOT/manifest.json"; do
@@ -37,9 +38,9 @@ COMMAND=(
   --authority-root "$AUTHORITY_ROOT" --authority-sha256 "$AUTHORITY_SHA256"
   --pack-root "$PACK_ROOT" --pack-sha256 "$PACK_SHA256"
   --output-root "$RUN_ROOT/checkpoints" --log-jsonl "$RUN_ROOT/logs/training.jsonl"
-  --steps "$STEPS" --save-every "$SAVE_EVERY" --keep-checkpoints 3
+  --steps "$STEPS" --save-every "$SAVE_EVERY" --keep-checkpoints "$KEEP_CHECKPOINTS"
   --diloco-k "$DILOCO_K" --context-size 4096 --lr "$LR" --warmup-steps "$WARMUP_STEPS"
-  --sampler-key 974103 --island-size 8 --merge-bucket-numel 67108864
+  --sampler-key "$SAMPLER_KEY" --island-size 8 --merge-bucket-numel 67108864
   --offload-schedulefree-state --schedulefree-offload-bucket-numel 67108864
 )
 printf '%q ' "${COMMAND[@]}" > "$RUN_ROOT/identity/command.txt"; printf '\n' >> "$RUN_ROOT/identity/command.txt"
