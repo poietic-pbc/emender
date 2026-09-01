@@ -1,6 +1,7 @@
 # EMENDER E97 4B Pi instruction-tuning plan
 
-**Status:** active implementation plan
+**Status:** first-phase historical plan; broad continuation is governed by
+[`EMENDER_E97_4B_BROAD_POSTTRAINING_PLAN.md`](EMENDER_E97_4B_BROAD_POSTTRAINING_PLAN.md)
 
 **Created:** 2026-08-31
 

@@ -1,7 +1,29 @@
 # E97 4B Pi compositional v3 preflight
 
-**Status:** curriculum and blind evaluation are frozen; candidate training has
-not started.
+**Status:** first blind evaluation complete and failed; v3 is diagnostic and
+must not be reused as blind promotion evidence.
+
+## Terminal blind result
+
+The behaviorally selected cumulative-recovery u8 checkpoint had SHA-256
+`eed48419d657b0be03953f6c99dc0ba14e61579ee748174ef0e6794f895157ed`.
+Before v3 it scored 120/120 on the original smoke panel and 226/240 on full
+compositional v2. Its first and only blind v3 evaluation scored 0/240:
+
+- schema-valid tool calls: 240/240;
+- exact tool sequences: 40/240;
+- exact tool arguments: 0/240;
+- completed, protocol-valid trajectories: 0/240;
+- sandbox postconditions: 80/240, dominated by non-mutating/vacuous tasks;
+- every v3 family: 0/40.
+
+Traces show explicit user paths replaced by memorized defaults such as
+`config.json` and `deployment.json`. The model then immediately repeated the
+failed call and the server cycle guard terminated it. This is decisive evidence
+of within-family template learning without family-level instruction transfer.
+No v3 record may enter training under a later claim of blind evaluation. The
+next phase is governed by
+[`../EMENDER_E97_4B_BROAD_POSTTRAINING_PLAN.md`](../EMENDER_E97_4B_BROAD_POSTTRAINING_PLAN.md).
 
 ## Gap evidence
 
