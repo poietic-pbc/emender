@@ -74,8 +74,19 @@ tool contracts.
 
 ## Candidate ladder
 
-The first candidate branch starts from the promoted live-aligned u8 saved `x`
-weights with a fresh Schedule-Free optimizer. It uses LR `2e-6`, K8 synchronization,
-and retained checkpoints every eight updates through update 64. Selection order
-is: v2 behavior, original 120-task smoke retention, then untouched blind v3.
-Loss alone cannot authorize continuation or promotion.
+The first candidate branch started from the promoted live-aligned u8 saved `x`
+weights with a fresh Schedule-Free optimizer. It used LR `2e-6`, K8
+synchronization, and retained checkpoints every eight updates through update 64.
+Updates 8, 16, 32, 48, and 64 each scored 0/120 on the balanced v2 diagnostic.
+Update 64 improved no-cycle behavior to 28/120 and protocol completion to 4/120,
+but exact arguments stayed 0/120. This LR/mixed-replay branch is rejected rather
+than extended on the strength of its falling loss.
+
+The second bounded branch restarts from the promoted parent, raises LR to `1e-5`,
+and uses the pure compositional authority so every sampled pack addresses the
+observed gap. It retains K8 checkpoints every eight updates through update 64.
+Replay retention is evaluated rather than assumed; if compositional behavior
+appears but the original smoke regresses, a subsequent lower-LR replay stage may
+repair retention. Selection order remains: v2 behavior, original 120-task smoke
+retention, then untouched blind v3. Loss alone cannot authorize continuation or
+promotion.
