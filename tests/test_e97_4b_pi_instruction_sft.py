@@ -11,6 +11,7 @@ from ndm.data.masked_sft_dataset import RECORD_INDEX, sha256
 from ndm.schedulefree_offload import CPUOffloadAdamWScheduleFree
 from scripts import build_e97_pi_instruction_sft as builder
 from scripts import build_e97_pi_eval_v2 as eval_v2_builder
+from scripts import build_e97_pi_compositional_sft as compositional_builder
 from scripts import build_e97_pi_finalization_repair_sft as repair_builder
 from scripts import eval_e97_4b_pi_core as evaluator
 from scripts import train_e97_4b_pi_sft as trainer
@@ -133,6 +134,24 @@ def test_pi_eval_v2_declares_compositional_contracts_and_postconditions(tmp_path
         assert task["final_contains"]
         sandbox = evaluator.make_sandbox(tmp_path, row)
         assert sandbox.is_dir()
+
+
+def test_compositional_sft_uses_live_context_and_targets_every_action():
+    encoding = tiktoken.get_encoding("p50k_base")
+    for index, kind in enumerate(eval_v2_builder.KINDS):
+        user, turns, _ = compositional_builder.trajectory(
+            kind, 1_000_000 + index, __import__("random").Random(300 + index))
+        tokens, masks, text = repair_builder.serialize_live_aligned(
+            [("system", builder.SYSTEM), ("user", user), *turns],
+            encoding, target_mode="all-assistant")
+        targeted = b"".join(
+            encoding.decode_single_token_bytes(token)
+            for token, mask in zip(tokens, masks) if mask
+        ).decode(errors="replace")
+        assert targeted.count("Action:") == len(turns[0:-1:2])
+        assert "Final:" in targeted and masks[-1] == 1
+        if kind in {"search-edit", "multi-edit", "recover-edit", "diagnose-test", "write-from-spec"}:
+            assert "(no tool output)" in text
 
 
 def test_pi_eval_v2_builder_freezes_all_records_for_evaluation(tmp_path):
