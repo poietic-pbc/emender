@@ -75,6 +75,50 @@ Repair authority:
 The repair starts from the update-64 saved `x` weights, not the behaviorally
 worse update-256 endpoint. It deliberately starts a fresh Schedule-Free
 optimizer at LR `5e-6`; old moments encode the superseded mixed curriculum.
-The bounded first repair is 64 updates with K8 checkpoints at repair updates 32
-and 64. Both are evaluated; repair loss alone cannot authorize continuation or
-promotion.
+The bounded first repair was 64 updates with K8 checkpoints at repair updates
+32 and 64. Real-Pi evaluation rejected both: terminal completion improved to
+119/120, but action-only masking caused premature finalization and degraded tool
+execution. Update 32 reached 62/120 full passes and update 64 reached 52/120.
+An eight-update micro-repair had the same failure mode (75/120).
+
+## Balanced live-aligned repair and promotion
+
+The accepted repair retains the exact live `(no tool output)` context but targets
+**all** assistant actions as well as the terminal final/newline. Its immutable
+authority has 20,000 records, 5,571,273 input tokens, and 2,400,225 assistant
+target tokens:
+
+- authority SHA-256:
+  `4a1cf86f9089cc3f2f79884f845d26d487d88b20fb32b589a8095d4824bc6a20`;
+- 1,419 completely validated 4K packs;
+- pack-manifest SHA-256:
+  `e4c24641cbbe1f70c84c48fcb5fdd815bb6aa6a67c285a2c08c3a4cd2cf2eaa0`.
+
+Eight updates from the update-64 saved `x` weights used a fresh Schedule-Free
+optimizer, LR `5e-6`, warmup 8, and K8 synchronization. The checkpoint contains
+4,045,972,080 unique parameters, passed mmap reload validation, and has SHA-256
+`b799802741737058c4de74e233a8af8e6a9a18977cbf753ad44f9037a27c3da8`.
+
+The first balanced evaluation exposed a serving false positive: the cycle guard
+rejected a focused test rerun after an intervening edit. A failed check followed
+by repair and the same verification is progress, not a cycle. Commit `95f50c29`
+therefore rejects only immediately consecutive identical actions; the server
+and protocol suite passes 24/24 tests. This does not relax the no-progress guard:
+an unchanged missing-path read repeated immediately is still rejected.
+
+The corrected, fixed 120-task real-Pi panel accepted the checkpoint:
+
+| Metric | Result |
+|---|---:|
+| Full task pass | **119/120** |
+| Protocol-valid / grounded final | **119/120** |
+| Schema-valid calls | **120/120** |
+| Exact tool sequence | **120/120** |
+| Exact tool arguments | **119/120** |
+| Sandbox postcondition | **120/120** |
+| No identical-call cycle | **119/120** |
+
+Bash, edit, read, write, and recover-test each passed 20/20; recover-read passed
+19/20. The sole failure immediately repeated the same missing-path read and was
+correctly stopped by the cycle guard. This checkpoint is behaviorally promoted;
+none of the lower-loss broad or final-only endpoints is promoted.
