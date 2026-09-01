@@ -11,6 +11,7 @@ from ndm.data.masked_sft_dataset import RECORD_INDEX, sha256
 from ndm.schedulefree_offload import CPUOffloadAdamWScheduleFree
 from scripts import build_e97_pi_instruction_sft as builder
 from scripts import build_e97_pi_eval_v2 as eval_v2_builder
+from scripts import build_e97_pi_eval_v3 as eval_v3_builder
 from scripts import build_e97_pi_compositional_sft as compositional_builder
 from scripts import build_e97_pi_finalization_repair_sft as repair_builder
 from scripts import eval_e97_4b_pi_core as evaluator
@@ -154,6 +155,16 @@ def test_compositional_sft_uses_live_context_and_targets_every_action():
             assert "(no tool output)" in text
 
 
+def test_pi_eval_v3_freezes_blind_family_heldout_contracts(tmp_path):
+    for index, kind in enumerate(eval_v3_builder.KINDS):
+        user, task = eval_v3_builder.trace(
+            kind, index, __import__("random").Random(500 + index))
+        row = {"id": f"v3-{index}", "kind": kind, "user": user, "task": task}
+        assert len(evaluator.expected_calls(row)) >= 2
+        assert task["final_contains"]
+        assert evaluator.make_sandbox(tmp_path, row).is_dir()
+
+
 def test_pi_eval_v2_builder_freezes_all_records_for_evaluation(tmp_path):
     root = tmp_path / "v2"
     run("scripts/build_e97_pi_eval_v2.py", "--output-root", root,
@@ -210,7 +221,9 @@ def test_local_finalization_repair_launcher_is_hash_bound_and_fresh_optimizer():
     assert '--new-stage-from "$PARENT_CHECKPOINT"' in text
     assert 'sha256sum "$PARENT_CHECKPOINT"' in text
     assert "gpu_lease.sh acquire 8 --no-wait" in text
-    assert "--sampler-key 974103" in text
+    assert "SAMPLER_KEY=${SAMPLER_KEY:-974103}" in text
+    assert '--sampler-key "$SAMPLER_KEY"' in text
+    assert '--keep-checkpoints "$KEEP_CHECKPOINTS"' in text
     assert "--offload-schedulefree-state" in text
     assert "LOCAL_PI_FINALIZATION_REPAIR_COMPLETE" in text
 
