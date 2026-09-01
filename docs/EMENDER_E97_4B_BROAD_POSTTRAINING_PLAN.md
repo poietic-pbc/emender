@@ -207,6 +207,16 @@ checkpoint that regresses the SFT gates.
 - Retain intermediate checkpoints and choose behaviorally. Lower loss is never a
   promotion argument by itself.
 
+## Long-context execution evidence
+
+The local 65,536-token SFT path is systems-qualified with two-layer activation
+checkpoint groups; see
+[`validation/e97-4b-pi-sft-64k-local-qualification.md`](validation/e97-4b-pi-sft-64k-local-qualification.md).
+This establishes fit, backward, update, checkpoint, and exact resume—not
+long-context behavior. Complete 64K trajectories and efficient 4K rolling
+state-action windows remain separate authorities so context length can be
+selected behaviorally rather than from loss or memory fit alone.
+
 ## Promotion gates
 
 A replacement checkpoint must satisfy all of the following:
