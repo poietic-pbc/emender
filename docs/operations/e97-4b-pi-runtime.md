@@ -18,6 +18,13 @@ The Python authority is `E97_PI_CORE_SYSTEM` in
 `ndm/e97_agent_protocol.py`. A regression test requires the published text file
 and Python constant to remain identical.
 
+This short prompt—not Pi's full generated system prompt—was serialized into
+`pi-native-core-v1` and the later live-aligned repair authorities. Those
+synthetic tasks almost always named the correct path in the user request; they
+did not teach general repository discovery. Supplying the full Pi prompt is
+therefore neither required nor a remedy for the known held-out-family path
+substitution failure.
+
 ## Assistant turn grammar
 
 The model generates exactly one action or one terminal final per turn:
@@ -59,6 +66,27 @@ pi --mode interactive \
 The local OpenAI-compatible server must use `--pi-core-canonical-system` or an
 equivalent request-time check. See `scripts/serve_e97_agent_openai.py` and
 `ndm/e97_agent_server.py`.
+
+The published model configuration advertises a 32,768-token operational window.
+This prevents Pi from reducing `max_completion_tokens` to one after reserving
+its own output budget, even when Pi constructs a large prompt before the server
+replaces the system message. It is an integration budget, not a claim that this
+development checkpoint was behaviorally qualified at 32K.
+
+## Recurrent prefix caching
+
+The server can retain an E97 recurrent state for a Pi session. The published
+provider compatibility settings request `x-session-id` affinity headers. On the
+first request `x-emender-cache` is `miss`; subsequent append-only requests must
+report `hit`, and `x-emender-suffix-tokens` must count only the newly ingested
+suffix. A persistent `miss` means session affinity is not reaching the server
+and makes the client replay the complete transcript unnecessarily.
+
+A static system prompt can also be prefetched once and cloned as the initial
+state for new sessions. Dynamic repository context should remain compact (for
+example cwd plus a bounded top-level listing) and be ingested once per session.
+Caching removes repeated prefill cost; it does not make an unsupported full Pi
+prompt behaviorally equivalent to the short training prompt.
 
 ## Transcript serialization
 

@@ -151,6 +151,74 @@ def normalize_messages(row: dict):
     return normalized, assistant_actions, reasoning_characters
 
 
+ROLE_PREFIX = {"system": "System:\n", "user": "User:\n",
+               "assistant": "Assistant:\n", "tool": "Tool:\n"}
+_MAX_RECORD_TOKENS = 4096
+
+
+def encode_record(messages):
+    pieces = []
+    for index, (role, content, targeted) in enumerate(messages):
+        if index:
+            pieces.append(("\n\n", False))
+        pieces.append((ROLE_PREFIX[role], False))
+        pieces.append((content, targeted))
+    pieces.append((codec.RS, True))
+    tokens, masks, complete = codec._encode_pieces(pieces)
+    return tokens, masks, complete
+
+
+def segment_messages(messages, max_tokens):
+    base = [(role, content, False) for role, content in messages[:2]]
+    if len(encode_record(base)[0]) >= max_tokens:
+        raise ValueError("oversize_system_and_user")
+    units = []
+    index = 2
+    while index < len(messages):
+        role, content = messages[index]
+        if role != "assistant":
+            index += 1
+            continue
+        unit = [(role, content, True)]
+        if index + 1 < len(messages) and messages[index + 1][0] == "tool":
+            tool_role, tool_content = messages[index + 1]
+            unit.append((tool_role, tool_content, False))
+            index += 1
+        units.append(unit)
+        index += 1
+    records, current = [], list(base)
+    dropped_observations = dropped_actions = 0
+    previous_context = None
+    for unit in units:
+        trial = current + unit
+        if len(encode_record(trial)[0]) <= max_tokens:
+            current = trial
+            previous_context = [(role, content, False) for role, content, _ in unit]
+            continue
+        if any(targeted for _, _, targeted in current):
+            records.append(current)
+        current = list(base)
+        if previous_context and len(encode_record(current + previous_context + unit)[0]) <= max_tokens:
+            current += previous_context
+        if len(encode_record(current + unit)[0]) <= max_tokens:
+            current += unit
+            previous_context = [(role, content, False) for role, content, _ in unit]
+            continue
+        action_only = [unit[0]]
+        if len(encode_record(current + action_only)[0]) <= max_tokens:
+            current += action_only
+            dropped_observations += int(len(unit) == 2)
+            previous_context = None
+        else:
+            dropped_actions += 1
+            previous_context = None
+    if any(targeted for _, _, targeted in current):
+        records.append(current)
+    if not records:
+        raise ValueError("no_bounded_records")
+    return records, dropped_observations, dropped_actions
+
+
 def serialize_item(item):
     source_file, row_index, row = item
     identity = f"open-swe:{row.get('trajectory_id', source_file + ':' + str(row_index))}"
@@ -167,28 +235,28 @@ def serialize_item(item):
         return {"excluded": "git_hack_attempted", "identity": identity}
     try:
         messages, actions, reasoning_characters = normalize_messages(row)
+        segments, dropped_observations, dropped_actions = segment_messages(messages, _MAX_RECORD_TOKENS)
     except ValueError as error:
         return {"error": str(error), "identity": identity}
-    pieces = []
-    for index, (role, content) in enumerate(messages):
-        if index:
-            pieces.append(("\n\n", False))
-        pieces.append(({"system": "System:\n", "user": "User:\n",
-                        "assistant": "Assistant:\n", "tool": "Tool:\n"}[role], False))
-        pieces.append((content, role == "assistant"))
-    pieces.append((codec.RS, True))
-    try:
-        tokens, masks, complete = codec._encode_pieces(pieces)
-    except ValueError as error:
-        return {"error": str(error), "identity": identity}
-    return {
-        "identity": identity, "source_file": source_file, "source_row": row_index,
-        "repo": repo, "license": license_name, "split": int(split(identity)),
-        "tokens": len(tokens), "targets": sum(masks), "actions": actions,
-        "reasoning_characters_dropped": reasoning_characters,
-        "token_bytes": struct.pack(f"<{len(tokens)}I", *tokens), "mask_bytes": bytes(masks),
-        "serialization_sha256": hashlib.sha256(complete.encode()).hexdigest(),
-    }
+    encoded = []
+    trajectory_split = int(split(identity))
+    for segment_index, segment in enumerate(segments):
+        try:
+            tokens, masks, complete = encode_record(segment)
+        except ValueError as error:
+            return {"error": str(error), "identity": identity}
+        encoded.append({
+            "identity": f"{identity}:window:{segment_index:04d}",
+            "trajectory_identity": identity, "source_file": source_file,
+            "source_row": row_index, "repo": repo, "license": license_name,
+            "split": trajectory_split, "tokens": len(tokens), "targets": sum(masks),
+            "actions": sum(1 for role, _, targeted in segment if role == "assistant" and targeted),
+            "token_bytes": struct.pack(f"<{len(tokens)}I", *tokens), "mask_bytes": bytes(masks),
+            "serialization_sha256": hashlib.sha256(complete.encode()).hexdigest(),
+        })
+    return {"records": encoded, "identity": identity, "reasoning_characters_dropped": reasoning_characters,
+            "source_actions": actions, "dropped_oversize_observations": dropped_observations,
+            "dropped_oversize_actions": dropped_actions}
 
 
 def rows(paths):
@@ -206,7 +274,12 @@ def main() -> None:
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=16)
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--max-record-tokens", type=int, default=4096)
     args = parser.parse_args()
+    global _MAX_RECORD_TOKENS
+    _MAX_RECORD_TOKENS = args.max_record_tokens
+    if _MAX_RECORD_TOKENS < 512:
+        raise SystemExit("--max-record-tokens must be at least 512")
     cache_root = os.environ.get("TIKTOKEN_CACHE_DIR")
     cache_object = Path(cache_root or "") / codec.TOKENIZER_CACHE_KEY
     if not cache_root or not cache_object.is_file() or sha256(cache_object) != codec.TOKENIZER_SHA256:
@@ -239,16 +312,21 @@ def main() -> None:
             if "error" in result:
                 errors[result["error"]] += 1
                 continue
-            token_out.write(result.pop("token_bytes")); mask_out.write(result.pop("mask_bytes"))
-            index_out.write(RECORD_INDEX.pack(offset, result["tokens"], result["targets"], result["split"]))
-            metadata_out.write(json.dumps(result, sort_keys=True) + "\n")
-            offset += result["tokens"]
-            counts["records"] += 1; counts["tokens"] += result["tokens"]
-            counts["assistant_target_tokens"] += result["targets"]
-            counts["assistant_actions"] += result["actions"]
+            counts["source_trajectories"] += 1
+            counts["source_actions"] += result["source_actions"]
             counts["reasoning_characters_dropped"] += result["reasoning_characters_dropped"]
-            counts["validation_records" if result["split"] else "train_records"] += 1
-            repos[result["repo"]] += 1
+            counts["dropped_oversize_observations"] += result["dropped_oversize_observations"]
+            counts["dropped_oversize_actions"] += result["dropped_oversize_actions"]
+            for record in result["records"]:
+                token_out.write(record.pop("token_bytes")); mask_out.write(record.pop("mask_bytes"))
+                index_out.write(RECORD_INDEX.pack(offset, record["tokens"], record["targets"], record["split"]))
+                metadata_out.write(json.dumps(record, sort_keys=True) + "\n")
+                offset += record["tokens"]
+                counts["records"] += 1; counts["tokens"] += record["tokens"]
+                counts["assistant_target_tokens"] += record["targets"]
+                counts["assistant_actions"] += record["actions"]
+                counts["validation_records" if record["split"] else "train_records"] += 1
+                repos[record["repo"]] += 1
     manifest = {
         "schema": AUTHORITY_SCHEMA, "status": "complete",
         "purpose": "verified OpenHands action-only Pi protocol distillation",
@@ -258,6 +336,10 @@ def main() -> None:
                     "excluded_repositories": sorted(EXCLUDED_REPOSITORIES),
                     "git_hack_attempted": False},
         "reasoning_policy": "teacher reasoning dropped in action-only branch",
+        "window_policy": {"max_record_tokens": _MAX_RECORD_TOKENS,
+                          "boundary": "whole assistant-action/tool-observation units",
+                          "overlap": "previous complete unit as untargeted context when it fits",
+                          "oversize": "omit whole observation or action and count it; never truncate content"},
         "counts": dict(counts), "errors": dict(errors), "excluded": dict(excluded),
         "repository_counts": dict(repos),
         "input_files": [{"name": path.name, "bytes": path.stat().st_size, "sha256": sha256(path)} for path in paths],
