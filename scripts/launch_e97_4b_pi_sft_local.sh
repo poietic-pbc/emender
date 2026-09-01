@@ -14,6 +14,8 @@ AUTHORITY_SHA256=${AUTHORITY_SHA256:-$(sha256sum "$AUTHORITY_ROOT/manifest.json"
 PACK_SHA256=${PACK_SHA256:-$(sha256sum "$PACK_ROOT/manifest.json" | awk '{print $1}')}
 LR=${LR:-0.00001}
 WARMUP_STEPS=${WARMUP_STEPS:-8}
+CONTEXT_SIZE=${CONTEXT_SIZE:-4096}
+SAMPLER_KEY=${SAMPLER_KEY:-974003}
 DILOCO_K=${DILOCO_K:-8}
 SAVE_EVERY=${SAVE_EVERY:-}
 RESUME=${RESUME:-}
@@ -47,7 +49,7 @@ RUN_ROOT=${RUN_ROOT:-/mnt/nvme1n1/erikg/diloco_8gpu/e97_4b_pi_instruction_local/
 }
 mkdir -p "$RUN_ROOT"/{checkpoints,identity,logs,terminal}
 cat > "$RUN_ROOT/identity/launch.json" <<EOF
-{"schema":"emender-e97-4b-pi-sft-local-launch-v1","mode":"$MODE","source_commit":"$SOURCE_COMMIT","parent_sha256":"$PARENT_SHA256","authority_sha256":"$AUTHORITY_SHA256","pack_sha256":"$PACK_SHA256","world_size":8,"steps":$STEPS,"diloco_k":$DILOCO_K,"optimizer_state_storage":"pinned-cpu"}
+{"schema":"emender-e97-4b-pi-sft-local-launch-v1","mode":"$MODE","source_commit":"$SOURCE_COMMIT","parent_sha256":"$PARENT_SHA256","authority_sha256":"$AUTHORITY_SHA256","pack_sha256":"$PACK_SHA256","world_size":8,"context_size":$CONTEXT_SIZE,"steps":$STEPS,"diloco_k":$DILOCO_K,"optimizer_state_storage":"pinned-cpu"}
 EOF
 RESUME_ARGS=()
 [[ -z "$RESUME" ]] || RESUME_ARGS=(--resume "$RESUME")
@@ -61,8 +63,8 @@ COMMAND=(
   --pack-root "$PACK_ROOT" --pack-sha256 "$PACK_SHA256"
   --output-root "$RUN_ROOT/checkpoints" --log-jsonl "$RUN_ROOT/logs/training.jsonl"
   --steps "$STEPS" --save-every "$SAVE_EVERY" --diloco-k "$DILOCO_K"
-  --context-size 4096 --lr "$LR" --warmup-steps "$WARMUP_STEPS"
-  --sampler-key 974003 --island-size 8 --merge-bucket-numel 67108864
+  --context-size "$CONTEXT_SIZE" --lr "$LR" --warmup-steps "$WARMUP_STEPS"
+  --sampler-key "$SAMPLER_KEY" --island-size 8 --merge-bucket-numel 67108864
   --offload-schedulefree-state --schedulefree-offload-bucket-numel 67108864
 )
 printf '%q ' "${COMMAND[@]}" > "$RUN_ROOT/identity/command.txt"; printf '\n' >> "$RUN_ROOT/identity/command.txt"

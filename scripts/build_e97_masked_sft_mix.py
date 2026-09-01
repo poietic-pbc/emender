@@ -24,6 +24,7 @@ class Source:
     target_assistant_tokens: int
     manifest: dict
     records: np.memmap
+    eligible_record_ids: np.ndarray
     token_file: object
     token_map: mmap.mmap
     mask_file: object
@@ -54,7 +55,7 @@ def entry(path: Path) -> dict[str, object]:
     return {"path": str(path.resolve()), "bytes": path.stat().st_size, "sha256": sha256(path)}
 
 
-def open_source(spec: tuple[str, Path, str, int]) -> Source:
+def open_source(spec: tuple[str, Path, str, int], max_record_tokens: int) -> Source:
     name, root, digest, target = spec
     manifest_path = root / "manifest.json"
     if sha256(manifest_path) != digest:
@@ -70,11 +71,14 @@ def open_source(spec: tuple[str, Path, str, int]) -> Source:
     records = np.memmap(paths["index"], mode="r", dtype=np.dtype([
         ("offset", "<u8"), ("tokens", "<u8"), ("targets", "<u8"),
         ("split", "u1"), ("pad", "V7")]))
-    if len(records) == 0 or not np.any(records["targets"] > 0):
-        raise RuntimeError(f"{name}: no target-bearing records")
+    eligible_record_ids = np.flatnonzero(
+        (records["targets"] > 0) & (records["tokens"] <= max_record_tokens))
+    if len(eligible_record_ids) == 0:
+        raise RuntimeError(f"{name}: no target-bearing records fit max-record-tokens")
     token_file = paths["tokens"].open("rb")
     mask_file = paths["mask"].open("rb")
-    return Source(name, root, digest, target, manifest, records, token_file,
+    return Source(name, root, digest, target, manifest, records,
+                  eligible_record_ids, token_file,
                   mmap.mmap(token_file.fileno(), 0, access=mmap.ACCESS_READ),
                   mask_file, mmap.mmap(mask_file.fileno(), 0, access=mmap.ACCESS_READ))
 
@@ -84,7 +88,11 @@ def main() -> None:
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--source", action="append", type=parse_source, required=True)
     parser.add_argument("--seed", type=int, default=974002)
+    parser.add_argument("--max-record-tokens", type=int, default=4097,
+                        help="Sample only whole records fitting this token bound")
     args = parser.parse_args()
+    if args.max_record_tokens < 2:
+        raise SystemExit("max-record-tokens must be at least 2")
     names = [source[0] for source in args.source]
     if len(names) != len(set(names)):
         raise SystemExit("source names must be unique")
@@ -95,7 +103,7 @@ def main() -> None:
         "index": args.output_root / "records.idx",
         "metadata": args.output_root / "records.jsonl",
     }
-    sources = [open_source(spec) for spec in args.source]
+    sources = [open_source(spec, args.max_record_tokens) for spec in args.source]
     counts = {"records": 0, "tokens": 0, "assistant_target_tokens": 0,
               "train_records": 0, "validation_records": 0}
     receipts = {}
@@ -106,7 +114,8 @@ def main() -> None:
                 rng = random.Random(args.seed + source_index)
                 observed_targets = observed_tokens = records_written = 0
                 while observed_targets < source.target_assistant_tokens:
-                    record_id = rng.randrange(len(source.records))
+                    record_id = int(source.eligible_record_ids[
+                        rng.randrange(len(source.eligible_record_ids))])
                     record = source.records[record_id]
                     token_count = int(record["tokens"])
                     target_count = int(record["targets"])
@@ -145,6 +154,7 @@ def main() -> None:
                     "root": str(source.root.resolve()),
                     "manifest_sha256": source.manifest_sha256,
                     "requested_assistant_target_tokens": source.target_assistant_tokens,
+                    "eligible_source_records": len(source.eligible_record_ids),
                     "records": records_written,
                     "tokens": observed_tokens,
                     "assistant_target_tokens": observed_targets,
@@ -163,6 +173,7 @@ def main() -> None:
         "purpose": "target-token-weighted E97 Pi instruction mixture",
         "construction": "deterministic sampling with replacement from immutable source records",
         "seed": args.seed,
+        "max_record_tokens": args.max_record_tokens,
         "source_order": names,
         "sources": receipts,
         "counts": counts,
