@@ -12,6 +12,7 @@ from ndm.schedulefree_offload import CPUOffloadAdamWScheduleFree
 from scripts import build_e97_pi_instruction_sft as builder
 from scripts import build_e97_pi_eval_v2 as eval_v2_builder
 from scripts import build_e97_pi_eval_v3 as eval_v3_builder
+from scripts import build_e97_pi_eval_v4 as eval_v4_builder
 from scripts import build_e97_pi_compositional_sft as compositional_builder
 from scripts import build_e97_pi_finalization_repair_sft as repair_builder
 from scripts import build_e97_pi_recover_read_sft as recover_read_builder
@@ -180,6 +181,16 @@ def test_pi_eval_v3_freezes_blind_family_heldout_contracts(tmp_path):
             kind, index, __import__("random").Random(500 + index))
         row = {"id": f"v3-{index}", "kind": kind, "user": user, "task": task}
         assert len(evaluator.expected_calls(row)) >= 2
+        assert task["final_contains"]
+        assert evaluator.make_sandbox(tmp_path, row).is_dir()
+
+
+def test_pi_eval_v4_freezes_post_broad_family_holdouts(tmp_path):
+    for index, kind in enumerate(eval_v4_builder.KINDS):
+        user, task = eval_v4_builder.trace(
+            kind, index, __import__("random").Random(700 + index))
+        row = {"id": f"v4-{index}", "kind": kind, "user": user, "task": task}
+        assert len(evaluator.expected_calls(row)) >= 3
         assert task["final_contains"]
         assert evaluator.make_sandbox(tmp_path, row).is_dir()
 
