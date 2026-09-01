@@ -102,6 +102,7 @@ def test_local_launcher_uses_ddp_numa_and_cpu_offload():
     assert "--offload-schedulefree-state" in text
     assert "--island-size 8" in text
     assert "NCCL_P2P_DISABLE=1" in text
+    assert 'export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"' in text
     assert "NUMA_LOCAL_RANK_TRITON_CACHE_PREFIX" in text
     assert "gpu_lease.sh acquire 8 --no-wait" in text
     assert "verify_e97_4b_pi_sft_checkpoint.py" in text

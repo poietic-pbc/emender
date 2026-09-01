@@ -65,6 +65,7 @@ if [[ ${ACQUIRE_GPUS:-1} == 1 ]]; then
 fi
 export NCCL_P2P_DISABLE=1 TORCH_NCCL_ENABLE_MONITORING=0 TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=1800
 export PYTORCH_ALLOC_CONF=expandable_segments:True OMP_NUM_THREADS=4 TIKTOKEN_CACHE_DIR=/tmp/data-gym-cache
+export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export NUMA_LOCAL_RANK_TRITON_CACHE_PREFIX=/tmp/e97-4b-pi-sft-${RUN_ID}
 set +e
 "${COMMAND[@]}" 2>&1 | tee "$RUN_ROOT/logs/run.log"
