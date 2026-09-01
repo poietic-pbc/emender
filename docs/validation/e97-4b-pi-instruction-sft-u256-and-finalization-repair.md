@@ -122,3 +122,21 @@ Bash, edit, read, write, and recover-test each passed 20/20; recover-read passed
 19/20. The sole failure immediately repeated the same missing-path read and was
 correctly stopped by the cycle guard. This checkpoint is behaviorally promoted;
 none of the lower-loss broad or final-only endpoints is promoted.
+
+## Private durable publication
+
+The promoted raw checkpoint and receipts are published privately at
+`spinozans/emender-e97-4b-pi-instruction-checkpoints`:
+
+- immutable revision: `5e80607d30c9bf5e2b01600ddba66ac51c3998c0`;
+- immutable tag: `pi-live-aligned-u8-119of120` (resolves to the same revision);
+- remote LFS object: 24,276,128,699 bytes;
+- remote LFS SHA-256:
+  `b799802741737058c4de74e233a8af8e6a9a18977cbf753ad44f9037a27c3da8`.
+
+Post-publication API verification confirmed the repository remained private,
+both immutable selectors resolved identically, the remote LFS size/hash matched
+the local checkpoint, and `LATEST.json`, the release manifest, reload receipt,
+data manifests, and 119/120 evaluation summary were readable at the immutable
+revision. The artifact is raw Python pickle and must only be loaded from an
+immutable revision after SHA-256 verification.
