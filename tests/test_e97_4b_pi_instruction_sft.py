@@ -12,6 +12,7 @@ from ndm.schedulefree_offload import CPUOffloadAdamWScheduleFree
 from scripts import build_e97_pi_instruction_sft as builder
 from scripts import eval_e97_4b_pi_core as evaluator
 from scripts import train_e97_4b_pi_sft as trainer
+from scripts import verify_e97_4b_pi_sft_checkpoint as verifier
 
 
 def run(*args):
@@ -79,6 +80,13 @@ def test_checkpoint_recipe_is_k_aligned_and_bounded():
     assert trainer.EXPECTED_PARAMETERS == 4_045_972_080
 
 
+def test_checkpoint_parameter_count_deduplicates_tied_embedding():
+    embedding = torch.ones(5, 3)
+    state = {"embedding.weight": embedding, "lm_head.weight": embedding,
+             "other.weight": torch.ones(2, 3)}
+    assert verifier.unique_state_numel(state) == 21
+
+
 def test_local_sft_optimizer_can_offload_schedulefree_state():
     parameter = torch.nn.Parameter(torch.ones(4))
     args = SimpleNamespace(
@@ -105,6 +113,8 @@ def test_local_launcher_uses_ddp_numa_and_cpu_offload():
     assert 'export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"' in text
     assert "NUMA_LOCAL_RANK_TRITON_CACHE_PREFIX" in text
     assert "gpu_lease.sh acquire 8 --no-wait" in text
+    assert 'canary requires RESUME naming the qualification checkpoint' in text
+    assert 'RESUME_ARGS=(--resume "$RESUME")' in text
     assert "verify_e97_4b_pi_sft_checkpoint.py" in text
 
 

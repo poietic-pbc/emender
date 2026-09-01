@@ -15,11 +15,16 @@ PACK_SHA256=${PACK_SHA256:-$(sha256sum "$PACK_ROOT/manifest.json" | awk '{print 
 LR=${LR:-0.00001}
 WARMUP_STEPS=${WARMUP_STEPS:-8}
 DILOCO_K=${DILOCO_K:-8}
-SAVE_EVERY=${SAVE_EVERY:-8}
+SAVE_EVERY=${SAVE_EVERY:-}
+RESUME=${RESUME:-}
 case "$MODE" in
-  qualification) STEPS=${STEPS:-8} ;;
+  qualification)
+    [[ -z "$RESUME" ]] || { echo "qualification must start from the parent" >&2; exit 64; }
+    STEPS=${STEPS:-8}; SAVE_EVERY=${SAVE_EVERY:-8}
+    ;;
   canary)
     [[ ${CONFIRM_CANARY:-0} == 1 ]] || { echo "canary requires CONFIRM_CANARY=1" >&2; exit 64; }
+    [[ -r "$RESUME" ]] || { echo "canary requires RESUME naming the qualification checkpoint" >&2; exit 66; }
     STEPS=${STEPS:-64}; SAVE_EVERY=${SAVE_EVERY:-32}
     ;;
   *) echo "MODE must be qualification or canary" >&2; exit 64;;
@@ -44,9 +49,12 @@ mkdir -p "$RUN_ROOT"/{checkpoints,identity,logs,terminal}
 cat > "$RUN_ROOT/identity/launch.json" <<EOF
 {"schema":"emender-e97-4b-pi-sft-local-launch-v1","mode":"$MODE","source_commit":"$SOURCE_COMMIT","parent_sha256":"$PARENT_SHA256","authority_sha256":"$AUTHORITY_SHA256","pack_sha256":"$PACK_SHA256","world_size":8,"steps":$STEPS,"diloco_k":$DILOCO_K,"optimizer_state_storage":"pinned-cpu"}
 EOF
+RESUME_ARGS=()
+[[ -z "$RESUME" ]] || RESUME_ARGS=(--resume "$RESUME")
 COMMAND=(
   torchrun --standalone --nproc_per_node="$WORLD_SIZE"
   scripts/numa_local_rank_exec.py -- scripts/train_e97_4b_pi_sft.py
+  "${RESUME_ARGS[@]}"
   --parent-checkpoint "$PARENT" --parent-sha256 "$PARENT_SHA256"
   --source-args-json "$SOURCE_ARGS" --source-commit "$SOURCE_COMMIT"
   --authority-root "$AUTHORITY_ROOT" --authority-sha256 "$AUTHORITY_SHA256"

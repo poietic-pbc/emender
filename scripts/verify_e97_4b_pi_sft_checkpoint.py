@@ -12,6 +12,24 @@ from ndm.data.masked_sft_dataset import sha256
 from scripts.train_e97_4b_pi_sft import EXPECTED_PARAMETERS, SCHEMA
 
 
+def unique_state_numel(state_dict) -> int:
+    """Count parameters once when tied state-dict entries share an exact view."""
+    seen = set()
+    total = 0
+    for name, tensor in state_dict.items():
+        if not torch.is_tensor(tensor):
+            raise ValueError(f"model state entry is not a tensor: {name}")
+        storage = tensor.untyped_storage()
+        identity = (
+            storage.data_ptr(), storage.nbytes(), tensor.storage_offset(),
+            tuple(tensor.shape), tuple(tensor.stride()), tensor.dtype,
+        )
+        if identity not in seen:
+            seen.add(identity)
+            total += tensor.numel()
+    return total
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("checkpoint", type=Path)
@@ -28,12 +46,12 @@ def main() -> None:
         "model_state_dict", "optimizer_state_dict", "sft_updates", "sft_total_tokens",
         "assistant_target_tokens", "parent_checkpoint_sha256", "authority_manifest_sha256",
         "pack_manifest_sha256", "data_world_size", "context_size", "island_size",
-        "diloco_k", "source_commit", "weight_mode",
+        "diloco_k", "source_commit", "weight_mode", "optimizer_state_storage",
     }
     missing = sorted(required - checkpoint.keys())
     if missing:
         raise SystemExit(f"checkpoint missing fields: {missing}")
-    parameters = sum(tensor.numel() for tensor in checkpoint["model_state_dict"].values())
+    parameters = unique_state_numel(checkpoint["model_state_dict"])
     if parameters != EXPECTED_PARAMETERS:
         raise SystemExit(f"parameter count mismatch: {parameters}")
     if checkpoint["weight_mode"] != "saved-eval-x":
@@ -56,6 +74,7 @@ def main() -> None:
         "authority_manifest_sha256": checkpoint["authority_manifest_sha256"],
         "pack_manifest_sha256": checkpoint["pack_manifest_sha256"],
         "source_commit": checkpoint["source_commit"],
+        "optimizer_state_storage": checkpoint["optimizer_state_storage"],
     }
     text = json.dumps(receipt, indent=2, sort_keys=True) + "\n"
     if args.output:
