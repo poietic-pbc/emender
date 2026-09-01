@@ -87,7 +87,14 @@ truncation fail closed.
 
 ## Target mixture and consumed-token clock
 
-The first broad run targets 20–30 million **consumed** assistant tokens:
+Twenty-five million **consumed** assistant tokens is the qualification
+milestone, not the expected final exposure. Stage A evaluates a cumulative
+25M/50M/100M ladder and may extend to 200M when frozen behavioral gains remain
+positive. The anticipated complete broad/distillation program consumes roughly
+100–250M assistant targets, excluding later RL rollouts. Total processed context
+will be larger and is reported separately.
+
+The initial mixture is:
 
 | Track | Initial target share |
 |---|---:|
@@ -135,10 +142,12 @@ sampling and, only after a strong SFT baseline, GRPO/RL with verifiable rewards.
 
 ### Stage A — broad cold-start SFT
 
-Train the cumulative 20–30M-target mixture with frequent checkpoints. This is
-full-parameter Schedule-Free SFT and retains the fixed-world eight-rank local
-execution contract. Select by broad instruction, code, Pi smoke, v2, and frozen
-repository evaluations.
+Train the cumulative mixture through 25M, 50M, and 100M consumed-target
+milestones, with a pre-authorized 200M extension only while frozen behavioral
+curves improve. This is full-parameter Schedule-Free SFT and retains the
+fixed-world eight-rank local execution contract. Select by broad instruction,
+code, Pi smoke, v2, and frozen repository evaluations. Stop early on regression
+or saturation; do not spend the nominal clock merely because data remain.
 
 ### Stage B — verified reasoning distillation
 
@@ -240,7 +249,8 @@ A weights-only portable release remains a separate deliverable.
    schema and validation suite.
 6. Build stratified 4K authorities; qualify 8K/16K separately.
 7. Run a small source-mixture qualification and inspect decoded masked records.
-8. Train the 20–30M-target Stage A ladder and evaluate every retained checkpoint.
+8. Train the 25M/50M/100M Stage A ladder, with a behavior-gated 200M extension,
+   and evaluate every retained milestone.
 9. Build and compare reasoning-distillation branches.
 10. Aggregate on-policy failures and perform verified rejection sampling.
 11. Add GRPO/RLVR only after the strongest distilled checkpoint clears all SFT
