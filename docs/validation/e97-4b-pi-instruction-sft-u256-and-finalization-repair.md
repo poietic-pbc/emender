@@ -120,8 +120,16 @@ The corrected, fixed 120-task real-Pi panel accepted the checkpoint:
 
 Bash, edit, read, write, and recover-test each passed 20/20; recover-read passed
 19/20. The sole failure immediately repeated the same missing-path read and was
-correctly stopped by the cycle guard. This checkpoint is behaviorally promoted;
-none of the lower-loss broad or final-only endpoints is promoted.
+correctly stopped by the cycle guard.
+
+For an apples-to-apples attribution check, the update-64 behavioral parent was
+then rerun on the same fixed panel and corrected serving commit. It passed
+86/120: bash 19/20, edit 8/20, read 20/20, recover-read 19/20, recover-test 0/20,
+and write 20/20. Thus the serving correction did not create the promoted score;
+the balanced live-aligned repair contributed a 33-task absolute improvement and
+changed recover-test from 0/20 to 20/20 while bringing edit from 8/20 to 20/20.
+The checkpoint is behaviorally promoted; none of the lower-loss broad or
+final-only endpoints is promoted.
 
 ## Private durable publication
 
