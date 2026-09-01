@@ -19,10 +19,13 @@ GRADIENT_CHECKPOINT_GROUP_SIZE=${GRADIENT_CHECKPOINT_GROUP_SIZE:-1}
 SAMPLER_KEY=${SAMPLER_KEY:-974003}
 DILOCO_K=${DILOCO_K:-8}
 SAVE_EVERY=${SAVE_EVERY:-}
+KEEP_CHECKPOINTS=${KEEP_CHECKPOINTS:-3}
 RESUME=${RESUME:-}
+NEW_STAGE_FROM=${NEW_STAGE_FROM:-0}
 case "$MODE" in
   qualification)
     [[ -z "$RESUME" ]] || { echo "qualification must start from the parent" >&2; exit 64; }
+    [[ "$NEW_STAGE_FROM" == 0 || "$NEW_STAGE_FROM" == 1 ]] || { echo "NEW_STAGE_FROM must be 0 or 1" >&2; exit 64; }
     STEPS=${STEPS:-8}; SAVE_EVERY=${SAVE_EVERY:-8}
     ;;
   canary)
@@ -50,10 +53,15 @@ RUN_ROOT=${RUN_ROOT:-/mnt/nvme1n1/erikg/diloco_8gpu/e97_4b_pi_instruction_local/
 }
 mkdir -p "$RUN_ROOT"/{checkpoints,identity,logs,terminal}
 cat > "$RUN_ROOT/identity/launch.json" <<EOF
-{"schema":"emender-e97-4b-pi-sft-local-launch-v1","mode":"$MODE","source_commit":"$SOURCE_COMMIT","parent_sha256":"$PARENT_SHA256","authority_sha256":"$AUTHORITY_SHA256","pack_sha256":"$PACK_SHA256","world_size":8,"context_size":$CONTEXT_SIZE,"gradient_checkpoint_group_size":$GRADIENT_CHECKPOINT_GROUP_SIZE,"steps":$STEPS,"diloco_k":$DILOCO_K,"optimizer_state_storage":"pinned-cpu"}
+{"schema":"emender-e97-4b-pi-sft-local-launch-v1","mode":"$MODE","source_commit":"$SOURCE_COMMIT","parent_sha256":"$PARENT_SHA256","authority_sha256":"$AUTHORITY_SHA256","pack_sha256":"$PACK_SHA256","world_size":8,"context_size":$CONTEXT_SIZE,"gradient_checkpoint_group_size":$GRADIENT_CHECKPOINT_GROUP_SIZE,"steps":$STEPS,"diloco_k":$DILOCO_K,"keep_checkpoints":$KEEP_CHECKPOINTS,"new_stage_from":$NEW_STAGE_FROM,"optimizer_state_storage":"pinned-cpu"}
 EOF
 RESUME_ARGS=()
-[[ -z "$RESUME" ]] || RESUME_ARGS=(--resume "$RESUME")
+if [[ -n "$RESUME" ]]; then
+  [[ "$NEW_STAGE_FROM" == 0 ]] || { echo "resume and new-stage-from are mutually exclusive" >&2; exit 64; }
+  RESUME_ARGS=(--resume "$RESUME")
+elif [[ "$NEW_STAGE_FROM" == 1 ]]; then
+  RESUME_ARGS=(--new-stage-from "$PARENT")
+fi
 COMMAND=(
   torchrun --standalone --nproc_per_node="$WORLD_SIZE"
   scripts/numa_local_rank_exec.py -- scripts/train_e97_4b_pi_sft.py
@@ -63,7 +71,7 @@ COMMAND=(
   --authority-root "$AUTHORITY_ROOT" --authority-sha256 "$AUTHORITY_SHA256"
   --pack-root "$PACK_ROOT" --pack-sha256 "$PACK_SHA256"
   --output-root "$RUN_ROOT/checkpoints" --log-jsonl "$RUN_ROOT/logs/training.jsonl"
-  --steps "$STEPS" --save-every "$SAVE_EVERY" --diloco-k "$DILOCO_K"
+  --steps "$STEPS" --save-every "$SAVE_EVERY" --keep-checkpoints "$KEEP_CHECKPOINTS" --diloco-k "$DILOCO_K"
   --context-size "$CONTEXT_SIZE" --gradient-checkpoint-group-size "$GRADIENT_CHECKPOINT_GROUP_SIZE"
   --lr "$LR" --warmup-steps "$WARMUP_STEPS"
   --sampler-key "$SAMPLER_KEY" --island-size 8 --merge-bucket-numel 67108864
