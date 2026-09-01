@@ -174,6 +174,9 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--warmup-steps", type=int, default=8)
+    parser.add_argument(
+        "--grad-clip", type=float, default=1.0,
+        help="global gradient-norm ceiling; 0 disables clipping while retaining norm telemetry")
     parser.add_argument("--sampler-key", type=int, default=974003)
     parser.add_argument("--offload-schedulefree-state", action="store_true")
     parser.add_argument("--schedulefree-offload-bucket-numel", type=int, default=67_108_864)
@@ -190,6 +193,8 @@ def main() -> None:
     if (args.keep_checkpoints <= 0 or args.merge_bucket_numel <= 0
             or args.schedulefree_offload_bucket_numel <= 0):
         raise SystemExit("checkpoint retention and optimizer/merge buckets must be positive")
+    if args.grad_clip < 0:
+        raise SystemExit("grad-clip must be nonnegative")
 
     dist.init_process_group("nccl")
     rank, world = dist.get_rank(), dist.get_world_size()
@@ -233,6 +238,7 @@ def main() -> None:
         "context_size": args.context_size,
         "island_size": args.island_size,
         "diloco_k": args.diloco_k,
+        "grad_clip": args.grad_clip,
         "optimizer_state_storage": optimizer_state_storage,
     }
     if args.resume is not None:
@@ -271,7 +277,8 @@ def main() -> None:
                              "parent-train-y"),
          source_commit=args.source_commit, world_size=world, island_size=args.island_size,
          diloco_k=args.diloco_k, context_size=args.context_size, lr=args.lr,
-         warmup_steps=args.warmup_steps, total_parameters=parameter_count,
+         warmup_steps=args.warmup_steps, grad_clip=args.grad_clip,
+         total_parameters=parameter_count,
          optimizer_state_storage=optimizer_state_storage,
          optimizer_state_bucket_numel=(args.schedulefree_offload_bucket_numel
                                         if args.offload_schedulefree_state else None),
@@ -290,7 +297,8 @@ def main() -> None:
         local_loss, _ = objective(
             model, tokens, masks, int(lengths[0]), spans[0], island_targets,
             args.island_size)
-        grad_norm = torch.nn.utils.clip_grad_norm_(core_model.parameters(), 1.0)
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            core_model.parameters(), args.grad_clip if args.grad_clip > 0 else float("inf"))
         if not torch.isfinite(grad_norm):
             raise RuntimeError("nonfinite SFT gradient norm")
         optimizer.step()
