@@ -204,6 +204,43 @@ def test_repeated_tool_call_cycle_fails_before_generation():
     assert service.engine.outputs == ["Final: unreachable" + RS]
 
 
+def test_failed_check_can_be_rerun_after_intervening_repair_action():
+    check = {
+        "role": "assistant",
+        "tool_calls": [{
+            "type": "function",
+            "function": {"name": "bash", "arguments": '{"command":"pytest -q"}'},
+        }],
+    }
+    repair = {
+        "role": "assistant",
+        "tool_calls": [{
+            "type": "function",
+            "function": {
+                "name": "edit",
+                "arguments": '{"path":"x.py","oldText":"0","newText":"1"}',
+            },
+        }],
+    }
+    service = AgentCompletionService(FakeEngine(["Final: repaired and verified.\n"]))
+    prepared = service.prepare_completion(
+        {
+            "messages": [
+                {"role": "user", "content": "repair and verify"},
+                check,
+                {"role": "tool", "content": "failed"},
+                repair,
+                {"role": "tool", "content": "Successfully replaced 1 block."},
+                check,
+                {"role": "tool", "content": "(no tool output)"},
+            ]
+        },
+        session_id="repair-check",
+    )
+    assert prepared.response["choices"][0]["message"]["content"] == (
+        "Final: repaired and verified.\n")
+
+
 def test_unknown_tool_and_malformed_generation_do_not_commit():
     for output, match in (
         ('Action: shell\nArguments: {"command":"id"}' + RS, "unknown tool"),

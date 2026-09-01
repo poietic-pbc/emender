@@ -255,7 +255,7 @@ class AgentCompletionService:
         messages = request.get("messages")
         if not isinstance(messages, list):
             raise AgentProtocolError("messages must be an array")
-        seen_tool_calls: set[tuple[str, str]] = set()
+        previous_tool_call: tuple[str, str] | None = None
         for message in messages:
             if not isinstance(message, Mapping) or message.get("role") != "assistant":
                 continue
@@ -268,9 +268,12 @@ class AgentCompletionService:
             if not isinstance(function, Mapping):
                 raise AgentProtocolError("assistant tool call requires function metadata")
             key = (str(function.get("name")), str(function.get("arguments")))
-            if key in seen_tool_calls:
+            # Only an immediately repeated identical action is a no-progress
+            # cycle. A failed check may legitimately be rerun after a read/edit
+            # or other intervening action has changed the relevant state.
+            if key == previous_tool_call:
                 raise AgentProtocolError("repeated tool call cycle detected")
-            seen_tool_calls.add(key)
+            previous_tool_call = key
         if self.system_prompt_override is not None:
             messages = [dict(message) for message in messages]
             if messages and messages[0].get("role") == "system":
