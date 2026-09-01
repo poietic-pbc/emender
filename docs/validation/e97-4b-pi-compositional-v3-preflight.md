@@ -25,6 +25,19 @@ No v3 record may enter training under a later claim of blind evaluation. The
 next phase is governed by
 [`../EMENDER_E97_4B_BROAD_POSTTRAINING_PLAN.md`](../EMENDER_E97_4B_BROAD_POSTTRAINING_PLAN.md).
 
+The checkpoint is published transparently as a development baseline, not a broad
+promotion, in public repository
+`spinozans/emender-e97-4b-pi-instruction-checkpoints`:
+
+- immutable revision: `ba0515370af1654116c36e9f7308c30112854adb`;
+- tag: `pi-cumulative-u8-smoke120-v2-226-v3-0`;
+- checkpoint SHA-256:
+  `eed48419d657b0be03953f6c99dc0ba14e61579ee748174ef0e6794f895157ed`;
+- remote LFS size: 24,276,128,699 bytes.
+
+Anonymous tag resolution, release receipts, LFS size, and LFS SHA-256 were
+verified after publication.
+
 ## Gap evidence
 
 On the new 240-task compositional v2 panel, both the promoted live-aligned u8
