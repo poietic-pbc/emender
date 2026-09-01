@@ -14,6 +14,12 @@ ARGS_JSON=${ARGS_JSON:-/mnt/nvme1n1/erikg/diloco_8gpu/e97_4b_frontier_100b_hf/ch
 AUTHORITY_ROOT=${AUTHORITY_ROOT:-/mnt/nvme1n1/erikg/sft/pi-native-core-v1}
 AUTHORITY_SHA256=${AUTHORITY_SHA256:-48f6b7ecb0083f09402e2f0715b95d7ca71ba45a2711375b811472ccdeb804e1}
 LIMIT=${LIMIT:-120}; WORLD_SIZE=8; EXPECTED_TASKS=${EXPECTED_TASKS:-$LIMIT}
+SYSTEM_VARIANT=${SYSTEM_VARIANT:-pi-core}
+case "$SYSTEM_VARIANT" in
+  pi-core) SYSTEM_ARG=--pi-core-canonical-system ;;
+  pi-agent-v2) SYSTEM_ARG=--pi-agent-v2-canonical-system ;;
+  *) echo "SYSTEM_VARIANT must be pi-core or pi-agent-v2" >&2; exit 64 ;;
+esac
 [[ "$RUN_ROOT" == /* && ! -e "$RUN_ROOT" ]] || { echo "RUN_ROOT must be a new absolute path" >&2; exit 64; }
 [[ -r "$CHECKPOINT" && -r "$ARGS_JSON" && -r "$CLI_IMAGE" ]] || exit 66
 [[ $(sha256sum "$CHECKPOINT" | awk '{print $1}') == "$CHECKPOINT_SHA256" ]] || { echo "checkpoint SHA-256 mismatch" >&2; exit 65; }
@@ -56,7 +62,7 @@ for rank in $(seq 0 7); do
     "$snapshot/scripts/numa_local_rank_exec.py" -- "$snapshot/scripts/serve_e97_agent_openai.py" \
       --checkpoint "$CHECKPOINT" --args-json "$ARGS_JSON" --host 127.0.0.1 --port "$port" \
       --max-output-tokens 256 --max-sessions 2 --ingest-mode tokenwise \
-      --pi-core-canonical-system --trace-generated-errors
+      "$SYSTEM_ARG" --trace-generated-errors
   ) > "$RUN_ROOT/shards/server-${rank}.out" 2> "$RUN_ROOT/shards/server-${rank}.log" &
   server_pids+=("$!")
 done
