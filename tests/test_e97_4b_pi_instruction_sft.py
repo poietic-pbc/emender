@@ -151,6 +151,17 @@ def test_local_sft_optimizer_can_offload_schedulefree_state():
     assert optimizer.state[parameter]["z"].device.type == "cpu"
 
 
+def test_local_finalization_repair_launcher_is_hash_bound_and_fresh_optimizer():
+    text = open("scripts/launch_e97_4b_pi_finalization_repair_local.sh").read()
+    assert "repair requires CONFIRM_REPAIR=1" in text
+    assert '--new-stage-from "$PARENT_CHECKPOINT"' in text
+    assert 'sha256sum "$PARENT_CHECKPOINT"' in text
+    assert "gpu_lease.sh acquire 8 --no-wait" in text
+    assert "--sampler-key 974103" in text
+    assert "--offload-schedulefree-state" in text
+    assert "LOCAL_PI_FINALIZATION_REPAIR_COMPLETE" in text
+
+
 def test_local_core_eval_launcher_is_real_pi_and_fail_closed():
     text = open("scripts/launch_e97_4b_pi_core_eval_local.sh").read()
     assert "gpu_lease.sh acquire 8 --no-wait" in text
