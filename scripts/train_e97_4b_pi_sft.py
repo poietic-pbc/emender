@@ -17,6 +17,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from schedulefree import AdamWScheduleFree
 
 from ndm.data.masked_sft_dataset import MaskedSFTPackedDataset, SFTSamplerIdentity, sha256
+from ndm.schedulefree_offload import CPUOffloadAdamWScheduleFree
 from ndm.e97 import load_e97_checkpoint
 from train import diloco_merge
 
@@ -118,6 +119,19 @@ def atomic_save(path: Path, payload: dict) -> None:
         temporary_link.unlink(missing_ok=True)
 
 
+def build_optimizer(parameters, args):
+    common = dict(
+        lr=args.lr, betas=(0.9, 0.95), weight_decay=args.weight_decay,
+        warmup_steps=args.warmup_steps)
+    if args.offload_schedulefree_state:
+        return CPUOffloadAdamWScheduleFree(
+            parameters, **common,
+            pin_memory=bool(args.schedulefree_offload_pin_memory),
+            release_gradients=bool(args.schedulefree_offload_release_gradients),
+            bucket_numel=args.schedulefree_offload_bucket_numel)
+    return AdamWScheduleFree(parameters, **common)
+
+
 def load_resume_optimizer(path: Path, optimizer, expected: dict) -> dict:
     checkpoint = torch.load(path, map_location="cpu", mmap=True, weights_only=False)
     if checkpoint.get("schema") != SCHEMA or "optimizer_state_dict" not in checkpoint:
@@ -159,13 +173,18 @@ def main() -> None:
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--warmup-steps", type=int, default=8)
     parser.add_argument("--sampler-key", type=int, default=974003)
+    parser.add_argument("--offload-schedulefree-state", action="store_true")
+    parser.add_argument("--schedulefree-offload-bucket-numel", type=int, default=67_108_864)
+    parser.add_argument("--schedulefree-offload-pin-memory", type=int, choices=(0, 1), default=1)
+    parser.add_argument("--schedulefree-offload-release-gradients", type=int, choices=(0, 1), default=1)
     args = parser.parse_args()
     if args.steps <= 0 or args.save_every <= 0 or args.diloco_k <= 0:
         raise SystemExit("steps/save-every/diloco-k must be positive")
     if args.save_every % args.diloco_k or args.steps % args.diloco_k:
         raise SystemExit("save and terminal steps must be K-aligned")
-    if args.keep_checkpoints <= 0 or args.merge_bucket_numel <= 0:
-        raise SystemExit("checkpoint retention and merge bucket must be positive")
+    if (args.keep_checkpoints <= 0 or args.merge_bucket_numel <= 0
+            or args.schedulefree_offload_bucket_numel <= 0):
+        raise SystemExit("checkpoint retention and optimizer/merge buckets must be positive")
 
     dist.init_process_group("nccl")
     rank, world = dist.get_rank(), dist.get_world_size()
@@ -196,10 +215,11 @@ def main() -> None:
         core_model, device_ids=[local_rank], output_device=local_rank,
         find_unused_parameters=False, gradient_as_bucket_view=True,
         process_group=island_group)
-    optimizer = AdamWScheduleFree(
-        core_model.parameters(), lr=args.lr, betas=(0.9, 0.95),
-        weight_decay=args.weight_decay, warmup_steps=args.warmup_steps)
+    optimizer = build_optimizer(core_model.parameters(), args)
 
+    optimizer_state_storage = (
+        CPUOffloadAdamWScheduleFree.state_storage
+        if args.offload_schedulefree_state else "accelerator")
     expected_resume = {
         "parent_checkpoint_sha256": args.parent_sha256,
         "authority_manifest_sha256": args.authority_sha256,
@@ -208,6 +228,7 @@ def main() -> None:
         "context_size": args.context_size,
         "island_size": args.island_size,
         "diloco_k": args.diloco_k,
+        "optimizer_state_storage": optimizer_state_storage,
     }
     if args.resume is not None:
         clocks = load_resume_optimizer(args.resume, optimizer, expected_resume)
@@ -216,6 +237,12 @@ def main() -> None:
         total_targets = clocks["assistant_target_tokens"]
     else:
         start_update = total_tokens = total_targets = 0
+        if args.offload_schedulefree_state:
+            initialization = optimizer.initialize_state_()
+            emit(args.log_jsonl, "optimizer_state_initialized", rank,
+                 storage=optimizer_state_storage, **initialization)
+    if args.offload_schedulefree_state:
+        optimizer.assert_state_offloaded()
     if start_update > args.steps or start_update % args.diloco_k:
         raise RuntimeError("resume update clock is invalid")
     optimizer.train()
@@ -238,6 +265,9 @@ def main() -> None:
          source_commit=args.source_commit, world_size=world, island_size=args.island_size,
          diloco_k=args.diloco_k, context_size=args.context_size, lr=args.lr,
          warmup_steps=args.warmup_steps, total_parameters=parameter_count,
+         optimizer_state_storage=optimizer_state_storage,
+         optimizer_state_bucket_numel=(args.schedulefree_offload_bucket_numel
+                                        if args.offload_schedulefree_state else None),
          start_update=start_update)
 
     merge_configuration = merge_args(args.merge_bucket_numel)

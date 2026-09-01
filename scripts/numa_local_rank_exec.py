@@ -37,6 +37,13 @@ def main() -> int:
     if not 0 <= physical_gpu <= 7:
         raise RuntimeError(f"unsupported physical GPU id for this host: {physical_gpu}")
     numa_node = 0 if physical_gpu <= 3 else 1
+    triton_prefix = os.environ.get("NUMA_LOCAL_RANK_TRITON_CACHE_PREFIX")
+    if triton_prefix:
+        triton_cache = f"{triton_prefix}-rank{local_rank}"
+        os.environ["TRITON_CACHE_DIR"] = triton_cache
+        os.makedirs(triton_cache, exist_ok=True)
+    else:
+        triton_cache = os.environ.get("TRITON_CACHE_DIR")
     numactl = shutil.which("numactl")
     if numactl is None:
         raise RuntimeError("numactl is required for the 8-GPU CPU-offload run")
@@ -52,6 +59,7 @@ def main() -> int:
         "local_rank": local_rank,
         "physical_gpu": physical_gpu,
         "numa_node": numa_node,
+        "triton_cache_dir": triton_cache,
         "command": command,
     }
     print("[numa-rank] " + json.dumps(evidence, sort_keys=True), flush=True)
