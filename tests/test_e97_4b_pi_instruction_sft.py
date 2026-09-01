@@ -103,6 +103,18 @@ def test_local_sft_optimizer_can_offload_schedulefree_state():
     assert optimizer.state[parameter]["z"].device.type == "cpu"
 
 
+def test_local_core_eval_launcher_is_real_pi_and_fail_closed():
+    text = open("scripts/launch_e97_4b_pi_core_eval_local.sh").read()
+    assert "gpu_lease.sh acquire 8 --no-wait" in text
+    assert "numa_local_rank_exec.py" in text
+    assert "eval_e97_4b_pi_core.py" in text
+    assert "configs/pi/e97-core-tools.ts" in text
+    assert "aggregate_e97_4b_pi_core.py" in text
+    assert "LOCAL_PI_CORE_EVAL_COMPLETE" in text
+    assert 'sha256sum "$CHECKPOINT"' in text
+    assert 'sha256sum "$CLI_IMAGE"' in text
+
+
 def test_local_launcher_uses_ddp_numa_and_cpu_offload():
     text = open("scripts/launch_e97_4b_pi_sft_local.sh").read()
     assert "torchrun --standalone --nproc_per_node=\"$WORLD_SIZE\"" in text
