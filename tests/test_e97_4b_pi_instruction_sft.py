@@ -157,6 +157,11 @@ def test_compositional_sft_uses_live_context_and_targets_every_action():
 
 
 def test_recover_read_authority_is_disjoint_and_live_aligned(tmp_path):
+    failure = recover_read_builder.live_missing_read_result(
+        "docs/authorities-000001.txt")
+    assert "FileNotFoundError" in failure
+    assert "docs/authorities-000001.txt" in failure
+    assert failure.endswith("Command exited with code 1")
     root = tmp_path / "recover-read"
     run("scripts/build_e97_pi_recover_read_sft.py", "--output-root", root,
         "--records", 12, "--seed", 701)

@@ -21,6 +21,22 @@ def entry(path: Path) -> dict[str, object]:
     return {"path": str(path.resolve()), "bytes": path.stat().st_size, "sha256": sha256(path)}
 
 
+def live_missing_read_result(path: str) -> str:
+    """Exact bounded Pi read-tool failure shape from the pinned CLI image."""
+    return (
+        "Traceback (most recent call last):\n"
+        "  File \"<string>\", line 1, in <module>\n"
+        "  File \"/usr/local/lib/python3.12/pathlib.py\", line 1027, in read_text\n"
+        "    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n"
+        "         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n"
+        "  File \"/usr/local/lib/python3.12/pathlib.py\", line 1013, in open\n"
+        "    return io.open(self, mode, buffering, encoding, errors, newline)\n"
+        "           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n"
+        f"FileNotFoundError: [Errno 2] No such file or directory: '{path}'\n"
+        "Command exited with code 1"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-root", type=Path, required=True)
@@ -47,6 +63,11 @@ def main() -> None:
             source_index = 2_000_000 + record_index
             user, turns, task = trace(
                 "recover-read", source_index, random.Random(args.seed + record_index))
+            correct_path = task["fixtures"][0]["path"]
+            wrong_path = correct_path.replace("authority-", "authorities-")
+            if turns[1][0] != "tool":
+                raise RuntimeError("recover-read trajectory shape changed")
+            turns[1] = ("tool", live_missing_read_result(wrong_path))
             tokens, masks, complete = serialize_live_aligned(
                 [("system", E97_PI_CORE_SYSTEM), ("user", user), *turns],
                 encoding, target_mode="all-assistant")
@@ -70,7 +91,10 @@ def main() -> None:
     manifest = {
         "schema": AUTHORITY_SCHEMA, "status": "complete",
         "purpose": "live-aligned missing-path read recovery retention repair",
-        "serialization": "all assistant actions/final/newline targeted; exact live tool context",
+        "serialization": (
+            "all assistant actions/final/newline targeted; exact pinned-image "
+            "FileNotFoundError tool context"
+        ),
         "evaluation_exclusion": {
             "smoke_authority_manifest_sha256": "48f6b7ecb0083f09402e2f0715b95d7ca71ba45a2711375b811472ccdeb804e1",
             "policy": "disjoint identity, two-million index domain, seed, values, and paths",
