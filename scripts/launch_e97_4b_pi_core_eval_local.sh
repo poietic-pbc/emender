@@ -6,7 +6,8 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd); cd "$ROOT"
 : "${CHECKPOINT_SHA256:?set the checkpoint SHA-256}"
 : "${CLI_IMAGE:?set CLI_IMAGE to the immutable Apptainer image}"
 : "${CLI_IMAGE_SHA256:?set CLI_IMAGE_SHA256}"
-SOURCE_COMMIT=${SOURCE_COMMIT:-$(git rev-parse HEAD)}
+SOURCE_COMMIT=${SOURCE_COMMIT:-HEAD}
+SOURCE_COMMIT=$(git rev-parse "${SOURCE_COMMIT}^{commit}")
 RUN_ID=${RUN_ID:-e97-4b-pi-core-local-$(date -u +%Y%m%dT%H%M%SZ)}
 RUN_ROOT=${RUN_ROOT:-/mnt/nvme1n1/erikg/diloco_8gpu/e97_4b_pi_instruction_local/evals/$RUN_ID}
 ARGS_JSON=${ARGS_JSON:-/mnt/nvme1n1/erikg/diloco_8gpu/e97_4b_frontier_100b_hf/checkpoints/step_024448_tokens_99723771904/args.json}

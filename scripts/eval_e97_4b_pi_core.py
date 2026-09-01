@@ -201,6 +201,9 @@ def main() -> None:
     if not 0 <= args.rank < args.world_size:
         raise SystemExit("invalid rank")
     selected = balanced_prefix(load_tasks(args.authority_root), args.limit)
+    # Validate the complete panel contract before the first expensive Pi turn.
+    for task in selected:
+        expected_calls(task)
     tasks = [task for index, task in enumerate(selected) if index % args.world_size == args.rank]
     shard = args.output_root / f"rank-{args.rank:02d}"
     for child in ("sandboxes", "traces", "results", "sessions"):
