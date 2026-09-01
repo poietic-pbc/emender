@@ -64,6 +64,17 @@ def events(text: str) -> list[dict[str, Any]]:
 
 
 def expected_calls(task: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    declared = task["task"].get("expected_calls")
+    if declared is not None:
+        if not isinstance(declared, list) or not declared:
+            raise ValueError("declared expected_calls must be a non-empty list")
+        values = []
+        for call in declared:
+            if (not isinstance(call, dict) or not isinstance(call.get("name"), str)
+                    or not isinstance(call.get("args"), dict)):
+                raise ValueError("invalid declared expected call")
+            values.append((call["name"], call["args"]))
+        return values
     kind = task["kind"]
     fixture = task["task"]["fixtures"][0] if task["task"]["fixtures"] else None
     verifier = task["task"]["verifier"]
@@ -98,6 +109,22 @@ def expected_calls(task: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
 
 
 def verify_sandbox(sandbox: Path, task: dict[str, Any]) -> bool:
+    declared = task["task"].get("postconditions")
+    if declared is not None:
+        if not isinstance(declared, list):
+            return False
+        for condition in declared:
+            if not isinstance(condition, dict) or not isinstance(condition.get("path"), str):
+                return False
+            path = sandbox / condition["path"]
+            if not path.is_file():
+                return False
+            text = path.read_text()
+            if "exact" in condition and text != condition["exact"]:
+                return False
+            if "contains" in condition and condition["contains"] not in text:
+                return False
+        return True
     verifier = task["task"]["verifier"]
     kind = verifier["kind"]
     if kind in {"exact_text", "recovery_exact_text"}:
@@ -136,6 +163,10 @@ def grounded_final(task: dict[str, Any], text: str | None) -> bool:
         return False
     if "\n\nAction:" in text or "(no tool output)" in text:
         return False
+    declared = task["task"].get("final_contains")
+    if declared is not None:
+        return (isinstance(declared, list) and bool(declared)
+                and all(isinstance(value, str) and value in text for value in declared))
     verifier = task["task"]["verifier"]
     fixture = task["task"]["fixtures"][0] if task["task"]["fixtures"] else None
     path = fixture["path"] if fixture else verifier.get("path")

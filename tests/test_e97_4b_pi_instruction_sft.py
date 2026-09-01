@@ -10,6 +10,7 @@ import torch
 from ndm.data.masked_sft_dataset import RECORD_INDEX, sha256
 from ndm.schedulefree_offload import CPUOffloadAdamWScheduleFree
 from scripts import build_e97_pi_instruction_sft as builder
+from scripts import build_e97_pi_eval_v2 as eval_v2_builder
 from scripts import build_e97_pi_finalization_repair_sft as repair_builder
 from scripts import eval_e97_4b_pi_core as evaluator
 from scripts import train_e97_4b_pi_sft as trainer
@@ -120,6 +121,30 @@ def test_pi_evaluator_reconstructs_exact_recovery_contract(tmp_path):
     path = sandbox / edit_args["path"]
     path.write_text(path.read_text().replace(edit_args["oldText"], edit_args["newText"]))
     assert evaluator.verify_sandbox(sandbox, row)
+
+
+def test_pi_eval_v2_declares_compositional_contracts_and_postconditions(tmp_path):
+    for index, kind in enumerate(eval_v2_builder.KINDS):
+        user, task = eval_v2_builder.trace(
+            kind, index, __import__("random").Random(100 + index))
+        row = {"id": f"v2-{index}", "kind": kind, "user": user, "task": task}
+        calls = evaluator.expected_calls(row)
+        assert len(calls) >= 2
+        assert task["final_contains"]
+        sandbox = evaluator.make_sandbox(tmp_path, row)
+        assert sandbox.is_dir()
+
+
+def test_pi_eval_v2_builder_freezes_all_records_for_evaluation(tmp_path):
+    root = tmp_path / "v2"
+    run("scripts/build_e97_pi_eval_v2.py", "--output-root", root,
+        "--records", 12, "--seed", 91)
+    manifest = json.loads((root / "manifest.json").read_text())
+    rows = [json.loads(line) for line in (root / "records.jsonl").open()]
+    assert manifest["schema"] == eval_v2_builder.SCHEMA
+    assert manifest["status"] == "complete"
+    assert len(rows) == 12 and all(row["split"] == 1 for row in rows)
+    assert manifest["outputs"]["metadata"]["sha256"] == sha256(root / "records.jsonl")
 
 
 def test_trainer_supports_hash_bound_fresh_optimizer_repair_stages():
