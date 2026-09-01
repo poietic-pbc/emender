@@ -10,6 +10,7 @@ import torch
 from ndm.data.masked_sft_dataset import RECORD_INDEX, sha256
 from ndm.schedulefree_offload import CPUOffloadAdamWScheduleFree
 from scripts import build_e97_pi_instruction_sft as builder
+from scripts import build_e97_pi_finalization_repair_sft as repair_builder
 from scripts import eval_e97_4b_pi_core as evaluator
 from scripts import train_e97_4b_pi_sft as trainer
 from scripts import verify_e97_4b_pi_sft_checkpoint as verifier
@@ -35,6 +36,21 @@ def test_pi_trace_serialization_is_rs_free_and_assistant_only():
     assert user not in targeted
 
 
+def test_finalization_repair_matches_live_empty_tool_context_and_targets_only_final():
+    encoding = tiktoken.get_encoding("p50k_base")
+    user, turns, _ = builder.trace("recover-test", 3, __import__("random").Random(7))
+    messages = [("system", builder.SYSTEM), ("user", user), *turns]
+    tokens, masks, text = repair_builder.serialize_final_only(messages, encoding)
+    assert "Tool:\n(no tool output)\n\nAssistant:\nFinal:" in text
+    targeted = b"".join(
+        encoding.decode_single_token_bytes(token)
+        for token, mask in zip(tokens, masks) if mask
+    ).decode(errors="replace")
+    assert targeted == turns[-1][1] + "\n"
+    assert "Action:" not in targeted
+    assert masks[-1] == 1
+
+
 def test_build_and_mix_authorities_are_deterministic_and_target_weighted(tmp_path):
     first, second = tmp_path / "first", tmp_path / "second"
     run("scripts/build_e97_pi_instruction_sft.py", "--output-root", first,
@@ -42,6 +58,13 @@ def test_build_and_mix_authorities_are_deterministic_and_target_weighted(tmp_pat
     run("scripts/build_e97_pi_instruction_sft.py", "--output-root", second,
         "--records", 24, "--seed", 12)
     first_sha, second_sha = sha256(first / "manifest.json"), sha256(second / "manifest.json")
+    repair = tmp_path / "repair"
+    run("scripts/build_e97_pi_finalization_repair_sft.py", "--source-root", first,
+        "--source-sha256", first_sha, "--output-root", repair)
+    repair_manifest = json.loads((repair / "manifest.json").read_text())
+    assert repair_manifest["source_manifest_sha256"] == first_sha
+    assert repair_manifest["counts"]["records"] == 24
+    assert repair_manifest["counts"]["assistant_target_tokens"] > 0
     mixed = tmp_path / "mixed"
     run("scripts/build_e97_masked_sft_mix.py", "--output-root", mixed,
         "--source", f"pi={first},{first_sha},2000",
@@ -88,6 +111,13 @@ def test_pi_evaluator_reconstructs_exact_recovery_contract(tmp_path):
     path = sandbox / edit_args["path"]
     path.write_text(path.read_text().replace(edit_args["oldText"], edit_args["newText"]))
     assert evaluator.verify_sandbox(sandbox, row)
+
+
+def test_trainer_supports_hash_bound_fresh_optimizer_repair_stages():
+    text = open("scripts/train_e97_4b_pi_sft.py").read()
+    assert 'lineage.add_argument("--new-stage-from", type=Path)' in text
+    assert "new-stage-from must equal the hash-bound parent checkpoint" in text
+    assert '"new-stage-saved-x" if args.new_stage_from' in text
 
 
 def test_checkpoint_recipe_is_k_aligned_and_bounded():

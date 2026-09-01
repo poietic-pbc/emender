@@ -161,7 +161,9 @@ def main() -> None:
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--log-jsonl", type=Path, required=True)
     parser.add_argument("--source-commit", required=True)
-    parser.add_argument("--resume", type=Path)
+    lineage = parser.add_mutually_exclusive_group()
+    lineage.add_argument("--resume", type=Path)
+    lineage.add_argument("--new-stage-from", type=Path)
     parser.add_argument("--steps", type=int, default=8)
     parser.add_argument("--save-every", type=int, default=8)
     parser.add_argument("--keep-checkpoints", type=int, default=3)
@@ -178,6 +180,9 @@ def main() -> None:
     parser.add_argument("--schedulefree-offload-pin-memory", type=int, choices=(0, 1), default=1)
     parser.add_argument("--schedulefree-offload-release-gradients", type=int, choices=(0, 1), default=1)
     args = parser.parse_args()
+    if (args.new_stage_from is not None
+            and args.new_stage_from.resolve() != args.parent_checkpoint.resolve()):
+        raise SystemExit("new-stage-from must equal the hash-bound parent checkpoint")
     if args.steps <= 0 or args.save_every <= 0 or args.diloco_k <= 0:
         raise SystemExit("steps/save-every/diloco-k must be positive")
     if args.save_every % args.diloco_k or args.steps % args.diloco_k:
@@ -198,8 +203,8 @@ def main() -> None:
     if sha256(args.pack_root / "manifest.json") != args.pack_sha256:
         raise RuntimeError("masked-SFT pack manifest mismatch")
 
-    load_path = args.resume if args.resume is not None else args.parent_checkpoint
-    weight_mode = "saved" if args.resume is not None else "train"
+    load_path = args.resume or args.new_stage_from or args.parent_checkpoint
+    weight_mode = "saved" if (args.resume is not None or args.new_stage_from is not None) else "train"
     loaded = load_e97_checkpoint(
         load_path, args_json=args.source_args_json, device=device,
         dtype=torch.bfloat16, weight_mode=weight_mode, use_triton=True, mmap=True)
@@ -261,7 +266,9 @@ def main() -> None:
     args.output_root.mkdir(parents=True, exist_ok=True)
     emit(args.log_jsonl, "start", rank,
          parent_checkpoint=str(args.parent_checkpoint), parent_sha256=args.parent_sha256,
-         source_weight_mode=("resume-saved-plus-optimizer" if args.resume else "parent-train-y"),
+         source_weight_mode=("resume-saved-plus-optimizer" if args.resume else
+                             "new-stage-saved-x" if args.new_stage_from else
+                             "parent-train-y"),
          source_commit=args.source_commit, world_size=world, island_size=args.island_size,
          diloco_k=args.diloco_k, context_size=args.context_size, lr=args.lr,
          warmup_steps=args.warmup_steps, total_parameters=parameter_count,
