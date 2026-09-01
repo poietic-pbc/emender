@@ -71,7 +71,11 @@ def expected_calls(task: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     if kind == "read":
         return [("read", {"path": path, "offset": 1, "limit": 80})]
     if kind == "bash":
-        return [("bash", {"command": verifier["command"]})]
+        command = (
+            f"python -c 'import json; print(json.load(open(\"{path}\"))"
+            f"[\"service\"][\"port\"])'"
+        )
+        return [("bash", {"command": command})]
     if kind == "edit":
         old = fixture["content"].rstrip("\n")
         return [("read", {"path": path, "offset": 1, "limit": 40}),
@@ -110,6 +114,43 @@ def verify_sandbox(sandbox: Path, task: dict[str, Any]) -> bool:
     return True
 
 
+def final_text(rows: list[dict[str, Any]]) -> str | None:
+    finals = []
+    for row in rows:
+        message = row.get("message")
+        if row.get("type") != "message_end" or not isinstance(message, dict):
+            continue
+        if message.get("role") != "assistant" or message.get("stopReason") != "stop":
+            continue
+        text = "".join(
+            str(part.get("text", "")) for part in message.get("content", [])
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+        if text:
+            finals.append(text)
+    return finals[-1] if len(finals) == 1 else None
+
+
+def grounded_final(task: dict[str, Any], text: str | None) -> bool:
+    if text is None or not text.startswith("Final:") or len(text) > 512:
+        return False
+    if "\n\nAction:" in text or "(no tool output)" in text:
+        return False
+    verifier = task["task"]["verifier"]
+    fixture = task["task"]["fixtures"][0] if task["task"]["fixtures"] else None
+    path = fixture["path"] if fixture else verifier.get("path")
+    if path and path not in text:
+        return False
+    if "expected" in verifier:
+        return str(verifier["expected"]) in text
+    if "contains" in verifier:
+        return str(verifier["contains"]) in text
+    if "content" in verifier:
+        payload = json.loads(verifier["content"])
+        return str(payload["release"]) in text and "approved" in text
+    return False
+
+
 def score(task: dict[str, Any], rows: list[dict[str, Any]], returncode: int,
           sandbox: Path) -> dict[str, Any]:
     starts = [row for row in rows if row.get("type") == "tool_execution_start"]
@@ -117,12 +158,23 @@ def score(task: dict[str, Any], rows: list[dict[str, Any]], returncode: int,
     expected = expected_calls(task)
     sequence = [name for name, _ in observed]
     repeated = any(observed[index] == observed[index - 1] for index in range(1, len(observed)))
+    text = final_text(rows)
+    protocol_errors = [
+        row for row in rows
+        if row.get("type") == "message_end"
+        and isinstance(row.get("message"), dict)
+        and row["message"].get("role") == "assistant"
+        and row["message"].get("stopReason") == "error"
+    ]
     checks = {
         "pi_exit_zero": returncode == 0,
+        "protocol_valid": not protocol_errors and text is not None,
+        "schema_valid_tool_calls": all(isinstance(args, dict) for _, args in observed),
         "tool_sequence": sequence == [name for name, _ in expected],
         "tool_arguments": observed == expected,
         "sandbox_postcondition": verify_sandbox(sandbox, task),
-        "agent_completed": sum(row.get("type") == "agent_end" for row in rows) == 1,
+        "grounded_final": grounded_final(task, text),
+        "agent_completed": sum(row.get("type") == "agent_end" for row in rows) == 1 and text is not None,
         "no_identical_call_cycle": not repeated,
     }
     return {

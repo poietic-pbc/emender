@@ -59,6 +59,24 @@ def test_build_and_mix_authorities_are_deterministic_and_target_weighted(tmp_pat
         assert sha256(mixed / __import__("pathlib").Path(entry["path"]).name) == entry["sha256"]
 
 
+def test_pi_evaluator_reconstructs_exact_bash_contract():
+    user, turns, task = builder.trace("bash", 397, __import__("random").Random(4))
+    row = {"id": "pi-native-bash-00000397", "kind": "bash", "user": user, "task": task}
+    expected = evaluator.expected_calls(row)
+    assert expected == [
+        ("bash", {"command": "python -c 'import json; print(json.load(open(\"configs/service-000397.json\"))[\"service\"][\"port\"])'"})
+    ]
+
+
+def test_pi_evaluator_rejects_repetitive_or_ungrounded_final():
+    user, turns, task = builder.trace("edit", 9, __import__("random").Random(4))
+    row = {"id": "pi-native-edit-00000009", "kind": "edit", "user": user, "task": task}
+    good = turns[-1][1]
+    assert evaluator.grounded_final(row, good)
+    assert not evaluator.grounded_final(row, good + "\n\nAction:\n(no tool output)")
+    assert not evaluator.grounded_final(row, "Final: done")
+
+
 def test_pi_evaluator_reconstructs_exact_recovery_contract(tmp_path):
     user, turns, task = builder.trace("recover-test", 9, __import__("random").Random(4))
     row = {"id": "pi-native-recover-test-00000009", "kind": "recover-test", "user": user, "task": task}

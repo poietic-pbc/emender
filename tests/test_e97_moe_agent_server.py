@@ -24,8 +24,7 @@ def test_moe_agent_engine_requires_eight_rank_group(monkeypatch):
 
 def test_moe_agent_server_uses_structured_completion_not_rs_as_success():
     source = Path("ndm/e97_moe_agent_server.py").read_text()
-    assert "parse_agent_turn" in source
-    assert 'turn.kind == "tool_call"' in source
+    assert "generated_turn_is_complete" in source
     assert 'token == 218' in source
     assert "_broadcast_finished" in source
 

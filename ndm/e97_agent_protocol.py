@@ -169,6 +169,19 @@ def parse_agent_turn(text: str) -> ParsedAgentTurn:
     raise AgentProtocolError("generated turn must begin with Action: or Final:")
 
 
+def generated_turn_is_complete(text: str) -> bool:
+    """Return whether incremental generation reached a safe Pi turn boundary."""
+    try:
+        turn = parse_agent_turn(text)
+    except AgentProtocolError:
+        return False
+    if turn.kind == "tool_call":
+        return True
+    # Canonical SFT finals are one concise line. Stop at their first newline so
+    # an otherwise correct final cannot drift into a memorized next transcript.
+    return turn.kind == "final" and ("\n" in turn.raw_text or RS in text)
+
+
 def allowed_tool_names(tools: Any) -> frozenset[str]:
     """Extract the closed function-tool vocabulary from an OpenAI request."""
 

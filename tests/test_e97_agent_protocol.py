@@ -4,6 +4,7 @@ from ndm.e97_agent_protocol import (
     AgentProtocolError,
     RS,
     allowed_tool_names,
+    generated_turn_is_complete,
     parse_agent_turn,
     serialize_pi_messages,
     validate_generated_tool,
@@ -83,6 +84,15 @@ def test_parse_action_preserves_argument_bytes_for_cache_replay():
     ])
     assert raw.removesuffix(RS) in replay
     assert RS not in replay
+
+
+def test_incremental_turn_boundary_stops_one_line_finals_and_complete_actions():
+    assert not generated_turn_is_complete("Final:")
+    assert not generated_turn_is_complete("Final: concise evidence")
+    assert generated_turn_is_complete("Final: concise evidence\n")
+    assert generated_turn_is_complete("Final: concise evidence" + RS)
+    assert generated_turn_is_complete('Action: read\nArguments: {"path":"README.md"}')
+    assert not generated_turn_is_complete('Action: read\nArguments: {')
 
 
 def test_parse_final_strips_only_rs():

@@ -21,6 +21,7 @@ from .e97 import (
 from .e97_agent_protocol import (
     AgentProtocolError,
     ParsedAgentTurn,
+    generated_turn_is_complete,
     parse_agent_turn,
     serialize_pi_messages,
     validate_generated_tool,
@@ -199,11 +200,7 @@ class TorchE97AgentEngine:
                 stop_token_ids=(218,),
             )
             generated.extend(next_tokens)
-            try:
-                turn = parse_agent_turn(self.decode(generated))
-            except AgentProtocolError:
-                turn = None
-            if turn is not None and turn.kind == "tool_call":
+            if generated_turn_is_complete(self.decode(generated)):
                 break
             if next_tokens and next_tokens[-1] == 218:
                 break

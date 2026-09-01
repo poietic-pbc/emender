@@ -19,7 +19,7 @@ from .e97 import (
     advance_e97_cache,
     advance_e97_cache_segment,
 )
-from .e97_agent_protocol import AgentProtocolError, parse_agent_turn
+from .e97_agent_protocol import generated_turn_is_complete
 
 
 class TorchE97MoEAgentEngine:
@@ -117,11 +117,7 @@ class TorchE97MoEAgentEngine:
             self._broadcast_token(token)
             generated.append(token)
             shadow = self._advance_local((token,), shadow)
-            try:
-                turn = parse_agent_turn(self.decode(generated))
-            except AgentProtocolError:
-                turn = None
-            finished = bool(token == 218 or (turn is not None and turn.kind == "tool_call"))
+            finished = bool(token == 218 or generated_turn_is_complete(self.decode(generated)))
             self._broadcast_finished(finished)
             if finished:
                 break
