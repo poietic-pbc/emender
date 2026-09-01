@@ -49,6 +49,15 @@ def test_finalization_repair_matches_live_empty_tool_context_and_targets_only_fi
     assert targeted == turns[-1][1] + "\n"
     assert "Action:" not in targeted
     assert masks[-1] == 1
+    all_tokens, all_masks, all_text = repair_builder.serialize_live_aligned(
+        messages, encoding, target_mode="all-assistant")
+    all_targeted = b"".join(
+        encoding.decode_single_token_bytes(token)
+        for token, mask in zip(all_tokens, all_masks) if mask
+    ).decode(errors="replace")
+    assert "Action: bash" in all_targeted
+    assert turns[-1][1] in all_targeted
+    assert "(no tool output)" in all_text and "(no tool output)" not in all_targeted
 
 
 def test_build_and_mix_authorities_are_deterministic_and_target_weighted(tmp_path):

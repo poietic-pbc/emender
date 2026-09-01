@@ -27,10 +27,12 @@ def normalize_live_tool_results(messages: list[tuple[str, str]]) -> list[tuple[s
     ]
 
 
-def serialize_final_only(
-    messages: list[tuple[str, str]], encoding,
+def serialize_live_aligned(
+    messages: list[tuple[str, str]], encoding, *, target_mode: str,
 ) -> tuple[list[int], list[int], str]:
-    """Mask only the terminal final and its learned one-line stop newline."""
+    """Serialize live Pi context with final-only or all-assistant targets."""
+    if target_mode not in {"final-only", "all-assistant"}:
+        raise ValueError("target_mode must be final-only or all-assistant")
     if not messages or messages[-1][0] != "assistant" or not messages[-1][1].startswith("Final:"):
         raise ValueError("repair records require one terminal Final assistant turn")
     normalized = normalize_live_tool_results(messages)
@@ -40,7 +42,9 @@ def serialize_final_only(
             pieces.append(("\n\n", False))
         label = {"system": "System", "user": "User", "assistant": "Assistant", "tool": "Tool"}[role]
         pieces.append((f"{label}:\n", False))
-        pieces.append((text, position == len(normalized) - 1))
+        target = role == "assistant" and (
+            target_mode == "all-assistant" or position == len(normalized) - 1)
+        pieces.append((text, target))
     # Canonical serving ends a concise final at its first newline. Make that
     # boundary supervised rather than relying on unrelated pretraining records.
     pieces.append(("\n", True))
@@ -71,11 +75,19 @@ def serialize_final_only(
     return tokens, masks, complete
 
 
+def serialize_final_only(
+    messages: list[tuple[str, str]], encoding,
+) -> tuple[list[int], list[int], str]:
+    return serialize_live_aligned(messages, encoding, target_mode="final-only")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--source-sha256", required=True)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument("--target-mode", choices=("final-only", "all-assistant"),
+                        default="final-only")
     args = parser.parse_args()
     source_manifest_path = args.source_root / "manifest.json"
     if sha256(source_manifest_path) != args.source_sha256:
@@ -118,7 +130,8 @@ def main() -> None:
             validation = int(split(identity))
             if validation != int(row["split"]):
                 raise RuntimeError(f"source split mismatch at record {index}")
-            tokens, masks, complete = serialize_final_only(original, encoding)
+            tokens, masks, complete = serialize_live_aligned(
+                original, encoding, target_mode=args.target_mode)
             token_out.write(struct.pack(f"<{len(tokens)}I", *tokens))
             mask_out.write(bytes(masks))
             index_out.write(RECORD_INDEX.pack(offset, len(tokens), sum(masks), validation))
@@ -136,10 +149,13 @@ def main() -> None:
     manifest = {
         "schema": AUTHORITY_SCHEMA,
         "status": "complete",
-        "purpose": "E97 Pi finalization repair with live empty-tool normalization",
+        "purpose": "E97 Pi live-aligned assistant repair",
+        "target_mode": args.target_mode,
         "source_root": str(args.source_root.resolve()),
         "source_manifest_sha256": args.source_sha256,
-        "construction": "deterministic source reconstruction; prior actions context-only; terminal Final plus newline targeted",
+        "construction": (
+            "deterministic source reconstruction; live empty-tool context; "
+            f"{args.target_mode} targets; terminal newline targeted"),
         "empty_tool_result": "(no tool output)",
         "terminal_boundary": "one targeted newline after Final",
         "seed": seed,
