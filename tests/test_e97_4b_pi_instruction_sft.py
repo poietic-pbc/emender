@@ -14,6 +14,7 @@ from scripts import build_e97_pi_eval_v2 as eval_v2_builder
 from scripts import build_e97_pi_eval_v3 as eval_v3_builder
 from scripts import build_e97_pi_compositional_sft as compositional_builder
 from scripts import build_e97_pi_finalization_repair_sft as repair_builder
+from scripts import build_e97_pi_recover_read_sft as recover_read_builder
 from scripts import eval_e97_4b_pi_core as evaluator
 from scripts import train_e97_4b_pi_sft as trainer
 from scripts import verify_e97_4b_pi_sft_checkpoint as verifier
@@ -153,6 +154,19 @@ def test_compositional_sft_uses_live_context_and_targets_every_action():
         assert "Final:" in targeted and masks[-1] == 1
         if kind in {"search-edit", "multi-edit", "recover-edit", "diagnose-test", "write-from-spec"}:
             assert "(no tool output)" in text
+
+
+def test_recover_read_authority_is_disjoint_and_live_aligned(tmp_path):
+    root = tmp_path / "recover-read"
+    run("scripts/build_e97_pi_recover_read_sft.py", "--output-root", root,
+        "--records", 12, "--seed", 701)
+    manifest = json.loads((root / "manifest.json").read_text())
+    rows = [json.loads(line) for line in (root / "records.jsonl").open()]
+    assert manifest["status"] == "complete"
+    assert manifest["source_index_offset"] == 2_000_000
+    assert manifest["kinds"] == ["recover-read"]
+    assert len(rows) == 12 and all(row["source_index"] >= 2_000_000 for row in rows)
+    assert manifest["outputs"]["metadata"]["sha256"] == sha256(root / "records.jsonl")
 
 
 def test_pi_eval_v3_freezes_blind_family_heldout_contracts(tmp_path):
