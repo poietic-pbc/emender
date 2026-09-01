@@ -168,6 +168,7 @@ def main() -> None:
     parser.add_argument("--save-every", type=int, default=8)
     parser.add_argument("--keep-checkpoints", type=int, default=3)
     parser.add_argument("--context-size", type=int, default=4096)
+    parser.add_argument("--gradient-checkpoint-group-size", type=int, default=1)
     parser.add_argument("--island-size", type=int, default=8)
     parser.add_argument("--diloco-k", type=int, default=8)
     parser.add_argument("--merge-bucket-numel", type=int, default=67_108_864)
@@ -195,6 +196,8 @@ def main() -> None:
         raise SystemExit("checkpoint retention and optimizer/merge buckets must be positive")
     if args.grad_clip < 0:
         raise SystemExit("grad-clip must be nonnegative")
+    if args.gradient_checkpoint_group_size <= 0:
+        raise SystemExit("gradient-checkpoint-group-size must be positive")
 
     dist.init_process_group("nccl")
     rank, world = dist.get_rank(), dist.get_world_size()
@@ -215,7 +218,7 @@ def main() -> None:
         dtype=torch.bfloat16, weight_mode=weight_mode, use_triton=True, mmap=True)
     core_model = loaded.model.train()
     core_model.gradient_checkpointing = True
-    core_model.gradient_checkpoint_group_size = 1
+    core_model.gradient_checkpoint_group_size = args.gradient_checkpoint_group_size
     parameter_count = sum(parameter.numel() for parameter in core_model.parameters())
     if parameter_count != EXPECTED_PARAMETERS:
         raise RuntimeError(f"E97 4B parameter mismatch: {parameter_count}")
@@ -278,6 +281,7 @@ def main() -> None:
          source_commit=args.source_commit, world_size=world, island_size=args.island_size,
          diloco_k=args.diloco_k, context_size=args.context_size, lr=args.lr,
          warmup_steps=args.warmup_steps, grad_clip=args.grad_clip,
+         gradient_checkpoint_group_size=args.gradient_checkpoint_group_size,
          total_parameters=parameter_count,
          optimizer_state_storage=optimizer_state_storage,
          optimizer_state_bucket_numel=(args.schedulefree_offload_bucket_numel
@@ -349,6 +353,7 @@ def main() -> None:
                     "learning_rate": args.lr,
                     "weight_decay": args.weight_decay,
                     "warmup_steps": args.warmup_steps,
+                    "gradient_checkpoint_group_size": args.gradient_checkpoint_group_size,
                     "merge_bucket_numel": args.merge_bucket_numel,
                 }
                 atomic_save(checkpoint, payload)
