@@ -1,7 +1,10 @@
+from pathlib import Path
+
 import pytest
 
 from ndm.e97_agent_protocol import (
     AgentProtocolError,
+    E97_PI_CORE_SYSTEM,
     RS,
     allowed_tool_names,
     generated_turn_is_complete,
@@ -9,6 +12,11 @@ from ndm.e97_agent_protocol import (
     serialize_pi_messages,
     validate_generated_tool,
 )
+
+
+def test_published_pi_system_prompt_matches_runtime_authority():
+    prompt = Path("configs/pi/e97-pi-core-system-prompt.txt").read_text()
+    assert prompt == E97_PI_CORE_SYSTEM + "\n"
 
 
 def function_tool(name):

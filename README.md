@@ -52,6 +52,15 @@ Public E97 releases:
   <https://huggingface.co/spinozans/emender-e97-1.3b-cli-agent>
 - Matched GDN2-MLP 1.3B control, final 152.280B-token authority:
   <https://huggingface.co/spinozans/gdn2-mlp-1.3b>
+- E97 4B foundation training checkpoints:
+  <https://huggingface.co/spinozans/e97-4b-training-checkpoints>
+- E97 4B Pi instruction checkpoints:
+  <https://huggingface.co/spinozans/emender-e97-4b-pi-instruction-checkpoints>
+
+The 4B Pi checkpoint requires its exact system prompt and closed tool contract;
+a generic assistant prompt is unsupported and can produce degenerate output.
+See [`docs/operations/e97-4b-pi-runtime.md`](docs/operations/e97-4b-pi-runtime.md)
+and [`configs/pi/e97-pi-core-system-prompt.txt`](configs/pi/e97-pi-core-system-prompt.txt).
 
 The CLI checkpoint is protocol-specific and is not a general instruction or
 coding assistant. Release identities, hashes, export semantics, and validation
